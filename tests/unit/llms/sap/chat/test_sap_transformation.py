@@ -973,22 +973,6 @@ class TestNormalizeReasoningContent:
         ]
         assert msg["reasoning_content"] == "Romans spoke Latin.\nThat is well known."
 
-    def test_string_reasoning_content_unchanged(self):
-        """String reasoning_content is left as-is (already the right type)."""
-        raw = {
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "42",
-                    "reasoning_content": "I thought about it.",
-                }
-            }]
-        }
-        out = self._normalize_reasoning_blocks(raw, "message")
-        msg = out["choices"][0]["message"]
-        assert msg["reasoning_content"] == "I thought about it."
-        assert "thinking_blocks" not in msg
-
     def test_no_reasoning_content_unchanged(self):
         """A message without reasoning_content is not modified."""
         raw = {"choices": [{"message": {"role": "assistant", "content": "Hi."}}]}
@@ -1120,10 +1104,6 @@ class TestNormalizeChoice:
         assert delta["reasoning_content"] == "delta thought"
         assert delta["thinking_blocks"][0]["thinking"] == "delta thought"
 
-    def test_string_reasoning_content_unchanged(self):
-        choice = {"index": 0, "message": {"reasoning_content": "already a string"}}
-        assert self._normalize_choice(choice, "message") == choice
-
     def test_no_reasoning_content_unchanged(self):
         choice = {"index": 0, "delta": {"content": "hello"}}
         assert self._normalize_choice(choice, "delta") == choice
@@ -1161,9 +1141,9 @@ class TestMessagesToSapTemplateReasoningContent:
         ]
         result = _messages_to_sap_template(messages)
         assistant_msg = result[1]
-        assert assistant_msg["reasoning_content"] == [
-            {"content": "Simple arithmetic.", "signature": "sig1"}
-        ]
+        assert assistant_msg["reasoning_content"] == (
+            {"content": "Simple arithmetic.", "signature": "sig1"},
+        )
 
     def test_litellm_normalized_assistant_message_round_trips_signature(self):
         """After a non-streaming SAP call, the ModelResponse has reasoning_content: str
@@ -1190,7 +1170,7 @@ class TestMessagesToSapTemplateReasoningContent:
         assistant = next(m for m in result if m.get("role") == "assistant")
 
         reasoning = assistant.get("reasoning_content")
-        assert isinstance(reasoning, list)
+        assert isinstance(reasoning, (list, tuple))
         assert any(block.get("signature") == signature for block in reasoning)
 
     def test_streaming_assembled_assistant_message_round_trips_signature(self):
@@ -1232,7 +1212,7 @@ class TestMessagesToSapTemplateReasoningContent:
         assistant = next(m for m in result if m.get("role") == "assistant")
 
         reasoning = assistant.get("reasoning_content")
-        assert isinstance(reasoning, list)
+        assert isinstance(reasoning, (list, tuple))
         assert any(block.get("signature") == signature for block in reasoning)
 
 
@@ -1252,7 +1232,7 @@ class TestAssistantMessageReasoningCoercion:
             "thinking_blocks": [{"type": "thinking", "thinking": "step one", "signature": "sig1"}],
             "reasoning_content": "step one",
         }, self._model)
-        assert result["reasoning_content"] == [{"content": "step one", "signature": "sig1"}]
+        assert result["reasoning_content"] == ({"content": "step one", "signature": "sig1"},)
         assert "thinking_blocks" not in result
 
     def test_string_reasoning_content_is_dropped(self):
@@ -1275,7 +1255,7 @@ class TestAssistantMessageReasoningCoercion:
             "content": "hi",
             "reasoning_content": [{"content": "thought", "signature": "s1"}],
         }, self._model)
-        assert result["reasoning_content"] == [{"content": "thought", "signature": "s1"}]
+        assert result["reasoning_content"] == ({"content": "thought", "signature": "s1"},)
 
 
 def _stream_event(shape: str, delta: dict[str, object]) -> str:

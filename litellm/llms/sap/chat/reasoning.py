@@ -19,7 +19,6 @@ class _SAPThoughtBlock(LiteLLMBaseModel):
 
 class _SAPThoughts(LiteLLMBaseModel):
     reasoning_content: tuple[_SAPThoughtBlock, ...]
-    thinking_blocks: tuple[ChatCompletionThinkingBlock, ...] = ()
 
 
 def _thinking_block(block: _SAPThoughtBlock) -> ChatCompletionThinkingBlock:
@@ -59,7 +58,7 @@ def _normalize_body(body: object) -> object:
     return {
         **fields,
         "reasoning_content": reasoning_text or None,
-        "thinking_blocks": [*parsed.thinking_blocks, *blocks],
+        "thinking_blocks": list(blocks),
     }
 
 

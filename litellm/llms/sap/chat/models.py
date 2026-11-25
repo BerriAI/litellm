@@ -140,7 +140,7 @@ class SAPAssistantMessage(LiteLLMBaseModel):
     content: str | TextContent | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = Field(default=[])
-    reasoning_content: list[_SAPThoughtBlock] | None = None  # mutable-ok: list of reasoning blocks from SAP wire format
+    reasoning_content: tuple[_SAPThoughtBlock, ...] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -157,7 +157,7 @@ class SAPAssistantMessage(LiteLLMBaseModel):
                 ],
             }
         if isinstance(data.get("reasoning_content"), str):
-            return {k: v for k, v in data.items() if k != "reasoning_content"}
+            return {k: v for k, v in data.items() if k not in ("reasoning_content", "thinking_blocks")}
         return data
 
 
