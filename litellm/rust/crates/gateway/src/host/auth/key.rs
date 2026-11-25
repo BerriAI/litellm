@@ -12,6 +12,7 @@ use litellm_gateway_auth_core::{
 use litellm_python_compat::{Value, json};
 use litellm_redis_store::auth_cache::{Bag, CachedKey, CachedObjectPermission, Lists};
 use serde::Deserialize;
+use serde_json::Map;
 
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
 
@@ -111,6 +112,15 @@ pub struct Key {
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
     pub(super) aliased: bool,
+    /// The key's `spend`, which the proxy logs as `user_api_key_spend`.
+    spend: f64,
+    /// The key's `max_budget`, which the proxy logs as `user_api_key_max_budget`.
+    max_budget: Option<f64>,
+    /// The key's `budget_reset_at`, which the proxy logs as `user_api_key_budget_reset_at`.
+    budget_reset_at: Option<Timestamp>,
+    /// The key's `metadata`, which the proxy logs as `user_api_key_auth_metadata`. It holds only
+    /// what [`Metadata`] reads, so no callback settings and no credential.
+    metadata: Arc<Map<String, serde_json::Value>>,
 }
 
 impl StoredKey for Key {
@@ -135,6 +145,22 @@ impl Key {
     pub(crate) fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
     }
+
+    pub(crate) fn spend(&self) -> f64 {
+        self.spend
+    }
+
+    pub(crate) fn max_budget(&self) -> Option<f64> {
+        self.max_budget
+    }
+
+    pub(crate) fn budget_reset_at(&self) -> Option<Timestamp> {
+        self.budget_reset_at
+    }
+
+    pub(crate) fn metadata(&self) -> &Map<String, serde_json::Value> {
+        &self.metadata
+    }
 }
 
 /// The `metadata` the native app honors: the key's own limit for each model it names one for,
@@ -158,6 +184,15 @@ impl Metadata {
         }
         let text = json::dumps(&Value::Dict(metadata.entries().to_vec())).ok()?;
         serde_json::from_str(&text).ok()
+    }
+}
+
+/// `metadata` as a JSON object in the order it was written, which the proxy's
+/// `strip_callback_config` leaves whole for a key whose [`Metadata`] was read.
+fn logged(metadata: &Bag) -> Map<String, serde_json::Value> {
+    match json::to_json(&Value::Dict(metadata.entries().to_vec())) {
+        Ok(serde_json::Value::Object(entries)) => entries,
+        _ => Map::new(),
     }
 }
 
@@ -404,6 +439,10 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
             alias: key.key_alias.as_deref().map(Arc::from),
             budget,
             aliased,
+            spend: key.spend,
+            max_budget: key.max_budget,
+            budget_reset_at: key.budget_reset_at,
+            metadata: Arc::new(logged(&key.metadata)),
         },
     })
 }
@@ -492,6 +531,31 @@ mod tests {
                 None,
                 false,
             )
+        );
+    }
+
+    #[rstest]
+    #[case::as_generated(json!({}), 0.0, json!({}))]
+    #[case::with_spend_and_limits(
+        json!({"spend": 1.25, "metadata": {"priority": "prod", "model_rpm_limit": {"claude": 2}}}),
+        1.25,
+        json!({"priority": "prod", "model_rpm_limit": {"claude": 2}})
+    )]
+    fn what_the_proxy_logs_of_a_key_is_read_in_the_order_it_was_written(
+        #[case] change: Fields,
+        #[case] spend: f64,
+        #[case] metadata: Fields,
+    ) {
+        let key = read(&cached(change)).unwrap();
+
+        assert_eq!(
+            (
+                key.row.spend(),
+                key.row.max_budget(),
+                key.row.budget_reset_at(),
+                serde_json::to_string(key.row.metadata()).unwrap(),
+            ),
+            (spend, None, None, metadata.to_string())
         );
     }
 

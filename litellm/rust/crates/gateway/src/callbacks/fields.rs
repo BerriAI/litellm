@@ -4,6 +4,7 @@
 
 use std::time::SystemTime;
 
+use jiff::Timestamp;
 use litellm_callbacks::{
     AttemptTiming, CallFacts, CallIds, CallKind, CallTarget, CallTiming, Deployment, Field,
     FieldSet, FieldValues, Hook, HookInput, KeyIdentity, LoggedKeyIdentity, LoggedModelGroup,
@@ -47,20 +48,36 @@ pub enum Unwritable {
 
 /// Who `identity` is charged as: a key by the hash its row is stored under, its alias and its
 /// owner, and the master key by Python's alias for it and the proxy admin. Native keys name no
-/// team, organization, project or end user.
+/// team, organization, project or end user. The spend, budget and metadata are what the proxy's
+/// `get_sanitized_user_information_from_key` logs of the `UserAPIKeyAuth`: the key row's own, and
+/// for the master key the defaults of the admin identity `return_user_api_key_auth_obj` builds,
+/// no spend, no budget and empty metadata.
 pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
     match &**identity {
         Caller::MasterKey => Charged {
             key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
             key_alias: None,
             user_id: Some(PROXY_ADMIN_NAME.to_owned()),
+            spend: Some(0.0),
+            max_budget: None,
+            budget_reset_at: None,
+            metadata: Some(Map::new()),
         },
         Caller::Key(key) => Charged {
             key_hash: identity.hash().map(ToString::to_string),
             key_alias: key.key.alias().map(str::to_owned),
             user_id: key.key.record().user_id.clone(),
+            spend: Some(key.key.spend()),
+            max_budget: key.key.max_budget(),
+            budget_reset_at: key.key.budget_reset_at().map(isoformat),
+            metadata: Some(key.key.metadata().clone()),
         },
     }
+}
+
+/// `at.isoformat()` of the UTC `datetime` Python reads a key's `budget_reset_at` as.
+fn isoformat(at: Timestamp) -> String {
+    UtcDateTime::from_system_time(at.into()).isoformat()
 }
 
 /// The route a call came in on, as Python's `user_api_key_request_route` names it.
@@ -394,6 +411,36 @@ mod tests {
 
     fn keys() -> Map<String, Value> {
         Map::from_iter([("max_tokens".to_owned(), json!(5))])
+    }
+
+    #[rstest]
+    fn the_master_key_is_charged_as_the_admin_identity_python_builds_for_it() {
+        assert_eq!(
+            charged(&crate::test_support::master()),
+            Charged {
+                key_hash: Some("litellm_proxy_master_key".to_owned()),
+                key_alias: None,
+                user_id: Some("default_user_id".to_owned()),
+                spend: Some(0.0),
+                max_budget: None,
+                budget_reset_at: None,
+                metadata: Some(Map::new()),
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::whole_seconds("2030-01-02T00:00:00Z", "2030-01-02T00:00:00+00:00")]
+    #[case::with_a_fraction("2031-03-01T00:00:00.5Z", "2031-03-01T00:00:00.500000+00:00")]
+    #[case::nanoseconds_python_does_not_keep(
+        "2031-03-01T00:00:00.000001999Z",
+        "2031-03-01T00:00:00.000001+00:00"
+    )]
+    fn a_budget_reset_is_logged_as_pythons_isoformat_of_it(
+        #[case] at: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(isoformat(at.parse().unwrap()), expected);
     }
 
     #[rstest]

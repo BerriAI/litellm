@@ -1,5 +1,5 @@
-//! The fields of `datetime.fromtimestamp(seconds, timezone.utc)`, `datetime.fromisoformat(text)`,
-//! and the milliseconds Python takes between two `datetime`s.
+//! The fields of `datetime.fromtimestamp(seconds, timezone.utc)` and its `isoformat()`,
+//! `datetime.fromisoformat(text)`, and the milliseconds Python takes between two `datetime`s.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -42,6 +42,25 @@ impl UtcDateTime {
             micros.div_euclid(1_000_000),
             micros.rem_euclid(1_000_000) as u32,
         )
+    }
+
+    /// `isoformat()` of the UTC `datetime`: its fraction only when it has microseconds, and the
+    /// offset as `+00:00`, never `Z`.
+    pub fn isoformat(&self) -> String {
+        let Self {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            microsecond,
+        } = self;
+        let fraction = match microsecond {
+            0 => String::new(),
+            micros => format!(".{micros:06}"),
+        };
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{fraction}+00:00")
     }
 }
 
@@ -403,6 +422,20 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(float_repr(milliseconds(elapsed)), expected);
+    }
+
+    #[rstest]
+    #[case::whole_seconds(
+        UtcDateTime::from_timestamp(1_893_542_400, 0),
+        "2030-01-02T00:00:00+00:00"
+    )]
+    #[case::with_microseconds(
+        UtcDateTime::from_timestamp(1_930_089_600, 500_000),
+        "2031-03-01T00:00:00.500000+00:00"
+    )]
+    #[case::one_microsecond(UtcDateTime::from_timestamp(5, 1), "1970-01-01T00:00:05.000001+00:00")]
+    fn a_utc_datetime_is_written_as_its_isoformat(#[case] at: UtcDateTime, #[case] expected: &str) {
+        assert_eq!(at.isoformat(), expected);
     }
 
     #[rstest]
