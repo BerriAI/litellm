@@ -6,6 +6,7 @@ import base64
 import importlib
 import io
 import os
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -26,6 +27,7 @@ from PIL import Image
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.redis.stores.connection import connect
@@ -1226,16 +1228,36 @@ async def test_a_fallback_serving_a_refused_image_counts_only_its_own_tokens_tow
     assert serving.call_count == 2
 
 
+class _SyncSuccesses(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self._logged: Final = threading.Condition()
+        self.count = 0
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        with self._logged:
+            self.count += 1
+            self._logged.notify_all()
+
+    def wait_for(self, count: int) -> None:
+        with self._logged:
+            assert self._logged.wait_for(lambda: self.count >= count, timeout=10)
+
+
 def test_a_sync_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_tpm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _refuser_with_a_backup()
+    successes: Final = _SyncSuccesses()
+    litellm.logging_callback_manager.add_litellm_callback(successes)
 
     with respx.mock(assert_all_called=False) as upstream:
         serving: Final = _mock_refuser_and_backup(upstream)
         router.image_generation(**_refused_request_on_a_shared_logging_object("image_generation"))
+        successes.wait_for(1)
         router.image_generation(model="backup", prompt="a single small red dot")
+        successes.wait_for(2)
         with pytest.raises(ValueError, match="No deployments available"):
             router.image_generation(model="backup", prompt="a single small red dot")
 

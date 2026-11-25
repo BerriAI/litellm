@@ -1252,6 +1252,95 @@ async def test_a_refusing_fallback_counts_the_same_model_group_usage_on_a_shared
     )
 
 
+async def _multi_image_refusing_fallback_usage(
+    request: dict[str, object], answers: tuple[tuple[dict[str, object], int], ...]
+) -> tuple[int | None, int | None]:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{name}.invalid/v1",
+                },
+                "model_info": {"id": name},
+            }
+            for name in ("outage", "refuser")
+        ],
+        fallbacks=[{"outage": ["refuser"]}],
+        num_retries=0,
+    )
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://outage.invalid").mock(
+                return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+            )
+            upstream.post(url__startswith="https://refuser.invalid").mock(
+                side_effect=[
+                    httpx.Response(
+                        200,
+                        json={
+                            "candidates": [answer],
+                            "usageMetadata": {"promptTokenCount": tokens, "totalTokenCount": tokens},
+                        },
+                    )
+                    for answer, tokens in answers
+                ]
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request, n=len(answers))
+            await asyncio.sleep(0)
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return await router.get_model_group_usage("refuser")
+    finally:
+        router.discard()
+
+
+_BILLED_REFUSAL: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+@pytest.mark.parametrize("shared_logging_object", [True, False])
+@pytest.mark.parametrize(
+    "answers, billed_tokens",
+    [
+        pytest.param(((_BILLED_REFUSAL, 600), (_BILLED_REFUSAL, 500)), 1100, id="two_billed_refusals"),
+        pytest.param(
+            (
+                ({"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}, 600),
+                ({"finishReason": "NO_IMAGE"}, 500),
+            ),
+            500,
+            id="a_free_refusal_beside_a_billed_answer",
+        ),
+    ],
+)
+async def test_every_billed_answer_of_a_refusing_multi_image_fallback_counts_toward_its_model_group_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    shared_logging_object: bool,
+    answers: tuple[tuple[dict[str, object], int], ...],
+    billed_tokens: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="multi-image-refused-by-a-fallback",
+    )
+    shared: Final = {**request, "litellm_logging_obj": logging_obj}
+    unshared: Final = {"model": "outage", "prompt": "a single small red dot"}
+
+    assert await _multi_image_refusing_fallback_usage(shared if shared_logging_object else unshared, answers) == (
+        billed_tokens,
+        1,
+    )
+
+
 @pytest.mark.asyncio
 async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
     import time

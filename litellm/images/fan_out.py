@@ -27,6 +27,8 @@ class _AnswerWithoutAnImage(Protocol):
     @property
     def billed_answer(self) -> ImageResponse | None: ...
 
+    def billing(self, answer: ImageResponse) -> Exception: ...
+
 
 class _SpendLog(Protocol):
     def uncached_price(self, result: object) -> _Price: ...
@@ -165,7 +167,14 @@ def settle_image_answers(
         _carry_discarded_answers(logging_obj, billed)
     else:
         record_partial_image_spend(logging_obj, billed)
-    raise min(unserved, key=_raise_order)
+    raise _billing_every_answer(min(unserved, key=_raise_order), billed)
+
+
+def _billing_every_answer(failure: Exception, billed: Sequence[ImageResponse]) -> Exception:
+    if not isinstance(failure, _AnswerWithoutAnImage) or not billed:
+        return failure
+    charged: Final = merge_image_responses(billed)
+    return failure if charged is failure.billed_answer else failure.billing(charged)
 
 
 def _billed_round(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> ServedRound:

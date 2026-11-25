@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Final
 
 import httpx
@@ -26,6 +27,10 @@ class UnservedImageError(UnprocessableEntityError):
     ) -> None:
         super().__init__(message=message, model=model, llm_provider=llm_provider, response=response)
         self.billed_answer: Final = billed_answer
+        self._billed_instead: Final = partial(UnservedImageError, message, model, llm_provider, response)
+
+    def billing(self, answer: ImageResponse) -> "UnservedImageError":
+        return self._billed_instead(billed_answer=answer)
 
 
 class ImageRefusalError(ContentPolicyViolationError):
@@ -46,6 +51,12 @@ class ImageRefusalError(ContentPolicyViolationError):
             provider_specific_fields=dict(provider_specific_fields),
         )
         self.billed_answer: Final = billed_answer
+        self._billed_instead: Final = partial(
+            ImageRefusalError, message, model, llm_provider, response, provider_specific_fields
+        )
+
+    def billing(self, answer: ImageResponse) -> "ImageRefusalError":
+        return self._billed_instead(billed_answer=answer)
 
 
 def is_answer_without_an_image(exception: object) -> bool:
