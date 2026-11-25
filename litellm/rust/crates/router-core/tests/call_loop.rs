@@ -1419,6 +1419,29 @@ async fn a_failed_attempt_counts_its_request_only_when_its_callback_ran(
 }
 
 #[rstest]
+#[case::an_async_call(false)]
+#[case::a_sync_call(true)]
+#[tokio::test]
+async fn a_failed_attempt_on_a_billed_answer_counts_its_tokens_with_its_request(
+    #[case] uncounted_request: bool,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "gemini/a", "tpm": 1000}, "model_info": {"id": "a1"}},
+        ]
+    }))
+    .unwrap();
+    let mut failure = AttemptError::new(FailureKind::ContentPolicyViolation, Some(400));
+    failure.uncounted_request = uncounted_request;
+    failure.answered_tokens = 1110;
+    let host = Arc::new(ScriptedHost::failing("primary", vec![failure]));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let _ = router.call(Op::from("aimage_generation"), request()).await;
+    let deployment = router.registry().deployment("a1").unwrap();
+    assert_eq!(router.health().usage(&deployment).await.unwrap(), (1110, 1));
+}
+
+#[rstest]
 #[case::counted(true, 2)]
 #[case::uncounted(false, 1)]
 #[tokio::test]

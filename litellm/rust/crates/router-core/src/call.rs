@@ -1458,10 +1458,17 @@ impl<H: RouterHost> Call<'_, H> {
         deployment: &crate::registry::Deployment,
         failure: &AttemptError,
     ) {
-        if failure.uncounted_request {
+        let counted = if failure.answered_tokens > 0 {
+            self.health()
+                .add_usage(deployment, None, failure.answered_tokens as f64, 1.0)
+                .await
+                .map(|_| ())
+        } else if failure.uncounted_request {
             return;
-        }
-        if let Err(error) = self.health().count_failed_request(deployment, None).await {
+        } else {
+            self.health().count_failed_request(deployment, None).await
+        };
+        if let Err(error) = counted {
             warn!(deployment_id = %deployment.id, error = %error, "usage was not recorded");
         }
     }

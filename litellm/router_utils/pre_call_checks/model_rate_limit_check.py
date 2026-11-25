@@ -23,6 +23,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.gemini.empty_image_response import billed_deployment_tokens
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, CounterIncrement, RouterUsage, UsageCounter
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
@@ -452,28 +453,32 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            dt: Final = self.clock()
-            tpm: Final = UsageCounter.for_deployment(f"{model_id}", f"{model}", "tpm", dt.strftime("%H-%M"))
-            reset_offset: Final = _reset_offset_from_kwargs(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
-            tpd: Final = UsageCounter.for_deployment(
-                f"{model_id}", f"{model}", "tpd", daily_window_day(dt, reset_offset)
-            )
-
-            verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm, total_tokens)
-
-            tokens: Final = int(total_tokens)
-            await self.usage.increment(tpm, tokens, RoutingArgs.ttl)
-            await self.usage.increment(tpd, tokens, RoutingArgs.daily_ttl)
+            await self._async_count_tokens(kwargs, f"{model_id}", f"{model}", int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
 
+    async def _async_count_tokens(self, kwargs: Mapping[str, object], model_id: str, model: str, tokens: int) -> None:
+        dt: Final = self.clock()
+        tpm: Final = UsageCounter.for_deployment(model_id, model, "tpm", dt.strftime("%H-%M"))
+        tpd: Final = UsageCounter.for_deployment(
+            model_id, model, "tpd", daily_window_day(dt, _reset_offset_from_kwargs(kwargs))
+        )
+        verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm, tokens)
+        await self.usage.increment(tpm, tokens, RoutingArgs.ttl)
+        await self.usage.increment(tpd, tokens, RoutingArgs.daily_ttl)
+
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        # Never fail the primary logging pipeline over an io-token refund error.
+        # Never fail the primary logging pipeline over an io-token refund or usage error.
         with contextlib.suppress(Exception):
-            await async_io_token_refund_failure(self.usage, kwargs)
+            billed: Final = billed_deployment_tokens(kwargs)
+            if billed is None:
+                await async_io_token_refund_failure(self.usage, kwargs)
+                return
+            await async_io_token_reconcile_success(self.usage, kwargs, None)
+            await self._async_count_tokens(kwargs, billed.deployment_id, billed.deployment_name, billed.tokens)
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:

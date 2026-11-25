@@ -5231,7 +5231,7 @@ class _Driver:
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
         self._last_error = error
-        if _answered_without_an_image(error):
+        if _answered_without_an_image(error) and self._answer_without_an_image is None:
             self._answer_without_an_image = error
         level: Final = step.get("fallback_level")
         retry: Final = step.get("retry")
@@ -5258,7 +5258,14 @@ class _Driver:
             "uncounted_request": self._plan.sync
             or is_batch_retrieve_call_type(logged.get("call_type"))
             or _raised_before_provider(error),
+            "answered_tokens": self._billed_answer_tokens(call, error),
         }
+
+    def _billed_answer_tokens(self, call: "AttemptCall | None", error: BaseException) -> int:
+        billed_answer: Final[object] = getattr(error, "billed_answer", None)
+        if call is None or billed_answer is None or not self._tracks_usage(call, billed_answer, False):
+            return 0
+        return total_tokens(billed_answer)
 
     def _records_blocked(
         self, failed: Mapping[str, object], call: "AttemptCall | None", error: BaseException, in_call: bool

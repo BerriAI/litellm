@@ -18,7 +18,9 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 from PIL import Image
 
 import litellm
@@ -1042,3 +1044,51 @@ async def test_request_over_every_tpm_limit_in_its_region_is_refused_while_anoth
         )
 
     assert "largest tpm limit of 100" in str(refused.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pricing,answer",
+    [
+        pytest.param({}, {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="refusal"),
+        pytest.param({}, {"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}, id="no_image"),
+        pytest.param(
+            {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}},
+            id="zero_priced_refusal",
+        ),
+    ],
+)
+async def test_an_image_answer_without_an_image_counts_its_answered_tokens_toward_the_deployment_tpm(
+    pricing: dict[str, int], answer: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://image.invalid/v1",
+                    "tpm": 1000,
+                    **pricing,
+                },
+                "model_info": {"id": "image"},
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+    billed: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__startswith="https://").mock(
+            return_value=httpx.Response(200, json={"candidates": [answer], "usageMetadata": billed})
+        )
+        with pytest.raises((litellm.ContentPolicyViolationError, litellm.UnprocessableEntityError)):
+            await router.aimage_generation(model="image", prompt="a single small red dot")
+        with pytest.raises(litellm.RateLimitError):
+            await router.aimage_generation(model="image", prompt="a single small red dot")
+
+    assert route.call_count == 1

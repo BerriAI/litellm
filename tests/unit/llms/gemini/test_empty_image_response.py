@@ -448,6 +448,45 @@ async def test_fallback_answer_without_an_image_after_a_provider_failure_is_the_
             await router.aimage_generation(model="image-group", prompt="a single small red dot")
 
 
+
+@pytest.mark.asyncio
+async def test_first_fallback_answer_without_an_image_after_a_provider_failure_is_the_error_the_client_gets(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+            }
+            for group in ("image-group", "refusing-group", "imageless-group")
+        ],
+        fallbacks=[{"image-group": ["refusing-group", "imageless-group"]}],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__startswith="https://image-group.invalid/").mock(
+            side_effect=lambda request: httpx.Response(503, json={"error": {"code": 503}})
+        )
+        upstream.post(url__startswith="https://refusing-group.invalid/").mock(
+            side_effect=lambda request: httpx.Response(
+                200, json={"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]}
+            )
+        )
+        upstream.post(url__startswith="https://imageless-group.invalid/").mock(
+            side_effect=lambda request: httpx.Response(
+                200, json={"candidates": [{"finishReason": "NO_IMAGE", "content": {"parts": [{"text": "no"}]}}]}
+            )
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router.aimage_generation(model="image-group", prompt="a single small red dot")
+
 _USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
 _SERVED: Final = {
     "candidates": [{"finishReason": "STOP", "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
