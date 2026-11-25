@@ -57,6 +57,7 @@ else:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _PROVIDER_RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, str], config=ConfigDict(hide_input_in_errors=True))
+_RATE_LIMIT_HEADER_PREFIXES: Final = ("anthropic-ratelimit-", "x-ratelimit-")
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
@@ -89,7 +90,12 @@ def _stamp_provider_response_headers(response: ModelResponse, logging_obj: LiteL
         )
     except ValidationError:
         return
-    set_provider_response_headers_in_hidden_params(response, headers, process_headers=process_anthropic_headers)
+    rate_limit_headers: Final = {
+        name.lower(): value for name, value in headers.items() if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES)
+    }
+    set_provider_response_headers_in_hidden_params(
+        response, rate_limit_headers, process_headers=process_anthropic_headers
+    )
 
 
 class AnthropicPassthroughLoggingHandler:
