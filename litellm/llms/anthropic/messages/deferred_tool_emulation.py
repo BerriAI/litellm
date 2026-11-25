@@ -228,8 +228,9 @@ def _loaded_tool_text(name: str, tool: Mapping[str, object] | None, dispatcher: 
     )
 
 
-def _forced_tool_name(tool_choice: Mapping[str, object] | None) -> object:
-    return None if tool_choice is None or tool_choice.get("type") != "tool" else tool_choice.get("name")
+def _forced_tool_name(tool_choice: object) -> object:
+    choice: Final = as_str_mapping(tool_choice) or {}
+    return choice.get("name") if choice.get("type") == "tool" else None
 
 
 def _reference_name(part: object) -> str | None:

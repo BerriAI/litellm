@@ -3440,6 +3440,15 @@ async def test_native_deferred_tools_drop_a_forced_tool_search_under_drop_params
     assert not any(sent_tool_choices)
 
 
+@pytest.mark.asyncio
+async def test_native_deferred_tools_send_a_request_whose_tool_choice_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    assert await _azure_messages_tool_types({"deferred_tools": "native"}, tool_choice="") == {"function", "tool_search"}
+
+
 _FORECAST_TOOL: Final = {
     "name": "mcp__weather__get_forecast",
     "description": "Get the forecast for a city",
@@ -3704,6 +3713,24 @@ async def test_emulated_deferred_tools_force_a_forced_deferred_tool_through_the_
     )
 
     assert body["tool_choice"] == {"type": "function", "function": {"name": "CallLoadedTool"}}
+    assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
+        "mcp__weather__get_forecast"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emulated_deferred_tools_answer_a_request_whose_tool_choice_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    _, response = await _fireworks_kimi_messages(
+        {"deferred_tools": "emulate"},
+        httpx.Response(200, json=_dispatcher_chat_completion()),
+        stream=False,
+        tool_choice="",
+    )
+
     assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
         "mcp__weather__get_forecast"
     ]

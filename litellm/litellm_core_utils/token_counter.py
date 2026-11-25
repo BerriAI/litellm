@@ -808,7 +808,17 @@ T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
-    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming", "custom")
+    (
+        "name",
+        "input_schema",
+        "description",
+        "cache_control",
+        "strict",
+        "type",
+        "eager_input_streaming",
+        "custom",
+        "defer_loading",
+    )
 )
 
 
