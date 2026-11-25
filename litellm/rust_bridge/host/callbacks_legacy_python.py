@@ -344,11 +344,19 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
 
 
+class ProviderStreamHead(dict[str, object]):
+    def __init__(self, hidden_params: Mapping[str, object], provider_headers: Mapping[str, str]) -> None:
+        super().__init__(hidden_params)
+        self.provider_headers: Final = provider_headers
+
+
 def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     logger.stream = True
     logger.model_call_details["stream"] = True
-    logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(
-        head.get("additional_headers") or {}
+    logger.model_call_details["response_headers"] = (
+        dict(head.provider_headers)
+        if isinstance(head, ProviderStreamHead)
+        else _STREAM_HEADERS.validate_python(head.get("additional_headers") or {})
     )
 
 

@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
+from litellm.rust_bridge.host.callbacks_legacy_python import ProviderStreamHead
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
@@ -69,7 +70,8 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
         anthropic_messages_stream_hidden_params,
     )
 
-    return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
+    response_headers: Final = httpx.Headers(list(headers))
+    return ProviderStreamHead(anthropic_messages_stream_hidden_params(response_headers), dict(response_headers))
 
 
 def map_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
