@@ -1960,29 +1960,33 @@ async def add_missing_team_member(
     existing_team_ids: Callable[[Sequence[str]], Awaitable[frozenset[str] | None]] = find_existing_team_ids,
     team_id_to_upsert: str | None = None,
     create_team: Callable[[str], Awaitable[object]] = create_sso_team,
-) -> None:
+) -> tuple[str, ...]:
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Drop the IdP groups that are not teams with one lookup, since group claims often carry many of them
     - Join the ``team_id_to_upsert`` team too, creating it when it is missing (``team_id_upsert``), the way the API JWT path does;
       it stays out of ``result.team_ids`` so restricted_sso_group and the access-token group fallback see only the claimed groups
     - Add missing user to missing teams, one at a time in sso_teams order, so user.teams keeps the claim's order
+    - Return the teams the user actually joined, in that order
     """
     held_teams: Final = frozenset(user_info.teams or ())
     claimed_teams: Final = sso_teams if team_id_to_upsert is None else (*sso_teams, team_id_to_upsert)
     missing_teams: Final = tuple(team_id for team_id in dict.fromkeys(claimed_teams) if team_id not in held_teams)
     if not missing_teams:
-        return
+        return ()
     existing: Final = await existing_team_ids(missing_teams)
     teams_to_add: Final = (
         missing_teams
         if existing is None
         else tuple(team_id for team_id in missing_teams if team_id in existing or team_id == team_id_to_upsert)
     )
-    for team_id in teams_to_add:
+
+    async def joined(team_id: str) -> bool:
         if team_id == team_id_to_upsert and (existing is None or team_id not in existing):
             await _create_sso_team_or_warn(team_id, create_team)
-        await add_team_member(team_id, user_info)
+        return await add_team_member(team_id, user_info) is not None
+
+    return tuple([team_id for team_id in teams_to_add if await joined(team_id)])
 
 
 def get_disabled_non_admin_personal_key_creation():
@@ -2110,12 +2114,17 @@ async def get_user_info_from_db(
             raise_database_outage=resolved_by_database_only,
         )
 
-        await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
+        joined_teams: Final = await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
             result=result,
             user_info=user_info,
         )
-
-        return user_info
+        if user_info is None or not joined_teams:
+            return user_info
+        return user_info.model_copy(
+            update={
+                "teams": [*(user_info.teams or ()), *joined_teams]  # pyright: ignore[reportUnknownMemberType]  # NewUserResponse.teams is an untyped list
+            }
+        )
     except _SSOUserAdmissionError:
         raise
     except Exception as e:
@@ -3755,7 +3764,7 @@ class SSOAuthenticationHandler:
     async def add_user_to_teams_from_sso_response(
         result: CustomOpenID | OpenID | Mapping[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
-    ):
+    ) -> tuple[str, ...]:
         """
         Adds the user as a team member to the teams specified in the SSO responses `team_ids` field
 
@@ -3764,9 +3773,9 @@ class SSOAuthenticationHandler:
         """
         if user_info is None:
             verbose_proxy_logger.debug("User not found in LiteLLM DB, skipping team member addition")
-            return
+            return ()
         sso_teams: Final = result.team_ids if isinstance(result, CustomOpenID) else []
-        await add_missing_team_member(
+        return await add_missing_team_member(
             user_info=user_info,
             sso_teams=sso_teams,
             team_id_to_upsert=result.team_id_to_upsert if isinstance(result, CustomOpenID) else None,
