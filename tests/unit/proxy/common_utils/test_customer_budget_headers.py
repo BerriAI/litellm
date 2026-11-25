@@ -163,3 +163,23 @@ def test_characters_a_header_name_cannot_hold_stay_out_of_the_duration_suffix(st
         "x-litellm-app-customer-org-max-budget-1d": "2.0",
         "x-litellm-app-customer-org-remaining-budget-1d": "1.0",
     }
+
+
+@pytest.mark.parametrize("tighter_first", (True, False))
+def test_windows_that_share_a_header_name_report_the_one_with_less_budget_left(tighter_first: bool) -> None:
+    tighter: Final = CustomerBudgetWindowUsage(budget_duration="1d", spend=4.0, max_budget=5.0)
+    looser: Final = CustomerBudgetWindowUsage(budget_duration="1d!", spend=4.0, max_budget=50.0)
+    hierarchy: Final = CustomerHierarchyAuth(
+        scopes=(
+            CustomerScopeAuth(
+                key="app_customer_org",
+                entity_id="app-1:org-1",
+                budget_window_usage=(tighter, looser) if tighter_first else (looser, tighter),
+            ),
+        )
+    )
+    assert dict(customer_budget_headers(hierarchy, ENABLED)) == {
+        "x-litellm-app-customer-org-spend-1d": "4.0",
+        "x-litellm-app-customer-org-max-budget-1d": "5.0",
+        "x-litellm-app-customer-org-remaining-budget-1d": "1.0",
+    }

@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from itertools import chain
 from typing import Final
 
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth, CustomerScopeKey
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerBudgetWindowUsage,
+    CustomerHierarchyAuth,
+    CustomerScopeAuth,
+    CustomerScopeKey,
+)
 
 _UNSAFE_IN_HEADER_NAME: Final = re.compile(r"[^A-Za-z0-9]+")
 _HEADER_SCOPES: Final[frozenset[CustomerScopeKey]] = frozenset(("app_customer_org", "app_customer_member"))
@@ -31,6 +36,10 @@ def _budget_headers(
     }
 
 
+def _headroom(window: CustomerBudgetWindowUsage) -> float:
+    return window.max_budget - window.spend
+
+
 def _scope_headers(scope: CustomerScopeAuth) -> Mapping[str, str]:
     prefix: Final = f"x-litellm-{scope.key.replace('_', '-')}"
     return dict(
@@ -50,7 +59,7 @@ def _scope_headers(scope: CustomerScopeAuth) -> Mapping[str, str]:
                         window.max_budget,
                         window.reset_at,
                     )
-                    for window in scope.budget_window_usage
+                    for window in sorted(scope.budget_window_usage, key=_headroom, reverse=True)
                 ),
             )
         )
