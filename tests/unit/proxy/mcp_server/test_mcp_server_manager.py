@@ -20560,6 +20560,30 @@ async def test_scheduled_catalog_retries_a_server_that_failed_registration(monke
 
 
 @pytest.mark.asyncio
+async def test_scheduled_catalog_retries_unresolved_oauth_at_the_same_revision(monkeypatch):
+    row = _catalog_row().model_copy(update={"auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code"})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    unresolved = MCPServer(
+        server_id=row.server_id,
+        name="initial",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        updated_at=row.updated_at,
+    )
+    build = AsyncMock(return_value=unresolved)
+    monkeypatch.setattr(manager, "build_mcp_server_from_table", build)
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert read_rows.await_count == 2
+    assert build.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_scheduled_catalog_keeps_refreshing_database_openapi_tools(monkeypatch):
     row = _catalog_row().model_copy(update={"spec_path": "https://upstream.example/openapi.json"})
     read_rows = AsyncMock(return_value=[row])
