@@ -10,8 +10,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{
-    Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, counted, counting, ends_call,
-    group_members, refused_by_provider,
+    Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, context_window_refusal,
+    counted, counting, ends_call, group_members, refused_by_provider,
 };
 use crate::{
     Call, Router, RouterStateSnapshot,
@@ -19,7 +19,7 @@ use crate::{
     error::{AttemptError, Error, FailureKind},
     fallback::FallbackTarget,
     health::should_retry_status,
-    host::{CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
+    host::{Attempt, CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
     retry::RetryStep,
     select::{SelectInputs, skips_batch_only},
 };
@@ -40,6 +40,8 @@ pub struct StreamOrigin {
     attempted_retries: u32,
     /// The budget the first stream retry committed to (`committed_retry_budget_for_request`).
     committed_budget: Option<u32>,
+    refused_ids: Vec<String>,
+    provider_refused_window: bool,
 }
 
 /// A [`StreamOrigin`] as the Python host hands it back. It names the level without the params
@@ -58,6 +60,8 @@ struct Document {
     committed_budget: Option<u32>,
     /// The group a pre-routing hook selected for `group`, which the fallback lookup keys on first.
     routed: Option<String>,
+    refused_ids: Vec<String>,
+    provider_refused_window: bool,
 }
 
 impl From<Document> for StreamOrigin {
@@ -74,6 +78,8 @@ impl From<Document> for StreamOrigin {
             deployment_id: document.deployment_id,
             attempted_retries: document.attempted_retries,
             committed_budget: document.committed_budget,
+            refused_ids: document.refused_ids,
+            provider_refused_window: document.provider_refused_window,
         }
     }
 }
@@ -118,20 +124,17 @@ pub struct Unanswered<F> {
 }
 
 impl StreamOrigin {
-    /// The origin of the response an attempt of `target` at `at` returned.
-    pub(super) fn of(
-        target: Target,
-        at: FallbackHop,
-        deployment_id: Option<String>,
-        retry: u32,
-    ) -> Self {
+    /// The origin of the response `attempt` of `target` returned.
+    pub(super) fn of(target: Target, deployment_id: Option<String>, attempt: &Attempt) -> Self {
         Self {
             target,
-            depth: at.depth,
-            level: at.level,
+            depth: attempt.fallback_depth,
+            level: attempt.fallback_level,
             deployment_id,
-            attempted_retries: retry,
+            attempted_retries: attempt.retry,
             committed_budget: None,
+            refused_ids: attempt.refused_ids.clone(),
+            provider_refused_window: attempt.provider_refused_window,
         }
     }
 
@@ -343,7 +346,9 @@ impl<H: RouterHost> Call<'_, H> {
         provider_refused_window: bool,
     ) -> Result<super::RouterResponse<H::Response>, Error> {
         let mut chain = FallbackChain {
-            provider_refused_window: provider_refused_window || refused_by_provider(&failed.error),
+            provider_refused_window: provider_refused_window
+                || origin.provider_refused_window
+                || refused_by_provider(&failed.error),
             ..FallbackChain::default()
         };
         if request.model != origin.target.group {
@@ -375,7 +380,8 @@ impl<H: RouterHost> Call<'_, H> {
     ) -> Result<super::RouterResponse<H::Response>, Spent> {
         // A stream's retries start from a chain that has tried nothing.
         let mut chain = FallbackChain {
-            provider_refused_window: failure.is_a("ContextWindowExceededError"),
+            provider_refused_window: origin.provider_refused_window
+                || failure.is_a("ContextWindowExceededError"),
             ..FallbackChain::default()
         };
         let level = Level {
@@ -387,21 +393,41 @@ impl<H: RouterHost> Call<'_, H> {
             chain: &mut chain,
         };
         let target = &level.target;
-        let (healthy, all) = self
+        let (healthy_deployments, all) = self
             .candidates(snapshot, op, request, &target.group, &counting())
             .await
-            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.routable())))
-            .unwrap_or((0, 0));
+            .map(|c| {
+                let (healthy, all) = (counted(&c, c.healthy.len()), counted(&c, c.routable()));
+                (c.healthy.into_iter().take(healthy).collect::<Vec<_>>(), all)
+            })
+            .unwrap_or_default();
+        let healthy = healthy_deployments.len();
         let mut inputs = SelectInputs {
             target_order: target.order,
             excluded_ids: target.excluded.clone(),
             requested: Some(target.group.clone()),
             fallback_hop: level.at.level > 0,
             failed_ids: origin.deployment_id.iter().cloned().collect(),
+            refused_ids: origin.refused_ids.clone(),
             refuse_uncertain: level.refuses_uncertain(),
             ..SelectInputs::default()
         };
         let (budget, policy_applies) = stream_retry_budget(snapshot, request, origin, failure.kind);
+        let refuses =
+            |failure: &AttemptError| !policy_applies && failure.is_a("ContextWindowExceededError");
+        let mut refusal = refuses(&failure).then(|| origin.failed(failure.clone()));
+        let group = target.routed.as_deref().unwrap_or(target.group.as_str());
+        let refused_by = failure
+            .failed_deployment_id
+            .as_deref()
+            .or(origin.deployment_id.as_deref());
+        let mut untried = match refused_by {
+            Some(refused) if refusal.is_some() => {
+                self.refuse(&level, group, refused, &mut inputs).await
+            }
+            _ => 0,
+        };
+        let lookup = origin.lookup(request);
         let mut newest = origin.failed(failure);
         let mut committed_budget = origin.committed_budget;
         for attempt in origin.attempted_retries.. {
@@ -411,7 +437,14 @@ impl<H: RouterHost> Call<'_, H> {
             if last.ends_retries() {
                 break;
             }
-            let step = level.retry_step(last, (budget, policy_applies), attempt, healthy, all);
+            let step = level.retry_step(
+                last,
+                (budget, policy_applies),
+                attempt,
+                (healthy, untried),
+                all,
+                &lookup,
+            );
             let RetryStep::Retry { backoff } = step else {
                 break;
             };
@@ -446,24 +479,33 @@ impl<H: RouterHost> Call<'_, H> {
             };
             level.chain.provider_refused_window |= refused_by_provider(&failed.error);
             inputs.refuse_uncertain |= level.chain.provider_refused_window;
-            if let Some(id) = failure
+            let failed_on = failure
                 .failed_deployment_id
                 .as_ref()
-                .or(failed.deployment_id.as_ref())
+                .or(failed.deployment_id.as_ref());
+            if let Some(id) = failed_on
                 && !inputs.failed_ids.contains(id)
             {
                 inputs.failed_ids.push(id.clone());
             }
+            let refused = refuses(failure);
+            if refused {
+                refusal = refusal.or_else(|| context_window_refusal(&failed));
+                untried = match failed_on {
+                    Some(id) => self.refuse(&level, group, id, &mut inputs).await,
+                    None => 0,
+                };
+            }
             // `_stream_fallback_error_for_raised`: a status the pre-stream retry rule would not
             // retry ends the retries with that failure.
-            let stop = failure.status.is_some_and(|s| !should_retry_status(s));
+            let stop = !refused && failure.status.is_some_and(|s| !should_retry_status(s));
             newest = failed;
             if stop {
                 break;
             }
         }
         Err(Spent {
-            failed: newest,
+            failed: self.refused_or(level.at.level, refusal, newest),
             committed_budget,
             provider_refused_window: level.chain.provider_refused_window,
         })

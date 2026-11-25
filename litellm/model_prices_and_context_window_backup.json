@@ -26498,7 +26498,8 @@
         },
         "source": "https://docs.gnani.ai/api/STT/models/prisma-v2-5",
         "supported_endpoints": [
-            "/v1/audio/transcriptions"
+            "/v1/audio/transcriptions",
+            "/v1/realtime"
         ]
     },
     "gnani/prisma-v3.0": {
@@ -26506,7 +26507,8 @@
         "mode": "audio_transcription",
         "source": "https://docs.gnani.ai/api/STT/models/prisma-v3",
         "supported_endpoints": [
-            "/v1/audio/transcriptions"
+            "/v1/audio/transcriptions",
+            "/v1/realtime"
         ]
     },
     "elevenlabs/scribe_v1": {
