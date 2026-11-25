@@ -1,4 +1,3 @@
-import json
 import os
 import uuid
 from collections.abc import Mapping
@@ -6,8 +5,8 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from _langfuse_otel_metadata_support import exported_llm_span, langfuse_rig, scenario_identity, watched_spans
-from integration._support.client import Gateway, eventually
+from _langfuse_otel_metadata_support import exported_llm_span, langfuse_rig, scenario_identity
+from integration._support.client import Gateway
 
 CONSOLE_SPAN: Final = '"span_id": "0x'
 INHERITED_OTEL_ENV: Final = tuple(name for name in os.environ if name.startswith("OTEL_"))
@@ -62,6 +61,7 @@ def test_key_langfuse_without_operator_keys_prints_no_spans(
             overrides={"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"},
             remove_environment=INHERITED_OTEL_ENV,
             operator_keys=False,
+            allow_collector_host=True,
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):
@@ -90,9 +90,7 @@ def test_key_langfuse_without_operator_keys_prints_no_spans(
         )
         assert response.status_code == 200, response.text
 
-        eventually(
-            watched_spans(rig.collector), lambda spans: any(marker in json.dumps(span) for span in spans), seconds=25
-        )
+        exported_llm_span(rig.collector, response.json()["id"])
 
         on_stdout: Final = CONSOLE_SPAN in rig.proxy.log.read_text()
         assert not on_stdout, f"span JSON on proxy stdout, see {rig.proxy.log}"

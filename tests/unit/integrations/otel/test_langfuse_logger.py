@@ -13,6 +13,8 @@ pytest.importorskip("opentelemetry")
 
 from opentelemetry import trace  # noqa: E402  # needs the importorskip above
 from opentelemetry.context import Context  # noqa: E402  # needs the importorskip above
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider  # noqa: E402  # needs the importorskip above
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402  # needs the importorskip above
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
@@ -30,6 +32,7 @@ from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
 from litellm.proxy.utils import ProxyLogging  # noqa: E402
 from litellm.types.llms.openai import (  # noqa: E402
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -222,12 +225,17 @@ def test_chat_stream_relays_chunks_untouched_and_stamps_assembled_output():
     assert [(turn["role"], turn["content"]) for turn in output] == [("assistant", "pong")]
 
 
-def test_responses_stream_stamps_output_from_the_completed_event():
+@pytest.mark.parametrize(
+    ("terminal_event_class", "terminal_event_type"),
+    [
+        (ResponseCompletedEvent, ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+        (ResponseIncompleteEvent, ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE),
+    ],
+)
+def test_responses_stream_stamps_output_from_the_terminal_event(terminal_event_class, terminal_event_type):
     logger, exporter = _logger()
-    completed = ResponseCompletedEvent(
-        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=_responses_api_response()
-    )
-    chunks = ({"type": "response.created"}, {"type": "response.output_text.delta", "delta": "pong"}, completed)
+    terminal_event = terminal_event_class(type=terminal_event_type, response=_responses_api_response())
+    chunks = ({"type": "response.created"}, {"type": "response.output_text.delta", "delta": "pong"}, terminal_event)
 
     relayed = _run_stream(logger, {"model": "gpt-5.4-mini", "input": "ping"}, chunks)
 
@@ -713,3 +721,32 @@ def test_failed_generation_without_a_first_chunk_has_no_completion_start_time() 
     attrs: Final = _generation_attrs(_llm_call_kwargs({"stream": True}, None), fail=True)
 
     assert COMPLETION_START_ATTR not in attrs
+
+
+@pytest.mark.parametrize("room", [0, 1, 2], ids=["full", "one-free", "two-free"])
+def test_release_and_version_never_push_an_attribute_off_a_root_span_at_its_limit(room: int) -> None:
+    server: Final = {"http.method": "POST", "http.scheme": "http", "http.route": "/v1/chat/completions"}
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", mapper_names=["genai", "langfuse"])
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=len(server) + 1 + room))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = build_otel_v2_logger(config=cfg, tracer_provider=provider)
+    root: Final = provider.get_tracer("server").start_span("POST /v1/chat/completions")
+    root.set_attributes(server)
+    set_request_root_span(root)
+
+    logger.log_pre_api_call(
+        model="gpt-5.4-mini",
+        messages=[],
+        kwargs={
+            "litellm_call_id": "call_1",
+            "litellm_params": {
+                "metadata": {"trace_name": "checkout", "trace_release": "rel-1", "trace_version": "v-1"}
+            },
+        },
+    )
+    root.end()
+
+    stamped: Final = dict(exporter.get_finished_spans()[0].attributes or {})
+    assert stamped.items() >= {**server, TRACE_NAME_ATTR: "checkout"}.items()
+    assert ("langfuse.release" in stamped, "langfuse.version" in stamped) == (room == 2, room == 2)

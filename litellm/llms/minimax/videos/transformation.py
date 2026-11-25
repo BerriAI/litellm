@@ -177,7 +177,7 @@ _CREATE_REQUEST_PARAMS: Final = frozenset({*_CREATE_BODY_KEYS, "content", "input
 
 _TASK_NOT_FOUND_MESSAGE: Final = "record not found"
 
-_ParsedT: Final = TypeVar("_ParsedT")
+_ParsedT = TypeVar("_ParsedT")
 
 
 def _minimax_error(status_code: int, message: str) -> MinimaxVideoError:
@@ -803,7 +803,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             params.update(extra_query)
         return f"{api_base}/v2/query/video_generation", params
 
-    def transform_video_list_response(  # pyright: ignore[reportIncompatibleMethodOverride]  # base declares dict[str, str] but the payload is a heterogeneous list body
+    def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",

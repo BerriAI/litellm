@@ -108,6 +108,25 @@ class TestCodexRun:
             exit_code=0, stdout=ROUND_TRIP, stderr=""
         )
 
+    def test_each_completed_web_search_counts_and_one_still_running_does_not(self) -> None:
+        search: Final = {
+            "id": "exec-07141cd4-a1e4-41ad-8bbd-27a117e188b4",
+            "type": "web_search",
+            "query": "https://pypi.org/project/litellm/",
+            "action": {"type": "open_page", "url": "https://pypi.org/project/litellm/"},
+        }
+        searching: Final = "\n".join(
+            (
+                _line({"type": "item.started", "item": {**search, "query": "", "action": {"type": "other"}}}),
+                _line({"type": "item.completed", "item": search}),
+                _line({"type": "item.started", "item": {**search, "id": "exec-2", "action": {"type": "other"}}}),
+                ROUND_TRIP,
+            )
+        )
+
+        assert codex_run(exit_code=0, stdout=searching, stderr="").web_searches == 1
+        assert codex_run(exit_code=0, stdout=ROUND_TRIP, stderr="").web_searches == 0
+
 
 def _only_rerun_patterns(ini: Path) -> tuple[str, ...]:
     parser: Final = configparser.ConfigParser()

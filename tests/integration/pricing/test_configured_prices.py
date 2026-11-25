@@ -16,7 +16,9 @@ from litellm import get_model_info
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
+from tests.integration._support.provider import PROVIDER_URL, SharedProvider
 from tests.integration._support.upstream import delete_scenario, register_scenario
+from tests.integration._support.wire import Reply, Request, wire_server
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
 
@@ -459,3 +461,158 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         now_served: Final = _bounded_chat(gateway, unpriced, key, unpriced_content)
         assert now_served.status_code == 200, now_served.text
         assert _observed(upstream) == [_upstream_chat(unpriced_upstream_model, unpriced_content)], now_served.text
+
+
+FORWARDED_OAUTH_TOKEN: Final = "sk-ant-oat01-integration-forwarded-credential"
+FORWARDED_INPUT_TOKENS: Final = 1000
+FORWARDED_OUTPUT_TOKENS: Final = 100
+
+
+def _client_header_forwarding_config(directory: Path) -> Path:
+    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration["general_settings"]["forward_client_headers_to_llm_api"] = True
+    path: Final = directory / "forwarding.yaml"
+    path.write_text(yaml.safe_dump(configuration))
+    return path
+
+
+def _anthropic_message(request: Request) -> Reply:
+    assert request.headers["authorization"] == f"Bearer {FORWARDED_OAUTH_TOKEN}", dict(request.headers)
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-7",
+                "content": [{"type": "text", "text": "forwarded credential control"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": FORWARDED_INPUT_TOKENS, "output_tokens": FORWARDED_OUTPUT_TOKENS},
+            }
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_rate", "output_rate"),
+    ((0.001, 0.002), (0.0, 0.0)),
+    ids=("custom_rates", "zero_rated"),
+)
+def test_messages_with_a_forwarded_client_credential_is_charged_at_the_deployment_configured_rates(
+    gateway: Gateway, tmp_path: Path, input_rate: float, output_rate: float
+) -> None:
+    with (
+        wire_server(_anthropic_message) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_client_header_forwarding_config(tmp_path)) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="anthropic/claude-opus-4-7",
+            api_base=wire.url,
+            api_key="integration-anthropic-key",
+            input_cost_per_token=input_rate,
+            output_cost_per_token=output_rate,
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = candidate.request(
+            "POST",
+            "/v1/messages",
+            {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "forwarded credential"}]},
+            headers={
+                "x-litellm-api-key": f"Bearer {key}",
+                "Authorization": f"Bearer {FORWARDED_OAUTH_TOKEN}",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        assert response.status_code == 200, response.text
+        expected: Final = FORWARDED_INPUT_TOKENS * input_rate + FORWARDED_OUTPUT_TOKENS * output_rate
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, abs=1e-12), dict(
+            response.headers
+        )
+        rows: Final = eventually(
+            lambda: candidate.rows(
+                'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key = %s', (sha256(key.encode()).hexdigest(),)
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert float(str(rows[0]["spend"])) == pytest.approx(expected, abs=1e-12), rows
+
+
+IMAGE_TOOL_MODEL: Final = "gpt-image-2.5-flare"
+IMAGE_TOOL_TEXT_INPUT_TOKENS: Final = 40
+IMAGE_TOOL_IMAGE_INPUT_TOKENS: Final = 300
+IMAGE_TOOL_IMAGE_OUTPUT_TOKENS: Final = 1000
+
+
+def _responses_reply_with_one_generated_image() -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"resp_{uuid.uuid4().hex}",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-4.1-mini",
+                "output": [{"type": "image_generation_call", "id": f"ig_{uuid.uuid4().hex}", "status": "completed"}],
+                "tools": [{"type": "image_generation", "model": IMAGE_TOOL_MODEL}],
+                "tool_usage": {
+                    "image_gen": {
+                        "input_tokens": IMAGE_TOOL_TEXT_INPUT_TOKENS + IMAGE_TOOL_IMAGE_INPUT_TOKENS,
+                        "input_tokens_details": {
+                            "text_tokens": IMAGE_TOOL_TEXT_INPUT_TOKENS,
+                            "image_tokens": IMAGE_TOOL_IMAGE_INPUT_TOKENS,
+                        },
+                        "output_tokens": IMAGE_TOOL_IMAGE_OUTPUT_TOKENS,
+                        "output_tokens_details": {"image_tokens": IMAGE_TOOL_IMAGE_OUTPUT_TOKENS, "text_tokens": 0},
+                        "total_tokens": IMAGE_TOOL_TEXT_INPUT_TOKENS
+                        + IMAGE_TOOL_IMAGE_INPUT_TOKENS
+                        + IMAGE_TOOL_IMAGE_OUTPUT_TOKENS,
+                    }
+                },
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            }
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize("discount", (0.5, None), ids=("image_deployment_with_custom_rates", "no_image_deployment"))
+def test_responses_image_generation_tool_is_charged_at_the_image_deployment_configured_rates(
+    gateway: Gateway, provider: SharedProvider, discount: float | None
+) -> None:
+    listed: Final = get_model_info(model=IMAGE_TOOL_MODEL, custom_llm_provider="openai")
+    scale: Final = 1.0 if discount is None else discount
+    text_input_rate: Final = (listed["input_cost_per_token"] or 0.0) * scale
+    image_input_rate: Final = (listed.get("input_cost_per_image_token") or 0.0) * scale
+    image_output_rate: Final = (listed.get("output_cost_per_image_token") or 0.0) * scale
+    assert text_input_rate > 0 and image_input_rate > 0 and image_output_rate > 0, listed
+    with gateway.scenario() as scenario:
+        chat_model: Final = scenario.model(model="openai/gpt-4.1-mini", api_base=f"{PROVIDER_URL}/v1")
+        if discount is not None:
+            scenario.model(
+                name=IMAGE_TOOL_MODEL,
+                model=f"openai/{IMAGE_TOOL_MODEL}",
+                api_base=f"{PROVIDER_URL}/v1",
+                input_cost_per_token=text_input_rate,
+                input_cost_per_image_token=image_input_rate,
+                output_cost_per_image_token=image_output_rate,
+            )
+        provider.expect(_responses_reply_with_one_generated_image())
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": chat_model,
+                "input": "draw a red circle",
+                "tools": [{"type": "image_generation", "model": IMAGE_TOOL_MODEL}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert len(provider.received()) == 1
+        assert float(response.headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(
+            IMAGE_TOOL_TEXT_INPUT_TOKENS * text_input_rate
+            + IMAGE_TOOL_IMAGE_INPUT_TOKENS * image_input_rate
+            + IMAGE_TOOL_IMAGE_OUTPUT_TOKENS * image_output_rate,
+            rel=1e-9,
+        ), response.headers

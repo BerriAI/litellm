@@ -1,5 +1,3 @@
-from litellm.proxy.deps.repositories import get_plugin_upload_repository
-from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 import asyncio
 import json
 import re
@@ -20,7 +18,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.deps.repositories import get_plugin_upload_repository
 from litellm.proxy.public_endpoints import router
+from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -70,6 +70,27 @@ def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter
     assert fields["api_base"].placeholder == BIGMODEL_API_BASE
     assert provider.default_model_placeholder is not None
     assert provider.default_model_placeholder.startswith("bigmodel/")
+
+
+def test_sarvam_fields_require_a_key_and_suggest_the_default_base() -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    sarvam: Final = JSONProviderRegistry.get("sarvam")
+    assert sarvam is not None
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_python(response.json())
+    provider: Final = next(item for item in providers if item.litellm_provider == "sarvam")
+    fields: Final = {field.key: field for field in provider.credential_fields}
+    assert set(fields) == {"api_base", "api_key"}
+    assert fields["api_key"].required is True
+    assert fields["api_key"].field_type == "password"
+    assert fields["api_base"].required is False
+    assert fields["api_base"].placeholder == sarvam.base_url
+    assert provider.default_model_placeholder is not None
+    assert provider.default_model_placeholder.startswith("sarvam/")
 
 
 def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
@@ -1283,6 +1304,18 @@ def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses
     }
     assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
     assert "embeddings" not in streamlake_endpoints
+
+
+def test_get_supported_endpoints_lists_webiq_search(reset_endpoints_cache: None) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    search: Final = next(endpoint for endpoint in response.json()["endpoints"] if endpoint["key"] == "search")
+    assert search["endpoint"] == "/search"
+    assert {"slug": "webiq", "display_name": "Microsoft Web IQ"} in search["providers"]
 
 
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(

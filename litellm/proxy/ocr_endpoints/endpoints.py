@@ -320,7 +320,7 @@ async def ocr(
         version,
     )
 
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Parse request body (JSON or multipart form)
         data = dict(await _parse_ocr_request(request))

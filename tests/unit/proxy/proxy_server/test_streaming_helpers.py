@@ -392,6 +392,42 @@ def test_responses_failure_event_reads_a_numeric_status_code_the_way_base_did(st
     assert failure.response.error["code"] == code
 
 
+def test_responses_failure_event_keeps_the_routers_fallback_outcome_over_the_upstream_message() -> None:
+    error: Final = litellm.InternalServerError(
+        message="FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. Fallback to q also failed: Q-ERROR"
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    message: Final = failure.response.error["message"]
+    assert "FLASH-ERROR" in message
+    assert message.endswith("Fallback to q also failed: Q-ERROR")
+
+
+def test_responses_failure_event_keeps_the_upstream_message_when_no_fallback_was_attempted() -> None:
+    error: Final = litellm.InternalServerError(
+        message="litellm wrapped FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. No fallback was attempted."
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["message"] == "FLASH-ERROR"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("guardrail_error", "error_object"),
@@ -874,6 +910,8 @@ def test_format_fallback_metadata_sse_event():
     event = _format_fallback_metadata_sse_event(
         fallback_model="fallback-model",
         fallback_errors=fallback_errors,
+        responses_stream=False,
+        return_raw_model_name=False,
     )
 
     assert isinstance(event, str)
@@ -1144,6 +1182,93 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("provider_chunks", "released"), [(0, True), (1, False)], ids=["before_output", "after_output"])
+async def test_async_data_generator_refunds_the_reservation_only_when_the_client_leaves_before_provider_output(
+    monkeypatch: pytest.MonkeyPatch, provider_chunks: int, released: bool
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    waiting_on_provider: Final = asyncio.Event()
+
+    async def provider() -> AsyncIterator[ModelResponseStream]:
+        for _ in range(provider_chunks):
+            yield _simple_chunk(content="partial")
+        waiting_on_provider.set()
+        await asyncio.Event().wait()
+        yield _simple_chunk(content="never sent")
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
+    )
+    generator: Final = async_data_generator(response=provider(), user_api_key_dict=auth, request_data={"model": "gpt-4"})
+    for _ in range(provider_chunks):
+        await generator.__anext__()
+    next_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await waiting_on_provider.wait()
+    next_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await next_frame
+
+    assert auth.budget_reservation is not None
+    assert (auth.budget_reservation.get("finalized") is True) is released
+
+
+class _PartialBillingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.billed_texts: Final[list[str]] = []  # mutable-ok: collects the billing events the stream dispatches
+        self.billed: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.billed_texts.append(litellm.get_response_string(response_obj))
+        self.billed.set()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_a_guardrail_buffered_leaves_its_reservation_to_the_partial_billing_when_the_client_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch, needs_wrap=True)
+    recorder: Final = _PartialBillingRecorder()
+    provider_stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "count"}],
+        mock_response="one two three four five six seven eight",
+        stream=True,
+        api_key="test-key",
+    )
+    provider_stream.logging_obj.dynamic_async_success_callbacks = [recorder]
+    guardrail_holding_chunks: Final = asyncio.Event()
+
+    async def buffering_guardrail(user_api_key_dict, response, request_data) -> AsyncIterator[object]:
+        held: Final = [await response.__anext__() for _ in range(3)]
+        guardrail_holding_chunks.set()
+        await asyncio.Event().wait()
+        for chunk in held:
+            yield chunk
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_iterator_hook", buffering_guardrail)
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.004, "entries": []}
+    )
+    generator: Final = async_data_generator(
+        response=provider_stream,
+        user_api_key_dict=auth,
+        request_data={"model": "gpt-4o-mini", "litellm_logging_obj": provider_stream.logging_obj},
+    )
+    first_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await guardrail_holding_chunks.wait()
+    first_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_frame
+    await asyncio.wait_for(recorder.billed.wait(), timeout=5)
+
+    assert recorder.billed_texts == ["".join(chunk.choices[0].delta.content or "" for chunk in provider_stream.chunks)]
+    assert recorder.billed_texts[0]
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is not True
 
 
 _AZURE_CONTENT_FILTER_RESULTS: Final = {
@@ -1470,6 +1595,127 @@ async def test_async_data_generator_emits_fallback_error_metadata_event(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_sends_fallback_metadata_in_place_of_a_stripped_usage_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
+    fallback_errors: Final = [
+        {"message": "litellm.RateLimitError: upstream limited request", "type": "RateLimitError", "code": "429"}
+    ]
+    usage_artifact: Final = ModelResponseStream(
+        id="chatcmpl-test", choices=[], created=0, model="openai/internal-fallback", object="chat.completion.chunk"
+    )
+    upstream: Final = _FakeStream(
+        [usage_artifact, _simple_chunk(model="openai/internal-fallback", content="hello")],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                "x-litellm-model-group": "fallback-model",
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in async_data_generator(
+                response=upstream,
+                user_api_key_dict=_user_auth(),
+                request_data={
+                    "model": "primary-model",
+                    "include_fallback_errors": True,
+                    "_litellm_strip_stream_usage": True,
+                },
+            )
+        ]
+    )
+    payloads: Final = tuple(json.loads(frame.removeprefix("data: ")) for frame in frames[:-1])
+
+    assert frames[-1] == "data: [DONE]\n\n"
+    assert len(payloads) == 2
+    assert payloads[0]["object"] == "chat.completion.chunk"
+    assert payloads[0]["choices"] == []
+    assert payloads[0]["litellm_fallback"] == {"fallback_model": "fallback-model", "errors": fallback_errors}
+    assert payloads[1]["choices"][0]["delta"]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_model", ["fallback-model", None])
+@pytest.mark.parametrize("return_raw_model_name", [False, True])
+async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_without_an_event_line(
+    monkeypatch: pytest.MonkeyPatch,
+    fallback_model: str | None,
+    return_raw_model_name: bool,
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
+    fallback_errors: Final = [
+        {
+            "message": "litellm.AuthenticationError: Incorrect API key provided",
+            "type": "AuthenticationError",
+            "param": None,
+            "code": "401",
+        }
+    ]
+    response: Final = ResponsesAPIResponse(id="resp_fallback", created_at=1, model="fallback-model", output=[])
+    upstream: Final = _FakeStream(
+        [
+            ResponseCreatedEvent.model_validate(
+                {"type": "response.created", "sequence_number": 0, "response": response}
+            ),
+            ResponseCompletedEvent.model_validate(
+                {"type": "response.completed", "sequence_number": 1, "response": response}
+            ),
+        ],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                **({"x-litellm-model-group": fallback_model} if fallback_model else {}),
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in async_data_generator(
+                response=upstream,
+                user_api_key_dict=_user_auth(),
+                request_data={
+                    "model": "primary-model",
+                    "include_fallback_errors": True,
+                    "metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: return_raw_model_name},
+                },
+                responses_stream_errors=True,
+            )
+        ]
+    )
+    event_frames: Final = tuple(frame for frame in frames if frame != "data: [DONE]\n\n")
+    payloads: Final = tuple(
+        json.loads(next(line.removeprefix("data: ") for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in event_frames
+    )
+
+    assert tuple(payload.get("type") for payload in payloads) == (
+        "response.created",
+        "litellm.fallback_metadata",
+        "response.completed",
+    )
+    stamped_model: Final = None if return_raw_model_name else fallback_model
+    assert payloads[1] == {
+        "type": "litellm.fallback_metadata",
+        "id": "litellm-fallback-metadata",
+        **({"model": stamped_model} if stamped_model else {}),
+        "litellm_fallback": {"fallback_model": fallback_model, "errors": fallback_errors},
+    }
+    assert {payload.get("model") for payload in payloads} == {stamped_model}
+    assert event_frames[1] == f"data: {json.dumps(payloads[1])}\n\n"
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_skips_fallback_error_event_without_opt_in(
     monkeypatch,
 ):
@@ -1527,6 +1773,29 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_mid_stream_error_frame_redacts_a_key_from_the_provider_message(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+    secret: Final = "sk-9876543210abcdef9876543210"
+    failure: Final = litellm.BadRequestError(
+        message=f"upstream rejected key {secret}", model="qwen", llm_provider="hosted_vllm"
+    )
+
+    frames: Final = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter_raises(failure), user_api_key_dict=_user_auth(), request_data={}
+        )
+    ]
+
+    error_frame: Final = next(item for item in frames if isinstance(item, str) and item.startswith('data: {"error":'))
+    error: Final = json.loads(error_frame.removeprefix("data: "))["error"]
+    assert secret not in error_frame
+    assert "upstream rejected key" in error["message"]
+    assert error["type"] == "invalid_request_error"
 
 
 _BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"

@@ -35,7 +35,6 @@ FileDeleteProvider = Literal[
 ]
 FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic", "mistral", "xai"]
 import litellm
-from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -47,7 +46,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
-from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.llms.xai.batches.handler import XAIBatchesHandler
 from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.types.llms.openai import (
@@ -102,7 +100,6 @@ def _file_content_logging_obj(kwargs: dict[str, object], _is_async: bool) -> Lit
 
 openai_files_instance: Final = OpenAIFilesAPI()
 azure_files_instance: Final = AzureOpenAIFilesAPI()
-vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
 xai_batch_results_instance: Final = XAIBatchesHandler()
 #################################################
@@ -116,7 +113,7 @@ async def acreate_file(
     custom_llm_provider: FileCreateProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject:
     """
     Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
@@ -306,7 +303,7 @@ async def afile_retrieve(
     custom_llm_provider: FileRetrieveProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject:
     """
     Async: Get file contents
@@ -480,7 +477,7 @@ async def afile_delete(
     custom_llm_provider: FileDeleteProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, FileObject]:
     """
     Async: Delete file
@@ -653,7 +650,7 @@ async def afile_list(
     purpose: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List files
@@ -814,7 +811,7 @@ async def afile_content(
     extra_body: dict[str, str] | None = None,
     chunk_size: int = 1024 * 1024,
     stream: bool = False,
-    **kwargs,
+    **kwargs: object,
 ) -> HttpxBinaryResponseContent | FileContentStreamingResult:
     """
     Async: Get file contents
@@ -986,27 +983,6 @@ def file_content(
                 client=client,
                 litellm_params=litellm_params_dict,
             )
-        elif custom_llm_provider == "vertex_ai":
-            api_base: Final = optional_params.api_base or ""
-            vertex_ai_project: Final = (
-                optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location: Final = (
-                optional_params.vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials: Final = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
-
-            response = vertex_ai_files_instance.file_content(
-                _is_async=_is_async,
-                file_content_request=_file_content_request,
-                api_base=api_base,
-                vertex_credentials=vertex_credentials,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
-                litellm_params=litellm_params_dict,
-            )
         elif custom_llm_provider == "bedrock":
             response = bedrock_files_instance.file_content(
                 _is_async=_is_async,
@@ -1041,7 +1017,7 @@ def file_content_streaming(
     extra_headers: dict[str, str] | None,
     chunk_size: int,
     optional_params: GenericLiteLLMParams,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     timeout: float | httpx.Timeout,
     logging_obj: LiteLLMLoggingObj,
     _is_async: bool,
@@ -1091,10 +1067,10 @@ def file_content_streaming(
             client=client if isinstance(client, (OpenAI, AsyncOpenAI)) else None,
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
-    elif custom_llm_provider == LlmProviders.VERTEX_AI.value:
+    elif custom_llm_provider in (LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value):
         if not _is_async:
             raise litellm.exceptions.BadRequestError(
-                message="Streaming 'file_content' for vertex_ai is only supported through 'afile_content'.",
+                message=f"Streaming 'file_content' for {custom_llm_provider} is only supported through 'afile_content'.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -1103,14 +1079,14 @@ def file_content_streaming(
                     request=httpx.Request(method="file_content", url="https://github.com/BerriAI/litellm"),
                 ),
             )
-        vertex_files_config: Final = ProviderConfigManager.get_provider_files_config(
+        google_files_config: Final = ProviderConfigManager.get_provider_files_config(
             model="",
-            provider=LlmProviders.VERTEX_AI,
+            provider=LlmProviders(custom_llm_provider),
         )
-        assert vertex_files_config is not None
+        assert google_files_config is not None
         response = base_llm_http_handler.async_retrieve_file_content_streaming(
             file_content_request=file_content_request,
-            provider_config=vertex_files_config,
+            provider_config=google_files_config,
             litellm_params=litellm_params,
             headers=extra_headers or {},
             logging_obj=logging_obj,

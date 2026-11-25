@@ -48,7 +48,7 @@ from proxy_client import Converged, await_converged
 
 pytestmark = pytest.mark.e2e
 
-GEMINI_MODEL: Final = "gemini-2.5-flash"
+GEMINI_MODEL: Final = "gemini-3.8-flash"
 OPENAI_MODEL: Final = "gpt-5.5"
 REGENERATE_GRACE_PERIOD = "15s"
 REGENERATE_GRACE_SECONDS = 15.0
@@ -155,7 +155,7 @@ class TestKeyRoutes:
         info = client.proxy.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
         assert info.models == [GEMINI_MODEL], (
-            f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
+            f"/key/info reports models {info.models}, configured ['gemini-3.8-flash']"
         )
         assert info.tpm_limit == 424242, (
             f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
@@ -501,7 +501,7 @@ class TestTeamRoutes:
         info = client.team_info(team_id)
         assert info.team_alias == alias, f"/team/info reports team_alias {info.team_alias!r}, configured {alias!r}"
         assert info.models == [GEMINI_MODEL], (
-            f"/team/info reports models {info.models}, configured ['gemini-2.5-flash']"
+            f"/team/info reports models {info.models}, configured ['gemini-3.8-flash']"
         )
 
         key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
@@ -775,7 +775,7 @@ class TestOrganizationRoutes:
             f"/organization/info reports alias {info.organization_alias!r}, configured {alias!r}"
         )
         assert info.models == [GEMINI_MODEL], (
-            f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+            f"/organization/info reports models {info.models}, configured ['gemini-3.8-flash']"
         )
 
     @pytest.mark.covers("mgmt.organization.update.persists")
@@ -882,7 +882,7 @@ class TestModelRoutes:
         model_id = client.proxy.create_model(
             model_name,
             LiteLLMParamsBody(
-                model="gpt-4o-mini",
+                model="gpt-6-luna",
                 mock_response="ok",
                 input_cost_per_token=_INITIAL_INPUT_COST,
             ),
@@ -898,7 +898,7 @@ class TestModelRoutes:
 
         client.proxy.update_model(
             model_id,
-            LiteLLMParamsBody(model="gpt-4o-mini", input_cost_per_token=_UPDATED_INPUT_COST),
+            LiteLLMParamsBody(model="gpt-6-luna", input_cost_per_token=_UPDATED_INPUT_COST),
         )
 
         def updated() -> ModelInfoEntry | None:

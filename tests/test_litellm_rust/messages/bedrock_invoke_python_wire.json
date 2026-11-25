@@ -1,0 +1,727 @@
+{
+ "_source": "What Python's Bedrock Invoke Messages config sent, logged and raised, captured once at 0445fbaf before its Messages handler code was removed",
+ "detached": [
+  "success",
+  {
+   "choices": [
+    {
+     "finish_reason": "stop",
+     "index": 0,
+     "message": {
+      "content": "Hello from native Messages",
+      "function_call": null,
+      "role": "assistant",
+      "tool_calls": null
+     }
+    }
+   ],
+   "id": "msg_native",
+   "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "object": "chat.completion",
+   "system_fingerprint": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "completion_tokens": 412,
+    "completion_tokens_details": {
+     "accepted_prediction_tokens": null,
+     "audio_tokens": null,
+     "image_tokens": null,
+     "reasoning_tokens": 0,
+     "rejected_prediction_tokens": null,
+     "text_tokens": 412,
+     "video_tokens": null
+    },
+    "cost": 0.0068145,
+    "prompt_tokens": 5,
+    "prompt_tokens_details": {
+     "audio_tokens": null,
+     "cache_creation_tokens": 0,
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "image_tokens": null,
+     "initial_prompt_tokens": null,
+     "text_tokens": 5,
+     "video_tokens": null
+    },
+    "total_tokens": 417
+   }
+  },
+  null
+ ],
+ "drop-thread": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ]
+  }
+ },
+ "guardrail": {
+  "billed": [
+   {
+    "guardrail_cost": 0.0003,
+    "guardrail_cost_by_unit": {
+     "contentPolicyUnits": 0.00015,
+     "topicPolicyUnits": 0.00015
+    },
+    "guardrail_id": "gr-1",
+    "guardrail_mode": "during_call",
+    "guardrail_name": "gr-1",
+    "guardrail_provider": "bedrock",
+    "guardrail_response": {
+     "input": {
+      "gr-1": {
+       "invocationMetrics": {
+        "usage": {
+         "contentPolicyUnits": 1,
+         "topicPolicyUnits": 1
+        }
+       }
+      }
+     },
+     "outputs": []
+    },
+    "guardrail_status": "success",
+    "guardrail_usage": {
+     "contentPolicyUnits": 1,
+     "topicPolicyUnits": 1
+    }
+   }
+  ],
+  "headers": {
+   "x-amzn-bedrock-guardrailidentifier": "gr-1",
+   "x-amzn-bedrock-guardrailversion": "1"
+  }
+ },
+ "plain": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ]
+  },
+  "path": "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+  "response": {
+   "content": [
+    {
+     "text": "Hello from native Messages",
+     "type": "text"
+    }
+   ],
+   "id": "msg_native",
+   "model": "claude-sonnet-5",
+   "role": "assistant",
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "type": "message",
+   "usage": {
+    "input_tokens": 5,
+    "output_tokens": 4
+   }
+  },
+  "signed_headers": "content-type;host;x-amz-date"
+ },
+ "signing/session-all": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;date;host;x-amz-security-token",
+  "deployment-session",
+  false,
+  true
+ ],
+ "signing/session-amz-date": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token",
+  "deployment-session",
+  true,
+  false
+ ],
+ "signing/session-date": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;date;host;x-amz-security-token",
+  "deployment-session",
+  false,
+  true
+ ],
+ "signing/session-security-token": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token",
+  "deployment-session",
+  true,
+  false
+ ],
+ "signing/static-all": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;date;host;x-amz-security-token",
+  "caller-token",
+  false,
+  true
+ ],
+ "signing/static-amz-date": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date",
+  null,
+  true,
+  false
+ ],
+ "signing/static-date": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;date;host",
+  null,
+  false,
+  true
+ ],
+ "signing/static-security-token": [
+  "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+  "us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token",
+  "caller-token",
+  true,
+  false
+ ],
+ "stream-failure/cut-body": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n"
+  ],
+  "raised": [
+   [
+    "ReadError",
+    null
+   ],
+   [
+    "ClientPayloadError",
+    null
+   ],
+   [
+    "ContentLengthError",
+    null
+   ]
+  ]
+ },
+ "stream-failure/empty-body": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [],
+  "raised": [
+   [
+    "BedrockError",
+    502
+   ]
+  ]
+ },
+ "stream-failure/error-event-mid-stream": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n"
+  ],
+  "raised": [
+   [
+    "BedrockError",
+    500
+   ]
+  ]
+ },
+ "stream-failure/exception-frame-first": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [],
+  "raised": [
+   [
+    "BedrockError",
+    429
+   ]
+  ]
+ },
+ "stream-failure/invalid-json-chunk": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n"
+  ],
+  "raised": [
+   [
+    "JSONDecodeError",
+    null
+   ]
+  ]
+ },
+ "stream-failure/json-body": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [],
+  "raised": [
+   [
+    "BedrockError",
+    502
+   ]
+  ]
+ },
+ "stream-failure/list-chunk": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n"
+  ],
+  "raised": [
+   [
+    "TypeError",
+    null
+   ]
+  ]
+ },
+ "stream-failure/unknown-event": {
+  "billed": [
+   "failure",
+   {}
+  ],
+  "chunks": [
+   "event: message\ndata: {\"message\": \"x\"}\n\n"
+  ],
+  "raised": [
+   [
+    "BedrockError",
+    502
+   ]
+  ]
+ },
+ "stream-guardrail": {
+  "billed": [
+   {
+    "guardrail_cost": 0.0003,
+    "guardrail_cost_by_unit": {
+     "contentPolicyUnits": 0.00015,
+     "topicPolicyUnits": 0.00015
+    },
+    "guardrail_id": "gr-1",
+    "guardrail_mode": "during_call",
+    "guardrail_name": "gr-1",
+    "guardrail_provider": "bedrock",
+    "guardrail_response": {
+     "input": {
+      "gr-1": {
+       "invocationMetrics": {
+        "usage": {
+         "contentPolicyUnits": 1,
+         "topicPolicyUnits": 1
+        }
+       }
+      }
+     },
+     "outputs": []
+    },
+    "guardrail_status": "success",
+    "guardrail_usage": {
+     "contentPolicyUnits": 1,
+     "topicPolicyUnits": 1
+    }
+   }
+  ],
+  "last_event": {
+   "amazon-bedrock-trace": {
+    "guardrail": {
+     "input": {
+      "gr-1": {
+       "invocationMetrics": {
+        "usage": {
+         "contentPolicyUnits": 1,
+         "topicPolicyUnits": 1
+        }
+       }
+      }
+     },
+     "outputs": []
+    }
+   },
+   "type": "message_stop"
+  }
+ },
+ "stream/complete": {
+  "billed": [
+   "success",
+   {
+    "choices": [
+     {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+       "content": "Hello from native Messages",
+       "function_call": null,
+       "role": "assistant",
+       "tool_calls": null
+      }
+     }
+    ],
+    "id": "msg_native",
+    "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "completion_tokens": 4,
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "image_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": 4,
+      "video_tokens": null
+     },
+     "cost": 8.25e-05,
+     "prompt_tokens": 5,
+     "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cache_write_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "initial_prompt_tokens": null,
+      "text_tokens": 5,
+      "video_tokens": null
+     },
+     "total_tokens": 9
+    }
+   },
+   null
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n",
+   "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
+   "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 4}}\n\n",
+   "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+  ]
+ },
+ "stream/no-message-delta": {
+  "billed": [
+   "success",
+   {
+    "choices": [
+     {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+       "content": "Hello from native Messages",
+       "function_call": null,
+       "role": "assistant",
+       "tool_calls": null
+      }
+     }
+    ],
+    "id": "msg_native",
+    "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "completion_tokens": 4,
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "image_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": 4,
+      "video_tokens": null
+     },
+     "cost": 8.25e-05,
+     "prompt_tokens": 5,
+     "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cache_write_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "initial_prompt_tokens": null,
+      "text_tokens": 5,
+      "video_tokens": null
+     },
+     "total_tokens": 9
+    }
+   },
+   null
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n",
+   "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"api_error\", \"message\": \"Provider stream ended before emitting a message_stop event; the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated.\"}}\n\n"
+  ]
+ },
+ "stream/no-message-stop": {
+  "billed": [
+   "success",
+   {
+    "choices": [
+     {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+       "content": "Hello from native Messages",
+       "function_call": null,
+       "role": "assistant",
+       "tool_calls": null
+      }
+     }
+    ],
+    "id": "msg_native",
+    "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "completion_tokens": 4,
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "image_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": 4,
+      "video_tokens": null
+     },
+     "cost": 8.25e-05,
+     "prompt_tokens": 5,
+     "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cache_write_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "initial_prompt_tokens": null,
+      "text_tokens": 5,
+      "video_tokens": null
+     },
+     "total_tokens": 9
+    }
+   },
+   null
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello from native Messages\"}}\n\n",
+   "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
+   "event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 4}}\n\n",
+   "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"api_error\", \"message\": \"Provider stream ended before emitting a message_stop event; the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated.\"}}\n\n"
+  ]
+ },
+ "stream/non-ascii": {
+  "billed": [
+   "success",
+   {
+    "choices": [
+     {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+       "content": "hé",
+       "function_call": null,
+       "role": "assistant",
+       "tool_calls": null
+      }
+     }
+    ],
+    "id": "msg_native",
+    "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "completion_tokens": 2,
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "image_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": 2,
+      "video_tokens": null
+     },
+     "cost": 4.9500000000000004e-05,
+     "prompt_tokens": 5,
+     "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cache_write_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "initial_prompt_tokens": null,
+      "text_tokens": 5,
+      "video_tokens": null
+     },
+     "total_tokens": 7
+    }
+   },
+   null
+  ],
+  "chunks": [
+   "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_native\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 5, \"output_tokens\": 4}}}\n\n",
+   "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n",
+   "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"h\\u00e9\"}}\n\n",
+   "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"api_error\", \"message\": \"Provider stream ended before emitting a message_stop event; the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated.\"}}\n\n"
+  ]
+ },
+ "tools/custom-field": [
+  {
+   "defer_loading": true,
+   "description": "A",
+   "input_schema": {
+    "type": "object"
+   },
+   "name": "a"
+  },
+  {
+   "description": "B",
+   "input_schema": {
+    "type": "object"
+   },
+   "name": "b"
+  }
+ ],
+ "tools/custom-schema-type": [
+  {
+   "input_schema": {
+    "properties": {
+     "o": {
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "name": "n",
+   "type": "custom"
+  }
+ ],
+ "tools/unnamed": [
+  {
+   "input_schema": {
+    "type": "object"
+   },
+   "name": "litellm_unnamed_tool_0"
+  },
+  {
+   "input_schema": {
+    "type": "object"
+   },
+   "name": "litellm_unnamed_tool_1"
+  }
+ ],
+ "url/invoke-arn": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ]
+  },
+  "path": "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-sonnet-4-5-20250929-v1%3A0/invoke"
+ },
+ "url/invoke-region-path": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ]
+  },
+  "path": "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
+ },
+ "url/invoke-region-path-arn": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ]
+  },
+  "path": "/model/arn%3Aaws%3Abedrock%3Aeu-west-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-sonnet-4-5-20250929-v1%3A0/invoke"
+ },
+ "url/model-id-arn": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ]
+  },
+  "path": "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aapplication-inference-profile%2Fabc123/invoke"
+ },
+ "url/sampling": {
+  "body": {
+   "anthropic_version": "bedrock-2023-05-31",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "temperature": 0.2
+  },
+  "path": "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke"
+ },
+ "warnings/clear-thinking": [
+  "Bedrock clear_thinking_20251015: max_tokens=1000 is not greater than minimum thinking budget (1024); cannot inject thinking safely"
+ ],
+ "warnings/inlined-schema": [
+  "Bedrock Invoke: model=anthropic.claude-3-5-sonnet-20240620-v1:0 does not take native structured output for this schema per model_prices_and_context_window.json, so the JSON schema was inlined into the last user message and is NOT enforced by the model."
+ ],
+ "warnings/native-output": [],
+ "warnings/native-output-rejected": [
+  "Bedrock rejected native structured output for model=us.anthropic.claude-sonnet-4-5-20250929-v1:0, so litellm sent the request again without it. Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the rejected call.",
+  "Bedrock Invoke: model=us.anthropic.claude-sonnet-4-5-20250929-v1:0 does not take native structured output for this schema per model_prices_and_context_window.json, so the JSON schema was inlined into the last user message and is NOT enforced by the model."
+ ],
+ "warnings/service-tier": [
+  "Dropping `service_tier` for model=us.anthropic.claude-sonnet-4-5-20250929-v1:0 on provider=bedrock. Only the Anthropic API routes accept it."
+ ]
+}
