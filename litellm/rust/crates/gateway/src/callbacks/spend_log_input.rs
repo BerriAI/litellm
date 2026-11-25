@@ -265,7 +265,7 @@ mod tests {
         Charged {
             key_hash: Some("a".repeat(64)),
             key_alias: Some("ci".to_owned()),
-            user_id: None,
+            ..Charged::default()
         }
     }
 
@@ -384,6 +384,7 @@ mod tests {
             key_hash: Some("litellm_proxy_master_key".to_owned()),
             key_alias: None,
             user_id: Some("default_user_id".to_owned()),
+            ..Charged::default()
         };
         let row = row(&input(&charged, &call(None), false));
         assert_eq!(

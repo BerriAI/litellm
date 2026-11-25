@@ -79,13 +79,22 @@ pub enum Ended {
     Failed,
 }
 
-/// Who a call is charged to, as Python's `UserAPIKeyAuth` names its caller.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Who a call is charged to, as Python's `UserAPIKeyAuth` names its caller, and what the proxy's
+/// `get_sanitized_user_information_from_key` logs of the key as `user_api_key_*` metadata.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Charged {
     /// The hash the key's row is stored under, or Python's alias for the master key.
     pub key_hash: Option<String>,
     pub key_alias: Option<String>,
     pub user_id: Option<String>,
+    /// The key's `spend`, `user_api_key_spend`.
+    pub spend: Option<f64>,
+    /// The key's `max_budget`, `user_api_key_max_budget`.
+    pub max_budget: Option<f64>,
+    /// `budget_reset_at.isoformat()`, `user_api_key_budget_reset_at`.
+    pub budget_reset_at: Option<String>,
+    /// The key's `metadata` without its callback settings, `user_api_key_auth_metadata`.
+    pub metadata: Option<Map<String, Value>>,
 }
 
 /// One call as it stands.
