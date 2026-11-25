@@ -553,10 +553,9 @@ dependencies = [
 [[package]]
 name = "aws-sigv4"
 version = "1.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31d955e76ff96acd555bf06fa0fa6d5bf9335fa84ae7c64481b20ae61d231f70"
 dependencies = [
  "aws-credential-types",
+ "aws-lc-rs",
  "aws-smithy-eventstream",
  "aws-smithy-http",
  "aws-smithy-runtime-api",
@@ -3539,6 +3538,8 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
+ "aws-lc-fips-sys",
+ "aws-lc-rs",
  "aws-runtime",
  "aws-sdk-sts",
  "aws-sigv4",
@@ -4211,6 +4212,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "litellm-at-rest",
+ "litellm-auth-aws",
  "litellm-auth-store",
  "litellm-callbacks",
  "litellm-callbacks-budgets",

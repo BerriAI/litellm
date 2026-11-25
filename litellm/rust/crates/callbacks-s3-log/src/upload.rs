@@ -15,7 +15,7 @@ use litellm_s3::signed::{Reply, SendError, SignedRequest, send};
 use reqwest::Method;
 
 use crate::{
-    key::{hex_sha256, object_url},
+    key::object_url,
     limiter::Limiter,
     settings::{Environment, Settings},
 };
@@ -208,7 +208,10 @@ impl Uploader {
         let mut headers = vec![
             ("Content-Type".to_owned(), object.content_type.to_owned()),
             ("Content-MD5".to_owned(), md5),
-            ("x-amz-content-sha256".to_owned(), hex_sha256(body)),
+            (
+                "x-amz-content-sha256".to_owned(),
+                litellm_auth_aws::hex_sha256(body),
+            ),
             ("Content-Language".to_owned(), "en".to_owned()),
             (
                 "Content-Disposition".to_owned(),

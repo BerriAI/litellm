@@ -2036,6 +2036,61 @@ mod tests {
         );
     }
 
+    /// Signatures from AWS's SigV4 test suite, aws-c-auth v0.9.0 `tests/aws-signing-test-suite/v4`
+    #[rstest::rstest]
+    #[case::get_vanilla("GET", "/", &[], "", None, "host;x-amz-date", "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31")]
+    #[case::get_vanilla_query_order_key_case("GET", "/?Param2=value2&Param1=value1", &[], "", None, "host;x-amz-date", "b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500")]
+    #[case::get_vanilla_with_session_token("GET", "/", &[], "", Some("6e86291e8372ff2a2260956d9b8aae1d763fbf315fa00fa31553b73ebf194267"), "host;x-amz-date;x-amz-security-token", "07ec1639c89043aa0e3e2de82b96708f198cceab042d4a97044c66dd9f74e7f8")]
+    #[case::post_vanilla("POST", "/", &[], "", None, "host;x-amz-date", "5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b")]
+    #[case::post_x_www_form_urlencoded("POST", "/", &[("content-type", "application/x-www-form-urlencoded"), ("content-length", "13"), ("x-amz-content-sha256", "9095672bbd1f56dfc5b65f3e153adc8731a4a654192329106275f4c7b24d0b6e")], "Param1=value1", None, "content-length;content-type;host;x-amz-content-sha256;x-amz-date", "d3875051da38690788ef43de4db0d8f280229d82040bfac253562e56c3f20e0b")]
+    fn signing_matches_the_aws_sigv4_test_suite(
+        #[case] method: &str,
+        #[case] path: &str,
+        #[case] headers: &[(&'static str, &str)],
+        #[case] body: &str,
+        #[case] session_token: Option<&str>,
+        #[case] signed_headers: &str,
+        #[case] signature: &str,
+    ) {
+        let credentials = Credentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            session_token.map(str::to_owned),
+            None,
+            "test",
+        );
+        let headers = headers
+            .iter()
+            .map(|(name, value)| {
+                (
+                    HeaderName::from_static(name),
+                    HeaderValue::from_str(value).unwrap(),
+                )
+            })
+            .collect();
+
+        let signed = sign_headers(
+            method,
+            &format!("https://example.amazonaws.com{path}"),
+            body.as_bytes(),
+            &headers,
+            SigningScope {
+                region: "us-east-1",
+                service: "service",
+                credentials: &credentials,
+                time: UNIX_EPOCH + std::time::Duration::from_secs(1_440_938_160),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            signed["Authorization"],
+            format!(
+                "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders={signed_headers}, Signature={signature}"
+            )
+        );
+    }
+
     #[test]
     fn signing_without_session_token_omits_security_header() {
         let (url, body, headers) = parity_inputs();
