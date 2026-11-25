@@ -7866,24 +7866,28 @@ async def test_anthropic_proxy_route_bills_the_custom_price_of_the_forwarded_mod
     )
 
 
+_NEGOTIATED_OPENAI_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("api_base", "bills_deployment_price"),
+    ("api_base", "team_id", "bills_deployment_price"),
     [
-        pytest.param(None, True, id="deployment-without-api-base"),
-        pytest.param("https://api.openai.com/v1", True, id="deployment-on-the-passthrough-base"),
-        pytest.param("https://vllm.internal/v1", False, id="deployment-on-another-server"),
+        pytest.param(None, None, True, id="deployment-without-api-base"),
+        pytest.param("https://api.openai.com/v1", None, True, id="deployment-on-the-passthrough-base"),
+        pytest.param("https://vllm.internal/v1", None, False, id="deployment-on-another-server"),
+        pytest.param(None, "team-a", False, id="team-deployment-called-by-its-team"),
     ],
 )
-async def test_openai_proxy_route_bills_the_custom_price_only_of_a_deployment_on_its_upstream(
-    monkeypatch, api_base, bills_deployment_price
+async def test_openai_proxy_route_bills_the_custom_price_only_of_an_operator_deployment_on_its_upstream(
+    monkeypatch, api_base, team_id, bills_deployment_price
 ):
     for name in ("OPENAI_API_BASE", "OPENAI_BASE_URL", "SERVER_ROOT_PATH"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     expected_pricing: Final = (
-        _RELAY_HAIKU_PRICING if bills_deployment_price else dict(litellm.model_cost["gpt-5.4-mini"])
+        _NEGOTIATED_OPENAI_PRICING if bills_deployment_price else dict(litellm.model_cost["gpt-5.4-mini"])
     )
     deployment_params: Final = {"model": "openai/gpt-5.4-mini", "api_key": "sk-test", "api_base": api_base}
     monkeypatch.setattr(
@@ -7893,7 +7897,11 @@ async def test_openai_proxy_route_bills_the_custom_price_only_of_a_deployment_on
                 {
                     "model_name": "gpt-5.4-mini",
                     "litellm_params": {key: value for key, value in deployment_params.items() if value is not None},
-                    "model_info": {"id": "openai-dep", **_RELAY_HAIKU_PRICING},
+                    "model_info": {
+                        "id": "openai-dep",
+                        **_NEGOTIATED_OPENAI_PRICING,
+                        **({"team_id": team_id} if team_id else {}),
+                    },
                 }
             ]
         ),
@@ -7914,7 +7922,7 @@ async def test_openai_proxy_route_bills_the_custom_price_only_of_a_deployment_on
                 "/openai_passthrough/v1/chat/completions", {"model": "gpt-5.4-mini", "messages": [*_RELAY_MESSAGES]}
             ),
             fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key", team_id=team_id),
         )
 
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(

@@ -336,10 +336,16 @@ def _upstream(base_url: str) -> str:
     return base_url.rstrip("/").removesuffix("/v1")
 
 
-def _targets_passthrough_base(api_base: object, passthrough_base: str | None) -> bool:
-    if passthrough_base is None or api_base is None:
+def _priced_by_the_passthrough_operator(
+    params: Mapping[str, object], model_info: Mapping[str, object], passthrough_base: str | None
+) -> bool:
+    if passthrough_base is None:
         return True
-    return isinstance(api_base, str) and _upstream(api_base) == _upstream(passthrough_base)
+    api_base: Final = params.get("api_base")
+    same_upstream: Final = api_base is None or (
+        isinstance(api_base, str) and _upstream(api_base) == _upstream(passthrough_base)
+    )
+    return same_upstream and model_info.get("team_id") is None
 
 
 def _provider_deployment_model_info(
@@ -347,9 +353,10 @@ def _provider_deployment_model_info(
 ) -> Mapping[str, object] | None:
     fields: Final = _object_mapping(deployment)
     params: Final = _object_mapping(fields.get("litellm_params"))
+    model_info: Final = _object_mapping(fields.get("model_info"))
     backend: Final = params.get("model")
     provider_override: Final = params.get("custom_llm_provider")
-    if not isinstance(backend, str) or not _targets_passthrough_base(params.get("api_base"), passthrough_base):
+    if not isinstance(backend, str) or not _priced_by_the_passthrough_operator(params, model_info, passthrough_base):
         return None
     try:
         backend_model, provider, _, _ = get_llm_provider(
@@ -360,7 +367,7 @@ def _provider_deployment_model_info(
     if provider != passthrough_provider.value or model not in (backend_model, backend.removeprefix(f"{provider}/")):
         return None
     return {
-        **_object_mapping(fields.get("model_info")),
+        **model_info,
         **{field: value for field in _DEPLOYMENT_PRICING_FIELDS if (value := params.get(field)) is not None},
     }
 
@@ -375,8 +382,8 @@ def _passthrough_deployment_pricing_model_info(
     """
     The pass-through selects no deployment, so ``request_body`` is the body it forwards. Only a single deployment in
     that model's group serving that exact model on the pass-through's provider can say what it costs: with several,
-    any pick could bill another deployment's negotiated price. With ``passthrough_base`` set, a deployment pointing at
-    another server is not the one the pass-through pays for, so its price is ignored.
+    any pick could bill another deployment's negotiated price. With ``passthrough_base`` set, the operator's key pays
+    for the call, so a deployment pointing at another server or priced by a team is ignored.
     """
     model: Final = request_body.get("model")
     if llm_router is None or not isinstance(model, str) or not model:
