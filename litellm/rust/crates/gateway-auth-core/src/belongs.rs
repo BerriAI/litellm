@@ -3,7 +3,7 @@
 //! instead of declaring the slots again. The end user is named by the request, not by the caller,
 //! so it sits beside a `Belongs`, never in it.
 
-use crate::Rows;
+use crate::{Rows, record::Record};
 
 /// No `Default`, so each place that builds one names every slot. An `Option` here is a name the
 /// caller does not have, never a row a host did not read.
@@ -107,6 +107,16 @@ impl<R: Rows> Team<R> {
     }
 }
 
+impl<R: Rows<Team: Record>> Team<R> {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Unstored(team_id) => team_id,
+            Self::Row(team) => team.id(),
+            Self::KeyCopy(copy) => &copy.team_id,
+        }
+    }
+}
+
 /// Only a key's: the UI team, or a team the host did not report. The key's own copy of the team's
 /// values stands, which is Python's `LiteLLM_TeamRebuiltFromToken`.
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +153,15 @@ impl<T> Named<T> {
         match self {
             Self::Stored(row) => Some(row),
             Self::Unstored(_) => None,
+        }
+    }
+}
+
+impl<T: Record> Named<T> {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Unstored(id) => id,
+            Self::Stored(row) => row.id(),
         }
     }
 }

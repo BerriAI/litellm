@@ -137,6 +137,24 @@ impl Key {
     }
 }
 
+#[cfg(test)]
+impl Key {
+    pub(crate) fn stored(hash: &str, alias: Option<&str>) -> Self {
+        Self {
+            record: KeyRecord {
+                token: Some(KeyHash::new(hash)),
+                ..KeyRecord::default()
+            },
+            models: Arc::from([]),
+            limits: KeyLimits::default(),
+            priority: None,
+            alias: alias.map(Arc::from),
+            budget: None,
+            aliased: false,
+        }
+    }
+}
+
 /// The `metadata` the native app honors: the key's own limit for each model it names one for,
 /// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`, and the priority
 /// class `dynamic_rate_limiter_v3` counts the key under, when it is written as text.

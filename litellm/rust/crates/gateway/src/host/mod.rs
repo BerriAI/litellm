@@ -12,6 +12,8 @@ mod prompt_estimate;
 mod router;
 mod spend_log;
 
+#[cfg(test)]
+pub(crate) use auth::Key;
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;

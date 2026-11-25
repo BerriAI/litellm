@@ -10,11 +10,8 @@ use std::sync::Arc;
 
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use litellm_config::GeneralSettings;
-use litellm_gateway_auth_core::{
-    Credential, StoredKey,
-    body::{
-        self, Deferred, Deployment, HostTables, Names, OptIn, Params, Policy, Reachable, Surface,
-    },
+use litellm_gateway_auth_core::body::{
+    self, Deferred, Deployment, HostTables, Names, OptIn, Params, Policy, Reachable, Surface,
 };
 use serde_json::{Map, Value};
 
@@ -113,10 +110,7 @@ async fn check<H: Host>(
         deferred: Deferred::default(),
     };
     let needs = body::needs(&request, names, policy);
-    let team = match &call.identity.credential {
-        Credential::MasterKey => None,
-        Credential::Key { key } => key.record().team_id.as_deref(),
-    };
+    let team = call.identity.belongs.holder.team().map(|team| team.id());
     let reachable = Reachable {
         groups: gateway
             .router

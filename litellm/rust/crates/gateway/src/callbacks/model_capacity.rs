@@ -39,7 +39,7 @@ use litellm_callbacks_parallel_request_limiter::{
 };
 use litellm_config::{Config, PriorityReservation};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::Credential;
+use litellm_gateway_auth_core::{Credential, Team};
 use litellm_gateway_inference::group_limits;
 use litellm_python_compat::json::loaded_str;
 use litellm_redis_store::{RequestRedis, active_teams::ActiveTeams, rate_limits::RateLimits};
@@ -178,15 +178,23 @@ pub struct Counted {
 }
 
 impl Counted {
-    /// The master key names no priority class. A key names the one its row holds.
+    /// The master key names no priority class, team or alias. A key names the class its row
+    /// holds, its alias and its team's id and alias. A key copy of a team holds no alias here.
     fn of(identity: &Authenticated<NativeRows>) -> Self {
-        let priority = match &identity.credential {
-            Credential::MasterKey => None,
-            Credential::Key { key } => key.priority().cloned(),
+        let (priority, key_alias) = match &identity.credential {
+            Credential::MasterKey => (None, None),
+            Credential::Key { key } => (key.priority().cloned(), key.alias().map(str::to_owned)),
         };
+        let team = identity.belongs.holder.team();
         Self {
             key: KeyFacts {
                 api_key: parallel_request_limiter::Caller::of(identity).api_key,
+                team_id: team.map(|team| Scalar::Text(team.id().to_owned())),
+                team_alias: match team {
+                    Some(Team::Row(team)) => team.team_alias.clone(),
+                    Some(Team::Unstored(_) | Team::KeyCopy(_)) | None => None,
+                },
+                key_alias,
                 priority: priority.as_deref().map(|priority| Priority {
                     value: json!(priority),
                     hash_error: None,
@@ -308,10 +316,10 @@ impl ModelCapacity {
         };
         let settlement = Settlement {
             model_group: Some(&group),
-            team_id: None,
-            team_alias: None,
+            team_id: counted.key.team_str(),
+            team_alias: counted.key.team_alias.as_deref(),
             key_hash: counted.key.api_key.as_deref(),
-            key_alias: None,
+            key_alias: counted.key.key_alias.as_deref(),
             customer_org_id: None,
             customer_org_alias: None,
         };
@@ -401,9 +409,80 @@ impl Callback for ModelCapacity {
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth_core::{
+        Belongs, Holder, Named, TeamCopy,
+        record::{EndUserRecord, TeamRecord},
+    };
     use rstest::rstest;
 
     use super::*;
+    use crate::test_support::{key, master};
+
+    fn in_team(team: Team<NativeRows>) -> Authenticated<NativeRows> {
+        key(
+            "stored",
+            Some("key alias"),
+            Belongs {
+                holder: Holder::Member {
+                    user: Named::Unstored("u1".to_owned()),
+                    team,
+                    membership: None,
+                },
+                org: None,
+                project: None,
+            },
+            EndUserRecord::default(),
+        )
+    }
+
+    fn counted_as(
+        team_id: Option<&str>,
+        team_alias: Option<&str>,
+        key_alias: Option<&str>,
+    ) -> KeyFacts {
+        KeyFacts {
+            team_id: team_id.map(|team_id| Scalar::Text(team_id.to_owned())),
+            team_alias: team_alias.map(str::to_owned),
+            key_alias: key_alias.map(str::to_owned),
+            ..KeyFacts::default()
+        }
+    }
+
+    #[rstest]
+    #[case::a_team_row(
+        in_team(Team::Row(TeamRecord { team_id: "t1".to_owned(), team_alias: Some("team alias".to_owned()), ..TeamRecord::default() })),
+        counted_as(Some("t1"), Some("team alias"), Some("key alias"))
+    )]
+    #[case::a_key_copy(
+        in_team(Team::KeyCopy(TeamCopy { team_id: "t1".to_owned(), object_permission: None })),
+        counted_as(Some("t1"), None, Some("key alias"))
+    )]
+    #[case::an_unstored_team(
+        in_team(Team::Unstored("t1".to_owned())),
+        counted_as(Some("t1"), None, Some("key alias"))
+    )]
+    #[case::the_master_key(master(), counted_as(None, None, None))]
+    fn a_call_is_counted_under_its_team_and_its_keys_alias(
+        #[case] identity: Authenticated<NativeRows>,
+        #[case] expected: KeyFacts,
+    ) {
+        let KeyFacts {
+            team_id,
+            team_alias,
+            key_alias,
+            ..
+        } = Counted::of(&identity).key;
+
+        assert_eq!(
+            KeyFacts {
+                team_id,
+                team_alias,
+                key_alias,
+                ..KeyFacts::default()
+            },
+            expected
+        );
+    }
 
     #[rstest]
     fn the_callback_is_built_only_when_the_config_names_it() {

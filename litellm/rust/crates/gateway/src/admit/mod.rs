@@ -105,9 +105,7 @@ fn token_estimate(
     path: &str,
     fields: &mut Fields,
 ) -> Option<Reason> {
-    let counts_tokens = parallel_request_limiter::Caller::of(caller)
-        .limits
-        .counts_tokens();
+    let counts_tokens = parallel_request_limiter::Caller::of(caller).counts_tokens();
     (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
         .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }

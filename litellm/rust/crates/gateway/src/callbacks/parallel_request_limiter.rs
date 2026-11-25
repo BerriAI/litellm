@@ -31,7 +31,7 @@ use litellm_callbacks_parallel_request_limiter::{
 };
 use litellm_config::{Config, Environment};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core as auth_core;
+use litellm_gateway_auth_core::{self as auth_core, Belongs, Named, Team, record::MinuteLimits};
 use litellm_gateway_inference::{RateLimited, call_type};
 use litellm_redis_client::RedisClient;
 use litellm_redis_store::{Remote, rate_limits::RateLimits};
@@ -217,35 +217,136 @@ impl KeyLimits {
     }
 }
 
-/// Who Python says the caller is: its `api_key` and its `user_id`.
+/// Who Python's auth object says the caller is, with the limits of each thing it belongs to.
 pub(crate) struct Caller {
     pub(crate) api_key: Option<String>,
-    user_id: Option<&'static str>,
+    user_id: Option<String>,
+    team_id: Option<String>,
+    org_id: Option<String>,
+    project_id: Option<String>,
+    end_user_id: Option<String>,
     pub(crate) limits: KeyLimits,
+    user: MinuteLimits,
+    team: MinuteLimits,
+    team_member: MinuteLimits,
+    end_user: MinuteLimits,
+    org: MinuteLimits,
 }
 
 impl Caller {
     /// A key is named by the hash its row is stored under, as Python's `api_key` is, and the
-    /// master key by Python's alias for it. The master key holds no limit.
+    /// master key by Python's alias for it. The master key holds no limit. A limit is only read
+    /// from a stored row: a key copy of a team holds none here.
     pub(crate) fn of(identity: &Authenticated<NativeRows>) -> Self {
-        match &identity.credential {
-            auth_core::Credential::MasterKey => Self {
-                api_key: Some(MASTER_KEY_ALIAS.to_owned()),
-                user_id: Some(PROXY_ADMIN_NAME),
-                limits: KeyLimits::default(),
+        let auth_core::Caller {
+            credential,
+            belongs:
+                Belongs {
+                    holder,
+                    org,
+                    project,
+                },
+            end_user,
+        } = &**identity;
+        let user = holder.user();
+        let team = holder.team();
+        let (api_key, user_id, limits) = match credential {
+            auth_core::Credential::MasterKey => (
+                Some(MASTER_KEY_ALIAS.to_owned()),
+                Some(PROXY_ADMIN_NAME.to_owned()),
+                KeyLimits::default(),
+            ),
+            auth_core::Credential::Key { key } => (
+                identity.hash().map(ToString::to_string),
+                user.map(|user| user.id().to_owned()),
+                key.limits().clone(),
+            ),
+        };
+        Self {
+            api_key,
+            user_id,
+            team_id: team.map(|team| team.id().to_owned()),
+            org_id: org.as_ref().map(|org| org.id().to_owned()),
+            project_id: project.as_ref().map(|project| project.id().to_owned()),
+            end_user_id: end_user.end_user_id.clone(),
+            limits,
+            user: user
+                .and_then(Named::stored)
+                .map(|user| user.limits)
+                .unwrap_or_default(),
+            team: match team {
+                Some(Team::Row(team)) => team.limits,
+                Some(Team::Unstored(_) | Team::KeyCopy(_)) | None => MinuteLimits::default(),
             },
-            auth_core::Credential::Key { key } => Self {
-                api_key: identity.hash().map(ToString::to_string),
-                user_id: None,
-                limits: key.limits().clone(),
-            },
+            team_member: holder
+                .membership()
+                .map(|member| member.limits)
+                .unwrap_or_default(),
+            end_user: end_user.limits,
+            org: org
+                .as_ref()
+                .and_then(Named::stored)
+                .map(|org| org.limits)
+                .unwrap_or_default(),
         }
+    }
+
+    /// Whether any limit counts tokens, which a call reserves from its body before it runs.
+    pub(crate) fn counts_tokens(&self) -> bool {
+        self.limits.counts_tokens()
+            || [
+                self.user,
+                self.team,
+                self.team_member,
+                self.end_user,
+                self.org,
+            ]
+            .into_iter()
+            .any(MinuteLimits::counts_tokens)
+    }
+
+    /// The members of Python's auth object the limiter's descriptors read.
+    fn auth(&self) -> Map<String, Value> {
+        let KeyLimits {
+            rpm,
+            tpm,
+            max_parallel_requests,
+            ..
+        } = &self.limits;
+        Map::from_iter(
+            [
+                ("api_key", json!(self.api_key)),
+                ("rpm_limit", json!(rpm)),
+                ("tpm_limit", json!(tpm)),
+                ("max_parallel_requests", json!(max_parallel_requests)),
+                ("user_id", json!(self.user_id)),
+                ("user_rpm_limit", json!(self.user.rpm)),
+                ("user_tpm_limit", json!(self.user.tpm)),
+                ("team_id", json!(self.team_id)),
+                ("team_rpm_limit", json!(self.team.rpm)),
+                ("team_tpm_limit", json!(self.team.tpm)),
+                ("team_member_rpm_limit", json!(self.team_member.rpm)),
+                ("team_member_tpm_limit", json!(self.team_member.tpm)),
+                ("end_user_id", json!(self.end_user_id)),
+                ("end_user_rpm_limit", json!(self.end_user.rpm)),
+                ("end_user_tpm_limit", json!(self.end_user.tpm)),
+                ("org_id", json!(self.org_id)),
+                ("organization_rpm_limit", json!(self.org.rpm)),
+                ("organization_tpm_limit", json!(self.org.tpm)),
+                ("project_id", json!(self.project_id)),
+            ]
+            .map(|(name, value)| (name.to_owned(), value)),
+        )
     }
 
     fn targets(&self) -> TargetFacts {
         TargetFacts {
             user_api_key_hash: self.api_key.clone(),
-            user_api_key_user_id: self.user_id.map(str::to_owned),
+            user_api_key_user_id: self.user_id.clone(),
+            user_api_key_team_id: self.team_id.clone(),
+            user_api_key_org_id: self.org_id.clone(),
+            user_api_key_project_id: self.project_id.clone(),
+            end_user_id: self.end_user_id.clone(),
             ..TargetFacts::default()
         }
     }
@@ -381,28 +482,14 @@ impl KeyLimiter {
         RateLimitedModel { requested, group }
     }
 
-    /// The limits the caller's key holds, as the proxy describes them: its `api_key`, and its
-    /// `model_per_key` for the model asked for.
+    /// The limits the caller holds, as the proxy describes them: its key's, its user's, team's,
+    /// membership's, end user's and organization's, and its key's `model_per_key` for the model
+    /// asked for.
     fn descriptors(&self, caller: &Caller, model: Option<&RateLimitedModel>) -> Vec<Descriptor> {
-        let KeyLimits {
-            rpm,
-            tpm,
-            max_parallel_requests,
-            model_rpm,
-            model_tpm,
-        } = &caller.limits;
-        let auth = Map::from_iter([
-            ("api_key".to_owned(), json!(caller.api_key)),
-            ("rpm_limit".to_owned(), json!(rpm)),
-            ("tpm_limit".to_owned(), json!(tpm)),
-            (
-                "max_parallel_requests".to_owned(),
-                json!(max_parallel_requests),
-            ),
-        ]);
+        let auth = caller.auth();
         let metadata = AuthMetadata {
-            key_model_rpm_limit: json!(**model_rpm),
-            key_model_tpm_limit: json!(**model_tpm),
+            key_model_rpm_limit: json!(*caller.limits.model_rpm),
+            key_model_tpm_limit: json!(*caller.limits.model_tpm),
             ..AuthMetadata::default()
         };
         let lookups = Lookups {
@@ -488,7 +575,7 @@ impl KeyLimiter {
             .as_ref()
             .map_or("", |call| call.kind.call_type.as_str());
         let sent = match input.fields.raw(Field::RequestBody)? {
-            Some(Value::Object(sent)) if admission.caller.limits.counts_tokens() => Some(sent),
+            Some(Value::Object(sent)) if admission.caller.counts_tokens() => Some(sent),
             _ => None,
         };
         let mut capped = sent.cloned().map(Value::Object);
@@ -663,9 +750,216 @@ impl Callback for KeyLimiter {
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth_core::{
+        Holder, TeamCopy,
+        record::{EndUserRecord, MembershipRecord, OrgRecord, TeamRecord, UserRecord},
+    };
     use rstest::rstest;
 
     use super::*;
+    use crate::test_support::{key, master};
+
+    fn limiter() -> Arc<KeyLimiter> {
+        KeyLimiter::new(
+            Settings::default(),
+            counters(None),
+            crate::boot::unhosted(&Config::default()),
+        )
+    }
+
+    /// Each descriptor's kind, the value it counts under and its request and token limits.
+    fn described(
+        identity: &Authenticated<NativeRows>,
+    ) -> Vec<(String, String, Option<i64>, Option<i64>)> {
+        limiter()
+            .descriptors(&Caller::of(identity), None)
+            .into_iter()
+            .map(|descriptor| {
+                let limits = descriptor.limits();
+                (
+                    descriptor.key,
+                    descriptor.value,
+                    limits.requests_per_unit,
+                    limits.tokens_per_unit,
+                )
+            })
+            .collect()
+    }
+
+    /// A user in a team in an organization, each with its own limits, called for an end user
+    /// with its own.
+    fn member() -> Authenticated<NativeRows> {
+        key(
+            "stored",
+            None,
+            Belongs {
+                holder: Holder::Member {
+                    user: Named::Stored(UserRecord {
+                        user_id: "u1".to_owned(),
+                        limits: MinuteLimits {
+                            rpm: Some(1),
+                            tpm: Some(10),
+                        },
+                        ..UserRecord::default()
+                    }),
+                    team: Team::Row(TeamRecord {
+                        team_id: "t1".to_owned(),
+                        limits: MinuteLimits {
+                            rpm: Some(2),
+                            tpm: Some(20),
+                        },
+                        ..TeamRecord::default()
+                    }),
+                    membership: Some(MembershipRecord {
+                        user_id: "u1".to_owned(),
+                        team_id: "t1".to_owned(),
+                        limits: MinuteLimits {
+                            rpm: Some(3),
+                            tpm: Some(30),
+                        },
+                    }),
+                },
+                org: Some(Named::Stored(OrgRecord {
+                    organization_id: "o1".to_owned(),
+                    limits: MinuteLimits {
+                        rpm: Some(5),
+                        tpm: Some(50),
+                    },
+                    ..OrgRecord::default()
+                })),
+                project: Some(Named::Unstored("p1".to_owned())),
+            },
+            EndUserRecord {
+                end_user_id: Some("e1".to_owned()),
+                found: true,
+                limits: MinuteLimits {
+                    rpm: Some(4),
+                    tpm: Some(40),
+                },
+            },
+        )
+    }
+
+    /// The same names with no row stored behind any of them.
+    fn unstored() -> Authenticated<NativeRows> {
+        key(
+            "stored",
+            None,
+            Belongs {
+                holder: Holder::Member {
+                    user: Named::Unstored("u1".to_owned()),
+                    team: Team::KeyCopy(TeamCopy {
+                        team_id: "t1".to_owned(),
+                        object_permission: None,
+                    }),
+                    membership: None,
+                },
+                org: Some(Named::Unstored("o1".to_owned())),
+                project: Some(Named::Unstored("p1".to_owned())),
+            },
+            EndUserRecord::default(),
+        )
+    }
+
+    fn described_as(
+        kind: &str,
+        value: &str,
+        rpm: i64,
+        tpm: i64,
+    ) -> (String, String, Option<i64>, Option<i64>) {
+        (kind.to_owned(), value.to_owned(), Some(rpm), Some(tpm))
+    }
+
+    #[rstest]
+    fn each_thing_a_caller_belongs_to_is_limited_under_its_own_name() {
+        assert_eq!(
+            described(&member()),
+            [
+                described_as("user", "u1", 1, 10),
+                described_as("team", "t1", 2, 20),
+                described_as("team_member", "t1:u1", 3, 30),
+                described_as("end_user", "e1", 4, 40),
+                described_as("organization", "o1", 5, 50),
+            ]
+        );
+    }
+
+    #[rstest]
+    fn the_master_key_is_limited_under_the_end_user_its_request_names() {
+        let master = Authenticated::from(auth_core::Caller::master_key(EndUserRecord {
+            end_user_id: Some("e1".to_owned()),
+            found: true,
+            limits: MinuteLimits {
+                rpm: Some(4),
+                tpm: Some(40),
+            },
+        }));
+
+        assert_eq!(described(&master), [described_as("end_user", "e1", 4, 40)]);
+    }
+
+    #[rstest]
+    #[case::named_with_no_row(unstored())]
+    #[case::the_master_key(master())]
+    fn a_caller_with_no_stored_row_holds_no_limit_beyond_its_keys(
+        #[case] identity: Authenticated<NativeRows>,
+    ) {
+        assert_eq!(described(&identity), []);
+    }
+
+    #[rstest]
+    #[case::stored(member(), Some("e1"))]
+    #[case::unstored(unstored(), None)]
+    fn a_settled_call_is_charged_to_every_name_the_caller_has(
+        #[case] identity: Authenticated<NativeRows>,
+        #[case] end_user_id: Option<&str>,
+    ) {
+        assert_eq!(
+            Caller::of(&identity).targets(),
+            TargetFacts {
+                user_api_key_hash: Some("stored".to_owned()),
+                user_api_key_user_id: Some("u1".to_owned()),
+                user_api_key_team_id: Some("t1".to_owned()),
+                user_api_key_org_id: Some("o1".to_owned()),
+                user_api_key_project_id: Some("p1".to_owned()),
+                end_user_id: end_user_id.map(str::to_owned),
+                ..TargetFacts::default()
+            }
+        );
+    }
+
+    #[rstest]
+    fn the_master_key_is_charged_as_the_proxy_admin() {
+        assert_eq!(
+            Caller::of(&master()).targets(),
+            TargetFacts {
+                user_api_key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
+                user_api_key_user_id: Some(PROXY_ADMIN_NAME.to_owned()),
+                ..TargetFacts::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::a_team_token_limit(TeamRecord { limits: MinuteLimits { tpm: Some(1), rpm: None }, ..TeamRecord::default() }, true)]
+    #[case::a_team_request_limit(TeamRecord { limits: MinuteLimits { rpm: Some(1), tpm: None }, ..TeamRecord::default() }, false)]
+    fn a_token_limit_anywhere_the_caller_belongs_counts_tokens(
+        #[case] team: TeamRecord,
+        #[case] counts_tokens: bool,
+    ) {
+        let identity = key(
+            "stored",
+            None,
+            Belongs {
+                holder: Holder::Team(Team::Row(team)),
+                org: None,
+                project: None,
+            },
+            EndUserRecord::default(),
+        );
+
+        assert_eq!(Caller::of(&identity).counts_tokens(), counts_tokens);
+    }
 
     #[rstest]
     fn the_window_and_the_reservation_come_from_the_environment() {

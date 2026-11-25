@@ -15,6 +15,7 @@ use litellm_gateway_auth_core::{
     AuthzDenial, Rows, StoredKey,
     authz::{self, Layer, ModelAsk},
     body::Credentials,
+    record::Record,
 };
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -48,7 +49,7 @@ pub trait Host: Send + Sync + Sized + 'static {
     type Hooks: CallHooks;
 
     /// The rows of the callers this host authenticates.
-    type Rows: Rows<Key: StoredKey>;
+    type Rows: Rows<Key: StoredKey, Team: Record>;
 
     /// The model lists this host read for `identity`, which the auth core decides access on. A
     /// list the host did not read belongs to a key it declined when it authenticated it.
