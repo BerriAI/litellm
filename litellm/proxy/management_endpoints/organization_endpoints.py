@@ -1682,18 +1682,10 @@ async def organization_member_delete(
             prisma_client=prisma_client,
         )
 
-        if data.user_email is not None and data.user_id is None:
-            existing_user_email_row: Final = await find_member_if_email(data.user_email, prisma_client)
-            data.user_id = existing_user_email_row.user_id
-
-        if data.user_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Either user_id or user_email needs to be passed in"},
-            )
+        member_user_id: Final = await _member_delete_user_id(data, prisma_client)
 
         await _remove_user_from_organization_teams(
-            user_id=data.user_id,
+            user_id=member_user_id,
             organization_id=data.organization_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -1702,7 +1694,7 @@ async def organization_member_delete(
         member_to_delete: Final = await _table(OrganizationMembershipRepository(prisma_client)).delete(
             where={
                 "user_id_organization_id": {
-                    "user_id": data.user_id,
+                    "user_id": member_user_id,
                     "organization_id": data.organization_id,
                 }
             }
@@ -1712,6 +1704,13 @@ async def organization_member_delete(
     except Exception as e:
         verbose_proxy_logger.exception("Error deleting member from organization: %s", e)
         raise e
+
+
+async def _member_delete_user_id(data: OrganizationMemberDeleteRequest, prisma_client: PrismaClient) -> str:
+    if data.user_id is not None:
+        return data.user_id
+    assert data.user_email is not None, "MemberDeleteRequest.check_user_info requires user_id or user_email"
+    return (await find_member_if_email(data.user_email, prisma_client)).user_id
 
 
 async def _remove_user_from_organization_teams(

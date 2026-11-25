@@ -1858,6 +1858,9 @@ class _UserRows:
     async def find_many(self, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[_Row]:
         return [_Row(**row) for user_id, row in self.rows.items() if user_id in where["user_id"]["in"]]
 
+    async def find_unique(self, where: Mapping[str, str]) -> _Row | None:
+        return next((_Row(**row) for row in self.rows.values() if row["user_email"] == where["user_email"]), None)
+
     async def update(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, Sequence[str]]]) -> _Row:
         self.rows[where["user_id"]]["teams"] = list(data["teams"]["set"])
         return _Row(**self.rows[where["user_id"]])
@@ -1900,11 +1903,6 @@ class _AppendOnlyRows:
     async def create_many(self, data: Sequence[Mapping[str, object]]) -> int:
         self.records.extend(data)
         return len(data)
-
-
-class _NoRows:
-    async def find_many(self, where: Mapping[str, object] | None = None) -> list[object]:
-        return []
 
 
 class _OrgMembershipRows:
@@ -1953,7 +1951,6 @@ class _OrgMemberDeletePrisma:
             litellm_verificationtoken=_KeyRows(keys),
             litellm_deletedverificationtoken=_AppendOnlyRows(),
             litellm_auditlog=_AppendOnlyRows(),
-            litellm_jwtkeymapping=_NoRows(),
             litellm_organizationmembership=_OrgMembershipRows(org_memberships),
         )
 
@@ -1963,7 +1960,10 @@ class _OrgMemberDeletePrisma:
 
 
 @pytest.mark.asyncio
-async def test_organization_member_delete_removes_the_user_from_every_team_of_that_organization(monkeypatch):
+@pytest.mark.parametrize("member", [{"user_id": "dev"}, {"user_email": "dev@example.com"}])
+async def test_organization_member_delete_removes_the_user_from_every_team_of_that_organization(
+    monkeypatch, rust_auth_stores: RustAuthStores, member: Mapping[str, str]
+):
     """Team membership inside an organization is granted through the organization, so removing the
     user from the organization has to take them off its teams the way /team/member_delete would, or
     they keep their team admin role, their team keys and the ability to mint new ones (LIT-9248).
@@ -1976,6 +1976,7 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_delete
+    from litellm.redis.stores.auth_cache import AuthObject
 
     lead: Final = {"user_id": "lead", "user_email": None, "role": "admin"}
     dev: Final = {"user_id": "dev", "user_email": None, "role": "admin"}
@@ -1989,22 +1990,27 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
             {"team_id": "team-ext", "organization_id": "org-ext", "members_with_roles": [dev]},
         ),
         users=(
-            {"user_id": "dev", "teams": ["team-eng", "team-ext"]},
-            {"user_id": "lead", "teams": ["team-eng", "team-eng-2"]},
+            {"user_id": "dev", "user_email": "dev@example.com", "teams": ["team-eng", "team-ext"]},
+            {"user_id": "lead", "user_email": "lead@example.com", "teams": ["team-eng", "team-eng-2"]},
         ),
         team_memberships=(("team-eng", "dev"), ("team-eng", "lead"), ("team-eng-2", "lead"), ("team-ext", "dev")),
         keys=(org_team_key, other_org_team_key, personal_key),
         org_memberships=(("dev", "org-eng"), ("lead", "org-eng"), ("dev", "org-ext")),
     )
     cache: Final = UserApiKeyCache()
-    for cache_key in ("team_id:team-eng", "team_id:team-ext", org_team_key.token, personal_key.token):
+    for cache_key in (
+        AuthObject.team("team-eng"),
+        AuthObject.team("team-ext"),
+        AuthObject.virtual_key(org_team_key.token),
+        AuthObject.virtual_key(personal_key.token),
+    ):
         cache.set_cache(key=cache_key, value={"cached": True})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
 
     removed: Final = await organization_member_delete(
-        data=OrganizationMemberDeleteRequest(organization_id="org-eng", user_id="dev"),
+        data=OrganizationMemberDeleteRequest(organization_id="org-eng", **member),
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
@@ -2018,7 +2024,7 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
     assert prisma.db.litellm_teammembership.rows == {("team-eng", "lead"), ("team-eng-2", "lead"), ("team-ext", "dev")}
     assert set(prisma.db.litellm_verificationtoken.rows) == {other_org_team_key.token, personal_key.token}
     assert [record["token"] for record in prisma.db.litellm_deletedverificationtoken.records] == [org_team_key.token]
-    assert cache.get_cache(key="team_id:team-eng") is None
-    assert cache.get_cache(key=org_team_key.token) is None
-    assert cache.get_cache(key="team_id:team-ext") == {"cached": True}
-    assert cache.get_cache(key=personal_key.token) == {"cached": True}
+    assert cache.get_cache(key=AuthObject.team("team-eng")) is None
+    assert cache.get_cache(key=AuthObject.virtual_key(org_team_key.token)) is None
+    assert cache.get_cache(key=AuthObject.team("team-ext")) == {"cached": True}
+    assert cache.get_cache(key=AuthObject.virtual_key(personal_key.token)) == {"cached": True}
