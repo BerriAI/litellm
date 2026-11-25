@@ -4064,6 +4064,32 @@ async def test_a_hosted_mcp_url_neither_registered_nor_allowlisted_is_dropped_un
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [_BEDROCK_MODEL, _DEEPSEEK_MODEL])
+@pytest.mark.parametrize("allowed_hosts", [(), ("mcp.deepwiki.com",)], ids=["not_allowlisted", "allowlisted"])
+@respx.mock
+async def test_a_hosted_mcp_tool_on_a_deployment_that_drops_tools_answers_without_tools_or_a_connection(
+    monkeypatch: pytest.MonkeyPatch, model: str, allowed_hosts: tuple[str, ...]
+):
+    _gateway_runs_hosted_mcp(monkeypatch, allowed_hosts)
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_answer_round(model),), _ROUTE_URLS[model])
+    server: Final = _ScriptedMCPServer()
+
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response: Final = await litellm.aresponses(
+            model=model,
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(_DEEPWIKI_TOOL)],
+            additional_drop_params=["tools"],
+            **_ROUTE_KWARGS[model],
+        )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _output_types(response.output) == ("message",)
+    assert _sent_tool_names(_sent_body(provider, 0)) == ()
+    assert server.opened == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [_BEDROCK_MODEL, _DEEPSEEK_MODEL])
 @pytest.mark.parametrize("tool_failed", [False, True], ids=["tool_succeeds", "tool_fails"])
 @respx.mock
 async def test_an_allowlisted_hosted_mcp_url_runs_on_the_gateway_and_answers_in_openai_mcp_items(
@@ -6027,6 +6053,29 @@ async def test_a_body_key_named_like_a_gateway_dependency_reaches_the_provider_l
     assert [call.name for call in server.calls] == (["ask_question"] if turn == "hosted_tool" else [])
     assert reads.asked == (((_PRIOR_RESPONSE_ID, (_PRIOR_RESPONSE_ID,)),) if turn == "follow_up" else ())
     assert _output_types(response.output)[-1] == "message"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["caller_input", "names_non_string_fields", "mcp_call_names"])
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@respx.mock
+async def test_a_body_key_named_like_a_bridge_transform_keyword_still_gets_the_providers_answer(
+    monkeypatch: pytest.MonkeyPatch, name: str, stream: bool
+):
+    provider: Final = _serve_responses(respx.mock, monkeypatch, _rounds_for("first", stream), _DEEPSEEK_URL)
+
+    response, _ = await _client_response(
+        await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Say ok",
+            stream=stream,
+            **{name: {}},
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+    )
+
+    assert provider.call_count == 1
+    assert _output_types(response.output) == ("message",)
 
 
 

@@ -2229,6 +2229,7 @@ def responses(
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
         input, tools = _apply_managed_file_id_mapping(input=input, tools=tools, kwargs=kwargs, local_vars=local_vars)
+        tools_the_route_keeps: Final = None if "tools" in _explicitly_dropped_fields(kwargs) else tools
 
         #########################################################
         # Native MCP Responses API
@@ -2265,7 +2266,12 @@ def responses(
             hosted_mcp_claims=None
             if skip_mcp_handler
             else _hosted_mcp_claims(
-                tools, model, custom_llm_provider, use_chat_completions_api, deployment_model_info, litellm_params
+                tools_the_route_keeps,
+                model,
+                custom_llm_provider,
+                use_chat_completions_api,
+                deployment_model_info,
+                litellm_params,
             ),
         )
         if _mcp_dispatch is not None:
@@ -2366,7 +2372,9 @@ def responses(
                 custom_llm_provider,
                 chat_bridge_prompt_kwargs,
             )
-            _raise_unrunnable_responses_hosted_mcp(tools, model, custom_llm_provider, litellm_params.drop_params)
+            _raise_unrunnable_responses_hosted_mcp(
+                tools_the_route_keeps, model, custom_llm_provider, litellm_params.drop_params
+            )
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
                 turn_replay,
