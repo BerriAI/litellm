@@ -164,9 +164,27 @@ def _any_model_supports(capability: Callable[..., bool], model_ids: tuple[str, .
     )
 
 
+def _declared_reasoning(model_id: str, provider: str) -> object:
+    try:
+        return litellm.get_model_info(model=model_id, custom_llm_provider=provider).get("supports_reasoning")
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for a model the cost map does not list
+        return None
+
+
 def _listed_without_reasoning(model_ids: tuple[str, ...]) -> bool:
-    listed: Final = any(litellm.utils.get_model_cost_key(model_id) is not None for model_id in model_ids)
-    return listed and not _any_model_supports(litellm.supports_reasoning, model_ids)
+    listed: Final = any(
+        litellm.utils.get_model_cost_key(model_id.rpartition("/")[2]) is not None for model_id in model_ids
+    )
+    declared_without: Final = any(
+        _declared_reasoning(model_id, provider) is False
+        for model_id, provider in itertools.product(model_ids, _COHERE_PROVIDERS)
+    )
+    return (listed or declared_without) and not _any_model_supports(litellm.supports_reasoning, model_ids)
+
+
+def _carries_reasoning(message: object) -> bool:
+    fields: Final = as_str_mapping(message)
+    return fields is not None and fields.get("role") == "assistant" and bool(_replayed_reasoning(fields))
 
 
 def _function_name(tool: object) -> object:
@@ -532,8 +550,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             headers,
         )
         history: Final = _HISTORY.validate_python(data["messages"])
-        resends_thinking: Final = not _listed_without_reasoning(
-            _cohere_model_ids(model, litellm_params.get("base_model"))
+        resends_thinking: Final = not (
+            any(map(_carries_reasoning, history))
+            and _listed_without_reasoning(_cohere_model_ids(model, litellm_params.get("base_model")))
         )
         return {**data, "messages": [_cohere_history_message(message, resends_thinking) for message in history]}
 
