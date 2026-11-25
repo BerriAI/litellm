@@ -965,7 +965,7 @@ def cost_per_token(
         return 0.0, 0.0
 
 
-def _get_replicate_completion_pricing(completion_response: dict, total_time: float = 0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time: float = 0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public: Final = (
@@ -977,9 +977,6 @@ def _get_replicate_completion_pricing(completion_response: dict, total_time: flo
         total_time = end_time - start_time
 
     return a100_80gb_price_per_second_public * total_time / 1000
-
-
-get_replicate_completion_pricing: Final = _get_replicate_completion_pricing
 
 
 def has_hidden_params(obj: object) -> bool:
@@ -1768,7 +1765,7 @@ def _cost_map_priced_input_output(
         return 0.0, 0.0
 
 
-def _split_reported_cost_by_cost_map_ratio(
+def split_reported_cost_by_cost_map_ratio(
     reported_total: float,
     model: str | None,
     custom_llm_provider: str | None,
@@ -1795,9 +1792,6 @@ def _split_reported_cost_by_cost_map_ratio(
     return input_cost, reported_total - input_cost
 
 
-split_reported_cost_by_cost_map_ratio: Final = _split_reported_cost_by_cost_map_ratio
-
-
 def _adjusted_provider_billed_cost(
     reported_cost: float,
     custom_llm_provider: str | None,
@@ -1811,7 +1805,7 @@ def _adjusted_provider_billed_cost(
     data_residency: str | None,
 ) -> float:
     adjusted: Final = adjusted_cost(reported_cost, custom_llm_provider, model, region_name)
-    input_cost, output_cost = _split_reported_cost_by_cost_map_ratio(
+    input_cost, output_cost = split_reported_cost_by_cost_map_ratio(
         reported_total=adjusted.cost,
         model=model,
         custom_llm_provider=pricing_provider,
@@ -2666,7 +2660,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return _get_replicate_completion_pricing(completion_response, response_time_ms)
+                    return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
                     raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
@@ -2917,7 +2911,7 @@ def response_cost_calculator(
                                 router_model_id=router_model_id,
                                 region_name=region_name,
                             )
-                            header_input_cost, header_output_cost = _split_reported_cost_by_cost_map_ratio(
+                            header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
                                 reported_total=provider_response_cost,
                                 model=header_priced_model or model,
                                 custom_llm_provider=pricing_provider or custom_llm_provider,
