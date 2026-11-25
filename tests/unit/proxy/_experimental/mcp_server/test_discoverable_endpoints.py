@@ -5,6 +5,7 @@ import json
 import time
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +17,7 @@ from litellm.proxy._types import LiteLLM_MCPServerTable
 from litellm.types.mcp import MCPAuth
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
@@ -6055,11 +6056,35 @@ _LAPTOP_LOOPBACK_REDIRECT: Final = "http://127.0.0.1:33418/"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("opt_in", [None, "false"])
+@pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
+async def test_register_bridge_keeps_client_callback_without_gateway_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    opt_in: str | None,
+    auth_type_value: Literal["oauth_delegate", "true_passthrough"],
+) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    if opt_in is None:
+        monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", opt_in)
+    response, upstream, persisted = await _bridge_register_response(
+        _bridge_server(auth_type=MCPAuth(auth_type_value)),
+        {"client_name": "backend", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
+    )
+
+    assert upstream.post.call_args.kwargs["json"]["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT]
+    assert upstream.post.call_args.kwargs["json"]["client_name"] == "backend"
+    assert json.loads(response.body.decode("utf-8"))["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT]
+    persisted.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
 async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_laptop_loopback(
     monkeypatch: pytest.MonkeyPatch, auth_type_value: Literal["oauth_delegate", "true_passthrough"]
 ) -> None:
-    """A laptop MCP client (VS Code) registers with its own loopback redirect. With PROXY_BASE_URL set
+    """A laptop MCP client (VS Code) registers with its own loopback redirect. With explicit opt-in
     the gateway must not relay that registration upstream: it registers its one shared client bound
     to the gateway /callback, keeps it, and hands the caller a client bound to the caller's loopback.
     Relaying the loopback is the customer failure on upstreams that restrict redirect domains."""
@@ -6068,6 +6093,7 @@ async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_
     from litellm.types.mcp import MCPAuth
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     response, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(auth_type=MCPAuth(auth_type_value)),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6089,6 +6115,7 @@ async def test_register_bridge_without_database_still_relays_client_registration
     """A database-free gateway cannot keep the shared client past this process, so even with
     PROXY_BASE_URL set it relays the caller's own registration instead of stranding the next authorize."""
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     _, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6106,6 +6133,7 @@ async def test_register_bridge_without_proxy_base_url_still_relays_client_regist
     """Without PROXY_BASE_URL the gateway cannot keep a shared client, so the relay arm remains the
     fallback and the caller's own redirect goes upstream as before."""
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     _, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6153,6 +6181,7 @@ async def test_authorize_clientless_bridge_loads_shared_client_before_choosing_t
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server: Final = _bridge_server(url="https://mcp.example.com/mcp")
@@ -6214,6 +6243,7 @@ async def test_token_clientless_bridge_loads_shared_client_before_choosing_the_a
     client and the gateway /callback, and with none yet it relays the caller's own client and redirect."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server: Final = _bridge_server(url="https://mcp.example.com/mcp")
@@ -9941,6 +9971,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     """On restart a config server's in-memory object has no client_id; hydration overlays the
     persisted DCR client from the server-scoped store, decrypting the encrypted-at-rest blob, so the
     refresh_token grant can authenticate as the registered client instead of re-authenticating."""
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
@@ -10000,6 +10031,7 @@ async def test_reuse_config_server_reads_store_with_real_crypto(monkeypatch):
     """A config-declared server (rowless) keeps its DCR client in the store, so the reuse read
     resolves it from the store and decrypts the encrypted-at-rest client, mirroring the write path so
     a re-authorize reuses the client instead of re-minting one."""
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
@@ -14043,6 +14075,7 @@ def test_persisted_client_remains_usable_for_its_issuer(issuer, url, monkeypatch
         _PersistedDcrCredentials,
     )
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server = _issuer_anchored_oauth_server(issuer).model_copy(update={"url": url, "client_id": None})
     credentials = _PersistedDcrCredentials(
@@ -14833,11 +14866,23 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")]
+    "prior_scopes, scope, expected",
+    [
+        (["tools.read"], "tools.write", "tools.read tools.write"),
+        (None, "tools.write", "tools.write"),
+        ([], "tools.write", "tools.write"),
+        (["logs_read_data", "dashboards_read"], "mcp_all", "mcp_all"),
+        (["logs_read_data", "dashboards_read"], "openid mcp_all", "openid mcp_all"),
+        (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
+    ],
 )
-async def test_managed_authorize_retains_the_callers_previous_grant(
-    jwt_oauth_identity, monkeypatch, prior_scopes, expected
-):
+async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    prior_scopes: list[str] | None,
+    scope: str,
+    expected: str,
+) -> None:
     from types import SimpleNamespace
     from urllib.parse import parse_qs, urlsplit
 
@@ -14863,7 +14908,7 @@ async def test_managed_authorize_retains_the_callers_previous_grant(
         server,
         "scope-client",
         "http://127.0.0.1:9/cb",
-        scope="tools.write",
+        scope=scope,
         code_challenge="challenge",
         code_challenge_method="S256",
     )
@@ -15113,6 +15158,9 @@ async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch
         (["tools.read", "tools.write"], ("tools.write",), "present"),
         (None, ("tools.write",), "absent"),
         (["tools.read"], (), "present"),
+        (["channels:read,chat:write"], ("channels:read", "chat:write"), "present"),
+        (["channels:read,chat:write"], ("channels:read", "files:write"), "absent"),
+        (["channels:read"], ("channels:read", "chat:write"), "absent"),
     ],
 )
 async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
@@ -15126,6 +15174,136 @@ async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted,
     monkeypatch.setattr(db, "get_user_oauth_credential", read)
     assert await endpoints._vendor_credential_state("owner", "server", required) == expected
     read.assert_awaited_once_with(prisma, "owner", "server")
+
+
+_SLACK_SCOPES: Final = frozenset(("channels:read", "chat:write", "files:write"))
+_DATADOG_EXPANSION: Final = ("logs_read_index_data", "dashboards_read", "mcp_read", "mcp_write")
+_COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
+
+
+@pytest.mark.parametrize(
+    ("granted", "requested", "known", "expected"),
+    [
+        (("channels:read,chat:write",), ("channels:read", "chat:write"), _SLACK_SCOPES, True),
+        (("channels:read,chat:write",), ("channels:read", "files:write"), _SLACK_SCOPES, False),
+        (("channels:read,chat:write,files:read",), ("channels:read",), _SLACK_SCOPES, False),
+        (("x:unknown,chat:write",), ("chat:write",), _SLACK_SCOPES, False),
+        (("files:read,write",), ("files:read",), _COMMA_NAMED_SCOPES, False),
+        (("files:read,write",), ("files:read,write",), _COMMA_NAMED_SCOPES, True),
+        (("channels:read,chat:write",), ("read",), _SLACK_SCOPES | {"read"}, False),
+        (("read", "write,admin"), ("admin",), frozenset(("read", "write", "admin")), False),
+        (("write,admin", "read"), ("admin",), frozenset(("read", "write", "admin")), False),
+        (("read", "write"), ("read", "write"), frozenset[str](), True),
+        ((), ("read",), frozenset(("read",)), False),
+        ((), (), frozenset[str](), True),
+        (_DATADOG_EXPANSION, ("mcp_all",), frozenset[str](), True),
+        (("channels:read,chat:write",), ("mcp_all", "channels:read"), _SLACK_SCOPES, True),
+        ((), ("mcp_all",), frozenset[str](), False),
+        (_DATADOG_EXPANSION, ("mcp_all", "admin"), frozenset[str](), False),
+    ],
+)
+def test_grant_covers_scopes_splits_a_lone_token_only_into_known_scopes(
+    granted: tuple[str, ...], requested: tuple[str, ...], known: frozenset[str], expected: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server.oauth_utils import grant_covers_scopes
+
+    assert grant_covers_scopes(granted, requested, lambda: known) is expected
+
+
+@pytest.mark.parametrize(
+    ("granted", "requested", "expected"),
+    [
+        (("channels:read",), ("channels:read",), True),
+        (("read", "write"), ("read", "write"), True),
+        (("read", "write"), ("admin",), False),
+        (("read",), ("admin",), False),
+        ((), (), True),
+    ],
+)
+def test_grant_covers_scopes_answers_like_a_subset_check_without_reading_server_scopes(
+    granted: tuple[str, ...], requested: tuple[str, ...], expected: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server.oauth_utils import grant_covers_scopes
+
+    def unreachable_server_scopes() -> frozenset[str]:
+        raise AssertionError("server scopes read for a grant with no comma token")
+
+    assert grant_covers_scopes(granted, requested, unreachable_server_scopes) is expected
+
+
+def test_server_scope_names_joins_configured_and_published_scopes() -> None:
+    from litellm.proxy._experimental.mcp_server.oauth_utils import server_scope_names
+
+    server: Final = _cimd_oauth_server().model_copy(
+        update={
+            "scopes": ["channels:read"],
+            "authorization_server_metadata": {
+                "issuer": "https://idp.example.com",
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://idp.example.com/token",
+                "response_types_supported": ["code"],
+                "scopes_supported": ["chat:write", "files:write"],
+            },
+        }
+    )
+    assert server_scope_names(server) == frozenset(("channels:read", "chat:write", "files:write"))
+    assert server_scope_names(_cimd_oauth_server()) == frozenset[str]()
+    assert server_scope_names(None) == frozenset[str]()
+
+
+_PUBLISHED_SLACK_METADATA: Final = {
+    "issuer": "https://idp.example.com",
+    "authorization_endpoint": "https://idp.example.com/authorize",
+    "token_endpoint": "https://idp.example.com/token",
+    "response_types_supported": ["code"],
+    "scopes_supported": ["channels:read", "chat:write", "files:read"],
+}
+
+
+def _in_memory_credentials_table(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "connect-check-test-salt")
+    prisma: Final = MagicMock()
+    rows: Final = prisma.db.litellm_mcpusercredentials
+
+    async def upsert(where: "Mapping[str, Mapping[str, str]]", data: "Mapping[str, Mapping[str, str]]") -> None:
+        key: Final = where["user_id_server_id"]
+        rows.find_unique.return_value = SimpleNamespace(
+            credential_b64=data["create"]["credential_b64"], user_id=key["user_id"], server_id=key["server_id"]
+        )
+
+    rows.find_unique = AsyncMock(return_value=None)
+    rows.upsert = AsyncMock(side_effect=upsert)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    return prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server_update",
+    [
+        {"scopes": ["channels:read", "chat:write", "files:read"]},
+        {"authorization_server_metadata": _PUBLISHED_SLACK_METADATA},
+    ],
+)
+async def test_connect_reads_a_comma_grant_against_the_server_scopes(
+    monkeypatch: pytest.MonkeyPatch, server_update: "Mapping[str, object]"
+) -> None:
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _cimd_oauth_server().model_copy(update=server_update)
+    prisma: Final = _in_memory_credentials_table(monkeypatch)
+    await db.store_user_oauth_credential(
+        prisma, "owner", server.server_id, "vendor-token", scopes=["channels:read,chat:write,files:read"]
+    )
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "absent"
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "present"
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ("files:write",)) == "absent"
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ()) == "present"
 
 
 @pytest.mark.parametrize(

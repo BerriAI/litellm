@@ -5,6 +5,7 @@ import pytest
 
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     assemble_anthropic_sse_stream,
+    build_usage_only_response_from_chunks,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
@@ -106,6 +107,98 @@ def test_assemble_anthropic_sse_stream_restores_upstream_identity_only_when_aske
     assert plain is not None and restored is not None
     assert plain.id != MESSAGE_ID
     assert (restored.id, restored.model) == (MESSAGE_ID, MODEL)
+
+
+TOOL_USE_STREAM: Final = (
+    *ANTHROPIC_STREAM[:5],
+    _frame(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_ls", "name": "Bash", "input": {}},
+        },
+    ),
+    _frame(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}},
+    ),
+    _frame("content_block_stop", {"type": "content_block_stop", "index": 1}),
+    _frame(
+        "message_delta",
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}},
+    ),
+    _frame("message_stop", {"type": "message_stop"}),
+)
+
+
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: null\n\n",
+        b'data: "x"\n\n',
+        b"data: [1]\n\n",
+        b"data: some words\n\n",
+        b"data: " + b"9" * 5000 + b"\n\n",
+        b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "null", "string", "array", "not-json", "huge-number", "deep-array"],
+)
+def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_object(non_object_frame: bytes):
+    assembled: Final = assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], non_object_frame, *TOOL_USE_STREAM[3:]))
+
+    assert assembled is not None
+    choice: Final = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "Hello there"
+    assert [(call.function.name, call.function.arguments) for call in choice.message.tool_calls or []] == [
+        ("Bash", '{"command": "ls"}')
+    ]
+
+
+@pytest.mark.parametrize(
+    "undecodable_object_frame",
+    [
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+        b'event: ping\ndata: {"type": "ping", "n": ' + b"9" * 5000 + b"}\n\n",
+    ],
+    ids=["deep-object", "huge-number-in-object"],
+)
+def test_assembling_refuses_a_stream_with_an_object_event_too_deep_or_too_long_to_decode(
+    undecodable_object_frame: bytes,
+):
+    assert (
+        assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], undecodable_object_frame, *TOOL_USE_STREAM[3:])) is None
+    )
+
+
+NON_OBJECT_FRAMES: Final = (b"data: 5\n\n", b"event: ping\ndata: null\n\n", b'data: "x"\n\n', b"data: [1]\n\n")
+
+
+@pytest.mark.parametrize("non_object_frame", NON_OBJECT_FRAMES)
+def test_a_non_object_data_line_before_message_start_reads_like_the_stream_without_it(non_object_frame: bytes):
+    chunks: Final = (non_object_frame, *ANTHROPIC_STREAM)
+
+    assert is_anthropic_sse_stream(chunks) is True
+    assert is_sse_error_stream(chunks) is False
+    assembled: Final = assemble_anthropic_sse_stream(chunks)
+    assert assembled is not None
+    choice: Final = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "Hello there"
+
+
+@pytest.mark.parametrize("non_object_frame", NON_OBJECT_FRAMES)
+def test_usage_of_a_stream_that_ends_in_an_error_survives_a_non_object_data_line(non_object_frame: bytes):
+    errored: Final = (*ANTHROPIC_STREAM[:3], ANTHROPIC_ERROR)
+    expected: Final = build_usage_only_response_from_chunks(errored, model=MODEL)
+
+    actual: Final = build_usage_only_response_from_chunks((*errored[:3], non_object_frame, ANTHROPIC_ERROR), model=MODEL)
+
+    assert expected is not None
+    assert actual is not None
+    assert actual.usage == expected.usage
 
 
 @pytest.mark.parametrize(

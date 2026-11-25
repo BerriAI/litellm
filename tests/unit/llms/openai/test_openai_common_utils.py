@@ -465,15 +465,26 @@ def _sdk_api_client(
         )
     if api == "image_variations":
         variation_factory: Final = OpenAIImageVariationsHandler()
-        params: Final = {
-            "api_key": "transport-only",
-            "base_url": kwargs["api_base"],
-            "timeout": timeout,
-        }
         return (
-            variation_factory.get_async_client(client=client, init_client_params=params)
+            variation_factory.get_async_client(
+                client=client,
+                api_key="transport-only",
+                api_base="https://sdk-default.example/v1",
+                timeout=timeout,
+                max_retries=0,
+                organization=None,
+                litellm_params={},
+            )
             if is_async
-            else variation_factory.get_sync_client(client=client, init_client_params=params)
+            else variation_factory.get_sync_client(
+                client=client,
+                api_key="transport-only",
+                api_base="https://sdk-default.example/v1",
+                timeout=timeout,
+                max_retries=0,
+                organization=None,
+                litellm_params={},
+            )
         )
     if api == "azure_gateway":
         return BaseAzureLLM()._init_azure_client_for_cloudflare_ai_gateway(
@@ -558,3 +569,23 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         )
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
+
+
+@pytest.mark.parametrize("upstream_body", ["upstream is down", "<html>bad gateway</html>", "[1, 2]", "12345"])
+@respx.mock
+def test_an_error_body_that_is_not_a_json_object_keeps_the_upstream_status(upstream_body: str) -> None:
+    respx.post("https://errors.example.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(400, text=upstream_body)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.completion(
+            model="openai/test-model",
+            api_base="https://errors.example.invalid/v1",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            max_retries=0,
+        )
+
+    assert raised.value.status_code == 400
+    assert upstream_body in raised.value.message

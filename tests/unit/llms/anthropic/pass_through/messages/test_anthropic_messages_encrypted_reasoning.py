@@ -1,9 +1,27 @@
+from collections.abc import Mapping
+from typing import Final
+
+import pytest
+
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+from litellm.llms.github_copilot.messages.transformation import GithubCopilotAnthropicMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    VertexAIPartnerModelsAnthropicMessagesConfig,
+)
+from litellm.types.router import GenericLiteLLMParams
 
 
 def _transform(messages):
@@ -48,3 +66,264 @@ def test_anthropic_signed_thinking_blocks_are_forwarded_untouched():
         },
     ]
     assert _transform(messages)["messages"] == messages
+
+
+def _history_with_a_gemini_thought(signature_fields: Mapping[str, str | None]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Read numbers.txt."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Gemini reasoning", **signature_fields},
+                {"type": "text", "text": "Two subsets."},
+            ],
+        },
+        {"role": "user", "content": "Now count the odd ones."},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "api_base"),
+    [
+        (AnthropicMessagesConfig(), "claude-sonnet-4-5", None),
+        (AnthropicMessagesConfig(), "claude-sonnet-4-5", "https://example.services.ai.azure.com/anthropic"),
+        (AnthropicMessagesConfig(), "claude-sonnet-4-5", "https://llm-gateway.example.com/anthropic"),
+        (OpenAILikeAnthropicMessagesConfig(), "claude-sonnet-4-5", "https://llm-gateway.example.com/anthropic"),
+        (AzureAnthropicMessagesConfig(), "claude-sonnet-4-5", "https://example.services.ai.azure.com/anthropic"),
+        (VertexAIPartnerModelsAnthropicMessagesConfig(), "claude-sonnet-4-5@20250929", None),
+        (AmazonAnthropicClaudeMessagesConfig(), "us.anthropic.claude-sonnet-4-5-20250929-v1:0", None),
+        (BedrockMantleAnthropicMessagesConfig(), "anthropic.claude-mythos-preview", None),
+        (GithubCopilotAnthropicMessagesConfig(), "claude-sonnet-4.5", None),
+    ],
+)
+@pytest.mark.parametrize("signature_fields", [{"signature": ""}, {"signature": None}, {}])
+def test_a_thought_another_provider_served_without_a_signature_never_reaches_claude(
+    config: BaseAnthropicMessagesConfig,
+    model: str,
+    api_base: str | None,
+    signature_fields: Mapping[str, str | None],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    messages: Final = _history_with_a_gemini_thought(signature_fields)
+    request: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 8192,
+            "thinking": {"type": "enabled", "budget_tokens": 4000},
+        },
+        litellm_params=GenericLiteLLMParams(api_base=api_base),
+        headers={},
+    )
+    assert request["messages"][1] == messages[1]
+    assert request["messages"][3]["content"] == [{"type": "text", "text": "Two subsets."}]
+    assert request["thinking"] == {"type": "enabled", "budget_tokens": 4000}
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "api_base"),
+    [
+        (DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", None),
+        (DeepSeekAnthropicMessagesConfig(), "claude-sonnet-4-5", None),
+        (AnthropicMessagesConfig(), "kimi-k3", None),
+        (AnthropicMessagesConfig(), "claude-sonnet-4-5", "https://api.deepseek.com/anthropic"),
+        (OpenAILikeAnthropicMessagesConfig(), "kimi-k3", "https://api.moonshot.ai/anthropic"),
+        (OpenAILikeAnthropicMessagesConfig(), "claude-sonnet-4-5", "https://api.deepseek.com/anthropic"),
+        (BedrockMantleAnthropicMessagesConfig(), "openai.gpt-oss-120b", None),
+    ],
+)
+def test_a_backend_that_does_not_verify_claude_signatures_gets_its_unsigned_thoughts_back(
+    config: BaseAnthropicMessagesConfig, model: str, api_base: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    messages: Final = _history_with_a_gemini_thought({"signature": ""})
+    request: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 8192},
+        litellm_params=GenericLiteLLMParams(api_base=api_base),
+        headers={},
+    )
+    assert request["messages"][3]["content"] == messages[3]["content"]
+
+
+def test_a_claude_name_behind_an_env_base_url_on_deepseek_gets_its_unsigned_thoughts_back(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
+    messages: Final = _history_with_a_gemini_thought({"signature": ""})
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 8192},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["messages"][3]["content"] == messages[3]["content"]
+
+
+_CLAUDE_SIGNED_TURN: Final = {
+    "role": "assistant",
+    "content": [
+        {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+        {"type": "text", "text": "Refined."},
+    ],
+}
+
+
+def _open_model_turn(thinking_block: dict[str, object]) -> dict[str, object]:
+    return {"role": "assistant", "content": [thinking_block, {"type": "text", "text": "Draft."}]}
+
+
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "open model plan", "signature": ""},
+        {"type": "thinking", "thinking": "open model plan", "signature": None},
+        {"type": "thinking", "thinking": "open model plan"},
+    ],
+    ids=["empty", "null", "missing"],
+)
+def test_unsigned_thinking_from_an_open_model_never_reaches_claude(thinking_block: dict[str, object]) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn(thinking_block),
+        {"role": "user", "content": "Refine it."},
+        _CLAUDE_SIGNED_TURN,
+        {"role": "user", "content": "Thanks."},
+    ]
+
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[3] == _CLAUDE_SIGNED_TURN
+    assert messages[1]["content"][0] == thinking_block
+
+
+def test_unsigned_thinking_is_still_replayed_to_an_open_model() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        {"role": "user", "content": "Refine it."},
+    ]
+
+    sent: Final = DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-v4-pro",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )["messages"]
+
+    assert sent[1]["content"][0]["thinking"] == "open model plan"
+
+
+def _pending_tool_turn(opening: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List the files."},
+        {
+            "role": "assistant",
+            "content": [*opening, {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]},
+    ]
+
+
+def test_unsigned_thinking_that_opens_the_pending_tool_turn_is_dropped_too() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        *_pending_tool_turn([{"type": "thinking", "thinking": "call ls", "signature": ""}]),
+    ]
+
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[3]["content"] == [{"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}]
+    assert sent[4] == messages[4]
+
+
+def test_unsigned_thinking_is_dropped_when_the_pending_tool_turn_never_opened_with_thinking() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        *_pending_tool_turn([]),
+    ]
+
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[2:] == messages[2:]
+
+
+@pytest.mark.parametrize(
+    ("base_model", "sent_opening"),
+    [
+        ("anthropic/claude-sonnet-4-5", {"type": "text", "text": "Draft."}),
+        ("deepseek/deepseek-v4-pro", {"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        (None, {"type": "thinking", "thinking": "open model plan", "signature": ""}),
+    ],
+    ids=["claude-base-model", "open-base-model", "no-base-model"],
+)
+def test_an_alias_strips_unsigned_thinking_only_when_its_base_model_names_claude(
+    base_model: str | None, sent_opening: dict[str, object]
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        {"role": "user", "content": "Refine it."},
+    ]
+
+    sent: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="prod-sonnet",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(base_model=base_model),
+        headers={},
+    )["messages"]
+
+    assert sent[1]["content"][0] == sent_opening
+
+
+def test_a_non_object_message_item_reaches_claude_as_sent() -> None:
+    messages: Final = ["hi", 7, {"role": "user", "content": "Solve it."}]
+
+    assert _transform(messages)["messages"] == messages
+
+
+@pytest.mark.parametrize(
+    "config, model",
+    [
+        (OpenAILikeAnthropicMessagesConfig(), "anthropic/claude-sonnet-4.5"),
+        (BedrockMantleAnthropicMessagesConfig(), "anthropic.claude-mythos-preview"),
+    ],
+    ids=["anthropic_compatible_server", "bedrock_mantle"],
+)
+def test_unsigned_thinking_never_reaches_claude_on_any_route(config: AnthropicMessagesConfig, model: str) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        {"role": "user", "content": "Refine it."},
+    ]
+
+    sent: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]

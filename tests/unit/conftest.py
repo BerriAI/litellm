@@ -93,7 +93,15 @@ CALLBACK_LISTS: Final = (
     "_async_failure_callback",
     "_async_input_callback",
 )
-RESET_TO_NONE_GLOBALS: Final = ("model_fallbacks", "cache")
+RESET_TO_NONE_GLOBALS: Final = (
+    "model_fallbacks",
+    "cache",
+    "max_fallbacks",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 RESTORED_GLOBALS: Final = (
     "disable_aiohttp_transport",
     "force_ipv4",

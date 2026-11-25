@@ -89,15 +89,18 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    asks_for_wildcard,
     build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     configured_proxy_base_url,
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
+    grant_covers_scopes,
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
+    server_scope_names,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
@@ -115,6 +118,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
@@ -886,13 +890,13 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
 
 
 def _register_relays_bridge_client(mcp_server: MCPServer) -> bool:
-    """``/register`` relays the caller's own registration only when the gateway cannot keep a shared
-    client: with ``PROXY_BASE_URL`` set it registers one client bound to its own ``/callback`` and
-    keeps it as the server's client, so an upstream that restricts redirect domains (Atlassian)
-    never sees a laptop loopback redirect. Without a database the shared client would live only in
-    this process, so a database-free gateway keeps relaying as well."""
+    """Creating a shared client changes callback routing and identity binding, so it requires opt-in.
+    Already configured or persisted clients retain their existing gateway-callback flow.
+    """
     return _dcr_bridge_relays_client_registration(mcp_server) and (
-        configured_proxy_base_url() is None or not _shared_client_store_available()
+        not get_secret_bool("LITELLM_MCP_DCR_GATEWAY_CLIENT", False)
+        or configured_proxy_base_url() is None
+        or not _shared_client_store_available()
     )
 
 
@@ -1038,7 +1042,10 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    merged_scope: Final = union_scopes(" ".join(prior_grant.get("scopes") or ()) if prior_grant else None, scope)
+    kept_scope: Final = (
+        None if prior_grant is None or asks_for_wildcard(scope) else " ".join(prior_grant.get("scopes") or ())
+    )
+    merged_scope: Final = union_scopes(kept_scope, scope)
     selected_scope: Final = (
         get_client_metadata_scopes(
             merged_scope,
@@ -2540,6 +2547,9 @@ async def _vendor_credential_state(
         get_user_oauth_credential,
         oauth_grant_state,
     )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import at module load
+        global_mcp_server_manager,
+    )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
 
     if prisma_client is None:
@@ -2551,7 +2561,12 @@ async def _vendor_credential_state(
     if oauth_grant_state(credential) == "absent":
         return "absent"
     granted_scopes: Final = credential.get("scopes") if credential else None
-    return "present" if set(requested_scopes).issubset(granted_scopes or ()) else "absent"
+    covered: Final = grant_covers_scopes(
+        tuple(granted_scopes or ()),
+        requested_scopes,
+        lambda: server_scope_names(global_mcp_server_manager.get_mcp_server_by_id(server_id)),
+    )
+    return "present" if covered else "absent"
 
 
 @router.get("/authorize/flow")

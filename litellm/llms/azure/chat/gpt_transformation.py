@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.allowed_tools_tool_choice import azure_api_version_takes_tool_choice
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
@@ -16,7 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
+from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS, is_chat_latest_name
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -144,7 +145,11 @@ class AzureOpenAIConfig(BaseConfig):
         name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
         the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
         """
-        return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or "gpt5_series" in model
+        return (
+            any(marker in model for marker in GPT_REASONING_SERIES_MARKERS)
+            or is_chat_latest_name(model)
+            or "gpt5_series" in model
+        )
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
@@ -219,14 +224,8 @@ class AzureOpenAIConfig(BaseConfig):
                 if api_version_year is None or api_version_month is None or api_version_day is None:
                     optional_params["tool_choice"] = value
                 else:
-                    if (
-                        api_version_year < "2023"
-                        or (api_version_year == "2023" and api_version_month < "12")
-                        or (api_version_year == "2023" and api_version_month == "12" and api_version_day < "01")
-                    ):
-                        if litellm.drop_params is True or (drop_params is not None and drop_params is True):
-                            pass
-                        else:
+                    if not azure_api_version_takes_tool_choice(api_version):
+                        if not (litellm.drop_params is True or drop_params is True):
                             raise UnsupportedParamsError(
                                 status_code=400,
                                 message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",

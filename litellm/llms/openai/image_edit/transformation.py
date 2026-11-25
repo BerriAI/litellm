@@ -1,22 +1,25 @@
+import os
+from collections.abc import Mapping
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Final, cast
+from pathlib import Path
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import (
-    ImageEditOptionalRequestParams,
-    ImageEditRequestParams,
-)
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ImageResponse
 
 from ..common_utils import OpenAIError
+from ..workload_identity import resolve_openai_bearer_token
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -26,13 +29,62 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_UPLOAD_TUPLE: Final = TypeAdapter(tuple[object, ...])
+_UPLOAD_LIST: Final = TypeAdapter(list[object])
+
+
+def _upload_file_name(upload: object, default_name: str) -> object:
+    if isinstance(upload, os.PathLike):
+        return Path(upload).name
+    if isinstance(upload, BufferedReader) and isinstance(upload.name, str):
+        return Path(upload.name).name
+    return default_name
+
+
+def _upload_content(upload: object) -> object:
+    return Path(upload).read_bytes() if isinstance(upload, os.PathLike) else upload
+
+
+def _as_upload_tuple(upload: object) -> tuple[object, ...] | None:
+    raw: Final[object] = upload
+    if not isinstance(upload, tuple):
+        return None
+    return _UPLOAD_TUPLE.validate_python(raw)
+
+
+def _first_upload(upload: object) -> object:
+    raw: Final[object] = upload
+    if not isinstance(upload, list):
+        return upload
+    uploads: Final = _UPLOAD_LIST.validate_python(raw)
+    return uploads[0] if uploads else None
+
+
+def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
+    parts: Final = _as_upload_tuple(upload)
+    if parts is not None and 2 <= len(parts) <= 4:
+        raw_name: Final[object] = parts[0]
+        content: Final[object] = _upload_content(parts[1])
+        resolved_name: Final[object] = raw_name if raw_name is not None else _upload_file_name(parts[1], default_name)
+        raw_type: Final[object] = parts[2] if len(parts) >= 3 else None
+        resolved_type: Final[object] = (
+            raw_type if raw_type is not None else ImageEditRequestUtils.get_image_content_type(content)
+        )
+        if len(parts) == 4:
+            return (resolved_name, content, resolved_type, parts[3])
+        return (resolved_name, content, resolved_type)
+    upload_content: Final = _upload_content(upload)
+    image_content_type: Final = ImageEditRequestUtils.get_image_content_type(upload_content)
+    return (_upload_file_name(upload, default_name), upload_content, image_content_type)
+
+
 class OpenAIImageEditConfig(BaseImageEditConfig):
     """
     Base configuration for OpenAI image edit API.
     Used for models like gpt-image-1 that support multiple images.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
         """
         All OpenAI Image Edits params are supported
         """
@@ -41,6 +93,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "prompt",
             "background",
             "input_fidelity",
+            "markup",
             "mask",
             "model",
             "n",
@@ -68,14 +121,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         files_list: list[tuple[str, Any]],
         image: object,
         field_name: str,
+        default_name: str = "image.png",
     ) -> None:
         """Add an image to the files list with appropriate content type"""
-        image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-
-        if isinstance(image, BufferedReader):
-            files_list.append((field_name, (image.name, image, image_content_type)))
-        else:
-            files_list.append((field_name, ("image.png", image, image_content_type)))
+        files_list.append((field_name, _build_upload_part(image, default_name)))
 
     def transform_image_edit_request(
         self,
@@ -93,24 +142,36 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         to support multiple images (e.g., for gpt-image-1).
         """
         # Build request params, only including non-None values
-        request_params: Final = {
-            "model": model,
-            **image_edit_optional_request_params,
-        }
-        if image is not None:
-            request_params["image"] = image
-        if prompt is not None:
-            request_params["prompt"] = prompt
-
-        request: Final = ImageEditRequestParams(**request_params)
-        request_dict: Final = cast(dict, request)
+        request_dict: Final = MappingProxyType[str, object](
+            {
+                "model": model,
+                **image_edit_optional_request_params,
+                **({"image": image} if image is not None else {}),
+                **({"prompt": prompt} if prompt is not None else {}),
+            }
+        )
 
         #########################################################
-        # Separate images and masks as `files` and send other parameters as `data`
+        # Separate images, masks, and markup as `files` and send other parameters as `data`
         #########################################################
         _image_list: Final = request_dict.get("image")
-        _mask = request_dict.get("mask")
-        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        single_file_uploads: Final = (
+            ("mask", _first_upload(request_dict.get("mask"))),
+            ("markup", _first_upload(request_dict.get("markup"))),
+        )
+        not_a_file_field: Final = next(
+            (field_name for field_name, upload in single_file_uploads if isinstance(upload, (Mapping, str))), None
+        )
+        if not_a_file_field is not None:
+            raise litellm.BadRequestError(
+                message=(
+                    f"'{not_a_file_field}' must be an uploaded image file, such as bytes, an open file or a "
+                    "pathlib.Path. A JSON image reference or a string cannot be sent in a multipart image edit."
+                ),
+                model=model,
+                llm_provider=litellm_params.custom_llm_provider or "openai",
+            )
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter
@@ -124,18 +185,14 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                         image=_image,
                         field_name="image[]",
                     )
-        # Handle mask parameter if provided
-        if _mask is not None:
-            # Handle case where mask can be a list (extract first mask)
-            if isinstance(_mask, list):
-                _mask = _mask[0] if _mask else None
-
-            if _mask is not None:
-                mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
-                if isinstance(_mask, BufferedReader):
-                    files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
-                else:
-                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+        for field_name, upload in single_file_uploads:
+            if upload is not None:
+                self._add_image_to_files(
+                    files_list=files_list,
+                    image=upload,
+                    field_name=field_name,
+                    default_name=f"{field_name}.png",
+                )
 
         return data_without_files, files_list
 
@@ -160,12 +217,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(

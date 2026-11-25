@@ -1,14 +1,15 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    NotRequired,
     ReadOnly,
     Required,
     TypedDict,
 )
 
-from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput, ImageURLListItem
 from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
@@ -18,6 +19,14 @@ GeminiEmbeddingElement = str | ChatCompletionFileObject
 GeminiEmbeddingInput = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
 )
+
+
+class GeminiImageProviderSpecificFields(TypedDict, total=False):
+    thought_signature: ReadOnly[str]
+
+
+class GeminiImageURLListItem(ImageURLListItem):
+    provider_specific_fields: ReadOnly[GeminiImageProviderSpecificFields]
 
 
 class FunctionResponse(TypedDict, total=False):
@@ -47,7 +56,13 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
-class FunctionResponsePartType(TypedDict, total=False):
+class GeminiFileInspectionMetadata(TypedDict, total=False):
+    document_metadata: ReadOnly[Mapping[str, object]]
+    spreadsheet_metadata: ReadOnly[Mapping[str, object]]
+    media_resolution: ReadOnly[Mapping[str, str]]
+
+
+class FunctionResponsePartType(GeminiFileInspectionMetadata, total=False):
     inline_data: BlobType
     file_data: FileDataType
 
@@ -58,7 +73,7 @@ class VideoMetadataType(TypedDict, total=False):
     endOffset: ReadOnly[str]
 
 
-class PartType(TypedDict, total=False):
+class PartType(GeminiFileInspectionMetadata, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType
@@ -66,7 +81,6 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
-    media_resolution: Literal["low", "medium", "high"]
     video_metadata: ReadOnly[VideoMetadataType]
 
 
@@ -216,7 +230,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["minimal", "low", "medium", "high"]
+    thinkingLevel: ReadOnly[Literal["minimal", "low", "medium", "high", "xhigh"]]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -302,8 +316,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
@@ -581,6 +595,7 @@ class Instance(TypedDict, total=False):
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: Required[list[Instance]]
     parameters: dict
+    labels: ReadOnly[Mapping[str, str]]
 
 
 class VideoEmbedding(TypedDict):
@@ -640,6 +655,7 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: list[ContentEmbeddings]
+    usageMetadata: NotRequired[ReadOnly[object]]
 
 
 class GeminiEmbedContentRequestBody(TypedDict, total=False):
@@ -728,6 +744,7 @@ class VertexAIBatchPredictionJob(TypedDict):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    labels: NotRequired[ReadOnly[Mapping[str, str]]]
 
 
 class VertexBatchPredictionResponse(TypedDict, total=False):

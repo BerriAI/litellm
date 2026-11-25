@@ -8,13 +8,90 @@ import unittest
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import openai
 import pytest
+import respx
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import litellm
+import litellm.proxy.proxy_server as proxy_server
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.utils import TokenCountResponse
+
+
+@pytest.mark.parametrize(
+    ("configured", "requested", "cacheable"),
+    [
+        ({}, {}, True),
+        ({}, {"store": True}, True),
+        ({}, {"store": False}, True),
+        ({}, {"store": False, "extra_body": {"store": True}}, True),
+        ({}, {"store": True, "extra_body": {"store": False}}, True),
+        ({}, {"store": False, "additional_drop_params": ["store"]}, True),
+        ({}, {"store": False, "previous_response_id": "resp_previous"}, False),
+        ({}, {"store": False, "extra_body": {"conversation": "conv_previous"}}, False),
+        ({}, {"store": False, "extra_body": {"truncation": "auto"}}, False),
+        ({"store": False}, {}, True),
+        ({"store": False}, {"store": None}, True),
+        ({"extra_body": {"store": False}}, {"extra_body": None}, True),
+    ],
+)
+def test_messages_count_tokens_puts_system_in_input_unless_the_request_continues_a_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: dict[str, object],
+    requested: dict[str, object],
+    cacheable: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "count-sol",
+                "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test", **configured},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    app: Final = FastAPI()
+    app.include_router(messages_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    with respx.mock(assert_all_called=True) as upstream:
+        count: Final = upstream.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        response: Final = TestClient(app).post(
+            "/v1/messages/count_tokens",
+            json={
+                "model": "count-sol",
+                "system": "Stable prefix",
+                "messages": [{"role": "user", "content": "hi"}],
+                **requested,
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["input_tokens"] == 10
+    user_message: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    developer_message: Final = {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Stable prefix"}],
+    }
+    assert json.loads(count.calls.last.request.content) == {
+        "model": "gpt-6.2-sol",
+        **(
+            {"input": [developer_message, user_message]}
+            if cacheable
+            else {"input": [user_message], "instructions": "Stable prefix"}
+        ),
+    }
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
@@ -723,3 +800,40 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_messages_error_relays_the_provider_code(status_code: int) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+
+    upstream: Final = httpx.Response(
+        status_code,
+        json={"error": {"message": "rejected"}},
+        request=httpx.Request("POST", "https://backend.example.test/v1/chat/completions"),
+    )
+    rejected: Final = openai.APIStatusError(
+        message="rejected",
+        response=upstream,
+        body={"message": "rejected", "code": "provider_code", "param": "temperature"},
+    )
+    with pytest.raises(openai.APIError) as mapped:
+        exception_type(model="qwen", original_exception=rejected, custom_llm_provider="hosted_vllm")
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),
+        patch.object(
+            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=AsyncMock(side_effect=mapped.value)
+        ),
+        patch.object(proxy_server, "proxy_logging_obj") as logging_obj,
+    ):
+        logging_obj.post_call_failure_hook = AsyncMock()
+        response: Final = await ep.anthropic_response(
+            fastapi_response=MagicMock(),
+            request=MagicMock(headers={}),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    error: Final = json.loads(response.body)["error"]
+    assert response.status_code == status_code
+    assert error["provider_specific_fields"] == {"code": "provider_code"}

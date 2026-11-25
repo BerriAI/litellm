@@ -103,6 +103,7 @@ else:
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARG_VALUE: Final = TypeAdapter(object)
 
 
 def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Router | None") -> bool:
@@ -110,18 +111,28 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
 
     Native Responses providers hold the conversation themselves, so their rows can wait for the batch write.
     A row with no router deployment behind it is treated as bridged, which keeps today's immediate flush.
+    A native Foundry model router row is written at once too, as when every router turn was bridged,
+    because its follow-up can land on a router entry in the same group that still bridges.
     """
     if payload.get("call_type") not in RESPONSES_SESSION_CALL_TYPES:
         return False
+    from litellm.llms.azure_ai.common_utils import is_foundry_v1_model_router
+    from litellm.responses.main import answered_by_the_chat_bridge, provider_stores_the_conversation
+
+    if answered_by_the_chat_bridge(payload.get("request_id")):
+        return True
     model_id: Final = payload.get("model_id")
     deployment: Final = (
         llm_router.get_deployment(model_id=model_id) if llm_router is not None and isinstance(model_id, str) else None
     )
     if deployment is None:
         return True
-    from litellm.responses.main import provider_stores_the_conversation
-
     litellm_params: Final = deployment.litellm_params
+    if is_foundry_v1_model_router(litellm_params.model, litellm_params.api_base) and (
+        litellm.get_llm_provider(model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider)[1]
+        == "azure_ai"
+    ):
+        return True
     return not provider_stores_the_conversation(
         litellm_params.model,
         litellm_params.custom_llm_provider,
@@ -774,6 +785,7 @@ class DBSpendUpdateWriter:
                 return
             from litellm.proxy.db.spend_log_tool_index import (
                 build_tool_usage_transaction,
+                logged_full_tool_names,
             )
 
             transaction: Final = build_tool_usage_transaction(
@@ -784,6 +796,7 @@ class DBSpendUpdateWriter:
                 total_tokens=payload["total_tokens"],
                 completion_response=completion_response,
                 realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+                full_names=logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {})),
             )
             if transaction is None:
                 return
@@ -987,6 +1000,9 @@ class DBSpendUpdateWriter:
             _metadata: Final = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
             user_agent: Final = _metadata.get("user_agent") or None
+            from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+
+            full_names: Final = logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {}))
 
             def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
                 self.tool_discovery_queue.add_update(
@@ -1017,8 +1033,8 @@ class DBSpendUpdateWriter:
                     continue
                 fn = tool_def.get("function") or {}
                 name = fn.get("name") if isinstance(fn, dict) else None
-                if name:
-                    _enqueue(name)
+                if isinstance(name, str) and name:
+                    _enqueue(full_names.get(name, name))
 
             # --- Tools from Anthropic /messages pass-through request body
             #     (Anthropic format: tools[].name, no "function" wrapper) ---
@@ -1034,9 +1050,7 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
-
-            for tool_name in response_tool_call_names(completion_response):
+            for tool_name in response_tool_call_names(completion_response, full_names):
                 _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)

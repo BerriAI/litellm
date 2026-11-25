@@ -35,6 +35,8 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -519,6 +521,29 @@ async def test_create__fallback_explicit_provider_bypasses_not_found_gate(harnes
     await call_create(harness, provider="anthropic")
 
     assert harness.acreate_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_create__fallback_workload_identity_alone_forwards(
+    harness: Harness, no_openai_creds: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    token_file = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness)
+
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio
@@ -1817,6 +1842,75 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
     assert retrieve_harness.update_batch_in_db.call_count == 1
 
 
+def _hook_rewriting_the_batch_id_to(batch_id: str) -> Callable[..., LiteLLMBatch]:
+    def hook(*, response: LiteLLMBatch, **_: object) -> LiteLLMBatch:
+        response.id = batch_id
+        return response
+
+    return hook
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_endpoint", ["/v1/chat/completions", ""])
+async def test_retrieve__provider_sync_keeps_the_endpoint_the_batch_was_created_for(
+    retrieve_harness: RetrieveHarness, provider_endpoint: str
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(
+        update={"endpoint": "/v1/embeddings"}
+    )
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": provider_endpoint}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+    retrieve_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "in_progress")
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert retrieve_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
+    assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
+
+
+@pytest.mark.asyncio
+async def test_retrieve__a_saved_batch_without_an_endpoint_keeps_the_providers(
+    retrieve_harness: RetrieveHarness,
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": ""})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress")
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/chat/completions"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__an_embeddings_endpoint_from_the_provider_corrects_a_saved_chat_endpoint(
+    retrieve_harness: RetrieveHarness,
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(
+        update={"endpoint": "/v1/chat/completions"}
+    )
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": "/v1/embeddings"}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/embeddings"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
 async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
@@ -2569,6 +2663,32 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
         await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
 
     assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
+async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harness: CancelHarness) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="in_progress").model_copy(
+        update={"endpoint": "/v1/embeddings"}
+    )
+    stored_row: Final = MagicMock(status="in_progress", file_object=stored.model_dump(mode="json"))
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = stored_row
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="cancelling")
+    cancel_harness.router.acancel_batch.return_value = provider_batch
+    cancel_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+    cancel_harness.logging.get_proxy_hook.return_value = object()
+
+    with (
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
+        patch.object(proxy_server, "prisma_client", prisma_client),
+    ):
+        resp: Final = await call_cancel(cancel_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "cancelling")
+    written: Final = cancel_harness.update_batch_in_db.call_args.kwargs
+    assert (written["response"].endpoint, written["db_batch_object"]) == ("/v1/embeddings", stored_row)
+    assert cancel_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
 
 
 @pytest.mark.asyncio

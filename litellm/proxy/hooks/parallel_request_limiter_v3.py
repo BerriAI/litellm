@@ -4091,6 +4091,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             *await self._create_tag_rate_limit_descriptors(data),
         ]
 
+    async def raise_if_over_limit_before_body(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Refuse a request from its headers alone once a limit that needs no body is exhausted.
+
+        Counters are only read, never incremented, so an admitted request is still charged by
+        ``async_pre_call_hook`` after its body is parsed. Limits that need the model are not checked here.
+        """
+        descriptors: Final = await self._build_request_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict, data={}, call_type=None
+        )
+        if not descriptors:
+            return
+        response: Final = await self.should_rate_limit(
+            descriptors=descriptors,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            read_only=True,
+            skip_tpm_check=self.tpm_reservation_enabled,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response=response, descriptors=descriptors)
+
     async def _release_request_capacity_when_admitted(
         self,
         admission: asyncio.Task[RateLimitResponse],
@@ -5562,7 +5582,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
-    @with_service_target("rate_limits")
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5581,6 +5600,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
         """
+        await self.async_release_request_parallel_slot()
+
+    @with_service_target("rate_limits")
+    async def async_release_request_parallel_slot(self) -> None:
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     @with_service_target("rate_limits")

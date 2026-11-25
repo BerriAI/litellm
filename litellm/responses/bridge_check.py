@@ -4,15 +4,24 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    get_llm_provider,
+    resolve_model_and_provider_for_metadata,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_whitespace_user_message
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
+from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute, get_vertex_ai_model_route
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import OpenAIWebSearchOptions
+from litellm.types.llms.openai import ChatCompletionUserMessage, OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_model_info_helper
 
@@ -39,6 +48,24 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
+def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast(  # cast-ok: isinstance only narrows to Mapping[Unknown, Unknown]; request JSON keys are str
+        Mapping[str, object], value
+    )
+
+
+def bridge_reasoning_effort(
+    reasoning_effort: str | Mapping[str, object] | None, extra_body: object
+) -> str | Mapping[str, object] | None:
+    nested_body: Final = str_keyed_mapping(extra_body)
+    if reasoning_effort is not None or nested_body is None:
+        return reasoning_effort
+    nested_effort: Final = nested_body.get("reasoning_effort")
+    return nested_effort if isinstance(nested_effort, str) else str_keyed_mapping(nested_effort)
+
+
 def chat_target_accepts_reasoning_summary(model: str, custom_llm_provider: str | None) -> bool:
     try:
         local_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
@@ -61,6 +88,10 @@ def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: st
             return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
 
 
+def serves_only_responses(model: str, custom_llm_provider: str) -> bool:
+    return custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model)
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -69,7 +100,8 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
-) -> tuple[dict, str]:
+    base_model: str | None = None,
+) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
@@ -97,36 +129,18 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
+    if serves_only_responses(model, custom_llm_provider):
+        model_info["mode"] = "responses"
+
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
 
-    # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
-    # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
-    # those keys.
-    #
-    # - gpt-5.4+: FUNCTION tools with reasoning active must be bridged. OpenAI enables
-    #   reasoning by default for these models (unset reasoning_effort means medium
-    #   server-side), and Chat Completions rejects function tools whenever reasoning is
-    #   on ("Function tools with reasoning_effort are not supported ... use
-    #   /v1/responses or set reasoning_effort to 'none'"), so only an explicit
-    #   ``"none"`` the chat gate forwards keeps the request chat-servable: a ``none``
-    #   the model's map row refuses is dropped (or refused) before the call, which
-    #   leaves the provider's default effort in force. Custom (grammar) tools are served
-    #   natively by Chat Completions with reasoning on, so custom-only requests stay on
-    #   chat and keep their native custom tool_call response shape.
-    # - The UNSET-effort arm only fires against endpoints known to enforce that
-    #   constraint (any api.openai.com host, or Azure OpenAI where api_base is
-    #   always set): chat-only OpenAI-compatible backends registered under the openai
-    #   provider with a custom api_base and gpt-5.4+ model names serve tools without
-    #   reasoning fine and have no /responses route, so they keep pre-existing
-    #   behavior (bridge only on an explicit reasoning_effort).
-    # - Azure AI Foundry's OpenAI v1 hosts (azure_ai provider) enforce it later in the series:
-    #   an explicit effort with function tools is rejected from gpt-5.6 on, and the unset
-    #   effort only from gpt-6 on (gpt-5.6 serves tools with reasoning silently off), so the
-    #   azure_ai gate keys on those measured boundaries instead of gpt-5.4+.
-    # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
-    #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
+    # Function tools with explicit active reasoning bridge on GPT-5.4+. With effort unset,
+    # OpenAI/Azure and Responses-capable Mantle endpoints bridge only GPT-5.6+ whose map
+    # default is not "none". Custom OpenAI-compatible endpoints keep unset effort on chat.
+    # Foundry uses its separate measured boundaries. Custom-only tools remain chat-native;
+    # reasoning summaries and tool_search retain their independent Responses requirements.
     has_function_tool: Final = any(
         (
             tool.get("type") == "function" and (isinstance(tool.get("function"), dict) or "name" in tool)
@@ -139,12 +153,17 @@ def responses_api_bridge_check(
         (tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)) == "tool_search"
         for tool in (tools or ())
     )
+    series_model: Final = (
+        AzureAIStudioConfig.gpt_5_base_model(model, base_model) or model
+        if custom_llm_provider == LlmProviders.AZURE_AI.value
+        else model
+    )
     requested_effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
     requested_summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, dict) else None
     reasoning_active: Final = (
         requested_effort != "none"
         or requested_summary is not None
-        or _chat_gate_refuses_reasoning_effort_none(model, custom_llm_provider)
+        or _chat_gate_refuses_reasoning_effort_none(series_model, custom_llm_provider)
     )
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
@@ -163,19 +182,30 @@ def responses_api_bridge_check(
         has_function_tool
         and reasoning_active
         and (
-            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            foundry_chat_rejects_function_tools_while_reasoning(series_model, reasoning_effort)
             if on_foundry_openai_endpoint
             else (
-                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-                and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
+                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(series_model)
+                and (
+                    reasoning_effort is not None
+                    or (
+                        on_constraint_enforcing_endpoint
+                        and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(series_model)
+                        and model_info.get("default_reasoning_effort") != "none"
+                    )
+                )
             )
         )
     )
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
         and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(model)
-        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and (
+            OpenAIGPT5Config.is_openai_gpt_5_model(series_model)
+            if custom_llm_provider == "openai"
+            else OpenAIGPT5Config.is_model_gpt_5_model(series_model)
+        )
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(series_model)
         and (
             (reasoning_effort is not None and reasoning_summary is not None)
             or chat_rejects_function_tools
@@ -186,3 +216,96 @@ def responses_api_bridge_check(
         model = model.replace("responses/", "")
 
     return model_info, model
+
+
+def chat_completion_ends_in_responses_api(
+    model: str | None,
+    custom_llm_provider: str | None,
+    *,
+    tools: Sequence[Mapping[str, object]] | None = None,
+    reasoning_effort: str | Mapping[str, object] | None = None,
+    reasoning_summary: object | None = None,
+    api_base: str | None = None,
+    base_model: str | None = None,
+) -> bool:
+    """Whether chat completion for this model is served by a Responses API.
+
+    Encrypted reasoning can be replayed only there. A normal chat provider cannot
+    verify the block, so the messages adapter strips it. ``chatgpt``, a ``responses/``
+    model, and a request whose tools or reasoning effort the bridge sends to Responses keep it.
+    """
+    if model is None and custom_llm_provider is None:
+        return False
+    try:
+        resolved_model, provider = resolve_model_and_provider_for_metadata(model or "", custom_llm_provider)
+    except Exception as error:  # noqa: BLE001  # unknown model names must not fail message translation
+        verbose_logger.debug("responses replay check failed for %s: %s", model, error)
+        return custom_llm_provider == LlmProviders.CHATGPT.value or (
+            isinstance(model, str) and (model == "chatgpt" or model.startswith("chatgpt/"))
+        )
+    model_info, _resolved = responses_api_bridge_check(
+        model=resolved_model,
+        custom_llm_provider=provider,
+        tools=tools,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        api_base=api_base,
+        base_model=base_model,
+    )
+    return model_info.get("mode") == "responses"
+
+
+_USER_TURN_ROLES: Final = frozenset({"user", "tool", "function"})
+
+
+def _with_deployment_base_model(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    deployment_model_info: Final = as_str_mapping(litellm_params.get("model_info"))
+    if litellm_params.get("base_model") or deployment_model_info is None:
+        return litellm_params
+    return {**litellm_params, "base_model": deployment_model_info.get("base_model")}
+
+
+def _uses_gemini_converter(model: str, provider: LlmProviders, litellm_params: Mapping[str, object]) -> bool:
+    if provider == LlmProviders.VERTEX_AI:
+        return (
+            get_vertex_ai_model_route(model, _with_deployment_base_model(litellm_params)) == VertexAIModelRoute.GEMINI
+        )
+    return isinstance(
+        ProviderConfigManager.get_provider_chat_config(model=model, provider=provider), VertexGeminiConfig
+    )
+
+
+def target_rejects_model_turn_end(
+    model: str, custom_llm_provider: str | None, litellm_params: Mapping[str, object]
+) -> bool:
+    try:
+        bare_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        return _uses_gemini_converter(bare_model, LlmProviders(provider), litellm_params)
+    except (litellm.BadRequestError, ValueError):
+        return False
+
+
+def needs_empty_user_turn_back(
+    caller_last_message: Mapping[str, object] | None,
+    sent_messages: Sequence[object],
+    model: str,
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object],
+) -> bool:
+    if not is_whitespace_user_message(caller_last_message):
+        return False
+    if sent_messages and message_field(sent_messages[-1], "role") in _USER_TURN_ROLES:
+        return False
+    return target_rejects_model_turn_end(model, custom_llm_provider, litellm_params)
+
+
+def empty_user_turn_for_model_turn_end(
+    caller_last_message: Mapping[str, object] | None,
+    sent_messages: Sequence[object],
+    model: str,
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[ChatCompletionUserMessage, ...]:
+    if not needs_empty_user_turn_back(caller_last_message, sent_messages, model, custom_llm_provider, litellm_params):
+        return ()
+    return (ChatCompletionUserMessage(role="user", content=""),)

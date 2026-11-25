@@ -42,6 +42,8 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
+    ValidationError,
     field_serializer,
     field_validator,
 )
@@ -203,6 +205,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
+    supports_part_media_resolution: ReadOnly[bool | None]
+    supports_media_in_tool_response: ReadOnly[bool | None]
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
     supports_bedrock_native_structured_output: ReadOnly[bool | None]
@@ -214,6 +218,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_per_turn_control: ReadOnly[bool | None]
+    supports_server_side_fallback: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
@@ -2078,6 +2083,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         setattr(self, key, value)
 
 
+class UnreportedUsage(Usage):
+    pass
+
+
 class StreamingChoices(OpenAIObject):
     def __init__(
         self,
@@ -2388,6 +2397,9 @@ class Embedding(OpenAIObject):
         setattr(self, key, value)
 
 
+_ITEM_USAGE: Final = TypeAdapter(tuple[Usage, ...], config=ConfigDict(strict=True))
+
+
 class EmbeddingResponse(OpenAIObject):
     model: str | None = None
     """The model used for embedding."""
@@ -2413,6 +2425,11 @@ class EmbeddingResponse(OpenAIObject):
 
     _response_headers: dict | None = None
     _response_ms: float | None = None
+    _item_usage: tuple[Usage, ...] = ()
+
+    @property
+    def item_usage(self) -> tuple[Usage, ...]:
+        return self._item_usage
 
     def __init__(
         self,
@@ -2422,6 +2439,7 @@ class EmbeddingResponse(OpenAIObject):
         data: list | list[Embedding] | None = None,
         hidden_params=None,
         _response_headers=None,
+        item_usage: tuple[Usage, ...] = (),
         **params,
     ) -> None:
         object: Final = "list"
@@ -2447,6 +2465,14 @@ class EmbeddingResponse(OpenAIObject):
 
         if hidden_params:
             self._hidden_params = hidden_params
+        self._item_usage = EmbeddingResponse._typed_item_usage(item_usage)
+
+    @staticmethod
+    def _typed_item_usage(value: object) -> tuple[Usage, ...]:
+        try:
+            return _ITEM_USAGE.validate_python(value)
+        except ValidationError:
+            return ()
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -4100,6 +4126,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_regex_lookaround",
         "supports_bedrock_native_structured_output",
         "supports_per_turn_control",
+        "supports_server_side_fallback",
     }
 )
 
@@ -4324,6 +4351,7 @@ class LlmProviders(str, Enum):
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
+    PERPLEXITY_ORCHESTRATOR = "perplexity_orchestrator"
     TYPESAFE = "typesafe"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
@@ -4335,6 +4363,7 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    GNANI = "gnani"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
     NADIR = "nadir"
@@ -4385,6 +4414,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GRADIUM = "gradium"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
@@ -4437,6 +4467,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"
@@ -4465,7 +4496,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
 }
 
 FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
 )
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})

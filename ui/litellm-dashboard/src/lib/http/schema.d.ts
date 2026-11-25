@@ -27434,6 +27434,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27445,6 +27449,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27456,6 +27464,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -29002,7 +29014,7 @@ export interface components {
             /** Choice */
             choice: string;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Probabilities */
             probabilities: {
                 [key: string]: number;
@@ -29715,6 +29727,11 @@ export interface components {
              * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
              */
             allow_unmanaged_response_ids?: boolean | null;
+            /**
+             * Allowed Client Side S3 Buckets
+             * @description S3 bucket names that keys other than proxy admins may name in `s3://` image and file URLs. Any other bucket is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_buckets?: string[] | null;
             /**
              * Allowed File Extensions
              * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
@@ -39496,7 +39513,7 @@ export interface components {
             /** Choice */
             choice: string | boolean;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -39592,7 +39609,7 @@ export interface components {
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -40065,6 +40082,37 @@ export interface components {
              * @constant
              */
             type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputToolSearchOutput */
+        OutputToolSearchOutput: {
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Tools
+             * @default []
+             */
+            tools: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_output";
         } & {
             [key: string]: unknown;
         };
@@ -41464,11 +41512,8 @@ export interface components {
         };
         /** PromptTokensDetails */
         PromptTokensDetails: {
-            /**
-             * Modality
-             * @enum {string}
-             */
-            modality: "TEXT" | "AUDIO" | "IMAGE" | "VIDEO";
+            /** Modality */
+            modality: string;
             /** Tokencount */
             tokenCount: number;
         };
@@ -43858,6 +43903,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /**
          * ResponsesAPIRequestParams
          * @description TypedDict for request parameters supported by the responses API.
@@ -43865,6 +43920,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -44045,7 +44101,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["OutputToolSearchOutput"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -44781,7 +44837,7 @@ export interface components {
         /** ScoreAnswer */
         ScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Legend */
             legend: {
                 [key: string]: string | {
@@ -57609,7 +57665,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user messages whose content mixes input_text, input_image and input_json parts
                      */
                     input: string | {
                         /** Content */
@@ -57631,6 +57687,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -66283,6 +66351,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -69747,6 +69816,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -77578,7 +77648,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user messages whose content mixes input_text, input_image and input_json parts
                      */
                     input: string | {
                         /** Content */
@@ -77600,6 +77670,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -80404,6 +80486,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */

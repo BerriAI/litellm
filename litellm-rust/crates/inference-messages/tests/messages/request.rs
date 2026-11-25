@@ -279,6 +279,50 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
     assert_eq!(sent["top_k"], 3);
 }
 
+#[rstest]
+#[case::claude_base_model(Some("anthropic/claude-sonnet-4-5"), json!([]))]
+#[case::open_base_model(Some("deepseek/deepseek-v4-pro"), json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[case::no_base_model(None, json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[tokio::test]
+async fn unsigned_thinking_is_dropped_for_an_alias_whose_base_model_names_claude(
+    call: MessagesCall,
+    #[case] base_model: Option<&str>,
+    #[case] sent_thinking: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([
+        {"role": "user", "content": "plan it"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "plan", "signature": ""}]},
+        {"role": "user", "content": "go on"}
+    ]);
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                base_model: base_model.map(str::to_owned),
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(call, json!({"model": "prod-sonnet", "messages": history}))
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    let thinking: Vec<Value> = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "thinking")
+        .cloned()
+        .collect();
+    assert_eq!(Value::from(thinking), sent_thinking);
+}
+
 fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));
@@ -674,6 +718,35 @@ async fn replayed_history_is_cleaned_before_sending(
 }
 
 #[rstest]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
 #[case::deepseek("deepseek")]
@@ -783,6 +856,48 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
     let body = request.json();
     assert_eq!(body.get("model"), None);
     assert_eq!(body["anthropic_version"], json!("vertex-2023-10-16"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn vertex_ai_drops_another_models_unsigned_thinking_before_claude(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+
+    run(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: LitellmParams {
+                vertex: VertexParams {
+                    vertex_project: Some("proj".into()),
+                    vertex_location: Some("us-east5".into()),
+                    ..VertexParams::default()
+                },
+                ..LitellmParams::default()
+            },
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Authorization", "Bearer caller-token")]),
+            ..with_model(call, "claude-sonnet-4-5@20250929")
+        },
+        json!({"messages": [
+            {"role": "user", "content": "Pick a number."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Gemini's plan", "signature": ""},
+                {"type": "thinking", "thinking": "Claude's plan", "signature": "sig-1"},
+                {"type": "text", "text": "Seven."}
+            ]},
+            {"role": "user", "content": "Double it."}
+        ]}),
+    ))
+    .await
+    .expect("messages call succeeds");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"][1]["content"],
+        json!([
+            {"type": "thinking", "thinking": "Claude's plan", "signature": "sig-1"},
+            {"type": "text", "text": "Seven."}
+        ])
+    );
 }
 
 #[rstest]

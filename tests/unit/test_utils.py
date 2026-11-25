@@ -1068,6 +1068,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "decisions",
                         "image_edit",
                         "embedding",
                         "evaluation",
@@ -1139,7 +1140,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
                 "supports_parallel_tool_use_config": {"type": "boolean"},
+                "supports_tool_schema_defs": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
+                "supports_part_media_resolution": {"type": "boolean"},
+                "supports_media_in_tool_response": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_thinking_cache_preservation": {"type": "boolean"},
@@ -1167,6 +1171,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
+                "supports_logprobs": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
                 "supports_low_reasoning_effort": {"type": "boolean"},
@@ -1187,6 +1192,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
+                "supports_search_tools_with_functions": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
                 "supports_fast_mode": {"type": "boolean"},
@@ -1207,6 +1213,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "supports_regex_lookaround": {"type": "boolean"},
+                "supports_all_json_schema_keywords": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",
@@ -1288,7 +1295,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
-                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
                 "off_peak_pricing": {
                     "type": "object",
@@ -3526,6 +3532,106 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+@pytest.mark.parametrize("provider", ("anthropic", "openai", "azure", "azure_ai", "hosted_vllm", "litellm_proxy"))
+def test_provider_specific_params_withhold_vector_store_routing_keys(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first", "vs-second"]}
+    provider_params: Final = {"provider_option": True, "tools": [{"type": "file_search", "vector_store_ids": ["vs"]}]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={**routing_params, **provider_params},
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    forwarded: Final = {**routing_params, **provider_params} if provider == "litellm_proxy" else provider_params
+    assert result == (forwarded if provider == "anthropic" else {"extra_body": forwarded})
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+def test_explicit_extra_body_vector_store_keys_reach_the_provider_as_sent(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    extra_body: Final = {"vector_store_ids": ["vs-first"], "provider_option": True}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={"extra_body": extra_body},
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    assert result == {"extra_body": extra_body}
+
+
+def test_custom_handler_still_receives_vector_store_routing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "my-rag-llm", "custom_handler": litellm.CustomLLM()}]
+    )
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first"]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params=dict(routing_params),
+        custom_llm_provider="my-rag-llm",
+        openai_params=[],
+    )
+
+    assert result == routing_params
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "url"),
+    (
+        ("anthropic", "claude-sonnet-5-5", "https://api.anthropic.com/v1/messages"),
+        ("openai", "gpt-6.1-sol", "https://api.openai.com/v1/chat/completions"),
+    ),
+)
+def test_completion_keeps_vector_store_routing_keys_out_of_provider_requests(
+    provider: str, model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    reply: Final = (
+        {
+            "id": "msg-vector-routing",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        if provider == "anthropic"
+        else {
+            "id": "chatcmpl-vector-routing",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    upstream: Final = respx_mock.post(url).respond(200, json=reply)
+    response: Final = litellm.completion(
+        model=f"{provider}/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        api_key="test-key",
+        vector_store_id="vs-single",
+        vector_store_ids=["vs-first", "vs-second"],
+    )
+    request_body: Final[Mapping[str, object]] = json.loads(upstream.calls.last.request.content)
+
+    assert response.choices[0].message.content == "ok"
+    assert request_body["model"] == model
+    assert "vector_store_id" not in request_body
+    assert "vector_store_ids" not in request_body
+
+
 class TestExtraBodyCannotOverrideModel:
     @pytest.mark.parametrize("custom_llm_provider", ["edenai", "openai", "azure"])
     def test_extra_body_model_is_dropped_for_openai_compatible_providers(self, custom_llm_provider: str) -> None:
@@ -5101,6 +5207,57 @@ async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_ob
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
+
+
+class _SyncSuccessKwargsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: tuple[dict[str, object], ...] = ()
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_kwargs = (*self.success_kwargs, kwargs)
+
+
+def test_wrapper_sync_logs_a_replayed_fake_stream_as_a_stream(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _SyncSuccessKwargsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.executor", executor)
+        replayed: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            fake_stream=True,
+        )
+        assert isinstance(replayed, CustomStreamWrapper)
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in replayed if chunk.choices) == "ok"
+
+    assert len(capture.success_kwargs) == 1
+    standard_logging_object: Final = capture.success_kwargs[0]["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["stream"] is True
+    assert capture.success_kwargs[0]["stream"] is True
 
 
 class _RewritingSuccessDeploymentHook(CustomLogger):
@@ -7448,6 +7605,59 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("mode", ["auto", "required"])
+def test_validate_tool_choice_allowed_tools_either_layout_comes_back_in_the_chat_layout(mode: str):
+    chat_layout: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
+        },
+    }
+    responses_layout: Final = {
+        "type": "allowed_tools",
+        "mode": mode,
+        "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+    }
+    assert validate_chat_completion_tool_choice(chat_layout, model=MODEL) == chat_layout
+    assert validate_chat_completion_tool_choice(responses_layout, model=MODEL) == chat_layout
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+        {"type": "allowed_tools", "allowed_tools": {"tools": [{"type": "function", "function": {"name": "a"}}]}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": "get_time"}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict[str, object]):
+    with pytest.raises(litellm.BadRequestError, match="allowed_tools") as exc_info:
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_dropped_under_drop_params(tool_choice: dict[str, object]):
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL, drop_params=True) is None
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
     """A non-str, non-dict tool_choice is rejected as a 400 that names the type it got."""
@@ -9338,6 +9548,19 @@ def test_get_valid_models_from_provider():
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
     assert "gpt-5-mini" in valid_models
+
+
+def test_get_valid_models_lists_a_json_provider_set_up_through_its_declared_key_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
+
+    monkeypatch.delenv("PERPLEXITYORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_ORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test-key")
+
+    assert "perplexity_orchestrator/anthropic/claude-haiku-5-5" in get_valid_models()
 
 
 @pytest.mark.parametrize(

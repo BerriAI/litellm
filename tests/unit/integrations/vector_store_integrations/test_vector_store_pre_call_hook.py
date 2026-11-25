@@ -2,7 +2,7 @@ import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
 import pytest
 from fastapi import HTTPException
@@ -155,6 +155,38 @@ async def _run_hook(
         dynamic_callback_params={},
         litellm_logging_obj=logging_obj,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+async def test_a_store_configured_with_a_raw_retrieval_query_still_runs_its_chat_search(
+    monkeypatch: pytest.MonkeyPatch, retrieval_query_param: str
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs-raw",
+                    custom_llm_provider="bedrock",
+                    litellm_params={"aws_region_name": "us-west-2", retrieval_query_param: {"text": "from the store"}},
+                )
+            ],
+        ),
+    )
+    router: Final = RecordingRouter()
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
+        ["vs-raw"],
+        FakeLoggingObj({}),
+    )
+
+    assert len(router.calls) == 1
+    assert router.calls[0]["query"] == "what is litellm?"
+    assert router.calls[0]["aws_region_name"] == "us-west-2"
+    assert retrieval_query_param not in router.calls[0]
 
 
 @pytest.mark.asyncio

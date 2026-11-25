@@ -1,13 +1,16 @@
 import asyncio
+import base64
 import contextlib
 import copy
 import datetime
 import importlib.abc
+import io
 import json
 import logging
 import os
 import sys
 import threading
+import wave
 import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
@@ -3476,6 +3479,59 @@ def test_response_cost_calculator_native_generate_content_body_uses_usage_metada
 
     cost = logging_obj.response_cost_calculator(result=native_body)
     assert cost == pytest.approx(expected_cost)
+
+
+def _gemini_tts_wav_base64() -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(bytes(range(256)) * 8)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _gemini_tts_reply(wav_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav_base64}}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 40, "totalTokenCount": 47},
+        "modelVersion": "gemini-3.8-flash-tts",
+    }
+
+
+def test_native_generate_content_logs_the_tts_audio_the_caller_received():
+    wav_base64: Final = _gemini_tts_wav_base64()
+    reply: Final = _gemini_tts_reply(wav_base64)
+    logging_obj: Final = LitellmLogging(
+        model="gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="tts-wav",
+        function_id="tts-wav",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-3.8-flash-tts")
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(200, json=reply)
+
+    _, _, logged, _ = logging_obj._prepare_success_logging(
+        result=reply,
+        start_time=None,
+        end_time=None,
+        cache_hit=False,
+        standard_logging_object=None,
+        build_logging_payload=False,
+        publish_logging_payload=False,
+    )
+
+    assert isinstance(logged, litellm.ModelResponse)
+    assert logged.choices[0].message.audio.data == wav_base64
 
 
 def test_response_cost_calculator_does_not_transform_non_generate_content_dict():

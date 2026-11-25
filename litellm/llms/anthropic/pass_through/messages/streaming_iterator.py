@@ -4,23 +4,24 @@ import re
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from litellm.constants import (
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
     ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
 )
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import loads_json_object, process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -92,16 +93,10 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     return False
 
 
-_DECODED_SSE_DATA: Final = TypeAdapter(object)
-
-
 def _decoded_sse_data_line(line: bytes) -> object | None:
     if not line.startswith(b"data:"):
         return None
-    try:
-        return _DECODED_SSE_DATA.validate_python(json.loads(line[len(b"data:") :].strip()))
-    except (ValueError, TypeError):
-        return None
+    return loads_json_object(line[len(b"data:") :])
 
 
 def _anthropic_event_payload(chunk: object, event_type: str) -> Mapping[str, object] | None:
@@ -243,16 +238,11 @@ def _anthropic_content_block_start_and_deltas(
             )
         case "thinking":
             signature: Final = block.get("signature")
-            signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)
-                if isinstance(signature, str) and signature
-                else ()
-            )
             return (
                 {"thinking": "", "signature": "", "type": "thinking"},
                 (
                     {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
-                    *signature_deltas,
+                    {"signature": signature if isinstance(signature, str) else "", "type": "signature_delta"},
                 ),
             )
         case "redacted_thinking":
@@ -343,16 +333,6 @@ class AnthropicMessagesStreamHiddenParams(TypedDict):
     additional_headers: dict[str, str]
 
 
-@runtime_checkable
-class SupportsAclose(Protocol):
-    async def aclose(self) -> None: ...
-
-
-async def aclose_if_supported(stream: object) -> None:
-    if isinstance(stream, SupportsAclose):
-        await stream.aclose()
-
-
 _CLOSING_SUPERSEDED_ATTEMPT: Final[ContextVar[bool]] = ContextVar("closing_superseded_attempt", default=False)
 
 
@@ -422,7 +402,6 @@ class AnthropicMessagesStreamingResponse:
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
 _SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
 _SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
-_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 def _sse_data_payload(line: bytes) -> bytes | None:
@@ -431,11 +410,7 @@ def _sse_data_payload(line: bytes) -> bytes | None:
 
 def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
-    data: Final = b"\n".join(payload for payload in payloads if payload is not None)
-    try:
-        return _SSE_EVENT.validate_python(json.loads(data))
-    except (ValueError, ValidationError):
-        return None
+    return loads_json_object(b"\n".join(payload for payload in payloads if payload is not None))
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:

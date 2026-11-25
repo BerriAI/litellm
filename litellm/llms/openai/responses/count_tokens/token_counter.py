@@ -11,7 +11,9 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+from litellm.llms.anthropic.pass_through.responses_adapters.handler import preserves_system_instructions
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -27,6 +29,7 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     get_workload_identity_bearer_token,
+    openai_static_api_key,
     resolve_openai_workload_identity_config,
 )
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
@@ -35,13 +38,18 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
 
 
-def _workload_identity_config(litellm_params: Mapping[str, object]) -> OpenAIWorkloadIdentityConfig | None:
+def _workload_identity_config(
+    litellm_params: Mapping[str, object],
+) -> OpenAIWorkloadIdentityConfig | OpenAIError | None:
     api_base: Final = litellm_params.get("api_base")
-    return resolve_openai_workload_identity_config(
-        api_key=None,
-        api_base=api_base if isinstance(api_base, str) else None,
-        litellm_params=litellm_params,
-    )
+    try:
+        return resolve_openai_workload_identity_config(
+            api_key=None,
+            api_base=api_base if isinstance(api_base, str) else None,
+            litellm_params=litellm_params,
+        )
+    except OpenAIError as e:
+        return e
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -67,11 +75,17 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
+        request_params: Mapping[str, object],
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
+                    preserve_system_instructions=preserves_system_instructions(request_params),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -127,7 +141,18 @@ class OpenAITokenCounter(BaseTokenCounter):
         credentials: Final = get_openai_credentials(
             api_base=litellm_params.get("api_base"), api_key=litellm_params.get("api_key")
         )
-        credential: Final = credentials.api_key or _workload_identity_config(litellm_params)
+        credential: Final = openai_static_api_key(credentials.api_key) or _workload_identity_config(litellm_params)
+
+        if isinstance(credential, OpenAIError):
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=credential.message,
+                status_code=credential.status_code,
+            )
 
         if credential is None:
             return TokenCountResponse(
@@ -153,6 +178,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            request_params=as_str_mapping(litellm_params) or {},
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting

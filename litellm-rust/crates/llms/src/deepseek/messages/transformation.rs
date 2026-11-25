@@ -59,6 +59,14 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
         Ok(complete_deepseek_anthropic_url(api_base, env_lookup))
     }
 
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -430,11 +438,13 @@ mod tests {
     }
 
     #[rstest]
-    fn thinking_history_and_params_pass_through() {
+    #[case::signed("sig")]
+    #[case::unsigned("")]
+    fn thinking_history_and_params_pass_through(#[case] signature: &str) {
         let messages = json!([
             {"role": "user", "content": "Use the tool."},
             {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "I should call the tool.", "signature": "sig"},
+                {"type": "thinking", "thinking": "I should call the tool.", "signature": signature},
                 {"type": "tool_use", "id": "toolu_123", "name": "get_weather", "input": {"city": "Sao Paulo"}}
             ]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_123", "content": "Sunny"}]}

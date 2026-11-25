@@ -158,6 +158,14 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
+def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str | None = None) -> tuple[str, str]:
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    resolved_model, resolved_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    return resolved_model, resolved_provider
+
+
 def inferred_provider(model: str | None) -> str | None:
     if not model:
         return None
@@ -415,7 +423,7 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
                     elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
                         custom_llm_provider = json_provider.slug
-                        dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
+                        dynamic_api_key = api_key if api_key is not None else json_provider.api_key_from(get_secret_str)
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")

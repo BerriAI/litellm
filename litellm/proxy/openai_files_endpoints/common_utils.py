@@ -2,7 +2,7 @@ import base64
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -15,11 +15,13 @@ from typing import (
     get_args,
     runtime_checkable,
 )
+from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -343,6 +345,51 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
 
 
+_GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
+
+
+def canonical_provider_file_id(file_id: str) -> str:
+    """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Every other URL or URI
+    (``s3://``, ``gs://``, a storage blob URL) is returned unchanged, so an upload whose name happens to contain
+    ``files/<id>`` never indexes someone else's ``<id>``."""
+    decoded: Final = unquote(file_id).strip()
+    is_url: Final = "://" in decoded
+    if is_url and urlparse(decoded).hostname != _GEMINI_FILES_HOST:
+        return file_id
+    path: Final = urlparse(decoded).path if is_url else decoded
+    files_index: Final = path.find("files/")
+    bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
+    return bare or decoded
+
+
+_GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def _gemini_files_tail(file_id: str) -> str:
+    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
+    files_index: Final = file_id.find("files/")
+    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+
+
+def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
+    for bare_id in bare_ids:
+        yield bare_id
+        yield f"files/{bare_id}"
+        yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
+
+
+def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
+    """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
+    canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
+    stored before ids were canonicalized."""
+    original: Final = get_original_file_id(file_id)
+    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
+    return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
+
+
 def is_model_embedded_id(file_id: str) -> bool:
     """
     Check if a file/batch ID has model routing information embedded.
@@ -658,6 +705,35 @@ def add_deployment_model_info(
         **(data.get("litellm_metadata") or {}),
         "model_info": deployment.model_info.model_dump(),
     }
+
+
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.get_credential_deployment(model_id=model_id)
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
+    return MappingProxyType({"drop_params": drop_params} if isinstance(drop_params, (bool, str)) else {})
+
+
+def router_default_drop_params(
+    llm_router: Optional["Router"], request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    router_defaults: Final = cast(  # cast-ok: the Router stores default_litellm_params as an untyped dict
+        Mapping[str, object], llm_router.default_litellm_params
+    )
+    return _as_drop_params(router_defaults.get("drop_params"))
+
+
+def configured_drop_params(
+    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    router_default: Final = router_default_drop_params(llm_router, request)
+    if llm_router is None or request.get("drop_params") is not None or router_default:
+        return router_default
+    return _as_drop_params(_deployment_drop_params(llm_router, model_id))
 
 
 def prepare_data_with_credentials(
@@ -1478,6 +1554,13 @@ def batch_cost_poller_is_active() -> bool:
         return getattr(poller, "batch_processed_support_confirmed", False) is True
     except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
         return False
+
+
+def created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> str:
+    if stored_batch is None or not stored_batch.endpoint:
+        return provider_batch.endpoint
+    provider_named_the_endpoint: Final = provider_batch.endpoint not in ("", "/v1/chat/completions")
+    return provider_batch.endpoint if provider_named_the_endpoint else stored_batch.endpoint
 
 
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:

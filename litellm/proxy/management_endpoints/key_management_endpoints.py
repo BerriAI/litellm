@@ -84,7 +84,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     publish_config_change,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -2743,17 +2743,15 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = None
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            key_reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
-            non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+            if not keeps_due_budget_reset(
+                budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
+            ):
+                non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "budget_limits" in non_default_values:
         raw_windows: Final = non_default_values["budget_limits"]
         if raw_windows:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
             initialized_windows: Final = []
             for window in raw_windows:
                 w = window if isinstance(window, dict) else window.model_dump()
@@ -3422,8 +3420,8 @@ async def _validate_update_key_data(
     #   / key-owner / team-admin / org-admin of the key).
     # - max_budget / spend / budget_limits: always require the admin
     #   check, even for the key owner or a team member (matches the
-    #   existing admin-only budget semantics).  budget_limits uses
-    #   model_fields_set because an explicit null/[] clears the field
+    #   existing admin-only budget semantics).  max_budget and budget_limits
+    #   use model_fields_set because an explicit null/[] clears the field
     #   and must gate the same as setting or changing it.
     # - spend gates on presence alone (not a value diff): the DB spend
     #   lags the live cross-pod counter, so letting an "unchanged" spend
@@ -3431,7 +3429,7 @@ async def _validate_update_key_data(
     #   overwrite the live counter below real usage and silently weaken
     #   enforcement.
     _is_budget_change: Final = (
-        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
+        ("max_budget" in data.model_fields_set and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
         or "soft_budget" in data.model_fields_set
@@ -4729,7 +4727,7 @@ async def info_key_fn(
         if (
             await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
-                key=key,
+                key=hashed_key,
                 key_info=key_info,
             )
             is not True
@@ -7967,7 +7965,7 @@ async def _can_user_query_key_info(
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
         or user_api_key_dict.api_key == key
-        or key_info.user_id == user_api_key_dict.user_id
+        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,

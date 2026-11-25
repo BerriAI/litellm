@@ -58,6 +58,8 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic.main import IncEx
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -76,6 +78,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
@@ -184,6 +187,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import unpriced_bedrock_arn
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -299,7 +303,12 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_internal_details_from_client_message,
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
@@ -348,6 +357,7 @@ from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_ty
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drop_params_flag,
+    drops_unsupported_params,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
@@ -363,6 +373,14 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    emptied_messages_error,
+    non_string_system_text_error,
+    non_string_user_text_error,
+    without_non_string_system_texts,
+)
+from litellm.llms.anthropic.pass_through.messages.utils import native_messages_to_send
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -445,6 +463,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     log_llm_api_exception,
     open_sse_before_first_byte,
     proxy_exception_from_route_error,
+    refuse_s3_media_the_key_may_not_read,
     request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
@@ -503,8 +522,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
+    redacted_raw_error_param,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -836,6 +860,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
+    openai_agents_turn_biller,
 )
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
@@ -1222,6 +1249,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
+async def _flush_spend_around_agents_rows_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = flush_spend_counters_on_shutdown,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
+) -> None:
+    await flush_spend()
+    remaining: Final = GracefulShutdownManager.remaining(clock=clock)
+    await drain_deferred_rows(max(0.0, remaining - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
+    await flush_spend()
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1757,6 +1797,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
+                    admin_mcp_stack.enter_context(GracefulShutdownManager.capture_sigterm())
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
@@ -1819,7 +1860,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
+            await _flush_spend_around_agents_rows_drain_on_shutdown()
 
             await _flush_spend_logs_queue_on_shutdown()
 
@@ -9663,91 +9704,68 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
-def _fast_serialize_simple_model_response_stream(
-    chunk: ModelResponseStream,
-) -> bytes | None:
-    """
-    Serialize the common OpenAI text streaming chunk without the full Pydantic
-    serializer. Fall back for richer chunks so tool calls, logprobs, usage, and
-    provider-specific fields keep the canonical model_dump_json behavior.
-    """
-    if (
-        getattr(chunk, "provider_specific_fields", None) is not None
-        or getattr(chunk, "system_fingerprint", None) is not None
-        or getattr(chunk, "usage", None) is not None
-    ):
-        return None
-
-    choices: Final = getattr(chunk, "choices", None)
-    if not isinstance(choices, list) or len(choices) != 1:
-        return None
-
-    choice: Final = choices[0]
-    if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
-        return None
-
-    delta: Final[object] = getattr(choice, "delta", None)
-    if delta is None:
-        return None
-
-    unsupported_delta_fields: Final = (
-        "function_call",
-        "tool_calls",
-        "audio",
-        "images",
-        "annotations",
-        "reasoning_content",
-        "thinking_blocks",
-        "provider_specific_fields",
-        "refusal",
-    )
-    if any(getattr(delta, field, None) is not None for field in unsupported_delta_fields):
-        return None
-
-    delta_dict: Final[dict] = {}
-    role: Final = getattr(delta, "role", None)
-    content: Final = getattr(delta, "content", None)
-    if role is not None:
-        delta_dict["role"] = role
-    if content is not None:
-        delta_dict["content"] = content
-
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
-    finish_reason: Final = getattr(choice, "finish_reason", None)
-    if finish_reason is not None:
-        choice_dict["finish_reason"] = finish_reason
-
-    # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
-    # field is None, omit it entirely rather than emitting ``"key": null``.
-    # Strict OpenAI-compatible clients reject ``null`` for optional fields like
-    # ``model``, so diverging here would surface as a client-side regression
-    # only on the fast path. Fall back to the slow path if a required-looking
-    # top-level identifier is missing.
-    model: Final = getattr(chunk, "model", None)
-    if model is None:
-        return None
-
-    payload: Final[dict] = {
-        "id": getattr(chunk, "id", None),
-        "object": getattr(chunk, "object", None),
-        "created": getattr(chunk, "created", None),
-        "model": model,
-        "service_tier": getattr(chunk, "service_tier", None),
-        "choices": [choice_dict],
-    }
-    for top_level_key in ("id", "object", "created", "service_tier"):
-        if payload[top_level_key] is None:
-            payload.pop(top_level_key)
-    return orjson.dumps(payload)
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
+_JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
-def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
+def _json_encodes(value: object) -> bool:
+    try:
+        to_jsonable_python(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _unencodable_part(value: object, ancestors: frozenset[int]) -> IncEx | bool:
+    if id(value) in ancestors:
+        return True
+    lineage: Final = ancestors | {id(value)}
+    if isinstance(value, BaseModel):
+        return _unencodable_keys(iter(value), lineage) or True
+    if isinstance(value, dict):
+        return _unencodable_entries(_JSON_OBJECT.validate_python(value), lineage)
+    if isinstance(value, (list, tuple)):
+        return _unencodable_indexes(enumerate(_JSON_ARRAY.validate_python(value)), lineage) or True
+    return True
+
+
+def _unencodable_entries(entries: Mapping[object, object], lineage: frozenset[int]) -> IncEx | bool:
+    by_name: Final = {key: item for key, item in entries.items() if isinstance(key, str)}
+    if len(by_name) == len(entries):
+        return _unencodable_keys(by_name.items(), lineage) or True
+    by_index: Final = {key: item for key, item in entries.items() if isinstance(key, int)}
+    if len(by_index) == len(entries):
+        return _unencodable_indexes(by_index.items(), lineage) or True
+    return True
+
+
+def _unencodable_keys(items: Iterable[tuple[str, object]], lineage: frozenset[int]) -> Mapping[str, IncEx | bool]:
+    return {key: _unencodable_part(item, lineage) for key, item in items if not _json_encodes(item)}
+
+
+def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
+    return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
+
+
+def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
+    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
+
+
+def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    try:
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    except PydanticSerializationError:
+        return _serialize_chat_chunk_leniently(chunk)
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
     if isinstance(chunk, ModelResponseStream):
-        serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
-        if serialized_chunk is not None:
-            return serialized_chunk
-
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+        return _serialize_chat_chunk(chunk)
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
 
 def _is_injected_stream_usage_artifact(chunk: object) -> bool:
@@ -10260,11 +10278,15 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
+        client_message: Final = getattr(e, "message", error_msg)
         proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            message=redact_internal_details_from_client_message(
+                client_message if isinstance(client_message, str) else error_msg
+            ),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
@@ -10309,10 +10331,16 @@ def _pricing_override_stamps(
 
 def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
+    configured_base_model: Final = model_info.get("base_model")
+    base_model: Final = (
+        None
+        if isinstance(configured_base_model, str) and unpriced_bedrock_arn(configured_base_model)
+        else configured_base_model
+    )
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
+        if "azure" in model_to_lookup or base_model:
+            model_to_lookup = base_model
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
     except Exception:
@@ -12589,11 +12617,12 @@ async def completion(
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
 
 
@@ -12817,7 +12846,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -12826,7 +12855,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", 500),
             )
@@ -14196,6 +14225,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14275,7 +14305,7 @@ async def _try_provider_token_count(
     deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
-    system: str | None = None,
+    system: str | list[object] | None = None,  # mutable-ok: Anthropic system blocks
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
@@ -14606,6 +14636,21 @@ def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[
     return group[0] if group else None
 
 
+def _messages_count_bridges(deployment: _TokenCountDeployment, request_model: str) -> bool:
+    from litellm.llms.anthropic.pass_through.messages.handler import messages_request_bridges
+
+    params: Final = deployment.get("litellm_params", {})
+    try:
+        model, provider, _, _ = litellm.get_llm_provider(
+            model=_non_empty_str(params.get("model")) or request_model,
+            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+            api_base=_non_empty_str(params.get("api_base")),
+        )
+    except litellm.BadRequestError:
+        return False
+    return messages_request_bridges(model, provider, dict(deployment.get("model_info", {})))
+
+
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -14639,6 +14684,44 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
+
+
+def _count_drops_params(deployment: Mapping[str, object] | None, sent_params: Mapping[str, object]) -> bool:
+    if "drop_params" in sent_params:
+        return drops_unsupported_params(sent_params["drop_params"])
+    return _drops_params(deployment)
+
+
+def _counted_request_messages(
+    messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
+    messages_format: TokenCountMessagesFormat,
+    drops: bool,
+) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
+    if messages is None:
+        return None
+    if messages_format != "anthropic":
+        return list(messages)
+    user_text_error: Final = None if drops else non_string_user_text_error(messages)
+    if user_text_error is not None:
+        raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
+    kept: Final = native_messages_to_send(messages, drops)
+    emptied_error: Final = emptied_messages_error(messages, kept)
+    if emptied_error is not None:
+        raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
+    return kept or list(messages)
+
+
+def _counted_request_system(
+    system: str | list[object] | None,  # mutable-ok: Anthropic system blocks
+    messages_format: TokenCountMessagesFormat,
+    drops: bool,
+) -> str | list[object] | None:  # mutable-ok: _try_provider_token_count takes Anthropic system blocks as a list
+    error: Final = None if messages_format != "anthropic" else non_string_system_text_error(system)
+    if error is None or not isinstance(system, list):
+        return system
+    if not drops:
+        raise ProxyException(message=error, type="invalid_request_error", param="system", code=400)
+    return without_non_string_system_texts(system)
 
 
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
@@ -14705,6 +14788,29 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         TokenCountResponse
     """
     return await count_request_tokens(request=request, call_endpoint=call_endpoint)
+
+
+def _deployment_for_messages_responses_count(
+    deployment: Mapping[str, object] | None,
+    router: Router | None,
+    request_litellm_params: Mapping[str, JsonValue],
+) -> Mapping[str, object] | None:
+    if deployment is None:
+        return None
+
+    from litellm.llms.anthropic.pass_through.responses_adapters.handler import SYSTEM_PLACEMENT_PARAMS
+
+    defaults: Final = router.default_litellm_params if router is not None else {}
+    overrides: Final = {
+        key: request_litellm_params[key] if key in request_litellm_params else defaults.get(key)
+        for key in SYSTEM_PLACEMENT_PARAMS
+        if key in request_litellm_params or defaults.get(key) is not None
+    }
+    if not overrides:
+        return deployment
+
+    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+    return {**deployment, "litellm_params": {**params, **overrides}}
 
 
 async def count_request_tokens(
@@ -14779,6 +14885,17 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    count_drops: Final = _count_drops_params(deployment, {**router_defaults, **request_litellm_params})
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_drops)
+    request_system: Final = _counted_request_system(system, messages_format, count_drops)
+    bridged_system: Final = (
+        system_without_claude_code_billing_header(request_system)
+        if messages_format == "anthropic" and _messages_count_bridges(deployment_view, request.model)
+        else request_system
+    )
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
@@ -14789,12 +14906,16 @@ async def count_request_tokens(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
                 contents=None if prompt_as_message else contents,
-                deployment=deployment,
+                deployment=(
+                    _deployment_for_messages_responses_count(deployment, llm_router, request_litellm_params)
+                    if messages_format == "anthropic" and custom_llm_provider == litellm.LlmProviders.OPENAI.value
+                    else deployment
+                ),
                 request_model=request.model,
                 tools=tools,
-                system=system,
+                system=request_system if isinstance(provider_counter, OpenAITokenCounter) else bridged_system,
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
@@ -14823,11 +14944,11 @@ async def count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    system_message: Final = _system_message(system)
+    system_message: Final = _system_message(bridged_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
@@ -14838,7 +14959,13 @@ async def count_request_tokens(
     framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
-        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        await _kimi_k3_count(
+            request,
+            messages_format,
+            model_to_use,
+            kimi_k3_messages,
+            counted_tools,
+        )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
     )
@@ -17679,6 +17806,9 @@ async def async_queue_request(
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {

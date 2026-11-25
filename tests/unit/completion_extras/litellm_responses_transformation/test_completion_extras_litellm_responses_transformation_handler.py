@@ -1,16 +1,27 @@
+import asyncio
+import json
+from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.types.utils import ModelResponse
 
 
@@ -218,13 +229,42 @@ def _completed_chat_response() -> ModelResponse:
     )
 
 
+def _completed_responses_api_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_completed",
+        created_at=0,
+        model="gpt-5.4",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_completed",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+            }
+        ],
+    )
+
+
+_COMPLETED_RESULTS = pytest.mark.parametrize(
+    "completed_result",
+    [_completed_chat_response, _completed_responses_api_response],
+    ids=["chat_response", "responses_api_response"],
+)
+
+
 @pytest.mark.asyncio
-async def test_acompletion_streams_completed_model_response():
+@_COMPLETED_RESULTS
+async def test_acompletion_streams_completed_model_response(
+    completed_result: Callable[[], ModelResponse | ResponsesAPIResponse],
+):
     """A streaming request whose bridge call comes back already completed must still be
     handed back as an async-iterable stream. Returning the bare ModelResponse crashed the
     proxy's SSE generator with "'async for' requires an object with __aiter__ method".
     Regression for #33154."""
-    completed = _completed_chat_response()
+    completed = completed_result()
     bridge = ResponsesToCompletionBridgeHandler()
 
     with (
@@ -245,8 +285,11 @@ async def test_acompletion_streams_completed_model_response():
     assert [c for c in chunks if c.choices[0].finish_reason], "stream never emitted a finish_reason"
 
 
-def test_completion_streams_completed_model_response():
-    completed = _completed_chat_response()
+@_COMPLETED_RESULTS
+def test_completion_streams_completed_model_response(
+    completed_result: Callable[[], ModelResponse | ResponsesAPIResponse],
+):
+    completed = completed_result()
     bridge = ResponsesToCompletionBridgeHandler()
 
     with (
@@ -265,6 +308,47 @@ def test_completion_streams_completed_model_response():
         f"completed response did not stream its content: {chunks}"
     )
 
+
+
+class _CostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.response_costs: list[object] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_costs.append(kwargs.get("response_cost"))
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+@_COMPLETED_RESULTS
+async def test_acompletion_streamed_completed_response_bills_the_cost_it_carries(
+    completed_result: Callable[[], ModelResponse | ResponsesAPIResponse], monkeypatch: pytest.MonkeyPatch
+):
+    """Emulated file search sums the cost of both of its calls into the completed response, and
+    streaming that response must bill the sum instead of re-pricing only the final message."""
+    summed_cost: Final = 0.0123
+    completed: Final = completed_result()
+    set_hidden_param(completed, "response_cost", summed_cost)
+    recorder: Final = _CostRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    bridge: Final = ResponsesToCompletionBridgeHandler()
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "gpt-5.4", "input": "hi"},
+        ),
+        patch("litellm.aresponses", new=AsyncMock(return_value=completed)),
+    ):
+        result = await bridge.acompletion(**_bridge_kwargs(stream=True))
+        assert isinstance(result, CustomStreamWrapper)
+        _ = [chunk async for chunk in result]
+        await asyncio.wait_for(recorder.logged.wait(), timeout=30)
+
+    assert recorder.response_costs == [pytest.approx(summed_cost)]
 
 _PROVIDER_NATIVE_MODEL_CASES = [
     ("perplexity", "perplexity/kimi-k3", "perplexity/kimi-k3"),
@@ -335,3 +419,110 @@ async def test_acompletion_keeps_provider_native_model_id_through_responses(
 
     handed_model = responses_call.call_args.kwargs["model"]
     assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model
+
+
+_CHATGPT_RESPONSES_URL: Final = "https://chatgpt.com/backend-api/codex/responses"
+
+
+def _reasoning_item(item_id: str) -> dict[str, object]:
+    return {"type": "reasoning", "id": item_id, "summary": [], "encrypted_content": f"gAAAA_{item_id}"}
+
+
+def _weather_call(index: int, city: str) -> dict[str, object]:
+    return {
+        "type": "function_call",
+        "id": f"fc_{index}",
+        "status": "completed",
+        "arguments": json.dumps({"city": city}),
+        "call_id": f"call_{index}",
+        "name": "get_weather",
+    }
+
+
+def _two_reasoning_tool_turn_stream() -> httpx.Response:
+    turn: Final = {
+        "id": "resp_two_reasoning",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-5.6-sol",
+        "output": [
+            _reasoning_item("rs_first"),
+            _weather_call(1, "Oslo"),
+            _reasoning_item("rs_second"),
+            _weather_call(2, "Lyon"),
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+    }
+    body: Final = f"data: {json.dumps({'type': 'response.completed', 'response': turn})}\n\ndata: [DONE]\n\n"
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+
+
+_FAR_FUTURE_EXPIRY: Final = 4_102_444_800
+
+
+@pytest.fixture
+def _chatgpt_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
+    auth: Final = {"access_token": "chatgpt-test-token", "expires_at": _FAR_FUTURE_EXPIRY, "account_id": "acct_test"}
+    (tmp_path / "auth.json").write_text(json.dumps(auth))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(_CHATGPT_RESPONSES_URL).mock(side_effect=lambda _request: _two_reasoning_tool_turn_stream())
+
+
+_WEATHER_QUESTION: Final = "Weather in Oslo and Lyon?"
+_WEATHER_TOOL_INPUT: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+_EVERY_REASONING_SIGNATURE: Final = [
+    encrypted_reasoning_signature("gAAAA_rs_first"),
+    encrypted_reasoning_signature("gAAAA_rs_second"),
+]
+
+
+def _thinking_signatures(reply: object) -> list[object]:
+    assert isinstance(reply, dict)
+    return [block.get("data") for block in reply["content"] if block["type"] == "redacted_thinking"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chatgpt_backend")
+async def test_async_messages_client_gets_every_reasoning_item_of_a_non_streamed_turn() -> None:
+    reply: Final = await litellm.anthropic.messages.acreate(
+        model="chatgpt/gpt-5.6-sol",
+        max_tokens=64,
+        messages=[{"role": "user", "content": _WEATHER_QUESTION}],
+        tools=[{"name": "get_weather", "input_schema": _WEATHER_TOOL_INPUT}],
+    )
+
+    assert _thinking_signatures(reply) == _EVERY_REASONING_SIGNATURE
+
+
+_CHAT_WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": _WEATHER_TOOL_INPUT}}
+
+
+def _reasoning_item_ids(response: object) -> list[object]:
+    assert isinstance(response, ModelResponse)
+    return [item["id"] for item in response.choices[0].message.reasoning_items]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chatgpt_backend")
+async def test_async_chat_client_keeps_only_the_last_reasoning_item_of_a_turn() -> None:
+    response: Final = await litellm.acompletion(
+        model="chatgpt/gpt-5.6-sol",
+        messages=[{"role": "user", "content": _WEATHER_QUESTION}],
+        tools=[_CHAT_WEATHER_TOOL],
+    )
+
+    assert _reasoning_item_ids(response) == ["rs_second"]
+
+
+@pytest.mark.usefixtures("_chatgpt_backend")
+def test_sync_chat_client_keeps_only_the_last_reasoning_item_of_a_turn() -> None:
+    response: Final = litellm.completion(
+        model="chatgpt/gpt-5.6-sol",
+        messages=[{"role": "user", "content": _WEATHER_QUESTION}],
+        tools=[_CHAT_WEATHER_TOOL],
+    )
+
+    assert _reasoning_item_ids(response) == ["rs_second"]

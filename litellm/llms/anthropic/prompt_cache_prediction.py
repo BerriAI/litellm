@@ -650,17 +650,15 @@ def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> M
             custom_llm_provider="anthropic",
             tools=_MESSAGES.validate_python(owned.get("tools") or []),
         )
+        drop_paths: Final = TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ())
         options: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             {**owned, "system": system},
             model=resolved_model,
             custom_llm_provider="anthropic",
             drop_params=owned.get("drop_params") is True,
+            additional_drop_params=drop_paths,
         )
-        filtered: Final = reduce(
-            delete_nested_value,
-            TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ()),
-            dict(options),
-        )
+        filtered: Final = reduce(delete_nested_value, drop_paths, dict(options))
         body: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
             model=resolved_model,
             messages=strip_provider_specific_fields_from_anthropic_messages(messages),

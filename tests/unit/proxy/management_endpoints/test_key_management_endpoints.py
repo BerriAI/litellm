@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
+    hash_token,
 )
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import (
@@ -52,6 +53,7 @@ from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _can_user_query_key_info,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
@@ -106,6 +108,31 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_user_id", "owner_user_id", "expected"),
+    [
+        (None, None, False),
+        ("", "", False),
+        ("alice", None, False),
+        ("alice", "bob", False),
+        ("alice", "alice", True),
+    ],
+)
+async def test_key_info_access_by_owner_requires_a_real_shared_owner(
+    caller_user_id: str | None, owner_user_id: str | None, expected: bool
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        api_key="caller-key-hash", user_id=caller_user_id, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    other_key: Final = LiteLLM_VerificationToken(token="other-key-hash", user_id=owner_user_id)
+
+    assert (
+        await _can_user_query_key_info(user_api_key_dict=auth, key=other_key.token, key_info=other_key)
+        is expected
+    ), f"caller user_id={caller_user_id!r} reading key owned by {owner_user_id!r}"
 
 
 @pytest.mark.asyncio
@@ -2095,6 +2122,34 @@ async def test_update_key_end_user_budget_id_folds_into_metadata_and_survives_om
         data=UpdateKeyRequest(key="sk-1", key_alias="renamed"), existing_key_row=existing_key
     )
     assert untouched["metadata"]["end_user_budget_id"] == "svc-a-budget"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_duration", "stored_reset_at", "moves_reset"),
+    [
+        ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", None, True),
+    ],
+)
+async def test_update_key_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", budget_duration=stored_duration, budget_reset_at=stored_reset_at
+    )
+
+    updated: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", budget_duration="30d"), existing_key_row=existing_key
+    )
+
+    assert updated["budget_duration"] == "30d"
+    reset_at: Final = updated.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in updated) is moves_reset
 
 
 @pytest.mark.asyncio
@@ -6682,6 +6737,30 @@ async def test_info_key_fn_archived_key_keeps_owner_authorization(monkeypatch):
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="owner-1", api_key="sk-own"),
     )
     assert owner_result["info"]["status"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_lets_an_ownerless_key_read_itself_by_plaintext(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    own_key: Final = "sk-ownerless-service-key"
+    other_key: Final = "sk-another-ownerless-key"
+    mock_prisma_client: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    caller: Final = UserAPIKeyAuth(api_key=hash_token(own_key), user_id=None, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hash_token(own_key), user_id=None, key_alias="own-service-key")
+    )
+    own_result: Final = await info_key_fn(key=own_key, user_api_key_dict=caller)
+    assert own_result["info"]["key_alias"] == "own-service-key"
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hash_token(other_key), user_id=None, key_alias="other-service-key")
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn(key=other_key, user_api_key_dict=caller)
+    assert exc_info.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -11861,7 +11940,8 @@ async def test_update_key_team_member_with_permission_can_update_non_budget(
 
 
 @pytest.mark.asyncio
-async def test_update_key_team_member_cannot_change_budget(monkeypatch):
+@pytest.mark.parametrize("requested_max_budget", [500.0, None])
+async def test_update_key_team_member_cannot_change_budget(monkeypatch, requested_max_budget):
     """A team member with /key/update in member_permissions still cannot
     change max_budget — budget/spend changes require team/org admin. The
     member_permissions bypass only applies to non-budget fields."""
@@ -11942,11 +12022,11 @@ async def test_update_key_team_member_cannot_change_budget(monkeypatch):
     with pytest.raises(ProxyException) as exc:
         await update_key_fn(
             request=mock_request,
-            data=UpdateKeyRequest(key=test_hashed_token, max_budget=500.0),
+            data=UpdateKeyRequest(key=test_hashed_token, max_budget=requested_max_budget),
             user_api_key_dict=team_member,
             litellm_changed_by=None,
         )
-    assert str(exc.value.code) == "403"
+    assert str(exc.value.code) == "403", exc.value.message
 
 
 # ============================================================================
@@ -12542,6 +12622,40 @@ class TestKeyOwnerPrivilegeEscalation:
                     user_api_key_cache=MagicMock(),
                 )
         mock_check.assert_called_once()
+
+    async def _validate_as_creator(self, data, existing):
+        prisma_client = AsyncMock()
+        prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+        return await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=self._make_auth(user_id="creator-123"),
+            llm_router=None,
+            premium_user=False,
+            prisma_client=prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_creator_cannot_clear_own_max_budget_with_null(self):
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = 10.0
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._validate_as_creator(UpdateKeyRequest(key="sk-test", max_budget=None), existing)
+
+        assert exc_info.value.status_code == 403, exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_creator_sending_null_max_budget_on_uncapped_key_needs_no_admin(self):
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = None
+
+        result = await self._validate_as_creator(
+            UpdateKeyRequest(key="sk-test", key_alias="renamed", max_budget=None), existing
+        )
+
+        assert result is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cleared_value", [[], None])
