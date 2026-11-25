@@ -60,7 +60,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self._creds_lock = threading.Lock()
         self._gdch_creds_cache: dict[tuple[str, str], _GDCHAudienceCredentials] = {}
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "vertex_project",
             "vertex_location",
@@ -84,7 +84,9 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             or optional_params.get("vertex_ai_location")
         )
 
-    def _effective_project(self, api_base: str, optional_params: dict, litellm_params: dict) -> str | None:
+    def _effective_project(
+        self, api_base: str, optional_params: dict[str, object], litellm_params: dict[str, object]
+    ) -> str | None:
         match: Final = re.search(r"/v1/projects/([^/]+)", api_base)
         if match:
             return match.group(1)
@@ -104,8 +106,8 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = api_base or litellm.gdc_api_base or litellm.api_base
@@ -221,14 +223,14 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         import google.auth.exceptions
 
         api_base = api_base or litellm.gdc_api_base or litellm.api_base
@@ -301,10 +303,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transforms the request to the GDC provider
         """

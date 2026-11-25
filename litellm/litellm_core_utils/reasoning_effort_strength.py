@@ -11,7 +11,6 @@ from typing_extensions import assert_never
 
 ReasoningEffortRounding: TypeAlias = Literal["up", "down"]
 
-PROVIDER_DEFAULT_REASONING_EFFORT: Final = "default"
 REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
 REASONING_EFFORT_STRENGTH_RANK: Final = MappingProxyType(
     {effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)}

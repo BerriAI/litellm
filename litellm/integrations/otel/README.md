@@ -208,7 +208,7 @@ becomes the global, so server spans export to that backend too.
    can't wait for startup). It binds to the OTel global `ProxyTracerProvider`. Noisy
    non-LLM routes are excluded by default (`mount._DEFAULT_EXCLUDED_ROUTES`): health
    checks (`/health*`), the Prometheus scrape (`/metrics`), and static UI/docs assets
-   (`/litellm-asset-prefix`, `/_next`, `/ui`, `/swagger`, `/docs`, `/redoc`,
+   (`/litellm-asset-prefix`, `/_next`, `/ui`, `/swagger`, `/scalar`, `/docs`,
    `/openapi.json`, favicons, `/.well-known`) — so load-balancer polling, metric
    scrapes, and asset fetches don't flood traces. Entries are substring-matched, so
    `/metrics` also drops the `/model/metrics` admin-analytics spans. Set

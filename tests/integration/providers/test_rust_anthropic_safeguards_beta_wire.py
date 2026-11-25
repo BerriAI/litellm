@@ -22,6 +22,7 @@ from integration._support.process import (
     graceful_stop_seconds,
     owned_proxy_process,
 )
+from integration._support.vertex import assert_vertex_authorization
 from integration._support.wire import Wire, wire_server
 from integration.providers._anthropic_safeguards_beta_support import (
     ANTHROPIC_DEPLOYMENT,
@@ -37,6 +38,7 @@ from integration.providers._anthropic_safeguards_beta_support import (
     MERGED_BETAS,
     NOT_A_LIST_MESSAGE,
     OVERLOADED_MESSAGE,
+    PROJECT,
     REPLY_TEXT,
     SAFEGUARD_RESULTS,
     SAFEGUARDS,
@@ -301,7 +303,7 @@ def test_vertex_messages_with_safeguards_keep_the_beta_from_the_shared_helper(
     assert f"msg_{marker}" in response.text and "safeguard_results" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert sent.target == (VERTEX_STREAM_TARGET if stream else VERTEX_TARGET), sent
-    assert sent.authorization == "Bearer scripted-token", sent
+    assert_vertex_authorization(sent.authorization, PROJECT, oauth_token=None)
     assert sent.beta == (f"{DANGEROUS_TOOL_USE},{WEB_SEARCH}" if web_search else DANGEROUS_TOOL_USE), sent
 
 

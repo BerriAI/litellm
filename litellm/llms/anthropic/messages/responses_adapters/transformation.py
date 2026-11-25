@@ -6,10 +6,11 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -27,21 +28,29 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    explicit_effort_fits_thinking_budget,
     reasoning_effort_from_thinking,
 )
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
+from litellm.llms.anthropic.messages.deferred_tools import (
+    DeferredToolsMode,
+    client_tool_search_name,
+    is_deferred,
+)
 from litellm.llms.anthropic.messages.native.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
 )
 from litellm.llms.anthropic.messages.utils import (
+    REASONING_EFFORT_OFF,
+    content_blocks,
+    is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     object_mapping,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
+    requested_reasoning_summary,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
@@ -74,19 +83,106 @@ def _output_item_mapping(item: object) -> Mapping[str, object]:
     return as_str_mapping(item) or MappingProxyType({})
 
 
-def _reasoning_effort(
-    thinking: Mapping[str, object], explicit_effort: object, *, model: str, drop_params: bool
-) -> object:
-    match thinking.get("type"):
-        case "adaptive":
-            return explicit_effort or "medium"
-        case "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
-            if explicit_effort and explicit_effort_fits_thinking_budget(explicit_effort, thinking):
-                return explicit_effort
-            return budget_effort
-        case _:
-            return None
+def _content_dicts(content: object) -> Iterator[Mapping[str, object]]:
+    if not isinstance(content, list):
+        return
+    for block in cast(list[object], content):  # cast-ok: untrusted client payload
+        if isinstance(block, dict):
+            yield cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
+
+
+def _assistant_tool_uses(messages: Iterable[AllAnthropicPassThroughMessageValues]) -> Iterator[Mapping[str, object]]:
+    for message in messages:
+        if message["role"] != "assistant":
+            continue
+        for block in _content_dicts(message.get("content")):
+            if block.get("type") == "tool_use":
+                yield block
+
+
+def _user_tool_results(messages: Iterable[AllAnthropicPassThroughMessageValues]) -> Iterator[Mapping[str, object]]:
+    for message in messages:
+        if message["role"] != "user":
+            continue
+        for block in _content_dicts(message.get("content")):
+            if block.get("type") == "tool_result":
+                yield block
+
+
+def _union(left: frozenset[str], right: frozenset[str]) -> frozenset[str]:
+    return left | right
+
+
+def _search_results(
+    messages: Iterable[AllAnthropicPassThroughMessageValues], call_ids: frozenset[str]
+) -> Iterator[tuple[str, tuple[str, ...]]]:
+    for block in _user_tool_results(messages):
+        if isinstance(call_id := block.get("tool_use_id"), str) and call_id in call_ids:
+            yield call_id, tuple(dict.fromkeys(_tool_reference_names(block)))
+
+
+def _tool_reference_names(tool_result: Mapping[str, object]) -> Iterator[str]:
+    for block in _content_dicts(tool_result.get("content")):
+        if block.get("type") == "tool_reference" and isinstance(name := block.get("tool_name"), str):
+            yield name
+
+
+def _tool_search_text_block(text: str) -> dict[str, str]:  # mutable-ok: API input content block
+    return {"type": "input_text", "text": f"ToolSearch tool output, not a message from the user: {json.dumps(text)}"}
+
+
+def _tool_result_texts(tool_result: Mapping[str, object]) -> Iterator[str]:
+    content: Final = tool_result.get("content")
+    if isinstance(content, str):
+        if content:
+            yield content
+        return
+    for block in _content_dicts(content):
+        if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text:
+            yield text
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSearchReplay:
+    call_ids: frozenset[str]
+    loadable: Mapping[str, Mapping[str, object]]
+    first_loads: Mapping[str, tuple[str, ...]]
+
+    def replays(self, tool_use_id: object) -> bool:
+        return isinstance(tool_use_id, str) and tool_use_id in self.call_ids
+
+    def call_item(self, tool_use: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
+        return {
+            "type": "tool_search_call",
+            "call_id": tool_use.get("id", ""),
+            "execution": "client",
+            "arguments": as_str_mapping(tool_use.get("input")) or {},
+            "status": "completed",
+        }
+
+    def output_items(
+        self, tool_result: Mapping[str, object]
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: API input items
+        texts: Final = tuple(_tool_result_texts(tool_result))
+        if not texts:
+            return (self.output_item(tool_result),)
+        return (
+            self.output_item(tool_result),
+            {"type": "message", "role": "user", "content": [_tool_search_text_block(text) for text in texts]},
+        )
+
+    def output_item(self, tool_result: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
+        return {
+            "type": "tool_search_output",
+            "call_id": tool_result.get("tool_use_id", ""),
+            "execution": "client",
+            "status": "incomplete" if tool_result.get("is_error") is True else "completed",
+            "tools": [
+                self.loadable[name]
+                for name in self.first_loads.get(str(tool_result.get("tool_use_id", "")), ())
+                if name in self.loadable
+            ],
+        }
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -158,16 +254,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return {"type": "input_file", "file_url": url}
         return None
 
-    @staticmethod
-    def _content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
-        if not isinstance(content, list):
-            return ()
-        return tuple(
-            cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
-            for block in cast(Sequence[object], content)  # cast-ok: untyped client content list
-            if isinstance(block, dict)
-        )
-
     @classmethod
     def _tool_result_image_parts(
         cls, blocks: Sequence[Mapping[str, object]]
@@ -192,7 +278,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         block, the images Anthropic caches for the mark. The result's text and documents join into one output, which
         the mark covers whole.
         """
-        inner: Final = cls._content_blocks(block.get("content"))
+        inner: Final = content_blocks(block.get("content"))
         own_breakpoint: Final = block.get("prompt_cache_breakpoint")
         if own_breakpoint is not None:
             return own_breakpoint, cls._tool_result_image_parts(inner), ()
@@ -306,13 +392,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @classmethod
     def _assistant_group_to_input_items(
-        cls, group: tuple[Mapping[str, object], ...]
+        cls, group: tuple[Mapping[str, object], ...], tool_search: ToolSearchReplay | None = None
     ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):
             replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
             return tuple(dict(item) for item in replayed)
+        if btype == "tool_use" and tool_search is not None and tool_search.replays(first.get("id")):
+            return (tool_search.call_item(first),)
         if btype == "tool_use":
             return (
                 {
@@ -327,6 +415,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_messages_to_responses_input(
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
+        tool_search: ToolSearchReplay | None = None,
     ) -> list[dict[str, object]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
@@ -383,7 +472,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 )
                             )
                         elif btype == "image":
-                            url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
+                            url = self._translate_anthropic_image_source_to_url(block.get("source", {}))
                             if url:
                                 user_parts.append(
                                     with_prompt_cache_breakpoint(
@@ -400,6 +489,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
                             tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
+                            if tool_search is not None and tool_search.replays(tool_use_id):
+                                input_items.extend(tool_search.output_items(tool_result_block))
+                                continue
                             tool_breakpoint, covered_image_parts, later_image_parts = (
                                 self._tool_result_images_by_breakpoint(tool_result_block)
                             )
@@ -473,7 +565,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     input_items.extend(
                         item
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
-                        for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
+                        for item in self._assistant_group_to_input_items(
+                            tuple(block for _, block in group), tool_search
+                        )
                     )
                     asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
                         {"type": "output_text", "text": block.get("text", "")}
@@ -511,12 +605,62 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
         return func_tool
 
+    @classmethod
+    def _translate_tool_with_deferral(
+        cls, tool_dict: Mapping[str, object], keeps_deferral: bool, tool_search_name: str | None
+    ) -> dict[str, object]:  # mutable-ok: API tool payload
+        if tool_search_name is not None and tool_dict.get("name") == tool_search_name:
+            return {
+                "type": "tool_search",
+                "execution": "client",
+                **({"description": tool_dict["description"]} if "description" in tool_dict else {}),
+                **(
+                    {"parameters": json_copy_or_original(tool_dict["input_schema"])}
+                    if "input_schema" in tool_dict
+                    else {}
+                ),
+            }
+        translated: Final = cls._translate_tool_to_responses_api(tool_dict)
+        if keeps_deferral and is_deferred(tool_dict) and translated.get("type") == "function":
+            return {**translated, "defer_loading": True}
+        return translated
+
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
+        deferred_tools: DeferredToolsMode = "drop",
     ) -> list[dict[str, object]]:
         """Convert Anthropic tool definitions to Responses API function tools."""
-        return [self._translate_tool_to_responses_api(tool) for tool in tools]
+        tool_search_name: Final = client_tool_search_name(tools) if deferred_tools == "native" else None
+        keeps_deferral: Final = deferred_tools == "passthrough" or tool_search_name is not None
+        return [self._translate_tool_with_deferral(tool, keeps_deferral, tool_search_name) for tool in tools]
+
+    @classmethod
+    def tool_search_replay(
+        cls,
+        messages: Sequence[AllAnthropicPassThroughMessageValues],
+        tools: Sequence[Mapping[str, object]],
+        tool_search_name: str,
+    ) -> ToolSearchReplay:
+        searches: Final = (block for block in _assistant_tool_uses(messages) if block.get("name") == tool_search_name)
+        loadable: Final = (tool for tool in tools if tool.get("name") != tool_search_name)
+        call_ids: Final = frozenset(
+            call_id for call_id in (block.get("id") for block in searches) if isinstance(call_id, str)
+        )
+        results: Final = tuple(_search_results(messages, call_ids))
+        loaded_before: Final = accumulate((frozenset(names) for _, names in results), _union, initial=frozenset[str]())
+        return ToolSearchReplay(
+            call_ids=call_ids,
+            loadable=MappingProxyType(
+                {str(tool.get("name")): cls._translate_tool_to_responses_api(tool) for tool in loadable}
+            ),
+            first_loads=MappingProxyType(
+                {
+                    call_id: tuple(name for name in names if name not in loaded)
+                    for (call_id, names), loaded in zip(results, loaded_before)
+                }
+            ),
+        )
 
     @staticmethod
     def translate_tool_choice_to_responses_api(
@@ -564,45 +708,73 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return result if result else None
 
     @staticmethod
+    def _requested_effort(
+        thinking: Mapping[str, object],
+        configured_effort: object,
+        *,
+        model: str,
+        drop_params: bool,
+        between_tool_calls: bool,
+    ) -> object:
+        match thinking.get("type"):
+            case "adaptive":
+                return configured_effort or "medium"
+            case "enabled":
+                return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+            case "disabled":
+                return REASONING_EFFORT_OFF
+            case "between_tools":
+                return (configured_effort or "medium") if between_tool_calls else REASONING_EFFORT_OFF
+            case _:
+                return configured_effort or None
+
+    @staticmethod
+    def _reasoning_summary(thinking: Mapping[str, object], auto_summary_level: str) -> str | None:
+        requested: Final = requested_reasoning_summary(thinking)
+        if requested:
+            return requested
+        if thinking.get("display") is not None:
+            return None
+        return auto_summary_level if is_reasoning_auto_summary_enabled() else None
+
+    @classmethod
     def translate_thinking_to_reasoning(
-        thinking: dict[str, object],
-        output_config: dict[str, object] | None = None,
+        cls,
+        thinking: object,
+        output_config: object = None,
         auto_summary_level: str = "detailed",
         *,
         model: str,
         drop_params: bool = True,
+        between_tool_calls: bool = False,
     ) -> dict[str, object] | None:
         """
-        Convert Anthropic thinking param to Responses API reasoning param.
+        Convert Anthropic thinking and ``output_config.effort`` to the Responses API reasoning param.
 
-        An explicit ``output_config.effort`` wins on adaptive thinking, and beside
-        ``thinking.budget_tokens`` only when the budget is a whole number of at least
-        one token and the effort is at or below the budget's effort, which the shared
-        ``reasoning_effort_from_thinking_budget`` thresholds give. Adaptive thinking
-        defaults to medium.
+        ``between_tools`` thinking reasons only once the model has tool results to read, so a fresh turn turns
+        reasoning off like ``disabled`` does.
         """
-        if not isinstance(thinking, dict):
-            return None
-
-        explicit_effort: Final = output_config.get("effort") if isinstance(output_config, dict) else None
-        effort: Final = _reasoning_effort(thinking, explicit_effort, model=model, drop_params=drop_params)
+        thinking_params: Final[Mapping[str, object]] = as_str_mapping(thinking) or {}
+        output_params: Final = as_str_mapping(output_config)
+        effort: Final = cls._requested_effort(
+            thinking_params,
+            output_params.get("effort") if output_params is not None else None,
+            model=model,
+            drop_params=drop_params,
+            between_tool_calls=between_tool_calls,
+        )
         if effort is None:
             return None
-
-        auto_summary: Final = is_reasoning_auto_summary_enabled()
-        result: Final[dict[str, object]] = {"effort": effort}
-        summary: Final = thinking.get("summary")
-        if summary:
-            result["summary"] = summary
-        elif auto_summary:
-            result["summary"] = auto_summary_level
-        return result
+        if effort == REASONING_EFFORT_OFF:
+            return {"effort": effort}
+        summary: Final = cls._reasoning_summary(thinking_params, auto_summary_level)
+        return {"effort": effort} if summary is None else {"effort": effort, "summary": summary}
 
     @classmethod
     def system_blocks_to_instructions(cls, system: object) -> str:
         return "\n".join(
             text
-            for block in cls._content_blocks(system)
+            for block in content_blocks(system)
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
@@ -624,7 +796,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         *,
         drop_params: bool = True,
         preserve_system_instructions: bool = False,
-    ) -> dict[str, Any]:
+        deferred_tools: DeferredToolsMode = "drop",
+    ) -> dict[str, object]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
@@ -641,7 +814,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             anthropic_request["messages"],
         )
 
-        input_items: Final = self.translate_messages_to_responses_input(messages_list)
+        tools: Final = anthropic_request.get("tools")
+        request_tools: Final = cast(list[AllAnthropicToolsValues], tools or [])
+        tool_search_name: Final = client_tool_search_name(request_tools) if deferred_tools == "native" else None
+        input_items: Final = self.translate_messages_to_responses_input(
+            messages_list,
+            None
+            if tool_search_name is None
+            else self.tool_search_replay(
+                messages_list,
+                cast(Sequence[Mapping[str, object]], request_tools),  # cast-ok: TypedDict upcast
+                tool_search_name,
+            ),
+        )
         system: Final = system_without_claude_code_billing_header(anthropic_request.get("system"))
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
@@ -691,12 +876,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if "top_p" in anthropic_request:
             responses_kwargs["top_p"] = anthropic_request["top_p"]
 
-        # tools
-        tools: Final = anthropic_request.get("tools")
-        if tools:
-            responses_kwargs["tools"] = self.translate_tools_to_responses_api(
-                cast(list[AllAnthropicToolsValues], tools)
-            )
+        if request_tools:
+            responses_kwargs["tools"] = self.translate_tools_to_responses_api(request_tools, deferred_tools)
 
         # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
@@ -705,19 +886,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )
 
-        # thinking -> reasoning
-        thinking: Final = anthropic_request.get("thinking")
-        if isinstance(thinking, dict):
-            output_config = anthropic_request.get("output_config")
-            reasoning: Final = self.translate_thinking_to_reasoning(
-                thinking,
-                output_config=cast(dict[str, object] | None, output_config),
-                auto_summary_level=auto_summary_level,
-                model=model,
-                drop_params=drop_params,
-            )
-            if reasoning:
-                responses_kwargs["reasoning"] = reasoning
+        reasoning: Final = self.translate_thinking_to_reasoning(
+            anthropic_request.get("thinking"),
+            output_config=anthropic_request.get("output_config"),
+            auto_summary_level=auto_summary_level,
+            model=model,
+            drop_params=drop_params,
+            between_tool_calls=is_between_tool_calls(anthropic_request),
+        )
+        if reasoning:
+            responses_kwargs["reasoning"] = reasoning
 
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
@@ -766,6 +944,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_response(
         self,
         response: ResponsesAPIResponse,
+        tool_search_name: str | None = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate an OpenAI ResponsesAPIResponse to AnthropicMessagesResponse.
@@ -812,6 +991,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             "id": item.get("call_id") or item.get("id") or "",
                             "name": item.get("name") or "",
                             "input": input_data,
+                        }
+                    ).model_dump(exclude_none=True)
+                )
+                stop_reason = "tool_use"
+            elif item_type == "tool_search_call" and tool_search_name is not None:
+                content.append(
+                    AnthropicResponseContentBlockToolUse.model_validate(
+                        {
+                            "type": "tool_use",
+                            "id": item.get("call_id") or item.get("id") or "",
+                            "name": tool_search_name,
+                            "input": as_str_mapping(item.get("arguments")) or {},
                         }
                     ).model_dump(exclude_none=True)
                 )

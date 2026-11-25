@@ -2,19 +2,22 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Building2, Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overview/UsageStatStrip";
 import { overviewTotals } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { CustomerUsageDatePicker, CustomerUsageStats } from "./_components/CustomerUsageSummary";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { isProxyAdminRole } from "@/utils/roles";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import CustomerDetail from "./_components/CustomerDetail";
+import CustomerEntityBudgetDialog from "./_components/CustomerEntityBudgetDialog";
 import CustomerOrganizationsTable from "./_components/CustomerOrganizationsTable";
 import {
   CUSTOMER_ORGANIZATION_TABLE,
@@ -25,13 +28,7 @@ import {
 } from "./_components/customerOrganizations";
 import { mergeCustomerActivityPages } from "./_components/customerUsageData";
 import { customerUsageTotals } from "./_components/customerUsageTotals";
-import {
-  calendarDate,
-  CUSTOMER_USAGE_MAX_RANGE_DAYS,
-  customerPresetRange,
-  customerUsagePresets,
-  useCustomerUsageRange,
-} from "./_components/customerUsageRange";
+import { calendarDate, customerPresetRange, useCustomerUsageRange } from "./_components/customerUsageRange";
 
 const EMPTY_USAGE = mergeCustomerActivityPages([]);
 
@@ -43,8 +40,11 @@ export default function CustomersPage() {
 
 function CustomerOrganizations() {
   const { t } = useTranslation();
-  const { accessToken, userId } = useAuthorized();
+  const { accessToken, userId, userRole, isViewOnly, isLoading } = useAuthorized();
+  const authenticatedAdmin = Boolean(accessToken && isProxyAdminRole(userRole) && !isLoading);
+  const canManage = authenticatedAdmin && !isViewOnly;
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const { dateValue, onDateChange, preset } = useCustomerUsageRange();
   const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
     useUrlTableState(CUSTOMER_ORGANIZATION_TABLE);
@@ -94,78 +94,84 @@ function CustomerOrganizations() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1920px] space-y-6 px-4 py-6 sm:px-6">
-      <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
-          <AdvancedDatePicker
-            value={dateValue}
-            onValueChange={onDateChange}
-            presetShortLabel={preset}
-            presets={customerUsagePresets}
-            maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
-            label={t("customerPortal.range.label")}
-            showTimeRange={false}
-            compact
-            className="max-w-sm"
+    <div className="mx-auto flex w-full max-w-[1872px] flex-col gap-6">
+      <PageHeader
+        aside={<CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />}
+      >
+        <PageHeaderTitle>
+          <Building2 />
+          {t("customerPortal.list.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("customerPortal.list.description")}</PageHeaderDescription>
+      </PageHeader>
+      <PageContent>
+        <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
+          </div>
+          {organizations.isError || usage.isError ? (
+            <ErrorState
+              message={t("customerPortal.list.error")}
+              onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
+            />
+          ) : (
+            <CustomerUsageStats
+              results={activity.results}
+              totals={totals}
+              loading={organizations.isPending || usage.isPending}
+            />
+          )}
+        </section>
+        <div className="rounded-lg border bg-card">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
+            <Input
+              className="max-w-xs"
+              aria-label={t("customerPortal.list.searchPlaceholder")}
+              placeholder={t("customerPortal.list.searchPlaceholder")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> {t("customerPortal.list.create")}
+            </Button>
+          </div>
+          {organizations.isError || monthlyUsage.isError ? (
+            <ErrorState
+              message={t("customerPortal.list.error")}
+              onRetry={() => void (organizations.isError ? organizations.refetch() : monthlyUsage.refetch())}
+            />
+          ) : (
+            <CustomerOrganizationsTable
+              rows={sorted.slice(start, start + pagination.pageSize)}
+              sorting={sorting}
+              onSort={onSortingChange}
+              loading={loading}
+              searching={Boolean(search)}
+              startDate={startDate}
+              endDate={endDate}
+              usageTotals={usageTotals}
+              canManage={canManage}
+              onEdit={setEditingOrganizationId}
+            />
+          )}
+          <DataTablePagination
+            page={page}
+            pageSize={pagination.pageSize}
+            rowCount={sorted.length}
+            onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
+            onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
+            isLoading={organizations.isFetching || monthlyUsage.isFetching}
           />
         </div>
-        {organizations.isError || usage.isError ? (
-          <ErrorState
-            message={t("customerPortal.list.error")}
-            onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
-          />
-        ) : (
-          <UsageStatStrip
-            results={activity.results}
-            totals={totals}
-            loading={organizations.isPending || usage.isPending}
-            requestCountsPending={organizations.isPending || usage.isPending}
-            budget={null}
-            showBudgetHint={false}
-          />
-        )}
-      </section>
-      <div className="rounded-lg border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-          <Input
-            className="max-w-xs"
-            aria-label={t("customerPortal.list.searchPlaceholder")}
-            placeholder={t("customerPortal.list.searchPlaceholder")}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> {t("customerPortal.list.create")}
-          </Button>
-        </div>
-        {organizations.isError || monthlyUsage.isError ? (
-          <ErrorState
-            message={t("customerPortal.list.error")}
-            onRetry={() => void (organizations.isError ? organizations.refetch() : monthlyUsage.refetch())}
-          />
-        ) : (
-          <CustomerOrganizationsTable
-            rows={sorted.slice(start, start + pagination.pageSize)}
-            sorting={sorting}
-            onSort={onSortingChange}
-            loading={loading}
-            searching={Boolean(search)}
-            startDate={startDate}
-            endDate={endDate}
-            usageTotals={usageTotals}
-          />
-        )}
-        <DataTablePagination
-          page={page}
-          pageSize={pagination.pageSize}
-          rowCount={sorted.length}
-          onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
-          onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
-          isLoading={organizations.isFetching || monthlyUsage.isFetching}
-        />
-      </div>
+      </PageContent>
       <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
+      {canManage && editingOrganizationId && (
+        <CustomerEntityBudgetDialog
+          key={editingOrganizationId}
+          organizationId={editingOrganizationId}
+          onClose={() => setEditingOrganizationId(null)}
+        />
+      )}
     </div>
   );
 }

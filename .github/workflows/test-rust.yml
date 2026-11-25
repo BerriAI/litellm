@@ -20,7 +20,7 @@ on:
       - "litellm/scripts/generate_trace_types.py"
       - "litellm/scripts/trace_codegen/**"
       - "litellm/scripts/lens_assets/**"
-      - "litellm/tracing/**"
+      - "litellm/integrations/lens/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -138,6 +138,11 @@ jobs:
             cargo test -p litellm-token-counter --locked --no-default-features --features "$features"
             cargo check -p litellm-python-bridge --locked --no-default-features --features "abi3${features:+,$features}"
           done
+
+      - name: Test the FIPS build
+        run: |
+          cargo test -p litellm-http --locked --features fips
+          cargo check -p litellm-gateway -p litellm-python-bridge --locked --features fips
 
       - name: Test secret manager feature combinations
         run: |

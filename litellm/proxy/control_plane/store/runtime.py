@@ -57,6 +57,7 @@ class RuntimeConfig:
         self.ready = False
         self.cursor = "0-0"
         self.task: asyncio.Task[None] | None = None
+        self.fleet_changed = asyncio.Event()
 
     async def reload(self) -> bool:
         if self.store is None:
@@ -102,6 +103,13 @@ class RuntimeConfig:
                 await self.store.close()
 
     async def process(self, entry: Entry) -> bool:
+        if entry.change.op == "fleet_team":
+            if self.store is None:
+                return False
+            async with self.store.transaction():
+                pass
+            self.fleet_changed.set()
+            return True
         if entry.change.op == "resync":
             return await self.reload()
         if self.store is None:

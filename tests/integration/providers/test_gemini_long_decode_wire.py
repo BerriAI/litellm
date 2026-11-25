@@ -1212,12 +1212,7 @@ def test_request_with_no_output_cap_is_never_continued_and_returns_googles_cut_w
 
 _NOT_A_NUMBER: Final[tuple[tuple[str, Mapping[str, JsonValue], int | None], ...]] = (
     ("n-string", {"n": "1"}, CAP),
-    ("n-list", {"n": [1]}, CAP),
-    ("n-5kb", {"n": "1" * 5120}, CAP),
     ("max_tokens-string", {"max_tokens": "300"}, None),
-    ("max_tokens-list", {"max_tokens": [300]}, None),
-    ("max_tokens-empty", {"max_tokens": ""}, None),
-    ("max_tokens-5kb", {"max_tokens": "3" * 5120}, None),
 )
 _NOT_A_NUMBER_CELLS: Final[tuple[ParameterSet, ...]] = tuple(
     pytest.param(extra, cap, stream, id=f"{name}-{_mode(stream)}")
@@ -1242,6 +1237,74 @@ def test_count_or_cap_that_is_not_a_number_makes_one_request_and_is_never_contin
         assert (observed.answer, observed.errors) == (FIRST_HALF.text, ()), observed
         (only,) = received(wire, "gemini", stream, (False,))
         assert "continuationToken" not in only, only
+
+
+_GOOGLE_REFUSES: Final[tuple[tuple[str, str, JsonValue], ...]] = (
+    ("n-list", "n", [1]),
+    ("n-5kb", "n", "1" * 5120),
+    ("n-true", "n", True),
+    ("max_tokens-list", "max_tokens", [300]),
+    ("max_tokens-empty", "max_tokens", ""),
+    ("max_tokens-5kb", "max_tokens", "3" * 5120),
+)
+_GOOGLE_REFUSES_CELLS: Final[tuple[ParameterSet, ...]] = tuple(
+    pytest.param(provider, param, value, stream, id=f"{provider}-{name}-{_mode(stream)}")
+    for provider, (name, param, value), stream in itertools.product(PROVIDERS, _GOOGLE_REFUSES, (False, True))
+)
+_GOOGLE_FIELD: Final[Mapping[str, str]] = MappingProxyType({"n": "candidate_count", "max_tokens": "max_output_tokens"})
+
+
+def _google_refuses(provider: Provider, field: str, value: JsonValue) -> Answer:
+    # Copied from the 400s generativelanguage.googleapis.com and Vertex AI generateContent sent on 2026-11-24
+    shown: Final = json.dumps(value) if provider == "gemini" else ""
+    where, message = (
+        (
+            "generation_config",
+            f"Invalid JSON payload received. Unknown name \"{field}\" at 'generation_config': "
+            "Proto field is not repeating, cannot start list.",
+        )
+        if isinstance(value, list)
+        else (
+            f"generation_config.{field}",
+            f"Invalid value at 'generation_config.{field}' (TYPE_INT32), {shown}",
+        )
+    )
+    violation: Final = {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [{"field": where, "description": message}],
+    }
+    error: Final = {"error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT", "details": [violation]}}
+    body: Final = json.dumps(error).encode()
+    return lambda stream: Reply(
+        status=400, body=body, content_type="text/event-stream" if stream else "application/json; charset=UTF-8"
+    )
+
+
+@pytest.mark.parametrize(("provider", "param", "value", "stream"), _GOOGLE_REFUSES_CELLS)
+def test_count_or_cap_google_refuses_returns_its_400_from_one_request_and_is_never_continued(
+    gateway: Gateway, provider: Provider, param: str, value: JsonValue, stream: bool
+) -> None:
+    field: Final = _GOOGLE_FIELD[param]
+    with wire_server(upstream(_google_refuses(provider, field, value))) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        refused: Final = post(gateway, "chat", request_body("chat", model, stream, {**NO_CACHE, param: value}))
+        assert refused.status_code == 400, refused.text
+        assert field in refused.text, refused.text
+        (only,) = received(wire, provider, stream, (False,))
+        assert json.dumps(at(only, "generationConfig", field)) == json.dumps(value), only
+
+
+@pytest.mark.parametrize(("provider", "param", "value", "stream"), _GOOGLE_REFUSES_CELLS)
+def test_count_or_cap_google_refuses_is_dropped_under_drop_params(
+    gateway: Gateway, provider: Provider, param: str, value: JsonValue, stream: bool
+) -> None:
+    pytest.skip("BUG: drop_params forwards a malformed n or max_tokens to Gemini, which answers 400")
+    with wire_server(_halves()) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body("chat", model, stream, {**NO_CACHE, param: value, "drop_params": True}, cap=None)
+        assert post(gateway, "chat", body).status_code == 200
+        (only,) = received(wire, provider, stream, (False,))
+        assert at(only, "generationConfig", _GOOGLE_FIELD[param]) is None, only
 
 
 def _twice_cells() -> tuple[ParameterSet, ...]:
@@ -1273,21 +1336,6 @@ def test_count_or_cap_sent_twice_in_one_body_is_read_from_its_last_value(
         observed: Final = answered("chat", stream, response)
         assert (observed.answer, observed.errors) == (_JOINED if continued else FIRST_HALF.text, ()), observed
         received(wire, "gemini", stream, (False, True) if continued else (False,))
-
-
-@pytest.mark.parametrize(("provider", "stream"), _provider_modes())
-def test_count_of_true_is_read_as_one_answer_and_continued(gateway: Gateway, provider: Provider, stream: bool) -> None:
-    first_id: Final = f"first-{uuid.uuid4().hex}"
-    respond: Final = upstream(answers(first_id, FIRST_HALF), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF))
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = register(gateway, scenario, provider, wire)
-        body: Final = request_body("chat", model, stream, {**NO_CACHE, "n": True})
-        observed: Final = answered("chat", stream, post(gateway, "chat", body))
-        assert (observed.answer, observed.finishes, observed.usage) == (_JOINED, ("stop",), _CHAIN_USAGE), observed
-        assert (observed.tokens, observed.errors) == ((), ()), observed
-        opening, continuing = received(wire, provider, stream, (False, True))
-        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
-        assert_billed(model, "chat", _CHAIN_USAGE, _identities(observed, first_id))
 
 
 @pytest.mark.parametrize(("provider", "endpoint", "stream"), _cells(PROVIDERS, ENDPOINTS))

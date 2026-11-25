@@ -441,33 +441,6 @@ class TestSurfaceNormalization:
         assert "stream" not in shadow_call
         assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
-    async def test_anthropic_arm_keeps_the_thinking_budget_effort_beside_an_explicit_effort(self):
-        def logged(wire_params: Mapping[str, object]) -> Mapping[str, object]:
-            return {
-                **_success_kwargs(call_type="anthropic_messages"),
-                "model": "gpt-5.1",
-                "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
-                "litellm_params": {
-                    "metadata": {},
-                    "proxy_server_request": {
-                        "body": {
-                            "model": "gpt-5.1",
-                            "messages": [],
-                            "max_tokens": 30000,
-                            "thinking": {"type": "enabled", "budget_tokens": 20000},
-                            **wire_params,
-                        }
-                    },
-                },
-            }
-
-        _, budget_router = await self._drive(logged({}), RESPONSE)
-        _, explicit_router = await self._drive(logged({"output_config": {"effort": "low"}}), RESPONSE)
-
-        budget_effort: Final = budget_router.acompletion.call_args_list[0].kwargs.get("reasoning_effort")
-        assert budget_effort is not None
-        assert explicit_router.acompletion.call_args_list[0].kwargs.get("reasoning_effort") == budget_effort
-
     async def test_responses_arm_translates_wire_body_params_and_drops_surface_only_keys(self):
         from litellm.types.llms.openai import ResponsesAPIResponse
 

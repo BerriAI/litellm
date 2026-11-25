@@ -15,7 +15,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, list_value, object_value, string_value
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
@@ -400,7 +400,7 @@ def claude_prompt(body: dict[str, JsonValue]) -> str:
 
 def vertex_claude_peer(request: Request) -> Reply:
     assert request.method == "POST", request.method
-    assert request.headers["authorization"] == "Bearer scripted-token", request.headers
+    assert_vertex_authorization(request.headers["authorization"], PROJECT, oauth_token=None)
     assert request.target == CLAUDE_TARGET, request.target
     reply: Final[dict[str, JsonValue]] = {
         "id": f"msg_{uuid.uuid4().hex}",

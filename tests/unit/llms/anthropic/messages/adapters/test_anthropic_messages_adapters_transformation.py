@@ -2,9 +2,8 @@ import base64
 import functools
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -24,11 +23,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
@@ -38,7 +37,6 @@ from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.router import Router
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
     AnthropicMessagesRequest,
@@ -624,6 +622,41 @@ def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning
     assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_reply"),
+    [
+        ("converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", [{"text": "Seven."}]),
+        ("converse/us.amazon.nova-pro-v1:0", [{"text": "Gemini reasoning"}, {"text": "Seven."}]),
+    ],
+)
+@pytest.mark.parametrize("signature", ["", None])
+def test_converse_claude_never_reads_an_unsigned_thought_from_another_provider_as_its_own_reply(
+    model: str, expected_reply: list[dict[str, str]], signature: str | None
+):
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Gemini reasoning", "signature": signature},
+                    {"type": "text", "text": "Seven."},
+                ],
+            },
+            {"role": "user", "content": "Double it."},
+        ],
+        model=model,
+        extra_kwargs={"custom_llm_provider": "bedrock"},
+    )
+
+    converse_messages: Final = _bedrock_converse_messages_pt(
+        messages=completion_kwargs["messages"], model=model.removeprefix("converse/"), llm_provider="bedrock_converse"
+    )
+
+    assert converse_messages[1]["content"] == expected_reply
+
+
 def test_chatgpt_messages_keep_encrypted_reasoning_and_replay_it():
     """chatgpt /v1/messages ends in the Responses API, so the signed block has to survive into the next request."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -806,6 +839,69 @@ def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_response
 
     assistant: Final = openai_request["messages"][1]
     assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    ("deployment_model_info", "kept"),
+    [
+        pytest.param({"base_model": "azure_ai/gpt-5.6-terra"}, True, id="gpt_5_6_base_model_bridges_to_responses"),
+        pytest.param({"base_model": "azure_ai/gpt-5.5"}, False, id="gpt_5_5_base_model_stays_on_chat"),
+        pytest.param({}, False, id="no_base_model_stays_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_a_custom_foundry_name_base_model_routes_it_to_responses(
+    deployment_model_info: dict[str, object], kept: bool
+) -> None:
+    request: Final = AnthropicMessagesRequest(
+        **{**_replayed_reasoning_request([{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]),
+           "model": "azure_ai/qa-prod-reasoner", "thinking": {"type": "enabled", "budget_tokens": 2048}}
+    )
+    openai_request, _mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request,
+        custom_llm_provider="azure_ai",
+        api_base="https://myproject.services.ai.azure.com",
+        deployment_model_info=deployment_model_info,
+    )
+
+    assistant: Final = openai_request["messages"][1]
+    assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}},
+        {"base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/Phi-4"}, "base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}, "base_model": ""},
+    ],
+    ids=["model_info", "litellm_params", "litellm_params_over_model_info", "empty_litellm_params"],
+)
+def test_a_custom_foundry_name_keeps_replayed_reasoning_and_its_summary_wherever_its_base_model_is_set(
+    base_model_source: Mapping[str, object],
+) -> None:
+    from litellm.llms.anthropic.messages.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    tools: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
+    request: Final = _replayed_reasoning_request(tools)
+    completion_kwargs, _mapping = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=cast(list[dict[str, object]], request["messages"]),
+        model="azure_ai/qa-prod-reasoner",
+        thinking={"type": "enabled", "budget_tokens": 2048, "summary": "auto"},
+        tools=tools,
+        extra_kwargs={
+            "custom_llm_provider": "azure_ai",
+            "api_base": "https://myproject.services.ai.azure.com",
+            **base_model_source,
+        },
+    )
+
+    assistant: Final = cast(list[Mapping[str, object]], completion_kwargs["messages"])[1]
+    assert assistant.get("thinking_blocks")
+    assert cast(Mapping[str, object], completion_kwargs["reasoning_effort"]).get("summary") == "auto"
 
 
 @pytest.mark.parametrize(
@@ -5851,6 +5947,264 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
     ]
 
 
+def _user_text_beside(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_USER_TURN: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+
+def _sent_chat_messages(route: respx.Route) -> list[object]:
+    return json.loads(route.calls.last.request.read())["messages"]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_non_string_user_text_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, text: object, stream: bool
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            stream=stream,
+            messages=_user_text_beside({"type": "text", "text": text}),
+        )
+
+    assert rejected.value.status_code == 400
+    assert (
+        rejected.value.message == "litellm.BadRequestError: messages.0.content.1.text: Input should be a valid string"
+    )
+    assert route.call_count == 0
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_drop_params_drops_a_non_string_user_text(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, text: object, drop_params_source: str
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside({"type": "text", "text": text})) == sent_for(_CLEAN_USER_TURN)
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("text_block", [{"type": "text"}, {"type": "text", "text": " "}], ids=["missing", "blank"])
+def test_chat_bridge_sync_strips_a_missing_or_blank_user_text_without_drop_params(
+    respx_mock: respx.MockRouter, text_block: Mapping[str, object]
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside(text_block)) == sent_for(_CLEAN_USER_TURN)
+
+
+_GEMINI_MODEL: Final = "gemini/gemini-3.8-flash"
+_GEMINI_URL: Final = (
+    r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+)
+_EMPTY_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+_WHITESPACE_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": [{"type": "text", "text": " "}]}, id="whitespace_text_block"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": "\n"}]}, id="newline_text_block"),
+)
+_DROPPED_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+)
+_ACCEPTING_CHAT_REPLY: Final = {
+    "id": "chatcmpl-model-turn-end",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "How can I help?"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 8},
+}
+_GEMINI_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
+async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("blank_text", ("", " "), ids=("empty", "blank"))
+async def test_a_request_with_only_blank_user_text_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, blank_text: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": [{"type": "text", "text": blank_text}]}],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [{"role": "user", "parts": [{"text": " "}]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("dropped_user_message", _DROPPED_USER_MESSAGES)
+async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_that_accepts_a_model_turn_end(
+    respx_mock: respx.MockRouter, dropped_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(
+        return_value=httpx.Response(200, json=_ACCEPTING_CHAT_REPLY)
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model=_CHAT_BRIDGE_MODEL,
+        api_base=_CHAT_BRIDGE_API_BASE,
+        api_key="fake-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, dropped_user_message],
+    )
+
+    sent: Final = json.loads(route.calls.last.request.read())["messages"]
+    assert [message["role"] for message in sent] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
+async def test_an_empty_trailing_user_message_reaches_an_alternating_gemini_deployment_as_the_configured_continue_message(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+async def test_an_adapter_completion_request_ending_in_an_empty_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    translated: Final = AnthropicAdapter().translate_completion_input_params(
+        {
+            "model": _GEMINI_MODEL,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        }
+    )
+    assert translated is not None
+
+    await litellm.acompletion(**translated, api_key="test-key")
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_a_trailing_user_message_with_content_the_adapter_drops_gets_no_blank_user_turn_for_gemini(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.com/france",
+        "title": "France",
+        "content": [{"type": "text", "text": "The capital of France is Paris."}],
+    }
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": [search_result]},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+    ]
+
+
 _RETRY_API_BASE: Final = "https://encrypted-retry.openai.azure.com"
 _RETRY_URL: Final = r".*encrypted-retry\.openai\.azure\.com/openai/.*responses.*"
 _RETRY_TOOLS: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
@@ -6419,1119 +6773,57 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
 
 
-_CHAT_ADAPTER_ALIAS: Final = "chat-adapter-gpt"
-_CHAT_ADAPTER_BUDGET: Final = {"type": "enabled", "budget_tokens": 2048}
-_CHAT_ADAPTER_DECLARING_LOW_AND_HIGH: Final = {"reasoning_effort_levels": ["low", "high"]}
+def _deferred_tool_request(model: str = "claude-sonnet-5-5") -> AnthropicMessagesRequest:
+    return AnthropicMessagesRequest(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+        tools=[
+            {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "mcp__weather__get_forecast",
+                "description": "Get a forecast",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "defer_loading": True,
+            },
+        ],
+    )
 
 
-def _responses_effort(body: Mapping[str, object]) -> object:
-    reasoning: Final = body.get("reasoning")
-    return reasoning.get("effort") if isinstance(reasoning, dict) else None
+@pytest.mark.parametrize("deployment_model_info", [None, {"deferred_tools": "drop"}, {"deferred_tools": "native"}])
+def test_chat_route_sends_deferred_tools_as_plain_functions_unless_passthrough(
+    deployment_model_info: Mapping[str, object] | None,
+):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info=deployment_model_info
+    )
+
+    tools: Final = openai_request["tools"]
+    assert [tool["function"]["name"] for tool in tools] == ["Read", "mcp__weather__get_forecast"]
+    assert not any("defer_loading" in tool for tool in tools)
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
 
 
-def _chat_completions_effort(body: Mapping[str, object]) -> object:
-    return body.get("reasoning_effort")
+@pytest.mark.parametrize("model", ["vertex_ai/1234567890", "1234567890"], ids=["prefixed", "bare"])
+def test_chat_route_passthrough_sends_plain_functions_to_a_vertex_psc_endpoint(model: str):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(model),
+        custom_llm_provider="vertex_ai",
+        api_base="https://psc-endpoint.example.internal",
+        deployment_model_info={"deferred_tools": "passthrough"},
+    )
+
+    assert not any("defer_loading" in tool for tool in openai_request["tools"])
 
 
-@dataclass(frozen=True, slots=True)
-class _ChatAdapterTarget:
-    model: str
-    litellm_params: Mapping[str, object]
-    url: str
-    reply: Mapping[str, object]
-    request_params: Mapping[str, object]
-    chat_completions_url: bool
-    sent_effort: Callable[[Mapping[str, object]], object]
+def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
+    )
 
-
-_OPENAI_WITH_STOP_SEQUENCES: Final = _ChatAdapterTarget(
-    model="gpt-5.6",
-    litellm_params=MappingProxyType({"model": "openai/gpt-5.6", "api_key": "sk-chat-adapter-effort"}),
-    url=r"https://api\.openai\.com/v1/responses",
-    reply=_RETRY_REPLY,
-    request_params=MappingProxyType({"stop_sequences": ["END"], "additional_drop_params": ["stop"]}),
-    chat_completions_url=False,
-    sent_effort=_responses_effort,
-)
-_OPENAI_WITH_CHAT_COMPLETIONS_URL: Final = _ChatAdapterTarget(
-    model="gpt-5.6",
-    litellm_params=_OPENAI_WITH_STOP_SEQUENCES.litellm_params,
-    url=_OPENAI_WITH_STOP_SEQUENCES.url,
-    reply=_RETRY_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=True,
-    sent_effort=_responses_effort,
-)
-_AZURE_CHAT_COMPLETIONS: Final = _ChatAdapterTarget(
-    model="azure/gpt-5.6",
-    litellm_params=MappingProxyType(
-        {"model": _CHAT_BRIDGE_MODEL, "api_base": _CHAT_BRIDGE_API_BASE, "api_key": "fake-key"}
-    ),
-    url=_CHAT_BRIDGE_URL,
-    reply=_CHAT_BRIDGE_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=False,
-    sent_effort=_chat_completions_effort,
-)
-_CHAT_ADAPTER_TARGETS: Final = (
-    pytest.param(_OPENAI_WITH_STOP_SEQUENCES, id="openai-stop-sequences"),
-    pytest.param(_OPENAI_WITH_CHAT_COMPLETIONS_URL, id="openai-chat-completions-url"),
-    pytest.param(_AZURE_CHAT_COMPLETIONS, id="azure-chat-completions"),
-)
-
-
-def _with_effort_flags(monkeypatch: pytest.MonkeyPatch, model: str, **flags: bool) -> None:
-    without_effort_flags: Final = {
-        field: value
-        for field, value in litellm.model_cost[model].items()
-        if field != "reasoning_effort_levels" and not field.endswith("_reasoning_effort")
+    tools: Final = openai_request["tools"]
+    assert {tool["function"]["name"]: tool.get("defer_loading") for tool in tools} == {
+        "Read": None,
+        "mcp__weather__get_forecast": True,
     }
-    monkeypatch.setitem(litellm.model_cost, model, {**without_effort_flags, "supports_reasoning": True, **flags})
-
-
-async def _chat_adapter_effort_sent(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    target: _ChatAdapterTarget,
-    model_info: Mapping[str, object] | None,
-    thinking: Mapping[str, object] = _CHAT_ADAPTER_BUDGET,
-    **params: object,
-) -> object:
-    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", target.chat_completions_url)
-    route: Final = respx_mock.post(url__regex=target.url).mock(return_value=httpx.Response(200, json=target.reply))
-    deployment: Final = {
-        "model_name": _CHAT_ADAPTER_ALIAS,
-        "litellm_params": dict(target.litellm_params),
-        **({"model_info": dict(model_info)} if model_info is not None else {}),
-    }
-    await Router(model_list=[deployment]).aanthropic_messages(
-        messages=[{"role": "user", "content": "hello"}],
-        model=_CHAT_ADAPTER_ALIAS,
-        max_tokens=4096,
-        thinking=dict(thinking),
-        **target.request_params,
-        **params,
-    )
-    return target.sent_effort(json.loads(route.calls.last.request.read()))
-
-
-def _chat_adapter_drop_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno == logging.WARNING and record.getMessage().startswith("Dropping")
-    ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-@pytest.mark.parametrize("effort", ["low", "turbo"])
-async def test_explicit_output_config_effort_wins_over_a_thinking_budget_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, effort: str
-) -> None:
-    _with_effort_flags(monkeypatch, target.model)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, output_config={"effort": effort}
-    )
-
-    assert sent == effort
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-@pytest.mark.parametrize(
-    "model_info, dropped_effort, budget_effort, warning_fragment",
-    [
-        (_CHAT_ADAPTER_DECLARING_LOW_AND_HIGH, "none", "high", "Dropping reasoning level none "),
-        (None, 5, "medium", "Dropping output_config.effort='unrecognized' "),
-        (None, "turbo", "medium", "Dropping output_config.effort='unrecognized' "),
-        (None, "low", "medium", "Dropping output_config.effort='low' "),
-    ],
-)
-async def test_an_effort_the_target_drops_beside_a_thinking_budget_sends_the_budget_effort_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    model_info: Mapping[str, object] | None,
-    dropped_effort: object,
-    budget_effort: str,
-    warning_fragment: str,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model, supports_low_reasoning_effort=False)
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock,
-            monkeypatch,
-            target,
-            model_info,
-            output_config={"effort": dropped_effort},
-            drop_params=True,
-        )
-
-    warnings: Final = _chat_adapter_drop_warnings(caplog)
-    assert sent == budget_effort
-    assert len(warnings) == 1
-    assert warnings[0].startswith(warning_fragment)
-    assert "gpt-5.6" in warnings[0]
-
-
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize("effort", ["low", "turbo"])
-@pytest.mark.parametrize(
-    "model, custom_llm_provider, sent",
-    [
-        pytest.param("claude-sonnet-4-5", "anthropic", {"thinking": _CHAT_ADAPTER_BUDGET}, id="claude"),
-        pytest.param("claude-opus-5.5", "openai", {"thinking": _CHAT_ADAPTER_BUDGET}, id="claude-over-openai"),
-        pytest.param("bedrock/us.amazon.nova-premier-v1:0", "bedrock", {"reasoning_effort": "medium"}, id="bedrock"),
-    ],
-)
-def test_claude_and_bedrock_targets_keep_the_thinking_budget_beside_an_explicit_effort(
-    model: str, custom_llm_provider: str, sent: Mapping[str, object], effort: str, drop_params: bool
-) -> None:
-    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 4096,
-            "thinking": _CHAT_ADAPTER_BUDGET,
-            "output_config": {"effort": effort},
-        },
-        custom_llm_provider=custom_llm_provider,
-        drop_params=drop_params,
-    )
-
-    assert {key: translated.get(key) for key in ("reasoning_effort", "thinking")} == {
-        "reasoning_effort": None,
-        "thinking": None,
-        **sent,
-    }
-
-
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize(
-    "model, custom_llm_provider",
-    [
-        pytest.param("gemini/gemini-4-hydrogen", "gemini", id="gemini"),
-        pytest.param("vertex_ai/gemini-4-hydrogen", "vertex_ai", id="vertex-gemini"),
-        pytest.param("xai/grok-4.3", "xai", id="xai"),
-        pytest.param("deepseek/deepseek-v4-pro", "deepseek", id="deepseek"),
-        pytest.param("kyma/claude-opus-5.5", "kyma", id="kyma"),
-        pytest.param("crusoe/open-reasoner", "crusoe", id="json-registered-provider"),
-        pytest.param("bedrock/openai.gpt-oss-120b-1:0", "bedrock", id="bedrock-gpt-oss"),
-        pytest.param("openai.gpt-oss-120b-1:0", "bedrock", id="bare-bedrock-gpt-oss"),
-        pytest.param("global.amazon.nova-2-lite-v1:0", "bedrock", id="bare-bedrock-nova"),
-        pytest.param("bedrock_mantle/openai.gpt-6-sol", "bedrock_mantle", id="bedrock-mantle"),
-    ],
-)
-def test_a_target_outside_the_gpt_reasoning_configs_keeps_the_thinking_budget_beside_an_explicit_effort(
-    model: str, custom_llm_provider: str, drop_params: bool
-) -> None:
-    request: Final = {
-        "model": model,
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 4096,
-        "thinking": _CHAT_ADAPTER_BUDGET,
-    }
-
-    def translated_effort(anthropic_request: Mapping[str, object]) -> object:
-        translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            cast(AnthropicMessagesRequest, anthropic_request),
-            custom_llm_provider=custom_llm_provider,
-            drop_params=drop_params,
-        )
-        return translated.get("reasoning_effort")
-
-    assert translated_effort({**request, "output_config": {"effort": "low"}}) == translated_effort(request)
-
-
-def test_an_openai_chat_deployment_keeps_the_thinking_budget_even_with_a_gpt_reasoning_base_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost, "prod-chat", {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": False}
-    )
-    request: Final = {
-        "model": "openai/prod-chat",
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 4096,
-        "thinking": _CHAT_ADAPTER_BUDGET,
-    }
-
-    def translated_effort(anthropic_request: Mapping[str, object]) -> object:
-        translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            cast(AnthropicMessagesRequest, anthropic_request),
-            custom_llm_provider="openai",
-            base_model="openai/gpt-5",
-        )
-        return translated.get("reasoning_effort")
-
-    budget_effort: Final = translated_effort(request)
-    assert budget_effort is not None
-    assert translated_effort({**request, "output_config": {"effort": "low"}}) == budget_effort
-
-
-def test_an_openai_gpt_reasoning_chat_deployment_gates_the_explicit_effort_on_its_own_row_not_its_base_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost, "gpt-5.6-prod", {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": False}
-    )
-    _with_effort_flags(monkeypatch, "gpt-5", supports_low_reasoning_effort=False)
-
-    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        {
-            "model": "openai/gpt-5.6-prod",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 4096,
-            "thinking": _CHAT_ADAPTER_BUDGET,
-            "output_config": {"effort": "low"},
-        },
-        custom_llm_provider="openai",
-        base_model="openai/gpt-5",
-    )
-
-    assert translated.get("reasoning_effort") == "low"
-
-
-@pytest.mark.parametrize(
-    "model, custom_llm_provider",
-    [
-        pytest.param("gpt-5.6", "openai", id="openai-gpt"),
-        pytest.param("azure/gpt-5.6", "azure", id="azure-gpt"),
-        pytest.param("gemini/gemini-4-hydrogen", "gemini", id="gemini"),
-    ],
-)
-def test_disabled_thinking_beside_an_explicit_effort_sends_what_disabled_thinking_alone_sends(
-    model: str, custom_llm_provider: str
-) -> None:
-    request: Final = {
-        "model": model,
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 4096,
-        "thinking": {"type": "disabled"},
-    }
-
-    def translated_effort(anthropic_request: Mapping[str, object]) -> object:
-        translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            cast(AnthropicMessagesRequest, anthropic_request),
-            custom_llm_provider=custom_llm_provider,
-            drop_params=True,
-        )
-        return translated.get("reasoning_effort")
-
-    assert translated_effort({**request, "output_config": {"effort": "high"}}) == translated_effort(request)
-
-
-def test_an_openai_reasoning_model_outside_the_gpt_series_sends_the_explicit_effort_on_the_responses_route(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _with_effort_flags(monkeypatch, "o4-mini")
-
-    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        {
-            "model": "o4-mini",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 4096,
-            "thinking": _CHAT_ADAPTER_BUDGET,
-            "output_config": {"effort": "low"},
-        },
-        custom_llm_provider="openai",
-        drop_params=True,
-    )
-
-    assert translated.get("reasoning_effort") == "low"
-
-
-def test_an_openai_reasoning_deployment_sends_the_explicit_effort_on_the_responses_route_whatever_its_chat_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost, "house-reasoner", {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": True}
-    )
-
-    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        {
-            "model": "openai/house-reasoner",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 4096,
-            "thinking": _CHAT_ADAPTER_BUDGET,
-            "output_config": {"effort": "low"},
-        },
-        custom_llm_provider="openai",
-        drop_params=True,
-    )
-
-    assert translated.get("reasoning_effort") == "low"
-
-
-_AZURE_GPT_REASONING_DEPLOYMENT: Final = "azure/gpt-5.6"
-_PROD_REASONER_BASE_MODEL: Final = "azure/gpt-5"
-_PROD_REASONER_PARAMS: Final = MappingProxyType(
-    {"model": "azure/prod-reasoner", "api_base": _CHAT_BRIDGE_API_BASE, "api_key": "fake-key"}
-)
-_PROD_REASONER_URL: Final = r".*tool-result-text\.openai\.azure\.com/openai/deployments/prod-reasoner/chat/completions.*"
-_PROD_REASONER_WITH_BASE_MODEL_PARAM: Final = _ChatAdapterTarget(
-    model=_PROD_REASONER_BASE_MODEL,
-    litellm_params=MappingProxyType({**_PROD_REASONER_PARAMS, "base_model": _PROD_REASONER_BASE_MODEL}),
-    url=_PROD_REASONER_URL,
-    reply=_CHAT_BRIDGE_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=False,
-    sent_effort=_chat_completions_effort,
-)
-_PROD_REASONER_WITH_BASE_MODEL_INFO: Final = _ChatAdapterTarget(
-    model=_PROD_REASONER_BASE_MODEL,
-    litellm_params=_PROD_REASONER_PARAMS,
-    url=_PROD_REASONER_URL,
-    reply=_CHAT_BRIDGE_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=False,
-    sent_effort=_chat_completions_effort,
-)
-_PROD_REASONER_DEPLOYMENTS: Final = (
-    pytest.param(_PROD_REASONER_WITH_BASE_MODEL_PARAM, None, id="litellm_params-base_model"),
-    pytest.param(
-        _PROD_REASONER_WITH_BASE_MODEL_INFO,
-        MappingProxyType({"base_model": _PROD_REASONER_BASE_MODEL}),
-        id="model_info-base_model",
-    ),
-)
-
-
-_AZURE_O3_CHAT_COMPLETIONS: Final = _ChatAdapterTarget(
-    model="azure/o3",
-    litellm_params=MappingProxyType({"model": "azure/o3", "api_base": _CHAT_BRIDGE_API_BASE, "api_key": "fake-key"}),
-    url=r".*tool-result-text\.openai\.azure\.com/openai/deployments/o3/chat/completions.*",
-    reply=_CHAT_BRIDGE_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=False,
-    sent_effort=_chat_completions_effort,
-)
-_MALFORMED_CHAT_ADAPTER_BUDGET: Final = {"type": "enabled", "budget_tokens": "abc"}
-_MALFORMED_BUDGET_TARGETS: Final = (
-    pytest.param(_OPENAI_WITH_STOP_SEQUENCES, id="openai-stop-sequences"),
-    pytest.param(_AZURE_CHAT_COMPLETIONS, id="azure-chat-completions"),
-)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize("effort", ["high", "max"])
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_above_the_thinking_budget_sends_what_the_budget_alone_sends_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    effort: str,
-    drop_params: bool,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model, supports_max_reasoning_effort=True)
-    budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, drop_params=drop_params
-    )
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, None, output_config={"effort": effort}, drop_params=drop_params
-        )
-
-    assert budget_effort is not None
-    assert sent == budget_effort
-    assert _chat_adapter_drop_warnings(caplog) == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_above_the_budget_effort_sends_what_the_budget_alone_sends_when_the_deployment_rounds_it_up(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_effort_flags(
-        monkeypatch, target.model, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False
-    )
-    minimal_budget: Final = {"type": "enabled", "budget_tokens": 512}
-    budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, thinking=minimal_budget
-    )
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, thinking=minimal_budget, output_config={"effort": "low"}
-    )
-
-    assert budget_effort is not None
-    assert sent == budget_effort
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_equal_to_the_budget_effort_that_the_target_refuses_is_dropped_with_a_warning(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model, supports_low_reasoning_effort=False)
-    low_budget: Final = {"type": "enabled", "budget_tokens": 1024}
-    budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, thinking=low_budget, drop_params=True
-    )
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock,
-            monkeypatch,
-            target,
-            None,
-            thinking=low_budget,
-            output_config={"effort": "low"},
-            drop_params=True,
-        )
-
-    dropped_explicit_effort: Final = [
-        warning
-        for warning in _chat_adapter_drop_warnings(caplog)
-        if warning.startswith("Dropping output_config.effort='low' ")
-    ]
-    assert sent == budget_effort
-    assert len(dropped_explicit_effort) == 1
-
-
-async def _chat_adapter_budget_error(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, **params: object
-) -> str:
-    with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens") as raised:
-        await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, None, thinking=_MALFORMED_CHAT_ADAPTER_BUDGET, **params
-        )
-    return str(raised.value)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("effort", ["low", "turbo"])
-@pytest.mark.parametrize("target", _MALFORMED_BUDGET_TARGETS)
-async def test_a_malformed_budget_beside_an_explicit_effort_raises_what_the_budget_alone_raises_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, effort: str
-) -> None:
-    _with_effort_flags(monkeypatch, target.model)
-    budget_error: Final = await _chat_adapter_budget_error(respx_mock, monkeypatch, target, drop_params=False)
-
-    explicit_error: Final = await _chat_adapter_budget_error(
-        respx_mock, monkeypatch, target, output_config={"effort": effort}, drop_params=False
-    )
-
-    assert explicit_error == budget_error
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("effort", ["low", "none"])
-@pytest.mark.parametrize("target", _MALFORMED_BUDGET_TARGETS)
-async def test_a_malformed_budget_beside_an_explicit_effort_sends_what_the_budget_alone_sends_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    effort: str,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model)
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        budget_effort: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, None, thinking=_MALFORMED_CHAT_ADAPTER_BUDGET, drop_params=True
-        )
-    budget_warnings: Final = _chat_adapter_drop_warnings(caplog)
-    caplog.clear()
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock,
-            monkeypatch,
-            target,
-            None,
-            thinking=_MALFORMED_CHAT_ADAPTER_BUDGET,
-            output_config={"effort": effort},
-            drop_params=True,
-        )
-
-    assert sent == budget_effort
-    assert len(budget_warnings) == 1
-    assert budget_warnings[0].startswith("Dropping thinking.budget_tokens")
-    assert _chat_adapter_drop_warnings(caplog) == budget_warnings
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-async def test_an_azure_o_series_deployment_sends_an_explicit_effort_at_or_below_the_thinking_budget(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop_params: bool
-) -> None:
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock,
-        monkeypatch,
-        _AZURE_O3_CHAT_COMPLETIONS,
-        None,
-        output_config={"effort": "low"},
-        drop_params=drop_params,
-    )
-
-    assert sent == "low"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-async def test_an_azure_o_series_deployment_sends_what_the_budget_alone_sends_beside_a_higher_explicit_effort(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    budget: Final = {"type": "enabled", "budget_tokens": 1024}
-    budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, _AZURE_O3_CHAT_COMPLETIONS, None, thinking=budget
-    )
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, _AZURE_O3_CHAT_COMPLETIONS, None, thinking=budget, output_config={"effort": "high"}
-    )
-
-    assert budget_effort is not None
-    assert sent == budget_effort
-
-
-_AZURE_HOUSE_O_SERIES_BASE_MODEL: Final = "azure/o3-mini"
-_AZURE_HOUSE_O_SERIES: Final = _ChatAdapterTarget(
-    model=_AZURE_HOUSE_O_SERIES_BASE_MODEL,
-    litellm_params=MappingProxyType(
-        {
-            "model": "azure/house-o-series",
-            "api_base": _CHAT_BRIDGE_API_BASE,
-            "api_key": "fake-key",
-            "base_model": _AZURE_HOUSE_O_SERIES_BASE_MODEL,
-        }
-    ),
-    url=r".*tool-result-text\.openai\.azure\.com/openai/deployments/house-o-series/chat/completions.*",
-    reply=_CHAT_BRIDGE_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=False,
-    sent_effort=_chat_completions_effort,
-)
-_OPENAI_O3_WITH_CHAT_COMPLETIONS_URL: Final = _ChatAdapterTarget(
-    model="o3",
-    litellm_params=MappingProxyType({"model": "openai/o3", "api_key": "sk-chat-adapter-effort"}),
-    url=r"https://api\.openai\.com/v1/responses",
-    reply=_RETRY_REPLY,
-    request_params=MappingProxyType({}),
-    chat_completions_url=True,
-    sent_effort=_responses_effort,
-)
-_O_SERIES_CHAT_ADAPTER_TARGETS: Final = (
-    pytest.param(_AZURE_O3_CHAT_COMPLETIONS, id="azure-o3"),
-    pytest.param(_AZURE_HOUSE_O_SERIES, id="azure-base_model-o3-mini"),
-    pytest.param(_OPENAI_O3_WITH_CHAT_COMPLETIONS_URL, id="openai-o3-chat-completions-url"),
-)
-
-
-def _with_o_series_rows(monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, **flags: bool) -> None:
-    _with_effort_flags(monkeypatch, target.model.removeprefix("azure/"))
-    _with_effort_flags(monkeypatch, target.model, **flags)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _O_SERIES_CHAT_ADAPTER_TARGETS)
-async def test_a_level_o_series_refuses_beside_a_thinking_budget_sends_the_budget_effort_under_drop_params_on_chat(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-) -> None:
-    _with_o_series_rows(monkeypatch, target)
-    budget_only: Final = await _chat_adapter_effort_sent(respx_mock, monkeypatch, target, None, drop_params=True)
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, None, output_config={"effort": "none"}, drop_params=True
-        )
-
-    warnings: Final = _chat_adapter_drop_warnings(caplog)
-    assert budget_only is not None
-    assert sent == budget_only
-    assert len(warnings) == 1
-    assert warnings[0].startswith("Dropping output_config.effort='none' ")
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _O_SERIES_CHAT_ADAPTER_TARGETS)
-async def test_a_level_o_series_refuses_beside_a_thinking_budget_answers_400_without_drop_params_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_o_series_rows(monkeypatch, target)
-
-    with pytest.raises(litellm.UnsupportedParamsError, match=r"output_config\.effort=none"):
-        await _chat_adapter_effort_sent(respx_mock, monkeypatch, target, None, output_config={"effort": "none"})
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize("target", _O_SERIES_CHAT_ADAPTER_TARGETS)
-async def test_an_effort_above_the_thinking_budget_sends_what_the_budget_alone_sends_to_o_series_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, drop_params: bool
-) -> None:
-    _with_o_series_rows(monkeypatch, target)
-    budget_only: Final = await _chat_adapter_effort_sent(respx_mock, monkeypatch, target, None, drop_params=drop_params)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, output_config={"effort": "xhigh"}, drop_params=drop_params
-    )
-
-    assert budget_only is not None
-    assert sent == budget_only
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize("target", _O_SERIES_CHAT_ADAPTER_TARGETS)
-async def test_a_level_o_series_accepts_below_a_thinking_budget_wins_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, drop_params: bool
-) -> None:
-    _with_o_series_rows(monkeypatch, target)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, output_config={"effort": "low"}, drop_params=drop_params
-    )
-
-    assert sent == "low"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize(
-    "target",
-    [
-        pytest.param(_AZURE_HOUSE_O_SERIES, id="azure-base_model-o3-mini"),
-        pytest.param(_OPENAI_O3_WITH_CHAT_COMPLETIONS_URL, id="openai-o3-chat-completions-url"),
-    ],
-)
-async def test_a_level_an_o_series_row_opts_in_beside_a_thinking_budget_wins_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_o_series_rows(monkeypatch, target, supports_none_reasoning_effort=True)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, output_config={"effort": "none"}, drop_params=True
-    )
-
-    assert sent == "none"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize(
-    "model_info",
-    [None, _CHAT_ADAPTER_DECLARING_LOW_AND_HIGH],
-    ids=["undeclared", "declares-low-and-high"],
-)
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_a_default_effort_beside_a_thinking_budget_sends_the_budget_effort_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    model_info: Mapping[str, object] | None,
-    drop_params: bool,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model)
-    budget_only: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, model_info, drop_params=drop_params
-    )
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, model_info, output_config={"effort": "default"}, drop_params=drop_params
-        )
-
-    assert budget_only is not None
-    assert sent == budget_only
-    assert _chat_adapter_drop_warnings(caplog) == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target, model_info", _PROD_REASONER_DEPLOYMENTS)
-async def test_a_deployment_whose_base_model_is_gpt_reasoning_sends_the_explicit_effort_beside_a_thinking_budget(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    target: _ChatAdapterTarget,
-    model_info: Mapping[str, object] | None,
-) -> None:
-    _with_effort_flags(monkeypatch, _PROD_REASONER_BASE_MODEL)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, model_info, output_config={"effort": "low"}, drop_params=True
-    )
-
-    assert sent == "low"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target, model_info", _PROD_REASONER_DEPLOYMENTS)
-async def test_an_effort_the_base_model_refuses_beside_a_thinking_budget_sends_the_budget_effort_under_drop_params(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    model_info: Mapping[str, object] | None,
-) -> None:
-    _with_effort_flags(monkeypatch, _PROD_REASONER_BASE_MODEL, supports_low_reasoning_effort=False)
-    budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, model_info, drop_params=True
-    )
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, model_info, output_config={"effort": "low"}, drop_params=True
-        )
-
-    assert budget_effort is not None
-    assert sent == budget_effort
-    assert len(_chat_adapter_drop_warnings(caplog)) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_the_chat_adapter_lowers_to_an_accepted_level_still_wins_over_a_thinking_budget(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model, supports_minimal_reasoning_effort=False)
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, None, output_config={"effort": "minimal"}, drop_params=True
-        )
-
-    assert sent == "low"
-    assert _chat_adapter_drop_warnings(caplog) == []
-
-
-@pytest.mark.parametrize("report_reasoning_drops, warning_count", [(False, 0), (True, 1)])
-def test_only_the_reporting_translation_warns_about_a_dropped_effort_beside_a_thinking_budget(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    report_reasoning_drops: bool,
-    warning_count: int,
-) -> None:
-    _with_effort_flags(monkeypatch, "gpt-5.6", supports_low_reasoning_effort=False)
-    request: Final = {
-        "model": "gpt-5.6",
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 4096,
-        "thinking": _CHAT_ADAPTER_BUDGET,
-    }
-
-    def translated_effort(anthropic_request: Mapping[str, object]) -> object:
-        translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            cast(AnthropicMessagesRequest, anthropic_request),
-            custom_llm_provider="openai",
-            drop_params=True,
-            report_reasoning_drops=report_reasoning_drops,
-        )
-        return translated.get("reasoning_effort")
-
-    never_sent: Final = translated_effort(request)
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        dropped: Final = translated_effort({**request, "output_config": {"effort": "low"}})
-
-    assert dropped == never_sent
-    assert len(_chat_adapter_drop_warnings(caplog)) == warning_count
-
-
-_ROWS_RAISING_MINIMAL_ABOVE_LOW: Final = (
-    pytest.param(
-        MappingProxyType({"supports_minimal_reasoning_effort": False, "supports_low_reasoning_effort": False}),
-        id="minimal-and-low-off",
-    ),
-    pytest.param(MappingProxyType({"reasoning_effort_levels": ["medium", "high"]}), id="declares-medium-and-high"),
-)
-
-
-async def _chat_adapter_outcome(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, **params: object
-) -> object:
-    try:
-        return await _chat_adapter_effort_sent(respx_mock, monkeypatch, target, None, **params)
-    except litellm.UnsupportedParamsError as error:
-        return str(error)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize("row", _ROWS_RAISING_MINIMAL_ABOVE_LOW)
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_raised_above_the_thinking_budget_sends_what_the_budget_alone_sends_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    target: _ChatAdapterTarget,
-    row: Mapping[str, object],
-    drop_params: bool,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model)
-    monkeypatch.setitem(litellm.model_cost, target.model, {**litellm.model_cost[target.model], **row})
-    low_budget: Final = {"type": "enabled", "budget_tokens": 1024}
-    budget_outcome: Final = await _chat_adapter_outcome(
-        respx_mock, monkeypatch, target, thinking=low_budget, drop_params=drop_params
-    )
-
-    explicit_outcome: Final = await _chat_adapter_outcome(
-        respx_mock,
-        monkeypatch,
-        target,
-        thinking=low_budget,
-        output_config={"effort": "minimal"},
-        drop_params=drop_params,
-    )
-
-    assert explicit_outcome == budget_outcome
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_raised_onto_the_model_levels_still_wins_below_the_thinking_budget_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_effort_flags(
-        monkeypatch, target.model, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False
-    )
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock,
-        monkeypatch,
-        target,
-        None,
-        thinking={"type": "enabled", "budget_tokens": 16384},
-        output_config={"effort": "minimal"},
-        drop_params=True,
-    )
-
-    assert sent == "medium"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_an_effort_the_request_model_info_declares_still_wins_below_the_thinking_budget_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_effort_flags(
-        monkeypatch, target.model, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False
-    )
-    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", target.chat_completions_url)
-    route: Final = respx_mock.post(url__regex=target.url).mock(return_value=httpx.Response(200, json=target.reply))
-
-    await litellm.anthropic.messages.acreate(
-        messages=[{"role": "user", "content": "hello"}],
-        max_tokens=4096,
-        thinking={"type": "enabled", "budget_tokens": 1024},
-        output_config={"effort": "minimal"},
-        model_info={"reasoning_effort_levels": ["minimal", "low", "high"]},
-        **target.litellm_params,
-        **target.request_params,
-    )
-
-    assert target.sent_effort(json.loads(route.calls.last.request.read())) == "minimal"
-
-
-_CHAT_ADAPTER_HIGH_BUDGET: Final = {"type": "enabled", "budget_tokens": 16384}
-_ENTRY_DECLARING_TARGETS: Final = (
-    *_CHAT_ADAPTER_TARGETS,
-    pytest.param(_PROD_REASONER_WITH_BASE_MODEL_PARAM, id="azure-base_model"),
-)
-
-
-def _with_declared_levels(monkeypatch: pytest.MonkeyPatch, model: str, *levels: str) -> None:
-    _with_effort_flags(monkeypatch, model)
-    monkeypatch.setitem(
-        litellm.model_cost, model, {**litellm.model_cost[model], "reasoning_effort_levels": list(levels)}
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _ENTRY_DECLARING_TARGETS)
-async def test_a_level_the_entry_does_not_declare_beside_a_thinking_budget_sends_the_budget_effort_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-) -> None:
-    _with_declared_levels(monkeypatch, target.model, "high")
-    budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, thinking=_CHAT_ADAPTER_HIGH_BUDGET, drop_params=True
-    )
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        sent: Final = await _chat_adapter_effort_sent(
-            respx_mock,
-            monkeypatch,
-            target,
-            None,
-            thinking=_CHAT_ADAPTER_HIGH_BUDGET,
-            output_config={"effort": "medium"},
-            drop_params=True,
-        )
-
-    warnings: Final = _chat_adapter_drop_warnings(caplog)
-    assert budget_effort == "high"
-    assert sent == budget_effort
-    assert len(warnings) == 1
-    assert warnings[0].startswith("Dropping output_config.effort='medium' ")
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _ENTRY_DECLARING_TARGETS)
-async def test_a_level_the_entry_does_not_declare_beside_a_thinking_budget_answers_400_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_declared_levels(monkeypatch, target.model, "high")
-
-    with pytest.raises(litellm.UnsupportedParamsError, match=r"output_config\.effort=medium"):
-        await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, target, None, thinking=_CHAT_ADAPTER_HIGH_BUDGET, output_config={"effort": "medium"}
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_only_a_lower_level_the_entry_declares_wins_over_a_thinking_budget_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_declared_levels(monkeypatch, target.model, "low", "high")
-
-    sent: Final = {
-        effort: await _chat_adapter_effort_sent(
-            respx_mock,
-            monkeypatch,
-            target,
-            None,
-            thinking=_CHAT_ADAPTER_HIGH_BUDGET,
-            output_config={"effort": effort},
-            drop_params=True,
-        )
-        for effort in ("low", "minimal", "medium")
-    }
-
-    assert sent == {"low": "low", "minimal": "low", "medium": "high"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
-async def test_a_deployment_declaring_its_own_levels_overrides_the_entry_beside_a_thinking_budget_on_the_chat_adapter(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
-) -> None:
-    _with_declared_levels(monkeypatch, target.model, "high")
-
-    entry_only: Final = await _chat_adapter_effort_sent(
-        respx_mock,
-        monkeypatch,
-        target,
-        None,
-        thinking=_CHAT_ADAPTER_HIGH_BUDGET,
-        output_config={"effort": "medium"},
-        drop_params=True,
-    )
-    deployment_declared: Final = await _chat_adapter_effort_sent(
-        respx_mock,
-        monkeypatch,
-        target,
-        {"reasoning_effort_levels": ["medium", "high"]},
-        thinking=_CHAT_ADAPTER_HIGH_BUDGET,
-        output_config={"effort": "medium"},
-        drop_params=True,
-    )
-
-    assert entry_only == "high"
-    assert deployment_declared == "medium"
-
-
-_NOT_A_WHOLE_TOKEN_COUNT: Final = (
-    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": float("inf")}), id="inf"),
-    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": float("nan")}), id="nan"),
-    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": -5}), id="negative"),
-    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": 0}), id="zero"),
-    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": 3.5}), id="fractional"),
-    pytest.param(MappingProxyType({"type": "enabled"}), id="missing"),
-    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": True}), id="bool"),
-)
-_TARGETS_BY_NONE_SUPPORT: Final = (
-    pytest.param(_OPENAI_WITH_STOP_SEQUENCES, True, id="openai-stop-sequences"),
-    pytest.param(_OPENAI_WITH_CHAT_COMPLETIONS_URL, True, id="openai-chat-completions-url"),
-    pytest.param(_AZURE_CHAT_COMPLETIONS, True, id="azure-chat-completions"),
-    pytest.param(_AZURE_O3_CHAT_COMPLETIONS, False, id="azure-o3"),
-    pytest.param(_OPENAI_O3_WITH_CHAT_COMPLETIONS_URL, False, id="openai-o3-chat-completions-url"),
-)
-
-
-async def _chat_adapter_outcome_and_drop_warnings(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    **params: object,
-) -> tuple[object, list[str]]:
-    caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        outcome: Final = await _chat_adapter_outcome(respx_mock, monkeypatch, target, **params)
-    return outcome, _chat_adapter_drop_warnings(caplog)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
-@pytest.mark.parametrize("effort", ["none", "low"])
-@pytest.mark.parametrize("thinking", _NOT_A_WHOLE_TOKEN_COUNT)
-@pytest.mark.parametrize("target, takes_none", _TARGETS_BY_NONE_SUPPORT)
-async def test_a_budget_that_is_not_a_whole_token_count_ignores_the_explicit_effort_on_the_chat_adapter(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    target: _ChatAdapterTarget,
-    takes_none: bool,
-    thinking: Mapping[str, object],
-    effort: str,
-    drop_params: bool,
-) -> None:
-    _with_effort_flags(monkeypatch, target.model.removeprefix("azure/"))
-    _with_effort_flags(monkeypatch, target.model, supports_none_reasoning_effort=takes_none)
-    budget_only: Final = await _chat_adapter_outcome_and_drop_warnings(
-        respx_mock, monkeypatch, caplog, target, thinking=thinking, drop_params=drop_params
-    )
-
-    explicit: Final = await _chat_adapter_outcome_and_drop_warnings(
-        respx_mock,
-        monkeypatch,
-        caplog,
-        target,
-        thinking=thinking,
-        output_config={"effort": effort},
-        drop_params=drop_params,
-    )
-
-    assert explicit == budget_only
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)

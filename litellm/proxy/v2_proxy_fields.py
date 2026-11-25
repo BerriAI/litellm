@@ -17,7 +17,7 @@ from litellm.integrations.custom_logger_v2.derivations import (
 )
 from litellm.integrations.custom_logger_v2.enums import Field
 from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, mapped
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
 from litellm.types.integrations.custom_logger_v2 import LimiterRequest, OutputCap, RateLimitStatuses, coerce_record
 
 
@@ -103,7 +103,7 @@ def _metadata_get(request: Mapping[str, object], bucket: str, name: str) -> obje
 
 def resolved_agent_id(auth: object, request: Mapping[str, object]) -> object:
     """The agent a request is made for. The key's own agent wins over one the request metadata names."""
-    key_agent_id: Final = getattr(auth, "agent_id", None)
+    key_agent_id: Final = attribute_or_none(auth, "agent_id")
     if key_agent_id:
         return key_agent_id
     return _metadata_get(request, "metadata", "agent_id") or _metadata_get(request, "litellm_metadata", "agent_id")

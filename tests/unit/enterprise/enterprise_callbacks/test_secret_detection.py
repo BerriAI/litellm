@@ -272,6 +272,77 @@ async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
     assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
 
 
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_credentials_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the deploy config."},
+                    {"type": "input_json", "data": {"deploy": {"env": f"AWS_ACCESS_KEY_ID={AWS_KEY}"}, "replicas": 2}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"deploy": {"env": "AWS_ACCESS_KEY_ID=[REDACTED]"}, "replicas": 2}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_secret_keys_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the key usage."},
+                    {"type": "input_json", "data": {"usage": {AWS_KEY: {"calls": 3}}}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"usage": {"[REDACTED]": {"calls": 3}}}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_keeps_every_value_when_secret_keys_redact_to_the_same_name():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_json",
+                        "data": {AWS_KEYS[0]: {"calls": 3}, AWS_KEYS[1]: {"calls": 5}, "[REDACTED]": {"calls": 7}},
+                    },
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][0]["data"] == {
+        "[REDACTED] (2)": {"calls": 3},
+        "[REDACTED] (3)": {"calls": 5},
+        "[REDACTED]": {"calls": 7},
+    }
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     (
