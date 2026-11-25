@@ -192,7 +192,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict[str, object],
         headers: dict[str, str],
     ) -> dict[str, object]:

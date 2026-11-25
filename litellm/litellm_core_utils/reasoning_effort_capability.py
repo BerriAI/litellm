@@ -14,8 +14,8 @@ Claude-family, where anthropic/chat/transformation.py gates max on the output_co
 explicit flag is the only signal that the tier is real.
 
 A deployment the map describes with no effort flags at all resolves to None rather than to the
-opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
-bedrock nova entries among them take neither none nor minimal, so composing a set out of the
+opt-out defaults. Most of the map's reasoning entries carry no flag, and the o1, o3-mini, o4-mini,
+xai and bedrock nova entries among them take neither none nor minimal, so composing a set out of the
 defaults alone would advertise levels those providers reject.
 
 The advertisement order is the REASONING_EFFORT declaration order, which is presentation only. It
@@ -236,10 +236,14 @@ def _rounding(value: object) -> ReasoningEffortRounding | None:
             return None
 
 
-def _deployment_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
+def configured_reasoning_effort_rounding() -> ReasoningEffortRounding:
+    return _rounding(litellm.reasoning_effort_rounding) or "up"
+
+
+def deployment_reasoning_effort_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
     own_info: Final = as_str_mapping(deployment_model_info)
     own: Final = _rounding(own_info.get(_ROUNDING_KEY)) if own_info is not None else None
-    return own or _rounding(litellm.reasoning_effort_rounding) or "up"
+    return own or configured_reasoning_effort_rounding()
 
 
 def _requested_level(requested: object) -> str | None:
@@ -290,7 +294,7 @@ def resolve_deployment_reasoning_effort(
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
     if declared is None:
         return unchanged
-    rounding: Final = _deployment_rounding(deployment_model_info)
+    rounding: Final = deployment_reasoning_effort_rounding(deployment_model_info)
     rounded_level: Final = (
         None
         if requested_level == _DEFAULT_EFFORT

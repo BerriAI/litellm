@@ -24,7 +24,7 @@ from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.db_truncation import truncated_for_db
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
-from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.litellm_core_utils.tool_fields import DeferredTopLevelTool, NamespaceMember, chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
@@ -3760,8 +3760,8 @@ class TestToolTransformation:
 
         assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset({"lookup"})
         assert dict(LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)) == {
-            "search__search": ("search", "search"),
-            "lookup": ("lookup", "lookup"),
+            "search__search": NamespaceMember("search", "search"),
+            "lookup": DeferredTopLevelTool("lookup"),
         }
         messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=[
@@ -3882,8 +3882,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map([namespace_tool])
 
-        assert result["collaboration__wait_agent"] == ("collaboration", "wait_agent")
-        assert result["wait_agent"] == ("collaboration", "wait_agent")
+        assert result["collaboration__wait_agent"] == NamespaceMember("collaboration", "wait_agent")
+        assert result["wait_agent"] == NamespaceMember("collaboration", "wait_agent")
 
     def test_namespace_tool_name_map_drops_ambiguous_unqualified_names(self):
         tools = [
@@ -3926,9 +3926,9 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["alpha__run"] == ("alpha", "run")
-        assert result["beta__run"] == ("beta", "run")
-        assert result["gamma__run"] == ("gamma", "run")
+        assert result["alpha__run"] == NamespaceMember("alpha", "run")
+        assert result["beta__run"] == NamespaceMember("beta", "run")
+        assert result["gamma__run"] == NamespaceMember("gamma", "run")
         assert "run" not in result
 
     def test_namespace_tool_name_map_keeps_the_object_tools_beside_a_malformed_entry(self):
@@ -3947,9 +3947,9 @@ class TestToolTransformation:
         )
 
         assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools) == {
-            "ns__a": ("ns", "a"),
-            "a": ("ns", "a"),
-            "top": ("top", "top"),
+            "ns__a": NamespaceMember("ns", "a"),
+            "a": NamespaceMember("ns", "a"),
+            "top": DeferredTopLevelTool("top"),
         }
 
     def test_namespace_tool_name_map_drops_top_level_function_collision(self):
@@ -3970,7 +3970,7 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["admin__run"] == ("admin", "run")
+        assert result["admin__run"] == NamespaceMember("admin", "run")
         assert "run" not in result
 
     def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
@@ -3989,8 +3989,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["x__foo"] == ("x", "foo")
-        assert result["y__x__foo"] == ("y", "x__foo")
+        assert result["x__foo"] == NamespaceMember("x", "foo")
+        assert result["y__x__foo"] == NamespaceMember("y", "x__foo")
 
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [
@@ -9566,3 +9566,92 @@ def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty
         ("assistant", "Hello!"),
         ("user", ""),
     ]
+
+
+_RESUMED_NAMESPACE: Final = "mcp__vault"
+_RESUMED_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+_RESUMED_HISTORY: Final = cast(
+    ResponseInputParam,
+    [
+        {"type": "message", "role": "user", "content": "Read the secret"},
+        {
+            "type": "function_call",
+            "call_id": "call_earlier",
+            "name": _RESUMED_TOOL,
+            "namespace": _RESUMED_NAMESPACE,
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "s3cr3t"},
+        {"type": "message", "role": "user", "content": "Read it again"},
+    ],
+)
+
+
+def _replayed_chat_name() -> str:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-sonnet-5-5",
+        input=_RESUMED_HISTORY,
+        responses_api_request=cast(ResponsesAPIOptionalRequestParams, {"tools": []}),
+        custom_llm_provider="bedrock",
+    )
+    names: Final = [
+        str(call["function"]["name"]) for message in request["messages"] for call in message.get("tool_calls") or ()
+    ]
+    assert len(names) == 1 and len(names[0]) <= 64, names
+    return names[0]
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("non_streaming", "streaming"))
+def test_a_resumed_turn_that_repeats_a_shortened_call_from_history_gets_the_original_tool_back(stream: bool) -> None:
+    """Codex can resume before it lists its MCP tools again, so the earlier call is the only trace of the tool."""
+    from unittest.mock import Mock
+
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    chat_name: Final = _replayed_chat_name()
+    request: Final = cast(ResponsesAPIOptionalRequestParams, {"tools": []})
+
+    if stream:
+        wrapper: Final = Mock(spec=litellm.CustomStreamWrapper)
+        wrapper.logging_obj = Mock()
+        iterator: Final = LiteLLMCompletionStreamingIterator(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            litellm_custom_stream_wrapper=wrapper,
+            request_input=_RESUMED_HISTORY,
+            responses_api_request=request,
+        )
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_again", "function": {"name": chat_name, "arguments": "{}"}}]
+        )
+        item: Final = iterator._pending_tool_events[0].item
+        assert (item.name, item.namespace) == (_RESUMED_TOOL, _RESUMED_NAMESPACE)
+        return
+
+    try:
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input=_RESUMED_HISTORY,
+            responses_api_request=request,
+            chat_completion_response=ModelResponse(
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_again", type="function", function=Function(name=chat_name, arguments="{}")
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            ),
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key="call_again")
+    calls: Final = [item for item in response.output if item.type == "function_call"]
+    assert [(call.name, call.namespace) for call in calls] == [(_RESUMED_TOOL, _RESUMED_NAMESPACE)]

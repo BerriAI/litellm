@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import pickle
 import threading
+from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -3883,4 +3884,30 @@ def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first
     assert merged_guardrail_entries(["pii", {"pii": {"extra_body": {"threshold": 1}}}], ["model-guard"]) == [
         {"pii": {"extra_body": {"threshold": 1}}},
         "model-guard",
+    ]
+
+
+def test_responses_guardrail_messages_name_namespaced_calls_by_their_full_name() -> None:
+    namespace: Final = "mcp__codex_apps__github_enterprise_connector_prod"
+    data: Final = {
+        "input": [
+            {"type": "message", "role": "user", "content": "find the open issues"},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "namespace": namespace,
+                "name": "search_issues_in_repository",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": "[]"},
+        ]
+    }
+
+    messages: Final = CustomGuardrail(guardrail_name="g").get_guardrails_messages_for_call_type(
+        call_type=CallTypes.aresponses, data=data
+    )
+    tool_calls: Final = tuple(chain.from_iterable(message.get("tool_calls") or () for message in messages))
+
+    assert [call["function"]["name"] for call in tool_calls] == [
+        "mcp__codex_apps__github_enterprise_connector_prod__search_issues_in_repository"
     ]

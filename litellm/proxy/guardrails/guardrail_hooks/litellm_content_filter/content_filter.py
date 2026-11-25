@@ -1897,7 +1897,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _log_guardrail_information(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
         status: "GuardrailStatus",
         start_time: datetime,
@@ -2085,7 +2085,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "GenericGuardrailAPIInputs":
@@ -2256,7 +2256,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and check for blocked content.

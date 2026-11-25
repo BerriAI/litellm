@@ -210,7 +210,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and add Gemini API key to headers.
         Gemini uses x-goog-api-key header for authentication.
@@ -239,7 +239,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Veo video generation.
@@ -381,7 +381,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video status retrieve request for Veo API.
 
@@ -453,7 +453,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video content request for Veo API.
 

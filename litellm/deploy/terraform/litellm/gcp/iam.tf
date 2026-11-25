@@ -1,20 +1,28 @@
+locals {
+  create_runtime_service_account = var.runtime_service_account_email == null
+  runtime_service_account_id     = "${local.name}-runtime"
+  ui_service_account_id          = "${local.name}-ui-runtime"
+  runtime_service_account_email  = local.create_runtime_service_account ? google_service_account.runtime[0].email : var.runtime_service_account_email
+  planned_runtime_account_email  = local.create_runtime_service_account ? "${local.runtime_service_account_id}@${var.project_id}.iam.gserviceaccount.com" : var.runtime_service_account_email
+  planned_ui_account_email       = var.ui_service_account_email == null ? "${local.ui_service_account_id}@${var.project_id}.iam.gserviceaccount.com" : var.ui_service_account_email
+}
+
+moved {
+  from = google_service_account.runtime
+  to   = google_service_account.runtime[0]
+}
+
 # Runtime SA used by the gateway, backend, and migration job — has Cloud
 # SQL client + Secret Manager accessor on every managed/extra secret. The
 # UI deliberately uses a *different* SA (below) so a compromised UI
 # container can't read master_key / db_password / license / ui_password /
 # provider creds via the metadata service.
 resource "google_service_account" "runtime" {
-  account_id   = "${local.name}-runtime"
-  display_name = "LiteLLM Cloud Run runtime"
+  count = local.create_runtime_service_account ? 1 : 0
 
-  lifecycle {
-    precondition {
-      condition = !var.create_runtime || var.billing_metrics_endpoint == "" || (
-        var.billing_metrics_client_id != "" && var.billing_metrics_client_secret != ""
-      )
-      error_message = "billing_metrics_client_id and billing_metrics_client_secret are required when billing_metrics_endpoint is set and create_runtime is true."
-    }
-  }
+  project      = var.project_id
+  account_id   = local.runtime_service_account_id
+  display_name = "LiteLLM Cloud Run runtime"
 }
 
 # UI runtime SA — no role bindings. The UI is static nginx with no DB,
@@ -23,33 +31,41 @@ resource "google_service_account" "runtime" {
 # project's serverless service agent (not this SA), so it doesn't need
 # artifactregistry.reader either.
 resource "google_service_account" "ui_runtime" {
-  count = var.create_runtime ? 1 : 0
+  count = var.create_runtime && var.ui_service_account_email == null ? 1 : 0
 
-  account_id   = "${local.name}-ui-runtime"
+  project      = var.project_id
+  account_id   = local.ui_service_account_id
   display_name = "LiteLLM Cloud Run UI runtime (no data-plane access)"
+}
+
+moved {
+  from = google_project_iam_member.runtime_cloudsql
+  to   = google_project_iam_member.runtime_cloudsql[0]
 }
 
 # Cloud SQL client — lets the Cloud Run services connect to the instance
 # over private IP via the VPC connector.
 resource "google_project_iam_member" "runtime_cloudsql" {
+  count = local.create_runtime_service_account ? 1 : 0
+
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.runtime.email}"
+  member  = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 # Secret Manager accessor — managed secrets first (split out as separate
 # resources because their IDs are computed-at-apply and can't drive a
 # for_each).
 resource "google_secret_manager_secret_iam_member" "master_key" {
-  secret_id = google_secret_manager_secret.master_key.id
+  secret_id = local.master_key_secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "db_password" {
-  secret_id = google_secret_manager_secret.db_password.id
+  secret_id = local.db_password_secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 # License secret accessor — only created when var.litellm_license is set.
@@ -58,7 +74,7 @@ resource "google_secret_manager_secret_iam_member" "license" {
 
   secret_id = google_secret_manager_secret.license[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 # UI password secret accessor — only created when var.ui_password is set.
@@ -67,7 +83,7 @@ resource "google_secret_manager_secret_iam_member" "ui_password" {
 
   secret_id = google_secret_manager_secret.ui_password[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 # User-supplied extras. Dedupe on the secret resource ID — two different
@@ -78,7 +94,7 @@ resource "google_secret_manager_secret_iam_member" "extras" {
 
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 # OTEL_HEADERS secret accessor — only created when var.otel_headers_secret
@@ -88,7 +104,7 @@ resource "google_secret_manager_secret_iam_member" "otel_headers" {
 
   secret_id = var.otel_headers_secret
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "billing_metrics_client_secret" {
@@ -96,7 +112,7 @@ resource "google_secret_manager_secret_iam_member" "billing_metrics_client_secre
 
   secret_id = google_secret_manager_secret.billing_metrics_client_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "metrics_run_monitoring" {
@@ -104,21 +120,21 @@ resource "google_secret_manager_secret_iam_member" "metrics_run_monitoring" {
 
   secret_id = google_secret_manager_secret.metrics_run_monitoring[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 resource "google_project_iam_member" "runtime_metric_writer" {
-  count = local.metrics_enabled ? 1 : 0
+  count = local.metrics_enabled && local.create_runtime_service_account ? 1 : 0
 
   project = var.project_id
   role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${google_service_account.runtime.email}"
+  member  = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 resource "google_project_iam_member" "runtime_log_writer" {
-  count = local.metrics_enabled ? 1 : 0
+  count = local.metrics_enabled && local.create_runtime_service_account ? 1 : 0
 
   project = var.project_id
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.runtime.email}"
+  member  = "serviceAccount:${local.runtime_service_account_email}"
 }

@@ -1268,7 +1268,7 @@ class CustomGuardrail(CustomLogger):
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+    ) -> tuple[dict[str, object], object]:  # mutable-ok: CustomLogger.async_logging_hook contract
         """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
         from litellm.llms import get_guardrail_translation_mapping
 
@@ -1552,7 +1552,7 @@ class CustomGuardrail(CustomLogger):
             return False
         return self.event_hook == event_type.value
 
-    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict[str, object]) -> dict:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
@@ -1714,7 +1714,7 @@ class CustomGuardrail(CustomLogger):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1743,7 +1743,7 @@ class CustomGuardrail(CustomLogger):
 
     def _process_response(
         self,
-        response: dict | None,
+        response: dict[str, object] | None,
         request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
@@ -1902,6 +1902,7 @@ class CustomGuardrail(CustomLogger):
         if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
             from typing import cast
 
+            from litellm.litellm_core_utils.tool_fields import qualified_member_name
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
@@ -1913,6 +1914,7 @@ class CustomGuardrail(CustomLogger):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data,
                 responses_api_request=data,
+                member_name=qualified_member_name,
             )
             return cast(list[AllMessageValues], messages)
         return None
@@ -2118,7 +2120,7 @@ def log_guardrail_information(func):
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object):
         if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)

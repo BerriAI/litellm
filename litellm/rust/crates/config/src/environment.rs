@@ -46,6 +46,12 @@ pub struct Environment {
     pub litellm_tpm_token_reservation_enabled: Option<Flag>,
     #[serde_as(as = "UintOrUnset")]
     pub proxy_batch_write_at: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_queue_max_bytes: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_write_batch_max_bytes: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_write_batch_max_rows: Option<u64>,
 }
 
 impl Environment {
