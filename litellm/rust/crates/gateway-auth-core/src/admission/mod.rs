@@ -5,7 +5,7 @@ mod budgets;
 mod models;
 
 use crate::{
-    AuthHost,
+    AuthHost, Named,
     authn::key::{KeyRequest, KeySettings},
     identity::key::KeyPrincipal,
     outcome::Refused,
@@ -20,7 +20,8 @@ pub(crate) async fn key<H: AuthHost>(
 ) -> Result<KeyPrincipal<H::Rows>, Refused<H::Rows>> {
     let key = host.with_temp_budget(principal.key).await?;
     models::normalize(host, &key.row).await?;
-    budgets::key(host, &key.row, principal.owner.as_ref(), request)
+    let owner = principal.belongs.holder.user().and_then(Named::stored);
+    budgets::key(host, &key.row, owner, request)
         .await
         .map_err(|error| Refused::new(error, Some(&key.row)))?;
     if settings.proxy_budget && settings.has_db {

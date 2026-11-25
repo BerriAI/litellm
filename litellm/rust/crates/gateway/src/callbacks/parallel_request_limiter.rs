@@ -228,16 +228,16 @@ impl Caller {
     /// A key is named by the hash its row is stored under, as Python's `api_key` is, and the
     /// master key by Python's alias for it. The master key holds no limit.
     pub(crate) fn of(identity: &Authenticated<NativeRows>) -> Self {
-        match &**identity {
-            auth_core::Caller::MasterKey => Self {
+        match &identity.credential {
+            auth_core::Credential::MasterKey => Self {
                 api_key: Some(MASTER_KEY_ALIAS.to_owned()),
                 user_id: Some(PROXY_ADMIN_NAME),
                 limits: KeyLimits::default(),
             },
-            auth_core::Caller::Key(key) => Self {
+            auth_core::Credential::Key { key } => Self {
                 api_key: identity.hash().map(ToString::to_string),
                 user_id: None,
-                limits: key.key.limits().clone(),
+                limits: key.limits().clone(),
             },
         }
     }

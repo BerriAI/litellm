@@ -1,6 +1,6 @@
 use crate::{
     AuthHost,
-    authn::key::{self, Credential, KeyRequest, KeySettings, Prechecked, Verified},
+    authn::key::{self, KeyRequest, KeySettings, KeySource, Prechecked, Verified},
     authz::RoutePolicy,
     host::KeyRow,
     identity::{
@@ -17,7 +17,7 @@ pub(crate) async fn authenticate<H: AuthHost>(
     request: &KeyRequest<'_>,
     settings: &KeySettings,
     policy: &RoutePolicy<'_>,
-    credential: Credential<'_, KeyRow<H>>,
+    credential: KeySource<'_, KeyRow<H>>,
 ) -> KeyOutcome<H::Rows> {
     let checked = key::precheck::<H::Rows>(request.route, credential, settings)
         .map_err(|denial| Refused::new(denial, None))?;
@@ -54,12 +54,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        Error, KeyDenial, KeyHash, MasterKey, Token,
+        Belongs, Error, Holder, KeyDenial, KeyHash, MasterKey, Named, Team, TeamCopy, Token,
         authn::{
             jwt::JwtSettings,
             key::{KeyRecord, Keyed},
         },
-        identity::key::TeamGrant,
         testing::{Labels, ScriptedHost},
     };
 
@@ -68,7 +67,7 @@ mod tests {
         host: &ScriptedHost,
         request: &KeyRequest<'_>,
         settings: &KeySettings,
-        credential: Credential<'_, String>,
+        credential: KeySource<'_, String>,
     ) -> KeyOutcome<Labels> {
         let jwt = JwtSettings::default();
         super::authenticate(
@@ -131,13 +130,7 @@ mod tests {
             now: NOW,
             runs_inference_checks: route == "/chat/completions",
         };
-        authenticate(
-            host,
-            &request,
-            settings,
-            Credential::Presented(Some(&token)),
-        )
-        .await
+        authenticate(host, &request, settings, KeySource::Presented(Some(&token))).await
     }
 
     async fn run_resolved(
@@ -155,7 +148,7 @@ mod tests {
             record,
             row: "mapped".to_owned(),
         };
-        let credential = Credential::Resolved {
+        let credential = KeySource::Resolved {
             key: resolved,
             end_user_id: None,
         };
@@ -208,7 +201,7 @@ mod tests {
             now: NOW,
             runs_inference_checks: true,
         };
-        let outcome = authenticate(&host, &request, &settings, Credential::Presented(None)).await;
+        let outcome = authenticate(&host, &request, &settings, KeySource::Presented(None)).await;
         assert_eq!(
             outcome.map_err(|refused| *refused.error),
             Err(KeyDenial::MissingKey.into())
@@ -335,8 +328,8 @@ mod tests {
             runs_inference_checks: true,
         };
         let credential = match credential_end_user {
-            None => Credential::Presented(Some(&token)),
-            Some(end_user_id) => Credential::Resolved {
+            None => KeySource::Presented(Some(&token)),
+            Some(end_user_id) => KeySource::Resolved {
                 key: Keyed {
                     record: virtual_key(),
                     row: "mapped".to_owned(),
@@ -563,10 +556,16 @@ mod tests {
             context(run(&host, "sk-1", "/chat/completions", &settings).await),
             KeyContext {
                 key: "db+prepared".to_owned(),
+                belongs: Belongs {
+                    holder: Holder::Member {
+                        user: Named::Stored("owner u".to_owned()),
+                        team: Team::Row("team t".to_owned()),
+                        membership: None,
+                    },
+                    org: None,
+                    project: Some(Named::Stored("project p".to_owned())),
+                },
                 end_user: "end-user".to_owned(),
-                owner: Some("owner u".to_owned()),
-                team: TeamGrant::Loaded("team t".to_owned()),
-                project: Some("project p".to_owned()),
             }
         );
         assert_eq!(
@@ -748,19 +747,36 @@ mod tests {
         );
     }
 
+    fn copy(team_id: &str, object_permission: Option<&str>) -> Team<Labels> {
+        Team::KeyCopy(TeamCopy {
+            team_id: team_id.to_owned(),
+            object_permission: object_permission.map(str::to_owned),
+        })
+    }
+
     #[rstest]
-    #[case::no_team(None, None, true, TeamGrant::NoTeam)]
-    #[case::ui_team(Some("litellm-dashboard"), None, true, TeamGrant::KeyCopy(None))]
-    #[case::unresolvable_team(Some("t"), None, false, TeamGrant::KeyCopy(None))]
-    #[case::unresolvable_team_with_permission(Some("t"), Some("op"), false, TeamGrant::KeyCopy(Some("permission op".to_owned())))]
-    #[case::resolved_team(Some("t"), Some("op"), true, TeamGrant::Loaded("team t".to_owned()))]
+    #[case::no_team(None, None, true, None)]
+    #[case::ui_team(
+        Some("litellm-dashboard"),
+        None,
+        true,
+        Some(copy("litellm-dashboard", None))
+    )]
+    #[case::unresolvable_team(Some("t"), None, false, Some(copy("t", None)))]
+    #[case::unresolvable_team_with_permission(
+        Some("t"),
+        Some("op"),
+        false,
+        Some(copy("t", Some("permission op")))
+    )]
+    #[case::resolved_team(Some("t"), Some("op"), true, Some(Team::Row("team t".to_owned())))]
     #[tokio::test]
     async fn team_falls_back_to_the_key_copy(
         settings: KeySettings,
         #[case] team_id: Option<&str>,
         #[case] team_object_permission_id: Option<&str>,
         #[case] key_team_found: bool,
-        #[case] expected: TeamGrant<Labels>,
+        #[case] expected: Option<Team<Labels>>,
     ) {
         let host = ScriptedHost {
             cached: Some(KeyRecord {
@@ -772,8 +788,11 @@ mod tests {
             ..ScriptedHost::default()
         };
         assert_eq!(
-            context(run(&host, "sk-1", "/chat/completions", &settings).await).team,
-            expected
+            context(run(&host, "sk-1", "/chat/completions", &settings).await)
+                .belongs
+                .holder
+                .team(),
+            expected.as_ref()
         );
     }
 
@@ -867,7 +886,8 @@ mod tests {
             ..ScriptedHost::default()
         };
         let context = context(run(&host, "sk-1", "/chat/completions", &settings).await);
-        assert_eq!((context.key.as_str(), context.owner), (key, None));
+        let owner = context.belongs.holder.user().and_then(Named::stored);
+        assert_eq!((context.key.as_str(), owner), (key, None));
     }
 
     #[rstest]

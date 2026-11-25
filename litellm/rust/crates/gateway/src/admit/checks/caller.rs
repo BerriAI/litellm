@@ -1,6 +1,6 @@
 use litellm_config::GeneralSettings;
 use litellm_gateway_auth::Error;
-use litellm_gateway_auth_core::Caller;
+use litellm_gateway_auth_core::Credential;
 
 use super::{Admit, Authentication, Reason, Refused};
 
@@ -12,8 +12,8 @@ use super::{Admit, Authentication, Reason, Refused};
 /// failed.
 pub(super) fn caller(admit: &Admit, authentication: &Authentication) -> Option<Reason> {
     match authentication {
-        Ok(caller) => match &**caller {
-            Caller::MasterKey | Caller::Key(_) => None,
+        Ok(caller) => match &caller.credential {
+            Credential::MasterKey | Credential::Key { .. } => None,
         },
         Err(error) => {
             let over = <&'static str>::from(error);

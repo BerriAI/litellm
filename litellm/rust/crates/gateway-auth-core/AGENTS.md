@@ -27,7 +27,13 @@ These are target invariants. Where the code still lags them, the Notion page lis
 ## The caller
 
 - Every answer about who the caller is and what it may reach is decided here, with no IO. A host asks, it never works one out from a row
-- `Caller` in `caller.rs` is the only thing a host carries past authentication. An identity that is not a caller a host serves, as no master key, the user auth route, a cached admin key and a JWT are, is `NotACaller` and never becomes one, so a host cannot serve it by accident
+- What a caller belongs to lives in one struct, `Belongs` in `belongs.rs`: a `Holder` (nobody, a user, a team, or a user in a team with its membership), the organization and the project. The key path and the JWT path both build it, `KeyContext` and `JwtIdentity` embed it, and a new consumer reads it there. It never declares those slots again
+  - `Belongs` has no `Default`, so each place that builds one names every slot. An `Option` in it is a name the caller does not have, never a row a host did not read
+  - `Named` is a row when one is stored and its id when none is, so an id is never held apart from its row
+  - `Team` is a row, a JWT's team id with no row (`Unstored`), or a key's own copy of its team's values (`KeyCopy`). Only a `KeyCopy` becomes a rebuilt team object in Python
+  - The end user is named by the request, not the caller, so it sits beside `Belongs`
+  - `record.rs` holds the core's record for each slot, which the gateway's `NativeRows` uses. A record grows a field with the first rule that reads it
+- `Caller` in `caller.rs` is the only thing a host carries past authentication. It holds the `Credential` the core verified (the master key or a key), what that belongs to, and the end user the request names, so a consumer reads `belongs` and `end_user` without matching on the credential. An identity that is not a caller a host serves, as no master key, the user auth route, a cached admin key and a JWT are, is `NotACaller` and never becomes one, so a host cannot serve it by accident
 - The role is derived here, by `Caller::role`. Admin is a role and never a kind of credential, so a host never reads it off how the caller authenticated or off a permission it holds
 - A key's id is the hash its row is stored under, `Caller::hash`, read from the `KeyRecord` the host's key row keeps through `StoredKey`. The key path refuses a key whose record has none, so a caller that is a key always has one and only the master key has none. It is never the hash of the token the request presented, which a key a JWT maps to does not have
 - For access, the host supplies the layers it read (the key's, the team's and so on) and the core decides. A host that did not read a layer a key has must have declined that key at authentication, so no decision is ever made on a layer that is missing

@@ -9,7 +9,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use litellm_gateway_auth_core::{Caller, Rows};
+use litellm_gateway_auth_core::{self as auth_core, Caller, Rows};
 use litellm_secret_value::SecretValue;
 
 use crate::{Auth, Credential, Error};
@@ -172,12 +172,12 @@ impl<R: Rows> FromRequestParts<Auth<R>> for RequireMasterKey {
         let caller = state
             .authenticate_credential(&presented(parts), parts)
             .await?;
-        match *caller {
-            Caller::MasterKey => {
+        match caller.credential {
+            auth_core::Credential::MasterKey => {
                 parts.extensions.insert(caller);
                 Ok(Self)
             }
-            Caller::Key(_) => Err(Error::InvalidToken),
+            auth_core::Credential::Key { .. } => Err(Error::InvalidToken),
         }
     }
 }

@@ -3,7 +3,7 @@ use litellm_config::{LitellmRole, RbacRole, UnregisteredJwtClientBehavior as Beh
 use serde_json::Value;
 
 use crate::{
-    AuthHost, Error, JwtDenial, Rows, Token,
+    AuthHost, Belongs, Error, Holder, JwtDenial, Named, Rows, Token,
     authn::jwt::{
         self, Claims, JwtRequest, JwtSettings, KeyOrigin, MappedJwt,
         mapping::{self, Mapping, Pending, Resolved},
@@ -14,7 +14,7 @@ use crate::{
     identity::{
         Caller, CallerKind, Principal,
         jwt::{
-            AgentMode, ClaimIdentity, FinishedJwt, JwtIdentity, JwtMapping, JwtOutcome, JwtRows,
+            AgentMode, ClaimIdentity, FinishedJwt, JwtIdentity, JwtMapping, JwtOutcome,
             Provisioning, Team, TeamSettings, UserInfo, agent, caller, claims, org,
             team::{self, Joined},
             user::{self, ResolvedUser},
@@ -228,21 +228,27 @@ async fn admin<H: AuthHost>(
         .filter(|id| !id.is_empty())
         .or(user_id.as_deref());
     let team = bind_team_member(host, team, member_id).await?;
+    let org_id = claims::org_id(claims, settings);
     Ok(JwtIdentity {
         claims: Value::Object(claims.0.clone()),
         is_proxy_admin: true,
+        belongs: Belongs {
+            holder: Holder::new(
+                Named::of(user_id.clone(), user.map(|user| user.row)),
+                team.as_ref()
+                    .map(|team| (crate::Team::Row(team.row.clone()), None)),
+            ),
+            org: Named::of(org_id.clone(), None),
+            project: None,
+        },
         user_id,
         user_email: info.user_email,
-        team_id: team.as_ref().map(|team| team.team_id.clone()),
-        org_id: claims::org_id(claims, settings),
+        team_id: team.map(|team| team.team_id),
+        org_id,
         end_user_id: None,
         agent_id: caller.agent_id,
         managed_agent: None,
-        rows: JwtRows {
-            user: user.map(|user| user.row),
-            team: team.map(|team| team.row),
-            ..JwtRows::default()
-        },
+        end_user: None,
     })
 }
 
@@ -414,26 +420,31 @@ fn identity_of<R: Rows>(claims: Value, principal: Principal<R>) -> Authorized<R>
         && user.as_ref().is_some_and(|user| {
             user.user_role.as_deref() == Some(<&str>::from(LitellmRole::ProxyAdmin))
         });
+    let user_email = user
+        .as_ref()
+        .and_then(|user| user.user_email.clone().filter(|text| !text.is_empty()))
+        .or(user_email);
+    let belongs = Belongs {
+        holder: Holder::new(
+            Named::of(user_id.clone(), user.map(|user| user.row)),
+            crate::Team::of(team_id.clone(), team.map(|team| team.row))
+                .map(|team| (team, membership.filter(|_| !is_proxy_admin))),
+        ),
+        org: Named::of(org_id.clone(), org),
+        project: None,
+    };
     let identity = JwtIdentity {
         claims,
         is_proxy_admin,
         user_id,
-        user_email: user
-            .as_ref()
-            .and_then(|user| user.user_email.clone().filter(|text| !text.is_empty()))
-            .or(user_email),
+        user_email,
         team_id,
         org_id,
         end_user_id,
         agent_id: caller.agent_id,
         managed_agent: caller.agent,
-        rows: JwtRows {
-            user: user.map(|user| user.row),
-            team: team.map(|team| team.row),
-            membership: membership.filter(|_| !is_proxy_admin),
-            org,
-            end_user,
-        },
+        belongs,
+        end_user,
     };
     Authorized { identity, grants }
 }
@@ -501,7 +512,11 @@ async fn register<H: AuthHost>(
             minted,
             org_id: identity.org_id,
         },
-        user: identity.rows.user,
+        user: identity
+            .belongs
+            .holder
+            .into_user()
+            .and_then(Named::into_stored),
     };
     let falls_through_to_key_checks = (settings.config.auto_register_map_existing_key
         || pending.behavior == Behavior::LinkOnly)
@@ -765,12 +780,15 @@ mod tests {
             (Some("t1"), false)
         );
         assert_eq!(
-            identity.rows,
-            JwtRows {
-                user: Some("u1".to_owned()),
-                team: Some("t1".to_owned()),
-                membership: Some("membership u1 t1".to_owned()),
-                ..JwtRows::default()
+            identity.belongs,
+            Belongs {
+                holder: Holder::Member {
+                    user: Named::Stored("u1".to_owned()),
+                    team: crate::Team::Row("t1".to_owned()),
+                    membership: Some("membership u1 t1".to_owned()),
+                },
+                org: None,
+                project: None,
             }
         );
         assert_eq!(calls(&host), expected_calls);
@@ -805,7 +823,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(identity.user_id.as_deref(), Some("canonical"));
-        assert_eq!(identity.rows.team.as_deref(), Some("t1 canonical"));
+        assert_eq!(
+            identity.belongs.holder.team(),
+            Some(&crate::Team::Row("t1 canonical".to_owned()))
+        );
         assert_eq!(calls(&host), expected_calls);
     }
 
@@ -988,9 +1009,13 @@ mod tests {
                 "add_member u1 t2",
             ]
         );
-        assert_eq!(identity.rows.user.as_deref(), Some("u1+role+teams"));
         assert_eq!(
-            identity.rows.membership, None,
+            identity.belongs.holder.user(),
+            Some(&Named::Stored("u1+role+teams".to_owned()))
+        );
+        assert_eq!(
+            identity.belongs.holder.membership(),
+            None,
             "a proxy admin's identity carries no membership"
         );
     }
@@ -1723,6 +1748,36 @@ mod tests {
         json!({"roles": ["team-role"], "oid": "t1"})
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn verify_a_team_role_jwt_keeps_the_members_membership_without_the_team_row() {
+        let host = ScriptedHost {
+            users: HashMap::from([("u1", user("u1", "internal_user", &["t1"]))]),
+            ..host(json!({"sub": "u1", "team": "t1", "oid": "t1"}))
+        };
+        let settings = settings(JwtAuthSettings {
+            team_id_jwt_field: Some("team".into()),
+            object_id_jwt_field: Some("oid".into()),
+            ..config()
+        });
+
+        let identity = authorize_with(&host, request(CHAT), &settings, None)
+            .await
+            .unwrap_or_else(|error| panic!("{error:?} {:?}", calls(&host)));
+
+        assert_eq!(
+            (identity.team_id.as_deref(), identity.belongs.holder),
+            (
+                Some("t1"),
+                Holder::Member {
+                    user: Named::Stored("u1".to_owned()),
+                    team: crate::Team::Unstored("t1".to_owned()),
+                    membership: Some("membership u1 t1".to_owned()),
+                }
+            )
+        );
+    }
+
     #[tokio::test]
     async fn a_jwt_is_verified_even_when_userinfo_is_enabled() {
         let host = host(json!({"sub": "u1", "scope": "litellm_proxy_admin"}));
@@ -2128,13 +2183,15 @@ mod tests {
             (Some("o1"), Some("e1"))
         );
         assert_eq!(
-            identity.rows,
-            JwtRows {
-                user: Some("u1".to_owned()),
-                org: Some("org o1".to_owned()),
-                end_user: Some("end-user e1".to_owned()),
-                ..JwtRows::default()
-            }
+            (identity.belongs, identity.end_user),
+            (
+                Belongs {
+                    holder: Holder::User(Named::Stored("u1".to_owned())),
+                    org: Some(Named::Stored("org o1".to_owned())),
+                    project: None,
+                },
+                Some("end-user e1".to_owned())
+            )
         );
         assert_eq!(
             calls(&host),

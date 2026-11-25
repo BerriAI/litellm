@@ -635,7 +635,9 @@ mod tests {
         let seeded =
             Registered::for_caller(scripted("seeded", &log, &[ended()], silent), |identity| {
                 AtomicU32::new(
-                    u32::from(**identity == litellm_gateway_auth_core::Caller::MasterKey) * 6,
+                    u32::from(
+                        identity.credential == litellm_gateway_auth_core::Credential::MasterKey,
+                    ) * 6,
                 )
             });
         let callbacks = Arc::new(Callbacks::new(vec![seeded]).unwrap());

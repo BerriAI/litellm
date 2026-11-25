@@ -123,7 +123,7 @@ mod tests {
     use crate::test_support::{Held, key};
 
     #[rstest]
-    #[case::the_master_key(Caller::MasterKey, r#"["litellm:master-key","master","master"]"#)]
+    #[case::the_master_key(Caller::master_key(()), r#"["litellm:master-key","master","master"]"#)]
     #[case::a_key_by_its_stored_hash(
         key("stored", false),
         r#"["litellm:virtual-key","stored","stored"]"#
