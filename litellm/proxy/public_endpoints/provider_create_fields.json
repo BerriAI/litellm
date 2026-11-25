@@ -4631,6 +4631,6 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "iteracompute/qwen/qwen3.8-27b"
+    "default_model_placeholder": "iteracompute/deepseek/deepseek-v4.1-flash-1017"
   }
 ]
