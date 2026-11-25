@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
+    reasoning_effort_within_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
@@ -720,7 +721,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             case "adaptive":
                 return configured_effort or "medium"
             case "enabled":
-                return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+                return reasoning_effort_within_thinking_budget(
+                    configured_effort, reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+                )
             case "disabled":
                 return REASONING_EFFORT_OFF
             case "between_tools":

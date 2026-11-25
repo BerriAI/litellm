@@ -15,6 +15,7 @@ import respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -604,6 +605,50 @@ def test_build_responses_kwargs_drops_a_client_none_a_reasoning_deployment_never
     )
 
     assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "none"})
+
+
+MEDIUM_BUDGET_THINKING: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET}
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [REASONS_WITHOUT_CONFIRMING_NONE, {"reasoning_effort_levels": ["low", "high"]}],
+    ids=["undeclared", "declared-levels"],
+)
+def test_build_responses_kwargs_sends_a_lower_explicit_effort_beside_an_enabled_budget(
+    model_info: dict[str, object],
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=8000,
+        messages=MESSAGES,
+        model="openai/reasoner-without-levels",
+        output_config={"effort": "low"},
+        thinking=MEDIUM_BUDGET_THINKING,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "model_info": model_info},
+    )
+
+    assert cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"] == "low"
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("effort", ["none", "turbo"])
+def test_build_responses_kwargs_lets_the_budget_decide_when_drop_params_drops_the_explicit_effort(
+    effort: str, drop_params: bool
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=8000,
+        messages=MESSAGES,
+        model="openai/reasoner-without-levels",
+        output_config=cast(AnthropicOutputConfig, {"effort": effort}),
+        thinking=MEDIUM_BUDGET_THINKING,
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    assert cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"] == ("medium" if drop_params else effort)
 
 
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])

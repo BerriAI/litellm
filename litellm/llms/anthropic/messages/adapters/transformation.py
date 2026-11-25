@@ -163,6 +163,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
     reasoning_effort_from_thinking_silently,
+    reasoning_effort_within_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
@@ -1324,11 +1325,14 @@ class LiteLLMAnthropicMessagesAdapter:
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
-            else self.translate_anthropic_thinking_to_reasoning_effort(
-                cast(AnthropicThinkingParam, thinking),
-                model=model,
-                drop_params=drop_params,
-                report_reasoning_drops=report_reasoning_drops,
+            else reasoning_effort_within_thinking_budget(
+                output_effort,
+                self.translate_anthropic_thinking_to_reasoning_effort(
+                    cast(AnthropicThinkingParam, thinking),
+                    model=model,
+                    drop_params=drop_params,
+                    report_reasoning_drops=report_reasoning_drops,
+                ),
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
