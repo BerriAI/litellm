@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -11,12 +12,17 @@ _REALTIME_ENDPOINT: Final = "/v1/realtime"
 V25_FIELDS_FLAG: Final = "gnani_v25_request_fields"
 
 
+def _lists_realtime(row: Mapping[str, object]) -> bool:
+    endpoints: Final = row.get("supported_endpoints")
+    return row.get("litellm_provider") == "gnani" and isinstance(endpoints, list) and _REALTIME_ENDPOINT in endpoints
+
+
 def supports_realtime(model: str) -> bool:
     from litellm.utils import catalog_with_runtime_registrations
 
-    row: Final = catalog_with_runtime_registrations().get(f"gnani/{model.removeprefix('gnani/')}") or {}
-    endpoints: Final = row.get("supported_endpoints")
-    return row.get("litellm_provider") == "gnani" and isinstance(endpoints, list) and _REALTIME_ENDPOINT in endpoints
+    name: Final = model.removeprefix("gnani/")
+    catalog: Final = catalog_with_runtime_registrations()
+    return any(_lists_realtime(catalog.get(key) or {}) for key in (f"gnani/{name}", name))
 
 
 def normalize_language(hint: str) -> str:

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import litellm
 from litellm import Router
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
@@ -216,6 +217,19 @@ def test_a_priced_deployment_of_an_unknown_gnani_model_stays_unsupported() -> No
         ]
     )
     assert ProviderConfigManager.get_provider_realtime_config("prisma-v9.0", LlmProviders.GNANI) is None
+
+
+def test_a_gnani_model_registered_under_a_bare_name_opens_realtime() -> None:
+    litellm.register_model(
+        {
+            "prisma-v3.5": {
+                "litellm_provider": "gnani",
+                "mode": "audio_transcription",
+                "supported_endpoints": ["/v1/audio/transcriptions", "/v1/realtime"],
+            }
+        }
+    )
+    assert ProviderConfigManager.get_provider_realtime_config("prisma-v3.5", LlmProviders.GNANI) is not None
 
 
 def test_opening_and_updating_a_session_preserves_the_client_rate_and_acknowledged_language() -> None:
