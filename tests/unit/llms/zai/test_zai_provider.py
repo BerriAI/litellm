@@ -167,7 +167,7 @@ def test_zai_forwards_reasoning_effort_as_sent_to_models_declaring_no_levels(
 
 
 @pytest.mark.parametrize("drop_params", [True, False])
-@pytest.mark.parametrize("model", ["glm-5.3", "glm-5.1"])
+@pytest.mark.parametrize("model", ["glm-5.1", "glm-5.2"])
 def test_zai_turns_thinking_off_for_reasoning_effort_none(
     local_model_cost_map: None,
     respx_mock: respx.MockRouter,
@@ -189,6 +189,32 @@ def test_zai_turns_thinking_off_for_reasoning_effort_none(
 
     body: Final = json.loads(respx_mock.calls[0].request.content)
     assert (body.get("thinking"), body.get("reasoning_effort")) == ({"type": "disabled"}, None)
+
+
+@pytest.mark.parametrize(("drop_params", "sent"), [(True, None), (False, "none")])
+@pytest.mark.parametrize("model", ["glm-5.3", "glm-5.3-flash"])
+def test_zai_drops_reasoning_effort_none_for_models_that_always_think_only_under_drop_params(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    drop_params: bool,
+    sent: str | None,
+) -> None:
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(
+        model=f"zai/{model}",
+        messages=[{"role": "user", "content": "Hello"}],
+        reasoning_effort="none",
+        drop_params=drop_params,
+    )
+
+    body: Final = json.loads(respx_mock.calls[0].request.content)
+    assert (body.get("thinking"), body.get("reasoning_effort")) == (None, sent)
 
 
 @pytest.mark.parametrize(("drop_params", "sent"), [(True, None), (False, "none")])

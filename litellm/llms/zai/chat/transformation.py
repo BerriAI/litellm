@@ -110,11 +110,15 @@ class ZAIChatConfig(OpenAIGPTConfig):
         supported_params: Final = self.get_supported_openai_params(model)
         sent: Final = {param: value for param, value in non_default_params.items() if param in supported_params}
         requested_effort: Final = sent.get("reasoning_effort")
-        turns_thinking_off: Final = _requested_level(requested_effort) == REASONING_OFF and "thinking" not in sent
         declared: Final = (
             declared_reasoning_efforts
             if declared_reasoning_efforts is not None
             else catalog_reasoning_efforts_for_model(model, "zai")
+        )
+        turns_thinking_off: Final = (
+            _requested_level(requested_effort) == REASONING_OFF
+            and "thinking" not in sent
+            and (declared is None or REASONING_OFF in declared)
         )
         reasoning_effort: Final = (
             None
