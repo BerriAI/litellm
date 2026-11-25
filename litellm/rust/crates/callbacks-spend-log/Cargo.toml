@@ -9,13 +9,14 @@ repository.workspace = true
 litellm-python-compat.workspace = true
 litellm-redaction.workspace = true
 
+aws-lc-rs.workspace = true
 base64.workspace = true
 fancy-regex.workspace = true
+hex.workspace = true
 num-traits = "0.2"
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
 veil.workspace = true
 

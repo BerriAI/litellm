@@ -3843,7 +3843,9 @@ dependencies = [
 name = "litellm-callbacks-budgets"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "futures-util",
+ "hex",
  "litellm-callbacks",
  "litellm-circuit-breaker",
  "litellm-coroutine",
@@ -3856,7 +3858,6 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "strum",
  "thiserror 2.0.21",
  "tokio",
@@ -3971,8 +3972,10 @@ dependencies = [
 name = "litellm-callbacks-spend-log"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "fancy-regex 0.19.2",
+ "hex",
  "litellm-python-compat",
  "litellm-redaction",
  "num-traits",
@@ -3980,7 +3983,6 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.21",
  "veil",
 ]
@@ -4298,7 +4300,9 @@ dependencies = [
 name = "litellm-gateway-auth-core"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
+ "hex",
  "http 1.4.2",
  "jiff",
  "jsonwebtoken",
@@ -4309,7 +4313,6 @@ dependencies = [
  "litellm-starlette",
  "rstest",
  "serde_json",
- "sha2 0.10.9",
  "strum",
  "subtle",
  "thiserror 2.0.21",

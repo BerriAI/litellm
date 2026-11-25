@@ -129,6 +129,7 @@ rstest = "0.26.1"
 wiremock = "0.6.5"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+aws-lc-rs = { version = "1.17", default-features = false, features = ["aws-lc-sys"] }
 rustls-native-certs = "0.8"
 rustify = "=0.7.0"
 rustify_derive = "=0.5.5"
@@ -137,6 +138,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+hex = "0.4"
 sha1 = "0.10"
 zeroize = "1.9.0"
 syn = { version = "2", default-features = false }

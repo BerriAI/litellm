@@ -1,7 +1,7 @@
 use std::fmt;
 
+use aws_lc_rs::digest::{SHA256, digest};
 use litellm_secret_value::SecretValue;
-use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::authn::jwt::is_jwt;
@@ -39,7 +39,7 @@ impl Token {
     }
 
     pub fn hash(&self) -> KeyHash {
-        KeyHash(format!("{:x}", Sha256::digest(self.expose().as_bytes())))
+        KeyHash(hex::encode(digest(&SHA256, self.expose().as_bytes())))
     }
 
     pub(crate) fn masked(&self) -> String {
@@ -122,13 +122,26 @@ mod tests {
 
     const MASTER: &str = "sk-master";
 
-    #[test]
-    fn hashes_with_sha256() {
-        // FIPS 180-2 test vector for "abc"
-        assert_eq!(
-            Token::new("abc").hash().as_str(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
+    #[rstest]
+    #[case::fips_180_2_abc(
+        "abc",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )]
+    #[case::virtual_key(
+        "sk-1234",
+        "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+    )]
+    #[case::utf8(
+        "sk-ü-ключ",
+        "8e1d3098ad382cd3a697ee19302f4d163fbadf6232b198b9625e4401b265efc1"
+    )]
+    #[case::empty("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")]
+    #[case::several_blocks_and_a_leading_zero_byte(
+        &format!("sk-{}", "a".repeat(200)),
+        "00fed7a1efaa37d6fdfb785d1a80ccf4b8111a872d213216a1dd1eff73e0bbb6"
+    )]
+    fn hashes_as_python_hash_token(#[case] token: &str, #[case] expected: &str) {
+        assert_eq!(Token::new(token).hash().as_str(), expected);
     }
 
     #[rstest]

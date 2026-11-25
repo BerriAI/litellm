@@ -6,11 +6,11 @@
 
 use std::sync::LazyLock;
 
+use aws_lc_rs::digest::{SHA256, digest};
 use litellm_python_compat::{BigInt, Value, datetime::IsoDateTime, truthy::truthy, unicode};
 use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::consts::{
     BATCH_COST_REQUEST_ID_SUFFIX, BATCH_TRACE_CALL_TYPES, CUSTOMER_IDENTITY_FIELDS,
@@ -104,7 +104,7 @@ pub fn strip_bearer(value: &str) -> &str {
 
 /// `hash_token`: the key's SHA-256 as lowercase hex.
 pub fn hash_token(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
+    hex::encode(digest(&SHA256, token.as_bytes()))
 }
 
 /// The value is a SHA-256 hex digest, so it is already the logged form of a key.
