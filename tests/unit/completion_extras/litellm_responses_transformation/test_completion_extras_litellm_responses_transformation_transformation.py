@@ -8147,6 +8147,33 @@ def test_transform_response_structured_raw_refusal_beside_a_tool_call_is_still_c
     assert result.choices[0].finish_reason == "tool_calls"
 
 
+@pytest.mark.parametrize(
+    ("parts", "expected"),
+    [
+        pytest.param((_REFUSAL_PART, _OTHER_REFUSAL), _REFUSAL_TEXT, id="first-of-two-refusals"),
+        pytest.param(
+            (_EMPTY_REFUSAL, {"type": "refusal", "refusal": None}, _OTHER_REFUSAL), "Still no.", id="skips-unusable"
+        ),
+    ],
+)
+def test_transform_response_raw_message_uses_its_first_usable_refusal(
+    parts: tuple[Mapping[str, object], ...], expected: str
+) -> None:
+    assert _transformed_content([_message_item(parts)]) == expected
+
+
+def test_transform_response_raw_refusal_keeps_the_item_role() -> None:
+    result: Final = _transformed([{**_message_item([_REFUSAL_PART]), "role": "user"}])
+
+    assert result.choices[0].message.role == "user"
+    assert result.choices[0].message.content == _REFUSAL_TEXT
+
+
+def test_transform_response_raw_non_message_item_with_refusal_content_still_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown items"):
+        _transformed([{**_message_item([_REFUSAL_PART]), "type": "unknown"}])
+
+
 class _RawItemDroppingHandler(LiteLLMResponsesTransformationHandler):
     def _handle_raw_dict_response_item(self, item: Mapping[str, object], index: int) -> tuple[Choices | None, int]:
         return None, index
