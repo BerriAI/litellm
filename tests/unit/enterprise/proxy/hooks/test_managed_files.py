@@ -7038,3 +7038,155 @@ async def test_same_team_can_edit_an_image_from_its_managed_file(body: Mapping[s
     )
 
     assert result == data
+
+
+_TREE_IMAGE_UUID: Final = "3f9a1c2e-7b4d-4e6f-9a8b-1c2d3e4f5a60"
+
+
+async def _image_edit_sent_to_deployment(
+    managed_files: PROXY_LiteLLMManagedFiles,
+    user_api_key_dict: UserAPIKeyAuth,
+    body: Mapping[str, object],
+    deployment_id: str,
+) -> Mapping[str, object]:
+    prepared: Final = _REQUEST_KWARGS.validate_python(
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=MagicMock(),
+            data={"model": "gpt-image-1", "prompt": "add a hat", **body},
+            call_type="aimage_edit",
+        )
+    )
+    sent: Final = await managed_files.async_pre_call_deployment_hook(
+        kwargs={**prepared, "model_info": {"id": deployment_id}}, call_type=CallTypes.aimage_edit
+    )
+    assert sent is not None
+    return sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deployment_id", "provider_file_id"), [("model-a", "file-a"), ("model-b", "file-b")])
+async def test_image_edit_sends_the_routed_deployments_provider_file_id_wherever_the_caller_names_the_file(
+    deployment_id: str, provider_file_id: str
+) -> None:
+    unified_file_id, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a", "model-b": "file-b"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    owner: Final = UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock())
+    body: Final = {
+        "images": [
+            {"file_id": unified_file_id},
+            {"file_id": "file-raw-provider-id"},
+            {"image_url": "https://images.example/hat.png"},
+        ],
+        "mask": {"file_id": unified_file_id},
+        "extra_body": {"markup": {"file_id": unified_file_id}},
+    }
+
+    sent: Final = await _image_edit_sent_to_deployment(managed_files, owner, body, deployment_id)
+
+    assert (sent["images"], sent["mask"], sent["extra_body"]) == (
+        [
+            {"file_id": provider_file_id},
+            {"file_id": "file-raw-provider-id"},
+            {"image_url": "https://images.example/hat.png"},
+        ],
+        {"file_id": provider_file_id},
+        {"markup": {"file_id": provider_file_id}},
+    ), sent
+
+
+@pytest.mark.asyncio
+async def test_image_edit_file_id_swap_leaves_the_callers_request_untouched_for_the_next_deployment() -> None:
+    unified_file_id, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a", "model-b": "file-b"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    images: Final = [{"file_id": unified_file_id}]
+    prepared: Final = _REQUEST_KWARGS.validate_python(
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+            cache=MagicMock(),
+            data={"model": "gpt-image-1", "prompt": "add a hat", "images": images},
+            call_type="aimage_edit",
+        )
+    )
+
+    first: Final = await managed_files.async_pre_call_deployment_hook(
+        kwargs={**prepared, "model_info": {"id": "model-a"}}, call_type=CallTypes.aimage_edit
+    )
+    retried: Final = await managed_files.async_pre_call_deployment_hook(
+        kwargs={**prepared, "model_info": {"id": "model-b"}}, call_type=CallTypes.aimage_edit
+    )
+
+    assert first is not None and retried is not None
+    assert (first["images"], retried["images"], images) == (
+        [{"file_id": "file-a"}],
+        [{"file_id": "file-b"}],
+        [{"file_id": unified_file_id}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_image_edit_swaps_a_file_id_nested_deeper_than_the_recursion_limit() -> None:
+    unified_file_id, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    owner: Final = UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock())
+    depth: Final = 3000
+    nested: Final = functools.reduce(lambda inner, _: {"images": [inner]}, range(depth), {"file_id": unified_file_id})
+
+    sent: Final = await _image_edit_sent_to_deployment(managed_files, owner, {"extra_body": nested}, "model-a")
+
+    innermost: Final = functools.reduce(lambda node, _: node["images"][0], range(depth), sent["extra_body"])
+    assert innermost == {"file_id": "file-a"}
+
+
+@pytest.mark.asyncio
+async def test_team_b_cannot_edit_an_image_from_team_a_managed_file_by_its_litellm_file_id() -> None:
+    unified_file_id, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    other_team: Final = UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _image_edit_sent_to_deployment(
+            managed_files, other_team, {"mask": {"file_id": unified_file_id}}, "model-a"
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"images": [{"file_id": "file-a"}]},
+        {"mask": {"file_id": "file-a"}},
+        {"extra_body": {"markup": {"file_id": "file-a"}}},
+    ],
+    ids=["images", "mask", "extra_body"],
+)
+async def test_team_b_cannot_edit_an_image_from_team_a_managed_file_by_its_openai_file_id(
+    body: Mapping[str, object],
+) -> None:
+    _, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    other_team: Final = UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _image_edit_sent_to_deployment(managed_files, other_team, body, "model-a")
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_image_edit_swaps_many_repeats_of_one_file_id_without_stalling_the_worker() -> None:
+    unified_file_id, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    owner: Final = UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock())
+    repeats: Final = 50_000
+    started: Final = time.perf_counter()
+
+    sent: Final = await _image_edit_sent_to_deployment(
+        managed_files, owner, {"extra_body": {"images": [{"file_id": unified_file_id} for _ in range(repeats)]}}, "model-a"
+    )
+
+    elapsed: Final = time.perf_counter() - started
+    assert sent["extra_body"] == {"images": [{"file_id": "file-a"}] * repeats}
+    assert elapsed < 2, f"swapping {repeats} references took {elapsed:.1f}s"

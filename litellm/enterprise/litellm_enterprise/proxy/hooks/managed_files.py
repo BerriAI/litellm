@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import partial, reduce
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import (
@@ -312,6 +313,11 @@ def _next_body_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
     return tuple(chain.from_iterable(map(_child_values, level)))
 
 
+def _body_levels(request_body: Mapping[str, object]) -> tuple[tuple[object, ...], ...]:
+    caller_fields: Final = tuple(value for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS)
+    return tuple(takewhile(bool, accumulate(repeat(None), _next_body_level, initial=caller_fields)))
+
+
 def _own_file_id(value: object) -> str | None:
     fields: Final = as_str_mapping(value)
     file_id: Final = fields.get("file_id") if fields is not None else None
@@ -319,10 +325,74 @@ def _own_file_id(value: object) -> str | None:
 
 
 def _nested_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    caller_fields: Final = tuple(value for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS)
-    levels: Final = accumulate(repeat(None), _next_body_level, initial=caller_fields)
-    nodes: Final = chain.from_iterable(takewhile(bool, levels))
+    nodes: Final = chain.from_iterable(_body_levels(request_body))
     return tuple(dict.fromkeys(filter(None, map(_own_file_id, nodes))))
+
+
+def _swapped_file_id(node: object, provider_file_ids: Mapping[str, str]) -> str | None:
+    file_id: Final = _own_file_id(node)
+    return provider_file_ids.get(file_id) if file_id is not None else None
+
+
+def _with_rebuilt_children(
+    node: object, rebuilt_below: Mapping[int, object], provider_file_ids: Mapping[str, str]
+) -> object:
+    fields: Final = as_str_mapping(node)
+    if fields is None:
+        return [rebuilt_below.get(id(item), item) for item in as_object_list(node) or ()]
+    children: Final = {key: rebuilt_below.get(id(child), child) for key, child in fields.items()}
+    provider_file_id: Final = _swapped_file_id(node, provider_file_ids)
+    return children if provider_file_id is None else {**children, "file_id": provider_file_id}
+
+
+def _changes_below(node: object, rebuilt_below: Mapping[int, object], provider_file_ids: Mapping[str, str]) -> bool:
+    return _swapped_file_id(node, provider_file_ids) is not None or any(
+        id(child) in rebuilt_below for child in _child_values(node)
+    )
+
+
+def _rebuilt_level(
+    rebuilt_below: Mapping[int, object], level: tuple[object, ...], provider_file_ids: Mapping[str, str]
+) -> Mapping[int, object]:
+    return MappingProxyType(
+        {
+            id(node): _with_rebuilt_children(node, rebuilt_below, provider_file_ids)
+            for node in level
+            if _changes_below(node, rebuilt_below, provider_file_ids)
+        }
+    )
+
+
+def _deployment_model_id(kwargs: Mapping[str, object]) -> str | None:
+    top_level_id: Final = _keyed_get(kwargs.get("model_info", {}), "id")
+    model_id: Final = (
+        _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id")
+        if top_level_id is None
+        else top_level_id
+    )
+    return model_id if isinstance(model_id, str) else None
+
+
+def _with_deployment_file_ids(kwargs: dict[str, object]) -> dict[str, object]:
+    model_id: Final = _deployment_model_id(kwargs)
+    if model_id is None:
+        return kwargs
+    model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPINGS.validate_python(kwargs.get("model_file_id_mapping") or {})
+    provider_file_ids: Final = {
+        file_id: file_id_by_model[model_id]
+        for file_id, file_id_by_model in model_file_id_mapping.items()
+        if model_id in file_id_by_model
+    }
+    if not provider_file_ids:
+        return kwargs
+    no_rebuilds: Final[Mapping[int, object]] = MappingProxyType({})
+    rebuilt_fields: Final = reduce(
+        partial(_rebuilt_level, provider_file_ids=provider_file_ids), reversed(_body_levels(kwargs)), no_rebuilds
+    )
+    return {
+        key: value if key in _PROXY_ADDED_REQUEST_FIELDS else rebuilt_fields.get(id(value), value)
+        for key, value in kwargs.items()
+    }
 
 
 def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
@@ -529,6 +599,7 @@ class _RouterFileCallKwargs(TypedDict, total=False):
 
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
+_MODEL_FILE_ID_MAPPINGS: Final = TypeAdapter(dict[str, dict[str, str]])
 _FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
 _FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
 
@@ -1973,7 +2044,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["file_id"] = provider_file_id
                     data.update(stored_s3_bucket_kwargs(provider_file_id))
         elif call_type == CallTypes.aimage_edit.value or call_type == CallTypes.image_edit.value:
-            await self.check_file_ids_access(_nested_file_ids(_REQUEST_FIELDS.validate_python(data)), user_api_key_dict)
+            image_edit_file_ids: Final = _nested_file_ids(data)
+            for image_edit_file_id in image_edit_file_ids:
+                await self.check_managed_file_id_access({"file_id": image_edit_file_id}, user_api_key_dict)
+            if image_edit_file_ids:
+                data["model_file_id_mapping"] = await self.get_model_file_id_mapping(
+                    image_edit_file_ids, user_api_key_dict.parent_otel_span
+                )
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
@@ -2080,19 +2157,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Allow modifying the request just before it's sent to the deployment.
         """
+        if call_type is CallTypes.aimage_edit or call_type is CallTypes.image_edit:
+            return _with_deployment_file_ids(kwargs)
         accessor_keys: Final = _PROVIDER_FILE_ID_KWARGS.get(call_type) if call_type else None
         if accessor_keys is None:
             return kwargs
 
         model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
-        # model_info may be at top-level or nested under litellm_metadata
-        # (batch/file operations use litellm_metadata)
-        model_id = cast(Optional[str], _keyed_get(kwargs.get("model_info", {}), "id"))
-        if model_id is None:
-            model_id = cast(
-                Optional[str],
-                _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id"),
-            )
+        model_id: Final = _deployment_model_id(kwargs)
         for accessor_key in accessor_keys:
             input_file_id = cast(Optional[str], kwargs.get(accessor_key))
             mapped_file_id: Optional[str] = None
