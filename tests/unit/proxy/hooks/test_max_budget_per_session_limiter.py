@@ -8,6 +8,7 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+from typing import Final
 from unittest.mock import patch
 
 import logging
@@ -143,6 +144,32 @@ async def test_budget_per_session_independent_sessions():
             call_type="",
         )
         assert result is None
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_uses_up_the_session_budget():
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    session_metadata: Final = {"session_id": "session-refused-stream", "agent_id": "agent-budget-123"}
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=1.0)
+        await handler.async_log_failure_event(
+            {"call_type": "anthropic_messages", "response_cost": 1.5, "litellm_params": {"metadata": session_metadata}},
+            None,
+            None,
+            None,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123"),
+                cache=DualCache(),
+                data={"metadata": {"session_id": "session-refused-stream"}},
+                call_type="",
+            )
+
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio

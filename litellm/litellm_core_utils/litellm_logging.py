@@ -785,7 +785,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self.on_stream_refused: Callable[[], Awaitable[None]] | None = None
         self._stream_success_refused: bool = False
+        self._stream_success_claimed: bool = False
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
     def refuse_stream_success(self) -> None:
@@ -796,6 +798,18 @@ class Logging(LiteLLMLoggingBaseClass):
     @property
     def stream_success_refused(self) -> bool:
         return self._stream_success_refused
+
+    def claim_stream_success(self) -> bool:
+        """The stream's success log is about to run, so a later refusal keeps it instead of billing a second row.
+        Returns False when a post-call hook already refused the stream."""
+        if self._stream_success_refused:
+            return False
+        self._stream_success_claimed = True
+        return True
+
+    @property
+    def stream_success_claimed(self) -> bool:
+        return self._stream_success_claimed
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,

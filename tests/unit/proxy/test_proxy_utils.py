@@ -10,6 +10,7 @@ from starlette.datastructures import State
 
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3522,55 +3523,25 @@ def _reads_cut_inside_each_frame(frames: tuple[bytes, ...]) -> tuple[bytes, ...]
     )
 
 
-async def _spend_rows_of_native_messages_stream_ending_in(
-    monkeypatch: pytest.MonkeyPatch,
-    error: Exception,
-    frames_read: int | None,
-    served_as: str = "python_stream",
-    request_route: str = "/v1/messages",
-) -> list[tuple[str, int, int, float]]:
-    """Streams a native /v1/messages answer through a post-call hook that raises ``error`` after reading
-    ``frames_read`` reads, or all of them when None, then runs the stream's teardown and the route's failure log.
-    ``served_as`` picks the Python handler's stream type, the bare byte stream the Rust bridge hands the proxy,
-    or that byte stream with every read cut inside an event."""
-    from litellm.caching.caching import DualCache
-    from litellm.integrations.custom_logger import CustomLogger
+class _SpendRows(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[tuple[str, int, int, float]] = []
+
+    def _row(self, status: str, kwargs: dict) -> tuple[str, int, int, float]:
+        payload: Final = kwargs["standard_logging_object"]
+        return status, payload["prompt_tokens"], payload["completion_tokens"], payload["response_cost"]
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.rows.append(self._row("success", kwargs))
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.rows.append(self._row("failure", kwargs))
+
+
+def _refused_stream_logging_obj(spend_rows: _SpendRows):
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
-        GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-        AnthropicMessagesStreamingResponse,
-    )
-    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-    class RaisingHook(CustomLogger):
-        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
-            read = 0
-            async for _ in response:
-                read += 1
-                if read == frames_read:
-                    break
-            raise error
-            yield
-
-    class SpendRows(CustomLogger):
-        def __init__(self) -> None:
-            super().__init__()
-            self.rows: list[tuple[str, int, int, float]] = []
-
-        def _row(self, status: str, kwargs: dict) -> tuple[str, int, int, float]:
-            payload: Final = kwargs["standard_logging_object"]
-            return status, payload["prompt_tokens"], payload["completion_tokens"], payload["response_cost"]
-
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-            self.rows.append(self._row("success", kwargs))
-
-        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            self.rows.append(self._row("failure", kwargs))
-
-    monkeypatch.setattr(litellm, "callbacks", [RaisingHook()])
-    spend_rows: Final = SpendRows()
     logging_obj: Final = Logging(
         model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "Repeat my phone number"}],
@@ -3589,6 +3560,44 @@ async def _spend_rows_of_native_messages_stream_ending_in(
         litellm_params={"api_base": "", "custom_llm_provider": "anthropic"},
         custom_llm_provider="anthropic",
     )
+    return logging_obj
+
+
+async def _spend_rows_of_native_messages_stream_ending_in(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    frames_read: int | None,
+    served_as: str = "python_stream",
+    request_route: str = "/v1/messages",
+    success_logged_before_refusal: bool = False,
+) -> list[tuple[str, int, int, float]]:
+    """Streams a native /v1/messages answer through a post-call hook that raises ``error`` after reading
+    ``frames_read`` reads, or all of them when None, then runs the stream's teardown and the route's failure log.
+    ``served_as`` picks the Python handler's stream type, the bare byte stream the Rust bridge hands the proxy,
+    or that byte stream with every read cut inside an event. With ``success_logged_before_refusal`` no post-call
+    guardrail parks the success log, so it runs as the stream ends, before the hook raises."""
+    from litellm.caching.caching import DualCache
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+        AnthropicMessagesStreamingResponse,
+    )
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    class RaisingHook(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            read = 0
+            async for _ in response:
+                read += 1
+                if read == frames_read:
+                    break
+            raise error
+            yield
+
+    monkeypatch.setattr(litellm, "callbacks", [RaisingHook()])
+    spend_rows: Final = _SpendRows()
+    logging_obj: Final = _refused_stream_logging_obj(spend_rows)
     frames: Final = _native_messages_sse(input_tokens=30, output_tokens=20)
     started: Final = datetime.now()
 
@@ -3616,9 +3625,13 @@ async def _spend_rows_of_native_messages_stream_ending_in(
     async def upstream():
         for read in reads:
             yield read
-        logging_obj._deferred_stream_complete_args = (success_logging(reads),)
+        if success_logged_before_refusal:
+            await success_logging(reads)
+        else:
+            logging_obj._deferred_stream_complete_args = (success_logging(reads),)
 
-    logging_obj._on_deferred_stream_complete = run_parked
+    if not success_logged_before_refusal:
+        logging_obj._on_deferred_stream_complete = run_parked
     served: Final = (
         AnthropicMessagesStreamingResponse(completion_stream=upstream(), hidden_params={})
         if served_as == "python_stream"
@@ -3674,3 +3687,116 @@ async def test_native_messages_stream_ending_in_a_callback_crash_still_logs_its_
     )
 
     assert ("success", 30, 20) in [row[:3] for row in rows]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("served_as", ["python_stream", "rust_bridge_byte_stream"])
+@pytest.mark.parametrize(
+    "refusal_error",
+    [
+        GuardrailRaisedException(guardrail_name="output-check", message="Blocked by callback"),
+        HTTPException(status_code=400, detail="Blocked by callback"),
+    ],
+    ids=["guardrail_raised", "http_exception"],
+)
+async def test_messages_stream_refused_after_its_success_was_logged_is_billed_once(
+    monkeypatch, refusal_error, served_as
+):
+    rows: Final = await _spend_rows_of_native_messages_stream_ending_in(
+        monkeypatch, refusal_error, None, served_as, success_logged_before_refusal=True
+    )
+
+    assert [row[:3] for row in rows if row[3] > 0] == [("success", 30, 20)]
+
+
+async def _native_pump_stream_refused_after(
+    monkeypatch: pytest.MonkeyPatch,
+    frames_read: int,
+    provider_holds_after: int | None,
+    served_as: str = "native_pump",
+) -> tuple[list[tuple[str, int, int, float]], bool]:
+    """Streams a native /v1/messages answer through a post-call hook that refuses it after reading ``frames_read``
+    frames, the provider sending every frame at once or, with ``provider_holds_after``, holding its stream open
+    after that many. ``served_as`` picks the Python handler's provider pump, the bare byte stream the Rust bridge
+    hands the proxy, or that byte stream wrapped as the bridge's public stream. Returns the spend rows and whether
+    the provider stream was closed."""
+    from litellm.caching.caching import DualCache
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+        BaseAnthropicMessagesStreamingIterator,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    class RefusingHook(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            read = 0
+            async for _ in response:
+                read += 1
+                if read == frames_read:
+                    break
+            raise BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+            yield
+
+    monkeypatch.setattr(litellm, "callbacks", [RefusingHook()])
+    spend_rows: Final = _SpendRows()
+    logging_obj: Final = _refused_stream_logging_obj(spend_rows)
+
+    async def run_parked(parked) -> None:
+        await parked
+
+    logging_obj._on_deferred_stream_complete = run_parked
+    provider_closed: Final = asyncio.Event()
+
+    async def provider():
+        try:
+            for sent, frame in enumerate(_native_messages_sse(input_tokens=30, output_tokens=20)):
+                if sent == provider_holds_after:
+                    await asyncio.Event().wait()
+                yield frame
+        finally:
+            provider_closed.set()
+
+    provider_stream: Final = provider()
+    served: Final = {
+        "native_pump": lambda: AnthropicMessagesStreamingResponse(
+            completion_stream=BaseAnthropicMessagesStreamingIterator(
+                litellm_logging_obj=logging_obj, request_body={"model": "claude-sonnet-4-5"}
+            ).async_sse_wrapper(provider_stream),
+            hidden_params={},
+        ),
+        "rust_bridge_byte_stream": lambda: provider_stream,
+        "rust_bridge_public_stream": lambda: AnthropicMessagesStreamingResponse(
+            completion_stream=provider_stream, hidden_params={}
+        ),
+    }[served_as]()
+    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=served,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+    )
+    started: Final = datetime.now()
+    with pytest.raises(BlockedPiiEntityError) as raised:
+        _ = [chunk async for chunk in guarded]
+    await logging_obj.async_failure_handler(raised.value, "", started, datetime.now())
+    return spend_rows.rows, provider_closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_refused_native_messages_stream_bills_every_frame_the_provider_sent(monkeypatch):
+    rows, _ = await _native_pump_stream_refused_after(monkeypatch, frames_read=2, provider_holds_after=None)
+
+    assert [row[:3] for row in rows] == [("failure", 30, 20)]
+    assert rows[0][3] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("served_as", ["native_pump", "rust_bridge_byte_stream", "rust_bridge_public_stream"])
+async def test_refused_messages_stream_closes_the_provider_stream_still_sending(monkeypatch, served_as):
+    rows, provider_closed = await asyncio.wait_for(
+        _native_pump_stream_refused_after(monkeypatch, frames_read=4, provider_holds_after=4, served_as=served_as),
+        timeout=10,
+    )
+
+    assert provider_closed
+    assert [row[:2] for row in rows] == [("failure", 30)]
+    assert rows[0][3] > 0
