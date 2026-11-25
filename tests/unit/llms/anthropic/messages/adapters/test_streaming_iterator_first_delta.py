@@ -1639,43 +1639,37 @@ _OPENROUTER_MULTIPLY_TOOL_CALL_LINES: Final = (
 _OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS: Final = MappingProxyType(
     {
         "claude-signature-piece": (
-            (
-                _openrouter_reasoning_text_line("anthropic-claude-v1"),
-                _openrouter_sse_line(
-                    {
-                        "content": "",
-                        "role": "assistant",
-                        "reasoning_details": [
-                            {"type": "reasoning.text", "signature": "sig-abc", "format": "anthropic-claude-v1", "index": 0}
-                        ],
-                    }
-                ),
-                *_OPENROUTER_MULTIPLY_TOOL_CALL_LINES,
+            _openrouter_reasoning_text_line("anthropic-claude-v1"),
+            _openrouter_sse_line(
+                {
+                    "content": "",
+                    "role": "assistant",
+                    "reasoning_details": [
+                        {"type": "reasoning.text", "signature": "sig-abc", "format": "anthropic-claude-v1", "index": 0}
+                    ],
+                }
             ),
-            "sig-abc",
+            *_OPENROUTER_MULTIPLY_TOOL_CALL_LINES,
         ),
         "gemini-encrypted-piece": (
-            (
-                _openrouter_reasoning_text_line("google-gemini-v1"),
-                _openrouter_sse_line(
-                    {
-                        "content": "",
-                        "role": "assistant",
-                        "reasoning": None,
-                        "reasoning_details": [
-                            {
-                                "type": "reasoning.encrypted",
-                                "data": "blob-xyz",
-                                "id": "toolu_1",
-                                "format": "google-gemini-v1",
-                                "index": 0,
-                            }
-                        ],
-                    }
-                ),
-                *_OPENROUTER_MULTIPLY_TOOL_CALL_LINES,
+            _openrouter_reasoning_text_line("google-gemini-v1"),
+            _openrouter_sse_line(
+                {
+                    "content": "",
+                    "role": "assistant",
+                    "reasoning": None,
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.encrypted",
+                            "data": "blob-xyz",
+                            "id": "toolu_1",
+                            "format": "google-gemini-v1",
+                            "index": 0,
+                        }
+                    ],
+                }
             ),
-            "",
+            *_OPENROUTER_MULTIPLY_TOOL_CALL_LINES,
         ),
     }
 )
@@ -1711,12 +1705,10 @@ def _openrouter_chat_stream(lines: Sequence[str], is_async: bool) -> CustomStrea
     "stream", list(_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS), ids=list(_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS)
 )
 @pytest.mark.asyncio
-async def test_openrouter_reasoning_details_piece_before_tool_call_stays_in_the_thinking_block(
-    is_async: bool, stream: str
-):
-    lines, expected_signature = _OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS[stream]
+async def test_openrouter_reasoning_details_piece_before_tool_call_opens_no_extra_block(is_async: bool, stream: str):
     wrapper: Final = AnthropicStreamWrapper(
-        completion_stream=_openrouter_chat_stream(lines, is_async), model="openrouter/anthropic/claude-haiku-4.5"
+        completion_stream=_openrouter_chat_stream(_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS[stream], is_async),
+        model="openrouter/anthropic/claude-haiku-4.5",
     )
 
     events: Final = await _drain_async(wrapper) if is_async else _drain_sync(wrapper)
@@ -1725,10 +1717,8 @@ async def test_openrouter_reasoning_details_piece_before_tool_call_stays_in_the_
         "thinking",
         "tool_use",
     ]
-    assert _thinking_blocks_as_accumulated(events) == (
-        _AccumulatedThinking(thinking="I need to multiply.", signature=expected_signature),
-    )
-    assert _signature_deltas(events) == [expected_signature]
+    assert _thinking_blocks_as_accumulated(events) == (_AccumulatedThinking(thinking="I need to multiply.", signature=""),)
+    assert _signature_deltas(events) == [""]
     assert "".join(
         event["delta"]["partial_json"]
         for event in events
@@ -1784,7 +1774,7 @@ _OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS: Final = MappingProxy
     ids=list(_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS),
 )
 @pytest.mark.asyncio
-async def test_openrouter_signature_bundled_with_another_payload_keeps_both(is_async: bool, stream: str):
+async def test_openrouter_signature_bundled_with_another_payload_keeps_that_payload(is_async: bool, stream: str):
     wrapper: Final = AnthropicStreamWrapper(
         completion_stream=_openrouter_chat_stream(
             _OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS[stream], is_async
@@ -1798,9 +1788,7 @@ async def test_openrouter_signature_bundled_with_another_payload_keeps_both(is_a
         "thinking",
         "text",
     ]
-    assert _thinking_blocks_as_accumulated(events) == (
-        _AccumulatedThinking(thinking="I need to multiply.", signature="sig-abc"),
-    )
+    assert _thinking_blocks_as_accumulated(events) == (_AccumulatedThinking(thinking="I need to multiply.", signature=""),)
     assert "".join(_text_deltas(events)) == "The answer is 391."
     assert [event["delta"]["stop_reason"] for event in events if event.get("type") == "message_delta"] == ["end_turn"]
     _assert_deltas_match_their_block_type(events)

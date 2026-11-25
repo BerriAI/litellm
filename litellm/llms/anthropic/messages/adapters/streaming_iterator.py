@@ -104,14 +104,6 @@ def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
     return value if value else ()
 
 
-def streamed_reasoning_details_signature(delta: object) -> str:
-    return "".join(
-        signature
-        for item in attribute_items(delta, "reasoning_details")
-        if isinstance(signature := (as_str_mapping(item) or {}).get("signature"), str)
-    )
-
-
 def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
     from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
     from litellm.llms.anthropic.messages.native.utils import refusal_reply_text
@@ -127,8 +119,6 @@ def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
     if refusal_reply_text(delta):
         return False
     if getattr(delta, "reasoning_content", None):
-        return False
-    if streamed_reasoning_details_signature(delta):
         return False
     # thinking_blocks whose entries are all empty AND unsigned must not
     # open a block: the emitted {"type": "thinking", "thinking": ""} gets
@@ -362,16 +352,9 @@ class _CombinedChunkSplitter:
 
     _PAYLOAD_FIELD_GROUPS: "tuple[tuple[str, ...], ...]" = (
         ("reasoning_content", "thinking_blocks"),
-        ("reasoning_details",),
         ("content",),
         ("tool_calls",),
     )
-
-    @staticmethod
-    def _carries(delta: object, field: str) -> bool:
-        if field == "reasoning_details":
-            return bool(streamed_reasoning_details_signature(delta))
-        return bool(_optional_attr(delta, field))
 
     @staticmethod
     def _clear_usage(chunk: "ModelResponseStream") -> None:
@@ -413,7 +396,7 @@ class _CombinedChunkSplitter:
         present_groups: Final = tuple(
             group
             for group in _CombinedChunkSplitter._PAYLOAD_FIELD_GROUPS
-            if any(_CombinedChunkSplitter._carries(delta, field) for field in group)
+            if any(_optional_attr(delta, field) for field in group)
         )
         if len(present_groups) <= 1:
             return (chunk,)
@@ -436,9 +419,6 @@ class _CombinedChunkSplitter:
                 thinking_blocks=thinking_blocks if thinking_blocks else None,
                 content=(copied_delta.content if "content" in group and copied_delta.content else None),
                 tool_calls=(copied_delta.tool_calls if "tool_calls" in group and copied_delta.tool_calls else None),
-                reasoning_details=(
-                    getattr(copied_delta, "reasoning_details", None) if "reasoning_details" in group else None
-                ),
             )
         return pieces
 

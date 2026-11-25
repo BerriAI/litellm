@@ -251,7 +251,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, LlmProviders, ModelResponse, StreamingChoices, Usage
 from litellm.utils import supports_mid_conversation_system
 
-from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper, streamed_reasoning_details_signature
+from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -1865,9 +1865,7 @@ class LiteLLMAnthropicMessagesAdapter:
             # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
             # branch above is skipped entirely; open a ``thinking`` block here so the
             # matching ``thinking_delta`` stream is not emitted into a text block.
-            elif isinstance(choice, StreamingChoices) and (
-                getattr(choice.delta, "reasoning_content", None) or streamed_reasoning_details_signature(choice.delta)
-            ):
+            elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
                 return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
 
         return "text", TextBlock(type="text", text="")
@@ -1905,10 +1903,6 @@ class LiteLLMAnthropicMessagesAdapter:
 
                         reasoning_content += thinking
                         reasoning_signature += signature
-            elif isinstance(choice, StreamingChoices) and (
-                details_signature := streamed_reasoning_details_signature(choice.delta)
-            ):
-                reasoning_signature += details_signature
             # Handle reasoning_content when thinking_blocks is not present
             # This handles providers like OpenRouter that return reasoning_content
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
