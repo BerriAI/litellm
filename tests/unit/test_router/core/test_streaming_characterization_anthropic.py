@@ -598,6 +598,38 @@ async def test_a_ping_sharing_a_chunk_with_message_start_goes_out_before_content
 
 
 @pytest.mark.parametrize(
+    ("router_arguments", "request_kwargs"),
+    [
+        ({"num_retries": 2}, {}),
+        ({"fallbacks": [{"a": ["b"]}], "num_retries": 2}, {}),
+        ({"num_retries": 2}, {"thread": {"type": "create"}}),
+    ],
+    ids=["retry-only", "with-a-fallback", "threaded"],
+)
+async def test_a_content_delta_split_across_reads_reaches_the_client_before_the_next_read(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    router_arguments: dict[str, object],
+    request_kwargs: dict[str, object],
+) -> None:
+    received: list[bytes] = []
+    reads: list[tuple[bytes, ...]] = []
+    split_at: Final = len(b"event: content_bl")
+    frames: Final = (
+        MESSAGE_START + THINKING_START,
+        SIGNATURE_DELTA[:split_at],
+        SIGNATURE_DELTA[split_at:],
+        BLOCK_STOP,
+        MESSAGE_STOP,
+    )
+    host.answer("openai/a", recording_stream(received, reads, *frames))
+    core = make_core(model_list=GROUPS_AB, **router_arguments)
+    await read_into(await open_stream(core, **request_kwargs), received)
+    assert b"".join(reads[frames.index(BLOCK_STOP)]) == MESSAGE_START + THINKING_START + SIGNATURE_DELTA
+    assert b"".join(received) == MESSAGE_START + THINKING_START + SIGNATURE_DELTA + BLOCK_STOP + MESSAGE_STOP
+
+
+@pytest.mark.parametrize(
     ("first_block", "retry_block", "delta"),
     [
         (THINKING_START, THINKING_START, SIGNATURE_DELTA),

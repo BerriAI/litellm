@@ -1513,8 +1513,6 @@ def wrap_anthropic_stream(
                     continue
                 before_content = not content_seen
                 content_seen = content_seen or not _is_anthropic_preamble_chunk(chunk)
-                if _stream_commits_now(chunk, has_generated_content, len(buffered)):
-                    has_generated_content = True
                 # A transport can split one SSE data line across byte chunks, so pre-content detection
                 # parses the held frames plus the current chunk.
                 parse_window = (
@@ -1522,6 +1520,8 @@ def wrap_anthropic_stream(
                     if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # see above
                     else chunk
                 )
+                if _stream_commits_now(parse_window, has_generated_content, len(buffered)):
+                    has_generated_content = True
                 error_event = parse_anthropic_error_event(parse_window)
                 bridged_failure = _bridged_stream_failure(source_iterator) if error_event is not None else None
                 if bridged_failure is not None:
