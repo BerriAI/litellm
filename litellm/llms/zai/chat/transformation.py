@@ -5,6 +5,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.router_utils.reasoning_effort_capability import (
     declared_reasoning_efforts_for_map_key,
     nearest_declared_reasoning_effort,
@@ -31,9 +32,21 @@ def _json_field(value: object, key: str) -> object:
     return value.get(key) if _is_json_object(value) else None
 
 
+def _map_key_reasoning_efforts(key: str) -> tuple[str, ...] | None:
+    exact: Final = declared_reasoning_efforts_for_map_key(key)
+    if exact is not None:
+        return exact
+    catalog_key: Final = GetModelCostMap.loaded_model_cost_map_key(key)
+    return None if catalog_key is None or catalog_key == key else declared_reasoning_efforts_for_map_key(catalog_key)
+
+
 def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
-    provider_levels: Final = declared_reasoning_efforts_for_map_key(f"zai/{model}")
-    return provider_levels if provider_levels is not None else declared_reasoning_efforts_for_map_key(model)
+    provider_levels: Final = _map_key_reasoning_efforts(f"zai/{model}")
+    return provider_levels if provider_levels is not None else _map_key_reasoning_efforts(model)
+
+
+def _always_thinks(levels: Sequence[str] | None) -> bool:
+    return levels is not None and REASONING_OFF not in levels
 
 
 def _requested_level(requested: object) -> object:
@@ -128,9 +141,11 @@ class ZAIChatConfig(OpenAIGPTConfig):
         declared: Final = (
             declared_reasoning_efforts if declared_reasoning_efforts is not None else _catalog_reasoning_efforts(model)
         )
-        always_thinks: Final = declared is not None and REASONING_OFF not in declared
+        always_thinks: Final = _always_thinks(declared)
         drops_disabled_thinking: Final = (
-            drops_unsupported and always_thinks and _json_field(sent.get("thinking"), "type") == "disabled"
+            drops_unsupported
+            and _json_field(sent.get("thinking"), "type") == "disabled"
+            and _always_thinks(_catalog_reasoning_efforts(model))
         )
         unsent_params: Final = EFFORT_PARAMS | THINKING_PARAMS if drops_disabled_thinking else EFFORT_PARAMS
         turns_thinking_off: Final = (
