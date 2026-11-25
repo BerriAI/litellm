@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    DROP_UNSUPPORTED_PARAMS_HINT,
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
@@ -1092,11 +1093,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not (litellm.drop_params or drop_params):
             speed_value: Final = optional_params.get("speed")
             raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} does not support speed={speed_value!r}. "
-                    "To drop unsupported params, set "
-                    "`litellm.drop_params = True`."
-                ),
+                message=f"{model} does not support speed={speed_value!r}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                 status_code=400,
             )
         litellm.verbose_logger.warning(
@@ -1114,8 +1111,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support service_tier={value!r}. Anthropic accepts 'auto', "
-                    "'standard_only', or OpenAI's 'default' (sent as 'standard_only'). "
-                    "To drop unsupported params, set `litellm.drop_params = True`."
+                    f"'standard_only', or OpenAI's 'default' (sent as 'standard_only'). {DROP_UNSUPPORTED_PARAMS_HINT}"
                 ),
                 status_code=400,
             )
@@ -2112,7 +2108,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return thinking
         return AnthropicThinkingParam(type=thinking.get("type", "enabled"), budget_tokens=max_tokens - 1)
 
-    def _extract_json_schema_from_response_format(self, value: dict | None) -> dict | None:
+    def _extract_json_schema_from_response_format(self, value: dict | None) -> dict[str, object] | None:
         if value is None:
             return None
         json_schema: dict | None = None
@@ -2172,7 +2168,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if value is None or value["type"] in ignore_response_format_types:  # value is a no-op
             return None
 
-        json_schema: Final[dict | None] = self._extract_json_schema_from_response_format(value)
+        json_schema: Final[dict[str, object] | None] = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
         """
@@ -2587,7 +2583,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
         tools: list[AllAnthropicToolsValues | dict],
-    ) -> list[AllAnthropicToolsValues | dict]:
+    ) -> list[AllAnthropicToolsValues | dict[str, object]]:
         """if 'container_upload' in messages, add code_execution tool
 
         Takes the pass-through union because the translator emits ``role: "system"``
@@ -2924,7 +2920,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
         anthropic_messages = list(
             without_stale_tool_search_results(
-                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                anthropic_messages
+                if _has_advisor
+                else strip_advisor_blocks_from_messages(anthropic_messages, drop_params=drop_params),
                 _TOOLS_ADAPTER.validate_python(_all_tools),
             )
         )

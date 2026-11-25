@@ -6,7 +6,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras._redaction import _redact_credentials
@@ -76,6 +76,19 @@ def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
         **{key: value for key, value in environment.items() if key != PRISMA_DISABLE_ADVISORY_LOCK_ENV_VAR},
         "DATABASE_URL": migration_url,
     }
+
+
+def tagged_environment(environment: Mapping[str, str], application_name: str) -> Mapping[str, str]:
+    """Name the Postgres sessions Prisma opens, so the sessions of one killed Prisma command can be found."""
+    database_url: Final = environment.get("DATABASE_URL")
+    if not database_url:
+        return environment
+    url: Final = urlsplit(database_url)
+    parameters: Final = tuple(
+        (key, value) for key, value in parse_qsl(url.query, keep_blank_values=True) if key != "application_name"
+    )
+    query: Final = urlencode((*parameters, ("application_name", application_name)), quote_via=quote)
+    return {**environment, "DATABASE_URL": urlunsplit(url._replace(query=query))}
 
 
 @dataclass(frozen=True, slots=True)

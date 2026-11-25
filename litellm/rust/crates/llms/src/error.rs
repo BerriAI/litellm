@@ -166,6 +166,10 @@ pub enum ErrorDetail {
     },
     #[error("{route} requires at least one message")]
     NoMessages { route: &'static str },
+    #[error("messages: no message has content left after dropping empty or non-string text blocks")]
+    EmptiedMessages,
+    #[error("{path}: Input should be a valid string")]
+    NonStringText { path: String },
     #[error("{subject} must be {expected}")]
     Expected {
         subject: &'static str,
@@ -199,7 +203,7 @@ pub enum ErrorDetail {
         model: String,
     },
     #[error(
-        "{model} does not support {param}={value}. {hint}To drop unsupported params, set `litellm.drop_params = True`."
+        "{model} does not support {param}={value}. {hint}To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     UnsupportedParameter {
         model: String,
@@ -209,7 +213,7 @@ pub enum ErrorDetail {
     },
     /// Python's Vertex config attributes this refusal to `vertex_ai` and the model.
     #[error(
-        "{model} does not support anthropic-version={value}. To drop unsupported params, set `litellm.drop_params = True`."
+        "{model} does not support anthropic-version={value}. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     UnsupportedVertexAnthropicVersion { model: String, value: String },
     #[error(

@@ -95,6 +95,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
@@ -232,6 +233,7 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
 
 
@@ -435,7 +437,6 @@ class LiteLLMRoutes(enum.Enum):
         "/tinyfish",
         "/vllm",
         "/mistral",
-        "/typesafe",
         "/laya",
         "/bespoke",
         "/openrouter",
@@ -2068,6 +2069,7 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -2148,6 +2150,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -2632,6 +2635,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
     """
+
+    ldap_sync: LDAPSyncSettings | None = Field(
+        None,
+        description="Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis.",
+    )
 
     access_group_rules: tuple[AccessGroupRule, ...] | None = None
 
@@ -3239,6 +3247,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_require_explicit_server_scope: bool = Field(
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
+    )
+    require_key_mcp_access_defined: bool | None = Field(
+        None,
+        description="When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.",
     )
     mcp_client_id_header: str | None = Field(
         None,
@@ -3881,6 +3893,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "OTEL_ENDPOINT",
             "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
+            "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS",
         ],
     )
 
@@ -3999,6 +4012,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
+    )
+
+    mixpanel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="mixpanel",
+        ui_callback_name="Mixpanel",
+        litellm_callback_params=("MIXPANEL_PROJECT_TOKEN", "MIXPANEL_REGION", "MIXPANEL_ENDPOINT"),
     )
 
     signoz: CallbackOnUI = CallbackOnUI(
@@ -4491,7 +4510,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         description="Member object or list of member objects to add. Each member must include either user_id or user_email, and a role"
     )
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4510,7 +4529,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
 class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
     member: list[OrgMember] | OrgMember
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4928,6 +4947,7 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_tpm_limit_counts_cached_tokens",
     "model_itpm_limit",
     "model_otpm_limit",
     "default_estimated_output_tokens",

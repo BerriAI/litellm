@@ -24,6 +24,11 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.model.config import (
+    EMIT_BACKGROUND_SERVICE_SPANS_ENV,
+    background_service_spans_from_yaml,
+    parse_background_service_spans_setting,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -738,6 +743,20 @@ def add_guardrail_response_to_standard_logging_object(
     return standard_logging_object
 
 
+def _background_service_spans_callback_value(stored_value: str | None) -> str | None:
+    yaml_setting: Final = background_service_spans_from_yaml((litellm.callback_settings or {}).get("otel"))
+    if yaml_setting is not None:
+        return str(yaml_setting).lower()
+    env_var: Final = EMIT_BACKGROUND_SERVICE_SPANS_ENV
+    value: Final = (
+        decrypt_value_helper(stored_value, env_var, exception_type="debug", return_original_value=True)
+        if stored_value is not None
+        else os.getenv(env_var)
+    )
+    enabled: Final = parse_background_service_spans_setting(value)
+    return None if enabled is None else str(enabled).lower()
+
+
 def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict[str, object]:
     """Process a single callback and return its data with environment variables"""
     env_vars: Final = CustomLogger.get_callback_env_vars(_callback)
@@ -745,6 +764,11 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
     env_vars_dict: Final[dict[str, str | None]] = {}
     for _var in env_vars:
         stored_value = environment_variables.get(_var, None)
+        if _var == EMIT_BACKGROUND_SERVICE_SPANS_ENV:
+            env_vars_dict[_var] = _background_service_spans_callback_value(
+                stored_value if isinstance(stored_value, str) else None
+            )
+            continue
         env_vars_dict[_var] = stored_value if stored_value is not None else os.getenv(_var)
 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}

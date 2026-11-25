@@ -42,7 +42,7 @@ from litellm.llms.anthropic.messages.context_management import (
     PolyfillResult,
     apply_context_management,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import reject_malformed_tool_result_text
+from litellm.llms.anthropic.messages.convertible_blocks import reject_malformed_text
 from litellm.llms.anthropic.messages.safeguards import (
     SafeguardsEvaluator,
     build_safeguards_evaluator,
@@ -101,7 +101,7 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
-def _model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+def model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     model_info: Final = as_str_mapping(kwargs.get("model_info"))
     base_model: Final = kwargs.get("base_model")
     if not isinstance(base_model, str) or not base_model:
@@ -662,7 +662,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
         client_summary: Final = thinking.get("summary")
-        deployment_model_info: Final = _model_info_with_request_base_model(completion_kwargs)
+        deployment_model_info: Final = model_info_with_request_base_model(completion_kwargs)
         declared_base_model: Final = None if deployment_model_info is None else deployment_model_info.get("base_model")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
@@ -896,7 +896,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
-            deployment_model_info=_model_info_with_request_base_model(provider_kwargs),
+            deployment_model_info=model_info_with_request_base_model(provider_kwargs),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
             drop_params=drop_params,
             translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
@@ -1023,7 +1023,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
-        reject_malformed_tool_result_text(messages, model, request_kwargs)
+        reject_malformed_text(messages, model, request_kwargs)
         drop_invalid_edits: Final = drops_unsupported_params(request_kwargs.get("drop_params"))
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
@@ -1148,7 +1148,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             )
 
         sync_request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
-        reject_malformed_tool_result_text(messages, model, sync_request_kwargs)
+        reject_malformed_text(messages, model, sync_request_kwargs)
 
         # Run the context_management polyfill on the sync path too so that
         # ``litellm.messages.create()`` callers don't silently lose edits like

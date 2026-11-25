@@ -53,6 +53,17 @@ variable "litellm_master_key" {
   sensitive   = true
 }
 
+variable "litellm_master_key_secret_id" {
+  description = "Resource ID of an existing Secret Manager secret (projects/PROJECT/secrets/NAME) whose latest version holds the LiteLLM master key."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.litellm_master_key_secret_id == null || (can(regex("^projects/[^/]+/secrets/[^/]+$", var.litellm_master_key_secret_id)) && var.litellm_master_key == "")
+    error_message = "Use a full Secret Manager secret ID for litellm_master_key_secret_id and leave litellm_master_key empty."
+  }
+}
+
 variable "litellm_license" {
   description = <<-EOT
     LiteLLM enterprise license string. When set, the stack creates a
@@ -85,6 +96,31 @@ variable "create_runtime" {
   description = "Create Cloud Run, load balancer, VPC connector, runtime support resources, and the migration job. Set false for GKE or another external runtime."
   type        = bool
   default     = true
+}
+
+variable "runtime_service_account_email" {
+  description = "Email of an existing service account for the gateway, backend, and migration job. The caller manages its project-level IAM grants."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.runtime_service_account_email == null || can(regex("^[^@\\s]+@[^@\\s]+\\.gserviceaccount\\.com$", var.runtime_service_account_email))
+    error_message = "runtime_service_account_email must be a Google service account email."
+  }
+}
+
+variable "ui_service_account_email" {
+  description = "Email of an existing service account for the Cloud Run UI. It should have no project roles and must be separate from the runtime service account."
+  type        = string
+  default     = null
+
+  validation {
+    condition = var.ui_service_account_email == null || (
+      can(regex("^[^@\\s]+@[^@\\s]+\\.gserviceaccount\\.com$", var.ui_service_account_email)) &&
+      var.ui_service_account_email != var.runtime_service_account_email
+    )
+    error_message = "ui_service_account_email must be a Google service account email distinct from runtime_service_account_email."
+  }
 }
 
 variable "network_id" {
@@ -351,6 +387,17 @@ variable "db_username" {
   default     = "litellm_app"
 }
 
+variable "db_password_secret_id" {
+  description = "Resource ID of an existing Secret Manager secret (projects/PROJECT/secrets/NAME) whose latest version holds the password for the customer-managed Cloud SQL app user."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.db_password_secret_id == null || can(regex("^projects/[^/]+/secrets/[^/]+$", var.db_password_secret_id))
+    error_message = "db_password_secret_id must be a full Secret Manager secret ID."
+  }
+}
+
 variable "lb_domains" {
   description = <<-EOT
     DNS names for a Google-managed SSL certificate fronting the LB. When
@@ -364,6 +411,37 @@ variable "lb_domains" {
   EOT
   type        = list(string)
   default     = []
+}
+
+variable "private_ingress" {
+  description = <<-EOT
+    Configure a regional internal Application Load Balancer. For a module-created VPC, provide a dedicated proxy_subnet_cidr. For an existing VPC, provide the frontend subnetwork_id and either provide proxy_subnet_cidr or provision an active regional managed proxy-only subnet yourself. For HTTPS, provide a regional Compute Engine SSL certificate ID and set lb_domains to the private DNS names it covers.
+  EOT
+  type = object({
+    subnetwork_id      = optional(string)
+    proxy_subnet_cidr  = optional(string)
+    ssl_certificate_id = optional(string)
+  })
+  default = null
+
+  validation {
+    condition = !var.create_runtime || var.private_ingress == null ? true : (
+      var.network_id == "" ? (
+        var.private_ingress.subnetwork_id == null && var.private_ingress.proxy_subnet_cidr != null
+        ) : (
+        var.private_ingress.subnetwork_id != null
+      )
+    )
+    error_message = "Private ingress needs proxy_subnet_cidr for a module-created VPC, or subnetwork_id for an existing VPC."
+  }
+
+  validation {
+    condition = !var.create_runtime || var.private_ingress == null ? true : (
+      var.private_ingress.ssl_certificate_id != null ? length(var.lb_domains) > 0 :
+      length(var.lb_domains) == 0 && var.allow_plaintext_lb
+    )
+    error_message = "For private HTTPS ingress, set ssl_certificate_id and lb_domains. For private HTTP ingress, leave both unset and set allow_plaintext_lb = true."
+  }
 }
 
 variable "allow_plaintext_lb" {
@@ -527,6 +605,12 @@ variable "otel_environment_name" {
   default     = ""
 }
 
+variable "turn_off_message_logging" {
+  description = "Set litellm_settings.turn_off_message_logging in the proxy configuration to redact prompts and responses from LiteLLM message logging."
+  type        = bool
+  default     = false
+}
+
 variable "otel_capture_message_content" {
   description = <<-EOT
     Value for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. Default
@@ -593,6 +677,13 @@ variable "billing_metrics_endpoint" {
   EOT
   type        = string
   default     = ""
+
+  validation {
+    condition = !var.create_runtime || var.billing_metrics_endpoint == "" || (
+      var.billing_metrics_client_id != "" && var.billing_metrics_client_secret != ""
+    )
+    error_message = "billing_metrics_client_id and billing_metrics_client_secret are required when billing_metrics_endpoint is set and create_runtime is true."
+  }
 }
 
 variable "billing_metrics_client_id" {

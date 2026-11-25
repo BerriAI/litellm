@@ -676,14 +676,54 @@ class TestDailyLimits:
 
         assert served == ["a", "b", "b", "b"]
 
+    @pytest.mark.asyncio
+    async def test_router_counts_a_streamed_response_against_the_deployment_tpm(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "streamed-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-mini",
+                        "api_key": "k",
+                        "mock_response": "streamed answer",
+                        "tpm": 1,
+                    },
+                    "model_info": {"id": "streamed-deployment"},
+                },
+            ],
+            num_retries=0,
+        )
+        usage: Final = _memory_usage()
+        check: Final = _check(usage=usage, clock=Clock(DAY_ONE))
+        router.optional_callbacks = [check]
+        litellm.logging_callback_manager.add_litellm_callback(check)
+        tpm_counter: Final = UsageCounter.for_deployment(
+            "streamed-deployment", "openai/gpt-4.1-mini", "tpm", DAY_ONE.strftime("%H-%M")
+        )
+        try:
+            stream: Final = await router.acompletion(
+                model="streamed-group", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+            async for _ in stream:
+                pass
+            logged_tokens: Final = await _tokens_once_logged(usage, tpm_counter)
+            with pytest.raises(litellm.RateLimitError):
+                await router.acompletion(
+                    model="streamed-group", messages=[{"role": "user", "content": "hi"}], stream=True
+                )
+        finally:
+            router.discard()
 
-async def _tpd_tokens_once_logged(usage: RouterUsage, counter: UsageCounter) -> int:
+        assert logged_tokens >= 1
+
+
+async def _tokens_once_logged(usage: RouterUsage, counter: UsageCounter) -> int:
     for _ in range(200):
         logged: Final = usage.get_local(counter)
         if logged is not None:
             return int(logged)
         await asyncio.sleep(0.01)
-    pytest.fail(f"the success callback never logged tpd tokens under {counter}")
+    pytest.fail(f"the success callback never logged tokens under {counter}")
 
 
 RESET_AT_EIGHT = datetime(2026, 10, 28, 8, 0, 0, tzinfo=timezone.utc)
@@ -818,7 +858,7 @@ class TestDailyResetTime:
             await router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion kwargs are untyped
                 model="daily-group", messages=[{"role": "user", "content": "hi"}], daily_reset_time="08:00"
             )
-            logged = await _tpd_tokens_once_logged(
+            logged = await _tokens_once_logged(
                 usage, UsageCounter.for_deployment("daily-test-id", "openai/gpt-4.1-mini", "tpd", "2026-10-28")
             )
         finally:

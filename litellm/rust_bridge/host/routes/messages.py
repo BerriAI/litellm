@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import (
     Final,
+    NoReturn,
     TypeAlias,
     TypeVar,
     cast,  # noqa: TID251  # narrows native payloads to public TypedDicts
@@ -69,6 +70,12 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_pass_through_api_base,
     strip_provider_specific_fields_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import reject_non_string_system_text
+from litellm.llms.anthropic.messages.deferred_tools import (
+    native_messages_deferred_tools_refusal,
+    refusal_unless_dropped,
+    unknown_deferred_tools_refusal,
+)
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
@@ -91,6 +98,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 )
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
 from litellm.llms.anthropic.messages.native.utils import (
+    cleaned_native_messages,
     continues_message_thread,
     diagnostics_refusal,
     message_thread_not_found_body,
@@ -107,6 +115,7 @@ from litellm.llms.anthropic.messages.safeguards import (
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
+from litellm.llms.base_llm.auth.provider_oauth import provider_oauth_token
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped request dict
@@ -132,7 +141,12 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.integrations.custom_logger import WEBSEARCH_CONVERTED_STREAM_KEY
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
+from litellm.types.utils import (
+    CallTypes,
+    ProviderSpecificHeader,
+    anthropic_wif_litellm_params,
+    provider_oauth_litellm_params,
+)
 from litellm.utils import clamp_max_tokens, get_base_model_from_metadata
 
 _RaisedT = TypeVar("_RaisedT", bound=Exception)
@@ -140,6 +154,7 @@ _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(_native.messages_optional_params())
 
 WORKLOAD_IDENTITY_FIELDS: Final = anthropic_wif_litellm_params
+ANTHROPIC_AUTH_FIELDS: Final = (*WORKLOAD_IDENTITY_FIELDS, *provider_oauth_litellm_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +320,28 @@ def _refuse_unsupported_thread(request: Mapping[str, object], asynchronous: bool
     if refusal is None:
         return
     _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    _raise_provider_refusal(refusal, request, provider)
+
+
+def _refuse_unusable_deferred_tools(request: Mapping[str, object], asynchronous: bool) -> None:
+    """Python's handler refuses a model_info.deferred_tools it cannot apply, or ignores it under drop_params."""
+    model_info: Final = request.get("model_info")
+    if (as_str_mapping(model_info) or {}).get("deferred_tools") is None:
+        return
+    drop_params: Final = drops_unsupported_params(request.get("drop_params"))
+    provider, config = _messages_config(request)
+    refusal: Final = refusal_unless_dropped(
+        unknown_deferred_tools_refusal(model_info)
+        or (None if config is None else native_messages_deferred_tools_refusal(model_info, provider)),
+        drop_params,
+    )
+    if refusal is None:
+        return
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    _raise_provider_refusal(AnthropicError(status_code=400, message=refusal), request, provider)
+
+
+def _raise_provider_refusal(refusal: AnthropicError, request: Mapping[str, object], provider: str) -> NoReturn:
     try:
         raise refusal
     except AnthropicError as provider_error:
@@ -684,6 +721,7 @@ def python_stream_types(head: object, kwargs: dict[str, object]) -> None:  # mut
     head.python_types = True  # rebind-ok: the head carries it back
     if not isinstance(logger, LiteLLMLoggingObj):
         return
+    head.logger = logger  # rebind-ok: the head carries it back
     hit: Final = cache.stream_hit(logger)
     if hit is None:
         head.cache_writer = functools.partial(cache.stream_writer, logger)  # rebind-ok: the head carries it back
@@ -749,6 +787,10 @@ _MISSING_KEY: Final = (
 
 def _rejection(error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool) -> Exception:
     """The error Python's handler raises for a request it refuses before sending it."""
+    if getattr(error, "messages_unresolved_rejection", False):
+        return _raised(
+            litellm.BadRequestError(message=str(error), model=str(request["model"]), llm_provider=request_provider)
+        )
     metadata: Final = request.get("metadata")
     if isinstance(metadata, dict):
         try:
@@ -1502,6 +1544,7 @@ def settings(
     if call_settings.mock_response is None and not call_settings.mcp_gateway:
         _refuse_unsupported_thread(request, asynchronous)
         _refuse_unsupported_diagnostics(request, asynchronous)
+        _refuse_unusable_deferred_tools(request, asynchronous)
     return asdict(call_settings)
 
 
@@ -1526,6 +1569,18 @@ class _Answered:
 
 
 def sync_answer(request: Mapping[str, object]) -> _Answered | None:
+    _ = cleaned_native_messages(
+        optional_sequence(request.get("messages")) or (),
+        request.get("drop_params"),
+        model=str(request["model"]),
+        custom_llm_provider=optional_str(request.get("custom_llm_provider")),
+    )
+    reject_non_string_system_text(
+        request.get("system"),
+        request.get("drop_params"),
+        str(request["model"]),
+        optional_str(request.get("custom_llm_provider")),
+    )
     logger: Final = request.get("litellm_logging_obj")
     mock: Final = _mock(request, logger, asynchronous=False)
     if mock is not None:
@@ -1936,6 +1991,10 @@ def workload_identity_token(params: Mapping[str, object], api_base: str | None) 
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")
 
 
+def client_credentials_token(params: Mapping[str, object], api_base: str | None, model: str) -> str | None:
+    return provider_oauth_token(params, api_base=api_base, provider="anthropic", model=model)
+
+
 class RawTransportFailure(Exception):
     def __init__(self, error: Exception) -> None:
         super().__init__(str(error))
@@ -2278,6 +2337,7 @@ def _agentic_stream(stream: AsyncStream, call: _AgenticCall, held: frozenset[str
             AnthropicMessagesStreamHiddenParams,
             stream._hidden_params,  # pyright: ignore[reportPrivateUsage]  # the native stream's own hidden params
         ),
+        litellm_logging_obj=call.logger,
     )
 
 

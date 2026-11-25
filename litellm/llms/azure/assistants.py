@@ -234,7 +234,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
     def add_message(
         self,
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         api_version: str | None,
@@ -251,7 +251,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
     def add_message(
         self,
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         api_version: str | None,

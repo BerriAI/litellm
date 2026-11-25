@@ -625,6 +625,8 @@ def _metadata_member(metadata: object, name: str) -> object:
 
 
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    from litellm.proxy.auth.auth_utils import team_models_counting_cached_tokens
+
     if auth is None:
         return MappingProxyType({})
     budgets: Final = _entries(_member(auth, "model_max_budget"))
@@ -637,6 +639,7 @@ def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
         else None,
         "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
         "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(_member(auth, "team_metadata")),
         "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
         "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
         "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),

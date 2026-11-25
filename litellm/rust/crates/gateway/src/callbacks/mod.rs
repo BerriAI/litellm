@@ -6,12 +6,15 @@
 //! yet is never told.
 
 mod fields;
+pub mod hosted;
 pub mod model_capacity;
 pub mod parallel_request_limiter;
+pub mod spend_log;
+mod spend_log_input;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use litellm_callbacks::{
     Abort, Callback, CallbackError, ErasedCallback, Hook, ManifestError, RequestState,
     Subscription, Verdict, Violation,
@@ -20,11 +23,12 @@ use litellm_error::{Report, Source};
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_inference::{
     CallHooks, HookError, Refusal, ServedCall,
-    record::{self, Entries},
+    record::{self, CallState, Charged},
 };
 use serde_json::{Map, Value};
 use strum::VariantArray;
 
+use self::hosted::Answers;
 use crate::host::NativeRows;
 
 /// A hook the gateway runs for a call.
@@ -103,9 +107,19 @@ pub struct Registered {
     /// For a callback that keeps something of each request's caller, as Python's hooks are
     /// handed the caller's `UserAPIKeyAuth`. `None` takes the callback's own `request_state`.
     from_caller: Option<FromCaller>,
+    /// What answers the callback's host calls, for a callback that makes them.
+    host: Option<Arc<dyn Answers>>,
 }
 
 impl Registered {
+    pub fn hosted(callback: Arc<dyn ErasedCallback>, host: Arc<dyn Answers>) -> Self {
+        Self {
+            callback,
+            from_caller: None,
+            host: Some(host),
+        }
+    }
+
     /// `callback`, with its state for each request made from that request's caller.
     pub fn for_caller<C: Callback>(
         callback: Arc<C>,
@@ -114,6 +128,7 @@ impl Registered {
         Self {
             callback,
             from_caller: Some(Box::new(move |identity| Arc::new(state(identity)))),
+            host: None,
         }
     }
 }
@@ -123,6 +138,7 @@ impl From<Arc<dyn ErasedCallback>> for Registered {
         Self {
             callback,
             from_caller: None,
+            host: None,
         }
     }
 }
@@ -163,6 +179,7 @@ impl Callbacks {
 
     pub(crate) fn begin(self: &Arc<Self>, identity: &Authenticated<NativeRows>) -> Call {
         Call {
+            charged: fields::charged(identity),
             states: self
                 .callbacks
                 .iter()
@@ -180,6 +197,8 @@ impl Callbacks {
 /// its record, which one callback's patch changes for the callbacks after it.
 pub struct Call {
     callbacks: Arc<Callbacks>,
+    /// Who the call is charged to, written to its record with the body the pre-call hook holds.
+    charged: Charged,
     /// By each callback's place in `callbacks`.
     states: Vec<Option<RequestState>>,
 }
@@ -200,18 +219,18 @@ fn refusal(abort: Abort) -> Refusal {
     }
 }
 
-fn header(name: &str, value: &Value) -> Option<(HeaderName, HeaderValue)> {
-    let value = match value {
-        Value::String(text) => HeaderValue::try_from(text.as_str()),
-        other => HeaderValue::try_from(other.to_string()),
-    };
-    Some((HeaderName::try_from(name).ok()?, value.ok()?))
-}
-
 impl Call {
     /// Runs the hook of `point` over the callbacks subscribed to it, in order. On a hook that
-    /// decides, the first to abort or fail ends it and the call.
+    /// decides, the first to abort or fail ends it and the call. The time the hook took is added
+    /// to the call's callback time.
     async fn run(&self, point: Point) -> Result<(), HookError> {
+        let began = Instant::now();
+        let ran = self.run_turns(point).await;
+        record::write(|entries| entries.callback_time += began.elapsed());
+        ran
+    }
+
+    async fn run_turns(&self, point: Point) -> Result<(), HookError> {
         let hook = point.hook();
         for (registered, state) in self.callbacks.callbacks.iter().zip(&self.states) {
             let callback = &registered.callback;
@@ -220,7 +239,7 @@ impl Call {
                 continue;
             };
             let name = &manifest.selection.name;
-            let turn = self.turn(callback.as_ref(), name, subscription, state.as_ref());
+            let turn = self.turn(registered, name, subscription, state.as_ref());
             let ended = match turn.await {
                 Ok(None) => continue,
                 Ok(Some(abort)) => HookError::Refused(refusal(abort)),
@@ -245,7 +264,7 @@ impl Call {
     /// its patch is written for the callbacks after it, and its abort is handed back.
     async fn turn(
         &self,
-        callback: &dyn ErasedCallback,
+        registered: &Registered,
         name: &str,
         subscription: &Subscription,
         state: Option<&RequestState>,
@@ -253,7 +272,14 @@ impl Call {
         let hook = subscription.hook;
         let input = record::read(|entries| fields::input(entries, hook, subscription.reads))
             .ok_or(Cause::NoRecord)?;
-        let Some(verdict) = callback.handle(&input, state).await? else {
+        let output = match &registered.host {
+            Some(host) => {
+                let callback = registered.callback.clone();
+                hosted::turn(callback, input, state.cloned(), host.as_ref()).await
+            }
+            None => registered.callback.handle(&input, state).await,
+        };
+        let Some(verdict) = output? else {
             return Ok(None);
         };
         subscription.check(&verdict)?;
@@ -277,14 +303,18 @@ impl CallHooks for Call {
     async fn pre_call(&self, body: Map<String, Value>) -> Result<Map<String, Value>, HookError> {
         let mut unheld = Some(body);
         record::write(|entries| {
+            entries.charged = self.charged.clone();
             if let Some(body) = unheld.take() {
                 entries.hold(body);
             }
         });
         let ran = self.run(Point::PreCall).await;
-        let body = record::write(Entries::release)
+        let body = record::write(CallState::release)
             .or(unheld)
             .unwrap_or_default();
+        if ran.is_ok() {
+            record::write(|entries| entries.api_call_start = Some(std::time::SystemTime::now()));
+        }
         ran.map(|()| body)
     }
 
@@ -292,16 +322,8 @@ impl CallHooks for Call {
         self.run(Point::PostCallSuccess).await
     }
 
-    async fn response_headers(&self) -> HeaderMap {
+    async fn response_headers(&self) {
         let _ = self.run(Point::ResponseHeaders).await;
-        record::read(|entries| {
-            entries
-                .response_headers()
-                .iter()
-                .filter_map(|(name, value)| header(name, value))
-                .collect()
-        })
-        .unwrap_or_default()
     }
 
     async fn succeeded(&self, served: ServedCall) {
@@ -310,7 +332,7 @@ impl CallHooks for Call {
     }
 
     async fn failed(&self) {
-        record::write(Entries::fail);
+        record::write(CallState::fail);
         let _ = self.run(Point::PostCallFailure).await;
         let _ = self.run(Point::AttemptEnded).await;
     }
@@ -460,7 +482,10 @@ mod tests {
     fn served() -> ServedCall {
         ServedCall {
             model_group: "claude".to_owned(),
+            deployment: None,
+            response_id: None,
             usage: None,
+            first_event: None,
         }
     }
 
@@ -658,22 +683,6 @@ mod tests {
                 name: "wrong".to_owned(),
                 hook: Hook::PostCallFailure
             })
-        );
-    }
-
-    #[rstest]
-    #[case::text("x-a", json!("one"), Some("one"))]
-    #[case::a_number_as_python_formats_it("x-a", json!(7), Some("7"))]
-    #[case::a_name_no_header_can_have("x a", json!("one"), None)]
-    fn a_header_a_callback_adds_goes_out_as_text(
-        #[case] name: &str,
-        #[case] value: Value,
-        #[case] sent: Option<&str>,
-    ) {
-        let header = header(name, &value);
-        assert_eq!(
-            header.as_ref().and_then(|(_, value)| value.to_str().ok()),
-            sent
         );
     }
 }

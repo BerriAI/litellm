@@ -2191,8 +2191,13 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
             {
                 "model_name": "claude-haiku-4-5",
                 "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-test"},
-            }
-        ]
+            },
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "sk-test"},
+            },
+        ],
+        fallbacks=[{"claude-haiku-4-5": ["claude-sonnet-5"]}],
     )
     provider_response = AnthropicMessagesStreamingResponse(
         completion_stream=held_back, hidden_params={"additional_headers": {}}
