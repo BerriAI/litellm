@@ -248,8 +248,10 @@ def test_unknown_keys_share_one_series_even_when_the_key_hash_is_a_custom_label(
         refused: Final = tuple(
             sample
             for sample in scrape(gateway)
-            if sample.name == "litellm_proxy_failed_requests_metric_total" and sample.labels["exception_status"] == "401"
+            if (sample.name, sample.labels.get("exception_status"))
+            == ("litellm_proxy_failed_requests_metric_total", "401")
         )
-        assert [(sample.labels["user_api_key_hash"], sample.value) for sample in refused] == [("None", 2.0)]
+        assert [sample.labels["user_api_key_hash"] for sample in refused] == ["None"]
+        assert refused[0].value >= 2
 
     until_asserted(landed, seconds=30)

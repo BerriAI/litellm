@@ -486,7 +486,11 @@ async def test_request_metrics_carry_the_routing_decision_of_an_auto_routed_call
             {
                 "standard_logging_object": {
                     "metadata": {
-                        "routing_decision": {"tier": "SIMPLE", "cause": "heuristic_scorer", "routed_model": "tier-down"},
+                        "routing_decision": {
+                            "tier": "SIMPLE",
+                            "cause": "heuristic_scorer",
+                            "routed_model": "tier-down",
+                        },
                         "spend_logs_metadata": {"nested": {"caller": "from-header"}},
                     }
                 }
@@ -527,7 +531,10 @@ async def test_proxy_failure_metrics_take_custom_labels_only_from_the_logged_pay
 
 @pytest.mark.parametrize(
     ("status_code", "expected"),
-    [pytest.param(401, ("None", "expired-alias"), id="401"), pytest.param(429, ("bad-key-hash", "expired-alias"), id="429")],
+    [
+        pytest.param(401, ("None", "expired-alias"), id="401"),
+        pytest.param(429, ("bad-key-hash", "expired-alias"), id="429"),
+    ],
 )
 @pytest.mark.asyncio
 async def test_proxy_failure_metrics_never_label_a_401_with_the_key_hash(
