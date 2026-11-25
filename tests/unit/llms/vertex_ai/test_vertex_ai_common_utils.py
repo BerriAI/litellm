@@ -222,6 +222,25 @@ async def test_vertex_gemini_count_rejects_a_non_string_tool_result_text_without
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_vertex_gemini_count_rejects_a_non_string_user_text_without_request(text: JsonValue) -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": text}]}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message == "messages.0.content.1.text: Input should be a valid string"
+    assert peer.requests == ()
+
+
+@pytest.mark.asyncio
 async def test_vertex_gemini_count_leaves_out_a_numeric_tool_result_text_when_the_deployment_drops_params() -> None:
     with _vertex_count_tokens_peer(200) as peer:
         result: Final = await VertexAITokenCounter().count_tokens(

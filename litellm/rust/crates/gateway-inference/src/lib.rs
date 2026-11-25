@@ -4,13 +4,17 @@
 //! `litellm-router-core` (pick, retries, fallbacks, cooldowns), runs the core route on each
 //! attempt, and tells the host's callback hooks what happened to the call (`hooks.rs`).
 
+mod asked;
 mod caching;
 mod error;
+mod group_usage;
 mod headers;
 mod hooks;
 pub mod messages;
 mod model_restamp;
 mod ocr;
+mod rate_limited;
+pub mod record;
 mod request;
 pub mod routing;
 mod routing_cache;
@@ -18,6 +22,9 @@ mod serve;
 mod stream_event;
 mod stream_hold;
 mod stream_outcome;
+#[cfg(test)]
+mod test_support;
+mod worker_outcomes;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -29,10 +36,13 @@ use litellm_inference_ocr::OcrRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
+pub use asked::call_type;
 pub use error::{BodyError, Ended, Error};
+pub use group_usage::{GroupLimits, group_limits};
 pub use headers::ExposedHeader;
 pub use hooks::{CallHooks, CallType, HookError, Refusal, ServedCall};
 pub use litellm_redis_store::RouterTiers;
+pub use rate_limited::RateLimited;
 pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
 pub use routing_cache::RoutingCache;
@@ -64,6 +74,16 @@ impl<H: Host> Gateway<H> {
         &self.routing
     }
 
+    /// The routing state itself, so a gateway built for a new config keeps the cooldowns, usage and
+    /// health this one counted.
+    pub fn shared_routing(&self) -> Arc<RoutingCache> {
+        self.routing.clone()
+    }
+
+    pub fn host(&self) -> &H {
+        &self.host
+    }
+
     /// How the messages route shapes a call to deployment `id`.
     pub(crate) fn shaping(&self, id: &str) -> MessagesShaping {
         self.shaping.get(id).cloned().unwrap_or_default()
@@ -75,7 +95,7 @@ impl<H: Host> Gateway<H> {
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
         shaping: HashMap<String, MessagesShaping>,
-        routing: RoutingCache,
+        routing: impl Into<Arc<RoutingCache>>,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
@@ -83,7 +103,7 @@ impl<H: Host> Gateway<H> {
         Ok(Self {
             host,
             cache: None,
-            routing: Arc::new(routing),
+            routing: routing.into(),
             shaping,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
@@ -111,5 +131,10 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             request::MAX_BODY_BYTES,
         ))
         .layer(headers::layer())
+        .layer(axum::middleware::from_fn_with_state(
+            gateway.clone(),
+            group_usage::told::<H>,
+        ))
+        .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }

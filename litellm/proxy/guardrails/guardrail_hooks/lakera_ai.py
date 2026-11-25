@@ -17,6 +17,7 @@ from typing import Final, Literal
 import httpx
 from fastapi import HTTPException
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +51,10 @@ INPUT_POSITIONING_MAP: Final = {
 }
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class lakeraAI_Moderation(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -64,15 +69,18 @@ class lakeraAI_Moderation(CustomGuardrail):
         category_thresholds: LakeraCategoryThresholds | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        options: Final[_CustomGuardrailOptions] = {
+            **kwargs,
+            "supported_event_hooks": kwargs.get("supported_event_hooks", list(self.get_supported_event_hooks())),
+        }
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.moderation_check = moderation_check
         self.category_thresholds = category_thresholds
         self.api_base = api_base or get_secret("LAKERA_API_BASE") or "https://api.lakera.ai"
-        super().__init__(**kwargs)
+        super().__init__(**options)
 
     #### CALL HOOKS - proxy only ####
     def _check_response_flagged(self, response: Mapping) -> None:
@@ -118,7 +126,7 @@ class lakeraAI_Moderation(CustomGuardrail):
 
     async def _check(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -161,7 +169,9 @@ class lakeraAI_Moderation(CustomGuardrail):
                         stringified_roles.append(role.value)
                     elif isinstance(role, str):
                         stringified_roles.append(role)
-            lakera_input_dict: Final[dict] = {role: None for role in INPUT_POSITIONING_MAP}
+            lakera_input_dict: Final[dict[str, dict[str, object] | None]] = {
+                role: None for role in INPUT_POSITIONING_MAP
+            }
             system_message = None
             tool_call_messages: list = []
             for message in data["messages"]:
@@ -295,7 +305,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -308,7 +318,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         from litellm.types.guardrails import GuardrailEventHooks
 
         if self.event_hook is None:
@@ -325,7 +335,7 @@ class lakeraAI_Moderation(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",

@@ -879,6 +879,9 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     TOOL_SEARCH_TOOL = "tool_search_tool"
 
 
+ANTHROPIC_UNRENDERED_BLOCK_TYPES: Final = frozenset({"fallback"})
+
+
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
@@ -895,6 +898,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
+    SERVER_SIDE_FALLBACK_2026_06_01 = "server-side-fallback-2026-06-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
     MCP_CLIENT_2025_04_04 = "mcp-client-2025-04-04"
     MESSAGE_THREADS_2026_08_12 = "message-threads-2026-08-12"

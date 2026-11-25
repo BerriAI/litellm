@@ -1,6 +1,6 @@
 import asyncio
 import contextvars
-from collections.abc import Awaitable, Coroutine
+from collections.abc import Awaitable, Coroutine, Mapping
 from functools import partial
 from typing import Final, Literal
 
@@ -49,6 +49,13 @@ async def arerank(
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run in the background and may still be pending when this coroutine
+    returns, so a ledger or exporter written from a callback may be incomplete at that point. A caller
+    that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     _custom_llm_provider: str | None = None
     try:
@@ -124,13 +131,20 @@ def rerank(
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run on a background logging thread and may still be pending when
+    this function returns, so a ledger or exporter written from a callback may be incomplete at that point.
+    A caller that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     # `instruction` is read from kwargs rather than declared as a named param.
     # The router forwards rerank calls via an untyped `**kwargs` unpack, and a
     # typed named param there would trip the basedpyright budget gate without
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
     instruction: Final[str | None] = kwargs.get("instruction", None)
-    headers: Final[dict | None] = kwargs.get("headers")
+    headers: Final[Mapping[str, object] | None] = kwargs.get("headers")
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
@@ -167,7 +181,7 @@ def rerank(
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Final[dict] = get_optional_rerank_params(
+        optional_rerank_params: Final[dict[str, object]] = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,

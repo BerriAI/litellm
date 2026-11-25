@@ -1,0 +1,131 @@
+{
+  "salt_key": "sk-at-rest-fixture-salt-key",
+  "cases": [
+    {
+      "name": "legacy_api_key",
+      "stored": "CEyme-YnpeqJOWu-wrNQ5sP-2rEuJDEoOKrL1SSPQHX-opEwTAj86xDoYXjRWUaRiJIeiqzmlub2XbUdKD1mpw==",
+      "decrypted": "sk-proj-credential-value",
+      "or_original": "sk-proj-credential-value"
+    },
+    {
+      "name": "legacy_empty",
+      "stored": "q2uzgbHtT166_EDgzl4nwgI4FQjlEhhwX3XVgBlEOLaJKFDSrjzTrQ==",
+      "decrypted": "",
+      "or_original": ""
+    },
+    {
+      "name": "legacy_unicode",
+      "stored": "kZCSt4Aeai0uPMEQSz45yhCJiv1QtGtXAuO10J_F8FFSr4u8YvMd5zhrkpjiqPedUtV7Klu9Eh6cCFAnFg==",
+      "decrypted": "clé secrète ✓ 鍵",
+      "or_original": "clé secrète ✓ 鍵"
+    },
+    {
+      "name": "legacy_long",
+      "stored": "FIv0tgrQFl5QwOtaxeRRL6f2fefxJMdb0b4kMwVU9c5pNP7S6BEEIQtP7DZFVL6gIr-CRcGfTjqkLUtcX22SEKbUf4vTHUfKhjvZVd7KFQeCiG5kG4TLUad47WwLZ4xJbmQ-6Hh94ePcvRx2saNMRYGvA1njsjNaLH7UrbONtjf9FeQmPYw4hBa7auWqSEqGTABvwydWFlnswEYo8h1i5WFvb1uLURmsVbTTIzEcvPkt5eD_sBOovDmD1FyN604f1wcKytqhZVDvvyHBad6UWG5sWFD4Ov3hvJQTJRyfRlhvz2bhcgvsj9ndIzYXD_dkhJ-XOdAZdmdOothO-_RCOmu1ui-SNF9WkcnhFp_5aX1EqLF85T2Bfj0vbWeMf8uEYiggTcTKNCt8e_jcJn_Xi0Kp86j5y3d1WP4krdLyb6qYg2fPays_ORk0vIlAJqkYPd-3lVZGMfYkqtHVMcvzk6mYys8MnTD4JT3pVGeRTfCPVmcpW4vYQb_Nu97zCO9-myrZQpukkiLUOQxXyesV8J0=",
+      "decrypted": "https://example-resource.openai.azure.com/openai/deployments/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "or_original": "https://example-resource.openai.azure.com/openai/deployments/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "gcm_api_key",
+      "stored": "v2:gcm:dwsixBErelgMnMRd30f3h5nHPzAzxmMdRb_et1BcPuAKVV_3BMQwENpxUlHfMZcnHB9yuA==",
+      "decrypted": "sk-proj-credential-value",
+      "or_original": "sk-proj-credential-value"
+    },
+    {
+      "name": "gcm_empty",
+      "stored": "v2:gcm:XpxX5Z2MSu1u1CZ5IG4IOep8UZFi-9k4Pmn7GA==",
+      "decrypted": "",
+      "or_original": ""
+    },
+    {
+      "name": "gcm_unicode",
+      "stored": "v2:gcm:VKzDA4cepJmDojcoCpjrXVEXxXyqKUmoSBfuxiy47MOK824MPxQDVDz58Ovy6iWmcg==",
+      "decrypted": "clé secrète ✓ 鍵",
+      "or_original": "clé secrète ✓ 鍵"
+    },
+    {
+      "name": "gcm_long",
+      "stored": "v2:gcm:OAxCIInRJykuV_OwRU6BE0G3HKQ4bz0tZUFWxff2NoS3xSHyJVAgHAaKamCy1kwQWEw38WVChKY6-eD6FVflWhOeLUrgJg-UJLO0jCVuR-5OoXVCcpEaY5Fag80hW0U9Y9Ch40wLS7QWOLKX789tatjOLznrZwJnsd3F0_ztnkTJ1XXFB164fyy4VZRwTC3-EGnBSZwFtx2RYoRTKuBNtxfClkICvDTSGt4jfgEbKlIj6H1IZK6zXzNqs0UqDlhvGapkk2Nch0Jag3LiuJUEGFAGWG-VdpzDySGu3rFJu3u2S2p1FT8hRGe2ujpAjIBidITEmNZ9Bdh5OFfIHsSc3nxLU7A7KG54rRCjpAgjgh1MddxaK4DBfnhemkPN69EhygbATHSb9WRTcN2mPw48R0E7yG6bIrmlI-Y6CBuV2OSzlYjVqrNRvQO9qQZIB77mvQmH2S40j1NwqtwRzZUfkalr8oEr2hEWRyEQDlsg99tS2yJXWIQTw9CXj8pNJwqKi2YAPms=",
+      "decrypted": "https://example-resource.openai.azure.com/openai/deployments/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "or_original": "https://example-resource.openai.azure.com/openai/deployments/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "legacy_standard_alphabet",
+      "stored": "l6dM3Qr2nHKre3orugEFkQtzLwNIl6vVEId/nQiKsilSJStM7of/b9CLCDxUkg3ORgDryENB7RDO8RzpmLs3Gw==",
+      "decrypted": "sk-proj-credential-value",
+      "or_original": "sk-proj-credential-value"
+    },
+    {
+      "name": "legacy_wrong_key",
+      "stored": "cN1V_fEFy4pt0UmGgmJ_VILrgw3wPl_JcS8X2f8aY012BYW9EPsZfgxedgFEhdnosJuEAhd2FTjEB-kGanTlSw==",
+      "decrypted": null,
+      "or_original": "cN1V_fEFy4pt0UmGgmJ_VILrgw3wPl_JcS8X2f8aY012BYW9EPsZfgxedgFEhdnosJuEAhd2FTjEB-kGanTlSw=="
+    },
+    {
+      "name": "gcm_wrong_key",
+      "stored": "v2:gcm:aUGZwg3xs8I6bshVddBG3YBrONXxEKW580VzOWN9wynB2JG945LEXKErBMuG0NNRCnrY3w==",
+      "decrypted": null,
+      "or_original": "v2:gcm:aUGZwg3xs8I6bshVddBG3YBrONXxEKW580VzOWN9wynB2JG945LEXKErBMuG0NNRCnrY3w=="
+    },
+    {
+      "name": "legacy_tampered",
+      "stored": "_9rHvw-ivj8h7jcR49y-xm12gO4Aqvant0je__FEO5aP8LENtY1T7oyveHQo-g56d1PRLEbrIaEDTdKBjqlz7w==",
+      "decrypted": null,
+      "or_original": "_9rHvw-ivj8h7jcR49y-xm12gO4Aqvant0je__FEO5aP8LENtY1T7oyveHQo-g56d1PRLEbrIaEDTdKBjqlz7w=="
+    },
+    {
+      "name": "gcm_tampered",
+      "stored": "v2:gcm:GvBuqkdNHRivySnu3M62znKDchZ_6AaBtnjXWRCXUiukaXOBTCdPe6clEFvcADK5cat8BQ==",
+      "decrypted": null,
+      "or_original": "v2:gcm:GvBuqkdNHRivySnu3M62znKDchZ_6AaBtnjXWRCXUiukaXOBTCdPe6clEFvcADK5cat8BQ=="
+    },
+    {
+      "name": "gcm_truncated",
+      "stored": "v2:gcm:AAAAAAAAAAA=",
+      "decrypted": null,
+      "or_original": "v2:gcm:AAAAAAAAAAA="
+    },
+    {
+      "name": "gcm_not_base64",
+      "stored": "v2:gcm:not base64!",
+      "decrypted": null,
+      "or_original": "v2:gcm:not base64!"
+    },
+    {
+      "name": "plain_model_name",
+      "stored": "azure/gpt-4o",
+      "decrypted": null,
+      "or_original": "azure/gpt-4o"
+    },
+    {
+      "name": "plain_url",
+      "stored": "https://api.openai.com/v1",
+      "decrypted": null,
+      "or_original": "https://api.openai.com/v1"
+    },
+    {
+      "name": "plain_env_reference",
+      "stored": "os.environ/OPENAI_API_KEY",
+      "decrypted": null,
+      "or_original": "os.environ/OPENAI_API_KEY"
+    },
+    {
+      "name": "plain_base64_alphabet",
+      "stored": "abcd",
+      "decrypted": null,
+      "or_original": "abcd"
+    },
+    {
+      "name": "plain_unicode",
+      "stored": "héllo",
+      "decrypted": null,
+      "or_original": "héllo"
+    },
+    {
+      "name": "plain_empty",
+      "stored": "",
+      "decrypted": "",
+      "or_original": ""
+    }
+  ]
+}

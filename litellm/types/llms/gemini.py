@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from enum import Enum
-from typing import Literal
+from typing import Final, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -11,6 +11,8 @@ from .vertex_ai import (
     Tools,
     UsageMetadata,
 )
+
+GEMINI_SEARCH_TOOL_ID_PREFIX: Final = "gsearch_"
 
 
 class GeminiFilesState(Enum):
