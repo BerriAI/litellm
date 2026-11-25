@@ -478,9 +478,7 @@ def _raw_refusal_choice(item: object, index: int) -> "Choices | None":
     fields: Final = as_str_mapping(item.model_dump() if isinstance(item, BaseModel) else item)
     if fields is None or fields.get("type") != "message":
         return None
-    parts: Final = tuple(as_object_list(fields.get("content")) or ())
-    if any(_json_field(part, "type") == "output_text" for part in parts):
-        return None
+    parts: Final = as_object_list(fields.get("content")) or ()
     refusal: Final = next((text for part in parts if (text := _raw_refusal_text(part)) is not None), None)
     if refusal is None:
         return None
@@ -1810,8 +1808,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     tool_call_index += 1
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
-                    if choice is None and enable_raw_refusal_fallback and not structured_output:
-                        choice = _raw_refusal_choice(output_item, index)
+                    choice = (
+                        _raw_refusal_choice(output_item, index)
+                        if choice is None and enable_raw_refusal_fallback and not structured_output
+                        else choice
+                    )
                     if choice is not None:
                         choices.append(choice)
             else:
@@ -1826,8 +1827,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and handle_raw_dict_callback is not None
             else None
         )
-        if structured_refusal is not None:
-            choices.append(structured_refusal)
+        choices.extend((structured_refusal,) if structured_refusal is not None else ())
 
         tool_search_items: Final = _tool_search_items_from_output_items(output_items)
         if not choices and not accumulated_tool_calls:
