@@ -598,6 +598,14 @@ def _published_direction(
     )
 
 
+def registered_model_info(model_id: str) -> ModelInfo:
+    """``get_model_info`` for a key the router registered, under the provider it was registered with, since a
+    deployment id can also be another provider's built-in model name that the lookup would otherwise infer."""
+    registered: Final = litellm.model_cost.get(model_id)
+    provider: Final = registered.get("litellm_provider") if isinstance(registered, dict) else None
+    return litellm.get_model_info(model=model_id, custom_llm_provider=provider if isinstance(provider, str) else None)
+
+
 def deployment_pricing_model_info(model_id: str | None, deployment_model: str | None) -> ModelInfo | None:
     """Pricing the router registered under this deployment's model_info.id.
 
@@ -622,12 +630,8 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     registered: Final = litellm.model_cost.get(model_id)
     if not isinstance(registered, dict) or not any(registered.get(key) is not None for key in _DEPLOYMENT_PRICING_KEYS):
         return None
-    registered_provider: Final = registered.get("litellm_provider")
     try:
-        merged: Final = litellm.get_model_info(
-            model=model_id,
-            custom_llm_provider=registered_provider if isinstance(registered_provider, str) else None,
-        ).copy()
+        merged: Final = registered_model_info(model_id).copy()
     except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
         return None
     published: Final = _published_pricing(deployment_model)

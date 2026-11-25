@@ -12506,16 +12506,15 @@ def test_deployment_pricing_model_info_honors_a_200k_tier_batch_override(
 
 
 def test_deployment_pricing_model_info_keeps_custom_pricing_when_the_id_is_another_providers_builtin_model(
-    _published_batch_model: None,
+    _published_batch_model: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm import Router
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
 
-    anthropic_model_id: Final = next(
-        key
-        for key, entry in litellm.model_cost.items()
-        if entry.get("litellm_provider") == "anthropic" and "/" not in key
-    )
+    anthropic_model_id: Final = "pinned-anthropic-model"
+    monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, anthropic_model_id})
+    assert get_llm_provider(anthropic_model_id)[1] == "anthropic", "the id alone must read as an anthropic model"
     declared_rates: Final = MappingProxyType(
         {
             "input_cost_per_token": 2.775e-06,
@@ -12524,7 +12523,6 @@ def test_deployment_pricing_model_info_keeps_custom_pricing_when_the_id_is_anoth
             "output_cost_per_token_batches": 6.9375e-06,
         }
     )
-    litellm.get_model_info.cache_clear()
     Router(
         model_list=[
             {

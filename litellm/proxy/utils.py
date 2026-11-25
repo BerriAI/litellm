@@ -208,6 +208,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
     deployment_pricing_model_info,
+    registered_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -1718,7 +1719,7 @@ def _input_cost_per_query(
 
 def _cost_per_query(model_cost_key: str) -> float | None:
     try:
-        model_info: Final = litellm.get_model_info(model=model_cost_key)
+        model_info: Final = registered_model_info(model_cost_key)
     except Exception:  # noqa: BLE001  # get_model_info raises for a key the cost map does not know
         return None
     return model_info.get("input_cost_per_query")

@@ -2986,6 +2986,25 @@ def test_a_failed_rerank_on_a_deployment_priced_per_token_bills_the_estimated_to
     assert _rerank_failure_input_cost("dep-rerank-own-token-rate") == pytest.approx(40 * 0.001)
 
 
+def test_a_failed_rerank_bills_its_deployments_per_query_rate_when_the_id_is_another_providers_model(monkeypatch):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, "pinned-anthropic-rerank"})
+    assert get_llm_provider("pinned-anthropic-rerank")[1] == "anthropic", "the id alone must read as an anthropic model"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-rerank",
+                "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", "input_cost_per_query": 0.5},
+                "model_info": {"id": "pinned-anthropic-rerank", "litellm_provider": "cohere"},
+            }
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+
+    assert _rerank_failure_input_cost("pinned-anthropic-rerank") == pytest.approx(0.5)
+
+
 def _failed_rerank_prompt_tokens(query: str, documents: list[object]) -> int:
     from litellm.proxy.utils import _estimated_prompt_usage
     from litellm.types.utils import CallTypes
