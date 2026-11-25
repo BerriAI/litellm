@@ -8,16 +8,16 @@ import asyncio
 import copy
 import json
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-from typing import Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, require_attributes
 from litellm.proxy._types import (
     AddTeamCallback,
     LiteLLM_AuditLogs,
@@ -59,9 +59,13 @@ from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  #
     _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     refresh_cached_team,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import OTEL_DESTINATION_VARS
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -72,6 +76,34 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 def _decrypted_metadata(metadata: object) -> Mapping[str, object]:
     return as_str_mapping(_DECODED_JSON.validate_python(decrypt_callback_vars(metadata))) or {}
+
+
+class _TeamMetadata(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _TeamRow(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+async def _find_team_row(prisma_client: "PrismaClient", team_id: str) -> _TeamRow | None:
+    found: Final[object] = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
+    if found is None:
+        return None
+    return require_attributes(found, _TeamRow, "model_dump", "metadata")
+
+
+def _metadata_of(team_row: _TeamRow) -> _TeamMetadata:
+    return require_attributes(team_row.metadata, _TeamMetadata, "get", "keys", "__getitem__", "__setitem__")
 
 
 def _callback_config_error(message: str) -> HTTPException:
@@ -229,16 +261,19 @@ async def _emit_team_callback_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                object_id=team_id,
-                action="updated",
-                updated_values=json.dumps({"metadata": redacted_after}, default=str),
-                before_value=json.dumps({"metadata": redacted_before}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team_id,
+                    action="updated",
+                    updated_values=json.dumps({"metadata": redacted_after}, default=str),
+                    before_value=json.dumps({"metadata": redacted_before}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )
@@ -302,7 +337,10 @@ async def add_team_callbacks(
         - langfuse_secret: The secret for the Langfuse callback
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
-        - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+        - langfuse_span_scope: For langfuse_otel, "full" sends the whole request trace,
+          "llm_only" sends only model-call spans.
+          Omitted follows LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE (default "full"), also configurable as
+          callback_settings.otel.langfuse_destination_span_scope.
         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
@@ -347,7 +385,7 @@ async def add_team_callbacks(
             )
 
         # Check if team_id exists already
-        _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
+        _existing_team: Final = await _find_team_row(prisma_client, team_id)
         if _existing_team is None:
             raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_400_BAD_REQUEST)
 
@@ -356,17 +394,16 @@ async def add_team_callbacks(
         # authenticated key holder could overwrite another team's logging
         # config (and read back the credentials they wrote).
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate({**_existing_team.model_dump()}), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 
         _validate_team_callback(data)
 
         # store team callback settings in metadata
-        team_metadata = _existing_team.metadata
-        team_callback_settings: list[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
-        if team_callback_settings is None or not isinstance(team_callback_settings, list):
-            team_callback_settings = []
+        team_metadata: Final = _metadata_of(_existing_team)
+        stored_logging: Final[object] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
+        team_callback_settings: list[dict] = stored_logging if isinstance(stored_logging, list) else []
 
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.
@@ -529,9 +566,7 @@ async def delete_team_callback(
         if prisma_client is None:
             raise _callback_error(500, CommonProxyErrors.db_not_connected_error.value)
 
-        _existing_team: Final = await prisma_client.get_data(
-            team_id=team_id, table_name="team", query_type="find_unique"
-        )
+        _existing_team: Final = await _find_team_row(prisma_client, team_id)
         if _existing_team is None:
             raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_404_NOT_FOUND)
 
@@ -539,11 +574,11 @@ async def delete_team_callback(
         # deregister its callbacks, otherwise any authenticated key holder could
         # silence another team's observability integration.
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate({**_existing_team.model_dump()}), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 
-        team_metadata: Final = _existing_team.metadata
+        team_metadata: Final = _metadata_of(_existing_team)
         registered_callbacks: Final = team_metadata.get("logging")
         entries: Final = registered_callbacks if isinstance(registered_callbacks, list) else ()
 
@@ -661,7 +696,7 @@ async def disable_team_logging(
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Check if team exists
-        _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
+        _existing_team: Final = await _find_team_row(prisma_client, team_id)
         if _existing_team is None:
             raise HTTPException(
                 status_code=404,
@@ -672,15 +707,17 @@ async def disable_team_logging(
         # team may disable its logging — otherwise any authenticated key
         # holder can silence audit logging for any team.
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate({**_existing_team.model_dump()}), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 
         # Update team metadata to disable logging
-        team_metadata = _existing_team.metadata
+        team_metadata: Final = _metadata_of(_existing_team)
         before_metadata: Final = copy.deepcopy(team_metadata)
         team_callback_settings: Final = team_metadata.get("callback_settings", {})
-        team_callback_settings_obj: Final = TeamCallbackMetadata(**team_callback_settings)
+        team_callback_settings_obj: Final = TeamCallbackMetadata.model_validate(
+            {**keyword_arguments(team_callback_settings, TeamCallbackMetadata)}
+        )
 
         # Reset callbacks
         team_callback_settings_obj.success_callback = []
@@ -805,7 +842,7 @@ async def get_team_callbacks(
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Check if team_id exists
-        _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
+        _existing_team: Final = await _find_team_row(prisma_client, team_id)
         if _existing_team is None:
             raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_404_NOT_FOUND)
 
@@ -813,7 +850,7 @@ async def get_team_callbacks(
         # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
         # team admins of THIS team may read them.
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate({**_existing_team.model_dump()}), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 

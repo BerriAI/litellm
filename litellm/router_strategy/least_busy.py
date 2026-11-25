@@ -311,7 +311,7 @@ def release_unstarted_picks(store: _ReservationStore, call_id: str | None) -> No
 
 @contextlib.contextmanager
 def owning_picks(store: _ReservationStore, call_id: str | None) -> Generator[None, None, None]:
-    owner: Final = call_id or _PICK_OWNER.get() or uuid.uuid4().hex
+    owner: Final = call_id or uuid.uuid4().hex
     token: Final = _PICK_OWNER.set(owner)
     try:
         yield
@@ -330,7 +330,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         router_cache: DualCache,
         clock: Callable[[], float] = time.monotonic,
         reservation_store: _ReservationStore | None = None,
-    ):
+    ) -> None:
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
         self._clock = clock

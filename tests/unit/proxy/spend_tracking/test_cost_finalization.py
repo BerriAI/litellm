@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
-from typing import Final, Literal
+from typing import Final, Literal, cast
+from unittest.mock import patch
 
 import pytest
 from pydantic import TypeAdapter
@@ -10,9 +11,30 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.proxy.spend_tracking.customer_cost_margin import apply_callback_customer_cost_margin
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, StandardLoggingPayload, Usage
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+
+
+def test_callback_customer_margin_accepts_a_legacy_payload_without_a_breakdown() -> None:
+    payload: Final = cast(
+        StandardLoggingPayload, {"response_cost": 0.5}
+    )  # cast-ok: legacy callbacks supply partial payloads
+    assert apply_callback_customer_cost_margin(payload, 0.5, 0.02) == pytest.approx(0.51)
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.01)
+    assert payload["cost_breakdown"]["customer_margin_percent"] == 0.02
+
+
+def test_callback_without_customer_margin_preserves_a_legacy_payload() -> None:
+    payload: Final = cast(
+        StandardLoggingPayload, {"response_cost": 0.5}
+    )  # cast-ok: legacy callbacks supply partial payloads
+    assert apply_callback_customer_cost_margin(payload, 0.5, None) == 0.5
+    assert payload == {"response_cost": 0.5}
+
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
 MODEL: Final = "gemini-finalization-test"
@@ -89,6 +111,77 @@ def response(cost: float = 0.5) -> ModelResponse:
     return result
 
 
+def test_callback_customer_margin_bills_and_reconciles_once(logging_obj: Logging) -> None:
+    prepared: Final = logging_obj.prepare_response_cost(response(), NOW)
+    assert prepared is not None
+    amount: Final = apply_callback_customer_cost_margin(prepared.payload, 0.5, 0.02)
+    assert amount == pytest.approx(0.51)
+    assert prepared.payload["response_cost"] == pytest.approx(0.51)
+    assert prepared.payload["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.01)
+    assert apply_callback_customer_cost_margin(prepared.payload, amount, 0.02) == amount
+
+
+@pytest.mark.asyncio
+async def test_customer_margin_reaches_the_final_cost_and_logging_once(logging_obj: Logging) -> None:
+    logging_obj.update_environment_variables(
+        model=MODEL,
+        custom_llm_provider="vertex_ai",
+        litellm_params={"metadata": {"user_api_key_customer_org_id": "org-1"}},
+        optional_params={},
+    )
+    result: Final = response()
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        finalized: Final = await finalize_response_cost(logging_obj, result, Counter(2), NOW)
+        assert finalized is not None
+        assert finalized.amount == pytest.approx(0.5 * 1.02)
+        assert await finalize_response_cost(logging_obj, result, Counter(2), NOW) is finalized
+    logging_obj._success_handler_helper_fn(result=result, start_time=NOW, end_time=NOW)
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["response_cost"] == pytest.approx(0.5 * 1.02)
+    assert payload["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.01)
+    assert payload["cost_breakdown"]["customer_margin_percent"] == 0.02
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("binding", "factor"),
+    [('{"customer_org_id": "org-1"}', 1.02), ("{}", 1.0), (None, 1.0)],
+    ids=["bound to a customer", "malformed binding", "no binding"],
+)
+async def test_a_key_bound_to_a_customer_is_surcharged_without_customer_headers(
+    logging_obj: Logging, binding: str | None, factor: float
+) -> None:
+    logging_obj.update_environment_variables(
+        model=MODEL,
+        custom_llm_provider="vertex_ai",
+        litellm_params={"metadata": {"user_api_key_customer_usage": binding}},
+        optional_params={},
+    )
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        finalized: Final = await finalize_response_cost(logging_obj, response(), Counter(2), NOW)
+
+    assert finalized is not None
+    assert finalized.amount == pytest.approx(0.5 * factor)
+
+
+@pytest.mark.asyncio
+async def test_a_customer_binding_stamped_beside_caller_metadata_is_still_surcharged(logging_obj: Logging) -> None:
+    logging_obj.update_environment_variables(
+        model=MODEL,
+        custom_llm_provider="vertex_ai",
+        litellm_params={
+            "metadata": {"label": "caller"},
+            "litellm_metadata": {"user_api_key_customer_usage": '{"customer_org_id": "org-1"}'},
+        },
+        optional_params={},
+    )
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        finalized: Final = await finalize_response_cost(logging_obj, response(), Counter(2), NOW)
+
+    assert finalized is not None
+    assert finalized.amount == pytest.approx(0.5 * 1.02)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("used", "expected"), [(0, 0.48), (1, 0.49), (2, 0.5)])
 async def test_header_and_logging_share_one_allowance_allocation(
@@ -111,7 +204,6 @@ async def test_header_and_logging_share_one_allowance_allocation(
     assert float(headers["x-litellm-response-cost"]) == pytest.approx(payload["response_cost"])
     assert payload["cost_finalized"] is True
     assert payload["cost_breakdown"] == costs[0].logging_breakdown()
-
 
 
 @pytest.mark.asyncio
@@ -300,8 +392,8 @@ async def test_guardrail_json_response_uses_finalized_header_when_cost_is_known(
     logging_obj: Logging, monkeypatch: pytest.MonkeyPatch, known_cost: bool
 ) -> None:
     import httpx
-
     from fastapi import Response
+
     from litellm.caching.dual_cache import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
@@ -347,6 +439,7 @@ async def test_malformed_passthrough_logging_preserves_response_dispatch_contrac
 ) -> None:
 
     import httpx
+
     from litellm.llms.anthropic.common_utils import AnthropicError
     from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
@@ -427,6 +520,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     disable_error_logs: bool,
     reserved_cost: float,
     disable_spend_updates: bool,
+    native_budgets_on: None,
 ) -> None:
     from unittest.mock import create_autospec
 
@@ -485,26 +579,26 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     counters: Final = SpendCounterStore(connect(None).spend_counters())
     for key in ("spend:key:completed-key", "spend:team:completed-team"):
-        counters.set_local(key, 1.5 + reserved_cost)
+        counters.set_local(key, 1.5)
     counters.set_local("spend:tag:User-Agent: budget-client", 1.5)
     monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
-    reservation: Final = (
-        {
-            "reserved_cost": reserved_cost,
-            "entries": [
-                {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": reserved_cost}
-                for key in ("spend:key:completed-key", "spend:team:completed-team")
-            ],
-        }
-        if reserved_cost
-        else None
-    )
     auth: Final = UserAPIKeyAuth(
         request_route="/v1/chat/completions",
         api_key="completed-key",
         team_id="completed-team",
-        budget_reservation=reservation,
     )
+    if reserved_cost:
+        _ = await native_reservation(
+            counters,
+            auth,
+            [
+                {"counter_key": key, "entity_type": "Key", "entity_id": key}
+                for key in ("spend:key:completed-key", "spend:team:completed-team")
+            ],
+            reserved_cost,
+        )
+        for key in ("spend:key:completed-key", "spend:team:completed-team"):
+            assert counters.get_local(key) == pytest.approx(1.5 + reserved_cost)
     request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
     with scope, pytest.raises(asyncio.CancelledError if failure == "cancel_scope" else type(failure)):
         await processor._process_llm_request(

@@ -2,6 +2,8 @@
 
 The V2 callback API. A callback declares which hooks it subscribes to, which fields it reads and writes, and whether it may abort. Registration turns that into a frozen manifest, and the dispatcher plans and runs every callback in `litellm.callbacks` in list order from those declarations.
 
+For writing a callback, see the [user guide](user-guide.md).
+
 ## How the three kinds of callback fit
 
 - **V2 callbacks** subclass `CustomLoggerV2` and declare handlers with `@on`.

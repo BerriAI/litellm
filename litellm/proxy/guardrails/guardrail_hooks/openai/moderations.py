@@ -39,7 +39,9 @@ from .base import OpenAIGuardrailBase
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIModerationResponse
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+        OpenAIModerationGuardrailConfigModel,
+    )
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -276,14 +278,14 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
     def _process_response(
         self,
-        response: dict | None,
+        response: dict[str, object] | None,
         request_data: dict,
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,
-    ):
+        original_inputs: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | None:
         """
         Override to log the full OpenAI Moderation API response instead of
         the decorator's simplified "allow"/"mask" string.
@@ -378,7 +380,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         return GuardrailTracingDetail(violation_categories=violation_categories)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["OpenAIModerationGuardrailConfigModel"] | None:
         """
         Get the config model for the OpenAI Moderation guardrail.
         """

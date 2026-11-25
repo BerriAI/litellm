@@ -291,12 +291,3 @@ export const mapDisplayToInternalNames = (displayNames: string[]): string[] => {
 export const mapInternalToDisplayNames = (internalNames: string[]): string[] => {
   return internalNames.map((name) => reverse_callback_map[name] || name);
 };
-
-// Utility functions for easy access
-export const getCallbackById = (id: string): CallbackConfig | undefined => {
-  return CALLBACK_CONFIGS.find((callback) => callback.id === id);
-};
-
-export const getCallbackByDisplayName = (displayName: string): CallbackConfig | undefined => {
-  return CALLBACK_CONFIGS.find((callback) => callback.displayName === displayName);
-};

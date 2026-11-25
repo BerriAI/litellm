@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -33,6 +34,20 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+_AzureSearchDocument: Final = TypedDict(
+    "_AzureSearchDocument",
+    {
+        "id": ReadOnly[str],
+        "content": ReadOnly[str | None],
+        "@search.score": ReadOnly[float],
+    },
+    total=False,
+)
+
+
+class _AzureSearchResponse(TypedDict, total=False):
+    value: ReadOnly[Sequence[_AzureSearchDocument]]
 
 
 class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM):
@@ -75,7 +90,7 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
             "write": [("POST", "/docs/index")],
         }
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
@@ -86,15 +101,17 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
             }
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
-        basic_headers: Final = self._base_validate_azure_environment(headers, litellm_params)
+    def validate_environment(
+        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
+        basic_headers: Final = self.base_validate_azure_environment(headers, litellm_params)
         basic_headers.update({"Content-Type": "application/json"})
         return basic_headers
 
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the base endpoint for Azure AI Search API
@@ -204,7 +221,7 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final[_AzureSearchResponse] = response.json()
 
             # Extract results from Azure AI Search API response
             results: Final = response_json.get("value", [])
@@ -269,7 +286,7 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> NoReturn:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:

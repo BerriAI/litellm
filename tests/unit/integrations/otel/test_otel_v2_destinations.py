@@ -42,7 +42,9 @@ from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
     OpenTelemetryV2Config,
+    _cached_langfuse_destination_span_scope,
     is_otel_v2_enabled,
+    langfuse_destination_span_scope,
     parse_excluded_services,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
@@ -118,6 +120,7 @@ def isolate_published_provider(monkeypatch):
 def forget_otel_v2_flag_after_each_test():
     yield
     is_otel_v2_enabled.cache_clear()
+    _cached_langfuse_destination_span_scope.cache_clear()
 
 
 def in_fresh_context(fn, *args):
@@ -3038,6 +3041,144 @@ class TestSpanScope:
 
         assert destination_for("langfuse_otel", creds).span_scope == "full"
 
+    @pytest.mark.parametrize("level", ["key", "team"])
+    @pytest.mark.parametrize("source", ["env", "callback_settings"])
+    @pytest.mark.parametrize(
+        ("default", "explicit", "expected"),
+        [("llm_only", None, "llm_only"), ("llm_only", "full", "full"), (None, None, "full")],
+    )
+    def test_proxy_destination_scope_falls_back_without_overriding_tenant_choices(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        allow_test_hosts: None,
+        level: str,
+        default: str | None,
+        explicit: str | None,
+        expected: str,
+        source: str,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_SPAN_SCOPE", "llm_only")
+        monkeypatch.setattr(litellm, "callback_settings", {})
+        monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        if default is not None:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", default if source == "env" else "full")
+            if source == "callback_settings":
+                monkeypatch.setattr(
+                    litellm, "callback_settings", {"otel": {"langfuse_destination_span_scope": default}}
+                )
+        is_otel_v2_enabled.cache_clear()
+        metadata: Final = {
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk",
+                        "langfuse_secret_key": "sk",
+                        "langfuse_host": "http://x",
+                        **({"langfuse_span_scope": explicit} if explicit is not None else {}),
+                    },
+                }
+            ]
+        }
+        auth: Final = UserAPIKeyAuth(**({"metadata": metadata} if level == "key" else {"team_metadata": metadata}))
+        destinations: Final = resolve_tenant_otel_destinations(auth)
+        assert [destination.span_scope for destination in destinations] == [expected]
+
+    @pytest.mark.parametrize("otel_settings", [None, "invalid", [], 42])
+    @pytest.mark.parametrize("default", [None, "llm_only"])
+    def test_non_mapping_otel_settings_preserve_key_destination(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        allow_test_hosts: None,
+        otel_settings: object,
+        default: str | None,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": otel_settings})
+        monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        if default is not None:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", default)
+        is_otel_v2_enabled.cache_clear()
+        auth: Final = UserAPIKeyAuth(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk",
+                            "langfuse_secret_key": "sk",
+                            "langfuse_host": "http://x",
+                        },
+                    }
+                ]
+            }
+        )
+
+        assert [destination.span_scope for destination in resolve_tenant_otel_destinations(auth)] == [default or "full"]
+
+    def test_callback_settings_destination_scope_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "full")
+        assert langfuse_destination_span_scope(" LLM_ONLY\n") == "llm_only"
+
+    @pytest.mark.parametrize(
+        ("bare", "prefixed", "configured", "expected"),
+        [
+            ("llm_only", None, None, "full"),
+            ("full", "llm_only", None, "llm_only"),
+            ("full", "full", "llm_only", "llm_only"),
+            ("llm_only", "llm_only", "full", "full"),
+        ],
+    )
+    def test_only_prefixed_environment_sets_destination_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        bare: str,
+        prefixed: str | None,
+        configured: str | None,
+        expected: str,
+    ) -> None:
+        monkeypatch.setenv("langfuse_destination_span_scope", bare)
+        if prefixed is None:
+            monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        else:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", prefixed)
+
+        assert langfuse_destination_span_scope(configured) == expected
+
+    @pytest.mark.parametrize("spelling", ["LLM_ONLY", " llm_only\n", "full"])
+    def test_destination_scope_config_normalizes_like_operator_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        spelling: str,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", spelling)
+        assert langfuse_destination_span_scope() == spelling.strip().lower()
+
+    @pytest.mark.parametrize("invalid", ["", "everything"])
+    @pytest.mark.parametrize("source", ["env", "callback_settings"])
+    def test_invalid_destination_scope_falls_back_and_warns_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, invalid: str, source: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", invalid if source == "env" else "full")
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            assert langfuse_destination_span_scope(invalid if source == "callback_settings" else None) == "full"
+            assert langfuse_destination_span_scope(invalid if source == "callback_settings" else None) == "full"
+        warnings: Final = [record.message for record in caplog.records if "DESTINATION_SPAN_SCOPE" in record.message]
+        assert len(warnings) == 1
+        assert repr(invalid) in warnings[0]
+        assert "'full'" in warnings[0] and "'llm_only'" in warnings[0]
+
+    def test_destination_scope_environment_is_a_process_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "llm_only")
+        assert langfuse_destination_span_scope() == "llm_only"
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "full")
+        assert langfuse_destination_span_scope() == "llm_only"
+        assert langfuse_destination_span_scope("full") == "full"
+        assert langfuse_destination_span_scope("llm_only") == "llm_only"
+
     def test_only_langfuse_honours_the_scope_var(self):
         arize = destination_for(
             "arize", {"arize_api_key": "k", "arize_space_id": "s", "langfuse_span_scope": "llm_only"}
@@ -5157,7 +5298,8 @@ class TestTenantHostSsrfGuard:
 
         assert destination_for("langfuse_otel", self._langfuse("https://collector.example.com@10.0.0.5")) is None
 
-    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch):
+    @pytest.mark.parametrize("malformed_host", ["https://lf.corp:99999", "http://[::1"])
+    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch, malformed_host: str):
         """``urlparse(...).port`` raises a bare ValueError, which would escape
         ``destination_for`` and kill the whole resolution."""
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -5168,7 +5310,7 @@ class TestTenantHostSsrfGuard:
             token="hashed",
             team_metadata={
                 "logging": [
-                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse("https://lf.corp:99999")},
+                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse(malformed_host)},
                     {"callback_name": "newrelic", "callback_vars": {"newrelic_api_key": "nr"}},
                 ]
             },

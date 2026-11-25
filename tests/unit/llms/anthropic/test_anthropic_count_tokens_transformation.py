@@ -13,11 +13,12 @@ import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.exceptions import BadRequestError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, count_tokens_feature_betas
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
-from litellm.exceptions import BadRequestError
 from litellm.llms.anthropic.count_tokens.transformation import (
     COUNT_TOKEN_OPTION_NAMES,
     AnthropicCountTokensConfig,
@@ -32,12 +33,22 @@ from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
 from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
-from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
 COMPACTION_BETA = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value
+FALLBACK_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+FALLBACK_HISTORY: Final = [
+    {"role": "user", "content": "hi"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Hello"},
+            {"type": "fallback", "from": {"model": "first-model"}, "to": {"model": "second-model"}},
+        ],
+    },
+]
 COMPACTED_HISTORY = [
     {
         "role": "assistant",
@@ -507,6 +518,117 @@ def test_count_drops_a_leading_system_message_without_text() -> None:
     )
 
     assert result == {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]}
+
+
+_GEMINI_THOUGHT_HISTORY: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "Pick a number."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+            {"type": "text", "text": "Seven."},
+        ],
+    },
+    {"role": "user", "content": "Double it."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
+            {"type": "text", "text": "Fourteen."},
+        ],
+    },
+    {"role": "user", "content": "Halve it."},
+]
+
+
+@pytest.mark.parametrize(
+    ("count_config", "messages_config"),
+    (
+        (AnthropicCountTokensConfig(), AnthropicMessagesConfig()),
+        (AzureAIAnthropicCountTokensConfig(), AzureAnthropicMessagesConfig()),
+    ),
+)
+@pytest.mark.parametrize("model", ("claude-opus-5-5", "kimi-k3"))
+def test_count_sends_the_thinking_history_messages_sends(
+    count_config: AnthropicCountTokensConfig, messages_config: AnthropicMessagesConfig, model: str
+) -> None:
+    messages: Final = _GEMINI_THOUGHT_HISTORY
+
+    counted: Final = count_config.transform_request_to_count_tokens(model=model, messages=messages)
+    sent: Final = messages_config.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert counted["messages"] == sent["messages"]
+    assert (counted["messages"] == messages) is (model == "kimi-k3")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "kept"),
+    (
+        ("https://api.anthropic.com", False),
+        ("https://llm-gateway.example.com/anthropic", False),
+        ("https://api.deepseek.com/anthropic", True),
+        ("https://api.z.ai/api/anthropic", True),
+    ),
+)
+async def test_handler_sends_an_unsigned_thought_only_to_a_host_that_needs_it_back(
+    api_base: str, kept: bool, httpx_transport_clients
+):
+    with respx.mock:
+        route = respx.post(f"{api_base}/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 21})
+        )
+        await AnthropicCountTokensHandler().handle_count_tokens_request(
+            model="claude-sonnet-4-5",
+            messages=_GEMINI_THOUGHT_HISTORY,
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
+            api_base=api_base,
+        )
+
+    sent: Final = TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)
+    assert (sent["messages"] == _GEMINI_THOUGHT_HISTORY) is kept
+
+
+_GEMINI_TOOL_TURN: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {"city": "Oslo"},
+                "provider_specific_fields": {"signature": "gemini-thought-signature"},
+            }
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+_GEMINI_TOOL_TURN_AS_SENT: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Oslo"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+
+
+@pytest.mark.parametrize("count_config", (AnthropicCountTokensConfig(), AzureAIAnthropicCountTokensConfig()))
+@pytest.mark.parametrize("model", ("claude-opus-5-5", "kimi-k3"))
+def test_count_drops_the_provider_specific_fields_litellm_puts_on_a_returned_block(
+    count_config: AnthropicCountTokensConfig, model: str
+) -> None:
+    counted: Final = count_config.transform_request_to_count_tokens(model=model, messages=_GEMINI_TOOL_TURN)
+
+    assert counted["messages"] == _GEMINI_TOOL_TURN_AS_SENT
 
 
 @pytest.mark.asyncio
@@ -1051,6 +1173,64 @@ async def test_counter_sends_the_tools_chat_inference_makes_from_tool_search_and
     assert [body.get("tools") for body in bodies] == [inference["tools"]]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    "blank",
+    (
+        pytest.param("", id="empty-string"),
+        pytest.param("  ", id="whitespace"),
+        pytest.param([{"type": "text", "text": ""}], id="empty-text-block"),
+    ),
+)
+async def test_counter_sends_a_blank_user_turn_as_the_text_chat_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    blank: JsonValue,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "Remember the number 7."},
+        {"role": "assistant", "content": "OK."},
+        {"role": "user", "content": blank},
+    ]
+    inference: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert result.error is not True
+    assert [body["messages"] for body in bodies] == [inference["messages"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_sends_a_native_image_turn_as_sent_next_to_a_blank_assistant_turn(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+                {"type": "text", "text": "What is in this image?"},
+            ],
+        },
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Describe it."},
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, deepcopy(messages), None, "openai")
+
+    assert result is not None
+    assert result.error is not True
+    assert [body["messages"] for body in bodies] == [messages]
+
+
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},
@@ -1254,6 +1434,24 @@ def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
     assert COMPACTION_BETA in with_block
     assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
     assert plain == ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+
+def test_headers_add_the_fallback_beta_only_for_a_history_that_echoes_the_block():
+    config: Final = AnthropicCountTokensConfig()
+    auth_header: Final = {"x-api-key": "sk-ant-api03-test-key"}
+
+    with_block: Final = config.get_count_tokens_headers(auth_header, FALLBACK_HISTORY)["anthropic-beta"].split(",")
+    plain: Final = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
+
+    assert FALLBACK_BETA in with_block
+    assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
+    assert plain == ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+
+@pytest.mark.parametrize("provider", ("azure_ai", "vertex_ai"))
+def test_platform_count_betas_carry_the_fallback_beta_only_for_a_history_that_echoes_the_block(provider: str) -> None:
+    assert FALLBACK_BETA in count_tokens_feature_betas(provider, {}, FALLBACK_HISTORY)
+    assert FALLBACK_BETA not in count_tokens_feature_betas(provider, {}, [{"role": "user", "content": "hi"}])
 
 
 @pytest.mark.asyncio

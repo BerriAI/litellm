@@ -73,7 +73,7 @@ class AzureOpenAIError(BaseLLMException):
     def __init__(
         self,
         status_code,
-        message,
+        message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: httpx.Headers | dict | None = None,
@@ -163,6 +163,12 @@ def entra_rejection_as_auth_error(error: Exception) -> EntraRejectionError | Non
     return None if reason is None else _entra_rejection(reason)
 
 
+def azure_ad_token_failure(error: Exception) -> Exception:
+    """What `get_azure_ad_token` raises from a token provider's failure."""
+    auth_error: Final = entra_rejection_as_auth_error(error)
+    return auth_error if auth_error is not None else RuntimeError(f"Failed to get Azure AD token: {error}")
+
+
 def _raise_entra_rejection_as_auth_error(error: Exception) -> NoReturn:
     auth_error: Final = entra_rejection_as_auth_error(error)
     if auth_error is None:
@@ -243,8 +249,8 @@ def _entra_rejections_as_auth_errors(
     return call_provider
 
 
-def process_azure_headers(headers: httpx.Headers | dict) -> dict:
-    openai_headers: Final = {}
+def process_azure_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
+    openai_headers: Final[dict[str, str]] = {}
     if "x-ratelimit-limit-requests" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["x-ratelimit-limit-requests"]
     if "x-ratelimit-remaining-requests" in headers:
@@ -305,6 +311,34 @@ def _cached_default_azure_credential_provider(scope: str) -> Callable[[], str]:
 
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return _cached_azure_ad_token_refresh_provider(scope)
+
+
+def _param_or_env_set(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], param_key: str, env_var_key: str
+) -> bool:
+    param_value: Final = litellm_params.get(param_key)
+    return bool(param_value if param_value is not None else environ.get(env_var_key))
+
+
+def uses_azure_entra_id_auth(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], token_refresh_enabled: bool
+) -> bool:
+    client_id_set: Final = _param_or_env_set(litellm_params, environ, "client_id", "AZURE_CLIENT_ID")
+    return (
+        litellm_params.get("azure_ad_token_provider") is not None
+        or bool(litellm_params.get("azure_ad_token"))
+        or (
+            client_id_set
+            and _param_or_env_set(litellm_params, environ, "tenant_id", "AZURE_TENANT_ID")
+            and _param_or_env_set(litellm_params, environ, "client_secret", "AZURE_CLIENT_SECRET")
+        )
+        or (
+            client_id_set
+            and _param_or_env_set(litellm_params, environ, "azure_username", "AZURE_USERNAME")
+            and _param_or_env_set(litellm_params, environ, "azure_password", "AZURE_PASSWORD")
+        )
+        or token_refresh_enabled
+    )
 
 
 def _async_azure_ad_token_provider(
@@ -535,6 +569,19 @@ def get_azure_ad_token_from_oidc(
     )
 
 
+AZURE_V1_API_VERSION: Final = "v1"
+
+
+def is_azure_openai_v1_base(api_base: str | None) -> bool:
+    return api_base is not None and httpx.URL(api_base).path.rstrip("/").endswith("/openai/v1")
+
+
+def default_azure_api_version(api_base: str | None, env_api_version: str | None) -> str:
+    if is_azure_openai_v1_base(api_base):
+        return AZURE_V1_API_VERSION
+    return env_api_version or litellm.AZURE_DEFAULT_API_VERSION
+
+
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
@@ -657,10 +704,7 @@ def get_azure_ad_token(
             raise
         except Exception as e:
             verbose_logger.error("Error calling Azure AD token provider: %s", e)
-            auth_error: Final = entra_rejection_as_auth_error(e)
-            if auth_error is not None:
-                raise auth_error from e
-            raise RuntimeError(f"Failed to get Azure AD token: {e}") from e
+            raise azure_ad_token_failure(e) from e
 
     return azure_ad_token
 
@@ -737,12 +781,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_base: str | None,
         api_version: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         _is_async: bool = False,
         model: str | None = None,
     ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:
         openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None
-        client_initialization_params: Final[dict] = locals()
+        client_initialization_params: Final[dict[str, object]] = locals()
         client_initialization_params["is_async"] = _is_async
         _lp: Final = litellm_params or {}
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
@@ -826,7 +870,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
             )
             v1_params: Final[_AzureV1ClientParams] = {
-                "api_key": v1_api_key,
+                "api_key": v1_api_key or "",
                 "base_url": f"{v1_root}/",
                 "default_query": dict(v1_query),
             }
@@ -1026,7 +1070,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         return client
 
     @staticmethod
-    def _base_validate_azure_environment(headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def _base_validate_azure_environment(
+        headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Check if api-key is already in headers; if so, use it

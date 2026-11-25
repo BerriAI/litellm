@@ -17,7 +17,7 @@ export function uiHref(routeSegment: string): string {
 
 /** First route segment under the UI base, e.g. "/ui/logs/" -> "logs" and "/ui/" -> "". */
 export function routeSegmentForPathname(pathname: string): string {
-  const base = uiBase();
-  const relative = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
+  const base = process.env.NODE_ENV === "development" ? "/ui" : uiBase();
+  const relative = pathname === base || pathname.startsWith(`${base}/`) ? pathname.slice(base.length) : pathname;
   return relative.replace(/^\/+/, "").split("/")[0];
 }

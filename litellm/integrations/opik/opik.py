@@ -6,7 +6,7 @@ import asyncio
 import traceback
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, Protocol
 
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
@@ -24,6 +24,44 @@ try:
     from opik.api_objects import opik_client
 except Exception:
     opik_client = None
+
+
+class _OpikClient(Protocol):
+    def trace(
+        self,
+        *,
+        id: object,
+        name: object,
+        start_time: datetime,
+        end_time: datetime,
+        input: object,
+        output: object,
+        metadata: object,
+        tags: object,
+        thread_id: object,
+        project_name: object,
+    ) -> object: ...
+
+    def span(
+        self,
+        *,
+        id: object,
+        trace_id: object,
+        parent_span_id: object,
+        name: object,
+        type: object,
+        model: object,
+        start_time: datetime,
+        end_time: datetime,
+        input: object,
+        output: object,
+        metadata: object,
+        tags: object,
+        usage: object,
+        project_name: object,
+        provider: object,
+        total_cost: object,
+    ) -> object: ...
 
 
 def _should_skip_event(kwargs: Mapping[str, object]) -> bool:
@@ -102,7 +140,7 @@ class OpikLogger(CustomBatchLogger):
 
         # Initialize _opik_client attribute
         if opik_client is not None:
-            self._opik_client = opik_client.get_client_cached()
+            self._opik_client: _OpikClient | None = opik_client.get_client_cached()
         else:
             self._opik_client = None
 
@@ -111,7 +149,7 @@ class OpikLogger(CustomBatchLogger):
     async def async_log_success_event(
         self,
         kwargs: dict[str, object],
-        response_obj: Any,
+        response_obj: object,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -194,7 +232,7 @@ class OpikLogger(CustomBatchLogger):
     def log_success_event(
         self,
         kwargs: dict[str, object],
-        response_obj: Any,
+        response_obj: object,
         start_time: datetime,
         end_time: datetime,
     ) -> None:

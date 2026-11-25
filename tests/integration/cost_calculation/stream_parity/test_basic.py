@@ -14,7 +14,10 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration.cost_calculation.catalog import PARITY_CASES
+from integration.cost_calculation.catalog import (
+    BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    PARITY_CASES,
+)
 from integration.cost_calculation.stream_parity.bases import anthropic, bedrock, openai, openai_responses, xai
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 from integration.cost_calculation.stream_parity.runner import assert_stream_parity
@@ -34,7 +37,19 @@ BRIDGES: Final = (
 CASES: Final = (*NATIVE, *BRIDGES, *PARITY_CASES)
 
 
-@pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
+def _marks(case: StreamParityTestCase) -> tuple[pytest.MarkDecorator, ...]:
+    legs: Final = frozenset((case.plain.name, case.streamed.name))
+    return (
+        (pytest.mark.billed_against_real_provider_by_cost_tracking_reconciliation_automation,)
+        if legs & BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION
+        else ()
+    )
+
+
+_PARAMS: Final = tuple(pytest.param(case, marks=_marks(case), id=case.id) for case in CASES)
+
+
+@pytest.mark.parametrize("case", _PARAMS)
 @pytest.mark.timeout(180)
 def test_streamed_request_bills_the_same_row_as_the_non_streamed_request(
     case: StreamParityTestCase, gateway: Gateway

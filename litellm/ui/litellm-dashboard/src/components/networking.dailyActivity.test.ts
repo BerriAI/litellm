@@ -198,13 +198,25 @@ describe("dailyActivityExportCall", () => {
   it("GETs the export route with export_type and format", async () => {
     const mockFetch = captureFetch();
 
-    await dailyActivityExportCall("organization", req({ entityIds: ["o1"] }), "daily_with_keys", "csv");
+    await dailyActivityExportCall("organization", req({ entityIds: ["o1"] }), "daily_with_keys", { format: "csv" });
 
     const url = requestedUrl(mockFetch);
     expect(url.pathname).toBe("/organization/daily/activity/export");
     expect(url.searchParams.get("export_type")).toBe("daily_with_keys");
     expect(url.searchParams.get("format")).toBe("csv");
     expect(url.searchParams.get("organization_ids")).toBe("o1");
+    expect(url.searchParams.has("include_metadata")).toBe(false);
+  });
+
+  it("sends include_metadata=true only when metadata is requested", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityExportCall("organization", req({ entityIds: ["o1"] }), "daily_with_keys", {
+      format: "csv",
+      includeMetadata: true,
+    });
+
+    expect(requestedUrl(mockFetch).searchParams.get("include_metadata")).toBe("true");
   });
 });
 

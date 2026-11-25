@@ -267,11 +267,10 @@ class TestIndexesOnLogTables:
         sql = 'DO $$ BEGIN EXECUTE \'CREATE INDEX "ix" ON "LiteLLM_SpendLogs" ("api_key")\'; END $$;'
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_a_marker_does_not_exempt_the_index(self, tmp_path):
-        sql = (
-            '-- data-migration-ok: table is empty at this point\nCREATE INDEX "ix" ON "LiteLLM_SpendLogs" ("api_key");'
-        )
-        assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
+    @pytest.mark.parametrize("table", ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"))
+    def test_a_marker_does_not_exempt_the_index(self, tmp_path: Path, table: str):
+        sql = f'-- data-migration-ok: table is empty at this point\nCREATE INDEX "ix" ON "{table}" ("api_key");'
+        assert _keywords(tmp_path, sql) == (f'CREATE INDEX on "{table}"',)
 
     def test_a_marker_on_a_rewrite_still_leaves_the_index_below_it_flagged(self, tmp_path):
         sql = (
