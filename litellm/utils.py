@@ -8285,13 +8285,15 @@ def function_to_dict(input_function) -> dict:
 
     try:
         from numpydoc.docscrape import NumpyDocString
+    except ImportError as e:
+        raise ImportError(
+            "numpydoc is required for function_to_dict. "
+            "Install it with: pip install 'litellm[utils]'"
+        ) from e
 
-        numpydoc: Any = NumpyDocString(docstring)
-        description: Final = "\n".join([s.strip() for s in numpydoc["Summary"]])
-        numpydoc_params = numpydoc["Parameters"]
-    except ImportError:
-        numpydoc_params = []
-        description = docstring.strip().split("\n\n")[0].strip() if docstring else ""
+    numpydoc: Any = NumpyDocString(docstring)
+    description: Final = "\n".join([s.strip() for s in numpydoc["Summary"]])
+    numpydoc_params = numpydoc["Parameters"]
 
     # Get function parameters and their types from annotations and docstring
     parameters: Final = {}

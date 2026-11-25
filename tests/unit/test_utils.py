@@ -11778,7 +11778,9 @@ def test_function_to_dict_parses_numpy_docstring_schema() -> None:
     assert schema["parameters"]["required"] == ["location", "unit"]
 
 
-def test_function_to_dict_fallback_without_numpydoc(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_function_to_dict_without_numpydoc_raises_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import sys
 
     monkeypatch.setitem(sys.modules, "numpydoc", None)
@@ -11791,13 +11793,8 @@ def test_function_to_dict_fallback_without_numpydoc(monkeypatch: pytest.MonkeyPa
         """
         return a + b
 
-    schema: Final = litellm.utils.function_to_dict(simple_calculator)
-    assert schema["name"] == "simple_calculator"
-    assert schema["description"] == "Add two numbers together."
-    assert schema["parameters"]["type"] == "object"
-    assert schema["parameters"]["properties"]["a"]["type"] == "integer"
-    assert schema["parameters"]["properties"]["b"]["type"] == "integer"
-    assert schema["parameters"]["required"] == ["a"]
+    with pytest.raises(ImportError, match=r"pip install 'litellm\[utils\]'"):
+        litellm.utils.function_to_dict(simple_calculator)
 
 
 def test_function_to_dict_non_callable_raises_type_error() -> None:
