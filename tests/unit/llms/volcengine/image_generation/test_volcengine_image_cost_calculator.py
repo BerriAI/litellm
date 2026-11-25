@@ -1,18 +1,18 @@
 from typing import Final
 
+import httpx
 import pytest
 
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.volcengine.image_generation.cost_calculator import cost_calculator
+from litellm.llms.volcengine.image_generation.transformation import ark_image_response
 from litellm.types.utils import ImageObject, ImageResponse, ImageUsage, ModelInfo
 
 ARK_SEEDREAM_MODELS: Final = (
-    "volcengine/doubao-seedream-4-0-250828",
-    "volcengine/doubao-seedream-4-5-251128",
-    "volcengine/doubao-seedream-5-0-260128",
+    "volcengine/doubao-seedream-4-0-260415",
+    "volcengine/doubao-seedream-4-0-20260415",
     "volcengine/doubao-seedream-5-0-flash-260915",
-    "volcengine/doubao-seedream-5-0-lite-260128",
     "volcengine/doubao-seedream-5-0-pro-260628",
     "volcengine/doubao-seedream-5-5-261028",
 )
@@ -75,6 +75,41 @@ def test_layer_decomposition_outputs_bill_at_the_layer_rate() -> None:
     )
 
     assert cost == 0.5
+
+
+def test_every_output_of_a_layer_decomposition_bills_at_the_layer_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "output_cost_per_image": 2.0,
+        "output_cost_per_image_1K": 2.0,
+        "provider_specific_entry": {"volcengine_image": {"layer_output_cost_per_image_1K": 0.5}},
+    }
+
+    cost: Final = cost_calculator(
+        model="doubao-seedream-5-0-pro-260628",
+        image_response=_response(("1024x1024", "1024x1024", "1024x1024"), layers=(0, 1, 2)),
+        model_info=model_info,
+    )
+
+    assert cost == 1.5
+
+
+def test_images_ark_failed_to_output_are_not_billed() -> None:
+    ark_body: Final = {
+        "created": 1,
+        "data": [
+            {"url": "https://ark.example/0.png", "size": "1024x1024"},
+            {"error": {"code": "OutputImageSensitiveContentDetected", "message": "blocked"}},
+        ],
+        "usage": {"generated_images": 1, "output_tokens": 4096, "total_tokens": 4096},
+    }
+
+    cost: Final = cost_calculator(
+        model="doubao-seedream-5-5-261028",
+        image_response=ark_image_response(httpx.Response(200, json=ark_body)),
+        model_info={"output_cost_per_image": 2.0, "output_cost_per_image_1K": 1.0},
+    )
+
+    assert cost == 1.0
 
 
 def test_input_images_bill_after_the_free_allowance() -> None:

@@ -71,9 +71,9 @@ class _ArkImage(BaseModel):
     z_index: int | None = None
     name: str | None = None
     description: str | None = None
-    bounding_box: dict[str, object] | None = None
-    text_recognition: dict[str, object] | None = None
-    error: dict[str, object] | None = None
+    bounding_box: Mapping[str, object] | None = None
+    text_recognition: Mapping[str, object] | None = None
+    error: Mapping[str, object] | None = None
 
 
 class _ArkUsage(BaseModel):
@@ -114,7 +114,7 @@ def ark_image_generation_url(api_base: str | None) -> str:
     return join_api_base(ensure_api_route(base, "api/v3"), "images/generations")
 
 
-def ark_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> dict[str, object]:
+def ark_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> Mapping[str, object]:
     resolved_api_key: Final[str | None] = (
         api_key or get_secret_str("ARK_API_KEY") or get_secret_str("VOLCENGINE_API_KEY")
     )
@@ -140,7 +140,7 @@ def ark_image_params(
         raise UnsupportedParamsError(
             status_code=400,
             message=f"stream is not supported for Volcengine image models ({model}). "
-            + "Seedream 5.5 returns one JSON response; set `litellm.drop_params = True` to ignore stream.",
+            + "LiteLLM returns one JSON image response; set `litellm.drop_params = True` to ignore stream.",
         )
     if _requests_several_images(params.get("n")) and not drop_params:
         raise UnsupportedParamsError(
@@ -170,7 +170,7 @@ def ark_image_request(
     model: str,
     prompt: str | None,
     params: Mapping[str, object],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     extra_body: Final = _JSON_OBJECT.validate_python(params.get("extra_body") or {})
     mapped: Final = {
         key: _form_value(key, value)
@@ -185,7 +185,9 @@ def ark_image_request(
     }
 
 
-def _provider_specific_fields(image: _ArkImage) -> dict[str, object] | None:
+def _provider_specific_fields(
+    image: _ArkImage,
+) -> dict[str, object] | None:  # mutable-ok: ImageObject.provider_specific_fields is typed as a dict
     dumped: Final = _JSON_OBJECT.validate_python(image.model_dump(exclude_none=True))
     fields: Final = {key: value for key, value in dumped.items() if key not in _PROVIDER_FIELDS}
     return fields or None
@@ -241,8 +243,13 @@ def ark_image_response(raw_response: httpx.Response) -> ImageResponse:
 
 class VolcEngineImageGenerationConfig(BaseImageGenerationConfig):
     @override
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return [cast(OpenAIImageGenerationOptionalParams, param) for param in ARK_IMAGE_PARAMS]
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: inherited contract
+        return [
+            cast(OpenAIImageGenerationOptionalParams, param)  # cast-ok: Ark params are not in the OpenAI literal
+            for param in ARK_IMAGE_PARAMS
+        ]
 
     @override
     def map_openai_params(
@@ -251,7 +258,7 @@ class VolcEngineImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
         return {
             **optional_params,
             **ark_image_params(non_default_params, model, drop_params),
@@ -279,8 +286,8 @@ class VolcEngineImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
-        return ark_image_headers(headers, api_key, model)
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        return dict(ark_image_headers(headers, api_key, model))
 
     @override
     def transform_image_generation_request(
@@ -290,8 +297,8 @@ class VolcEngineImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict[str, object]:
-        return ark_image_request(model, prompt, optional_params)
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        return dict(ark_image_request(model, prompt, optional_params))
 
     @override
     def transform_image_generation_response(

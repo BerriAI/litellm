@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+from openai.types.images_response import Image as OpenAIImage
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import resolve_image_model_info
@@ -19,7 +20,7 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 
 def _number(table: Mapping[str, object], key: str) -> float | None:
-    value = table.get(key)
+    value: Final = table.get(key)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return None
@@ -40,18 +41,27 @@ def _tier(pixels: int | None) -> str | None:
     return "1K" if pixels <= _LOW_TIER_MAX_PIXELS else "2K"
 
 
+def _image_fields(image: OpenAIImage) -> Mapping[str, object]:
+    return _mapping(image.provider_specific_fields) if isinstance(image, ImageObject) else {}
+
+
+def _generated_images(image_response: ImageResponse) -> tuple[Mapping[str, object], ...]:
+    return tuple(_image_fields(image) for image in image_response.data or () if image.url or image.b64_json)
+
+
+def _is_layer(fields: Mapping[str, object]) -> bool:
+    z_index: Final = fields.get("z_index")
+    return isinstance(z_index, int) and z_index > 0
+
+
 def _output_price(
     pricing: Mapping[str, object],
     entry: Mapping[str, object],
-    image: object,
+    fields: Mapping[str, object],
+    layer_decomposition: bool,
 ) -> float:
-    fields: Final[Mapping[str, object]] = (
-        _mapping(image.provider_specific_fields) if isinstance(image, ImageObject) else {}
-    )
     tier: Final = _tier(_pixels(fields.get("size")))
-    z_index: Final = fields.get("z_index")
-    is_layer: Final = isinstance(z_index, int) and z_index > 0
-    if is_layer and tier is not None:
+    if layer_decomposition and tier is not None:
         layer_price: Final = _number(entry, f"layer_output_cost_per_image_{tier}")
         if layer_price is not None:
             return layer_price
@@ -94,5 +104,7 @@ def cost_calculator(
 ) -> float:
     pricing: Final = _pricing(model, model_info)
     entry: Final = _mapping(_mapping(pricing.get("provider_specific_entry")).get(_PROVIDER_ENTRY_KEY))
-    output_cost: Final = sum(_output_price(pricing, entry, image) for image in image_response.data or [])
+    images: Final = _generated_images(image_response)
+    layer_decomposition: Final = any(_is_layer(fields) for fields in images)
+    output_cost: Final = sum(_output_price(pricing, entry, fields, layer_decomposition) for fields in images)
     return output_cost + _input_cost(pricing, entry, image_response)
