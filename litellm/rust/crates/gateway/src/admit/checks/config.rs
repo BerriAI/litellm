@@ -23,11 +23,12 @@ const UI_SETTINGS: &str = "ui_settings";
 const HONORED_GENERAL_SETTINGS: [&str; 2] = ["supported_db_objects", "encryption_algorithm"];
 
 /// The `litellm_settings` keys a variable can fill, as `Config::with_environment` layers them.
-const LAYERED: [&str; 12] = [
+/// `reasoning_auto_summary` and `request_timeout` read their variables as Python does, so neither
+/// is here.
+const LAYERED: [&str; 11] = [
     "litellm_settings.drop_params",
     "litellm_settings.modify_params",
     "litellm_settings.enable_anthropic_prompt_caching",
-    "litellm_settings.reasoning_auto_summary",
     "litellm_settings.use_chat_completions_url_for_anthropic_messages",
     "litellm_settings.route_all_chat_openai_to_responses",
     "litellm_settings.gemini_live_defer_setup",
@@ -333,6 +334,16 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
     .chain(other("router_settings.", additional_fields.keys(), &[]))
 }
 
+/// A `request_timeout` the native call reads otherwise than Python. Python fails every call on
+/// text `float()` refuses and keeps zero as a timeout, where the native call keeps neither. And
+/// the native router takes `router_settings.request_timeout` as a timeout of its own, where the
+/// Python router derives that value from this setting instead.
+fn unkept(config: &Config) -> bool {
+    config.litellm_settings.request_timeout.is_some()
+        && (crate::boot::request_timeout(&config.litellm_settings).is_none()
+            || config.router_settings.request_timeout.is_some())
+}
+
 /// A callback other than `dynamic_rate_limiter_v3`, the one the native app runs.
 fn other_callbacks(callbacks: &Option<Vec<Value>>) -> bool {
     callbacks
@@ -352,7 +363,8 @@ fn borrows(settings: &Option<PriorityReservationSettings>) -> bool {
     })
 }
 
-/// `drop_params` is honored whichever of the config and its variable set it, and
+/// `drop_params` and `reasoning_auto_summary` are honored whichever of the config and its
+/// variable set them, `request_timeout` unless it is [`unkept`], and
 /// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. `callbacks` is honored
 /// when it names only the dynamic rate limiter, which reads `priority_reservation` and its
 /// settings. The others the native app does not read only shape another route or the UI.
@@ -368,6 +380,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         disable_aiohttp_trust_env: _,
         disable_aiohttp_transport: _,
         drop_params: _,
+        reasoning_auto_summary: _,
         json_logs: _,
         set_verbose: _,
         enable_redis_auth_cache: _,
@@ -380,7 +393,6 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         priority_reservation_settings,
         modify_params,
         enable_anthropic_prompt_caching,
-        reasoning_auto_summary,
         request_timeout,
         num_retries,
         cache,
@@ -396,7 +408,6 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     set!(
         "litellm_settings.",
         [
-            request_timeout,
             num_retries,
             cache_params,
             success_callback,
@@ -405,13 +416,12 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             model_cost_map_url,
             anthropic_beta_headers_url,
         ],
-        on: [
-            cache,
-            modify_params,
-            enable_anthropic_prompt_caching,
-            reasoning_auto_summary,
-        ],
-        by: [callbacks => other_callbacks, priority_reservation_settings => borrows]
+        on: [cache, modify_params, enable_anthropic_prompt_caching],
+        by: [
+            callbacks => other_callbacks,
+            priority_reservation_settings => borrows,
+            request_timeout => |_| unkept(config),
+        ]
     )
     .chain(unknown("litellm_settings.", additional_fields))
     .map(|key| spelled(config, key))
@@ -521,8 +531,34 @@ mod tests {
         "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
         "litellm_settings.callbacks"
     )]
+    #[case::a_request_timeout_float_refuses(
+        "litellm_settings:\n  request_timeout: soon\n",
+        "litellm_settings.request_timeout"
+    )]
+    #[case::no_request_timeout_at_all(
+        "litellm_settings:\n  request_timeout: 0\n",
+        "litellm_settings.request_timeout"
+    )]
+    #[case::a_request_timeout_beside_the_routers_request_timeout(
+        "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  request_timeout: 10\n",
+        "litellm_settings.request_timeout"
+    )]
     fn a_setting_the_native_app_does_not_honor_is_named(#[case] yaml: &str, #[case] setting: &str) {
         assert_eq!(written(yaml), [setting]);
+    }
+
+    #[rstest]
+    #[case::reasoning_auto_summary_as_text(
+        "litellm_settings:\n  reasoning_auto_summary: \"false\"\n"
+    )]
+    #[case::a_request_timeout("litellm_settings:\n  request_timeout: 30\n")]
+    #[case::a_request_timeout_as_text("litellm_settings:\n  request_timeout: \"2.5\"\n")]
+    #[case::the_routers_timeout_alone("router_settings:\n  timeout: 10\n")]
+    #[case::a_request_timeout_beside_the_routers_timeout(
+        "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  timeout: 10\n"
+    )]
+    fn a_messages_setting_the_native_call_reads_as_python_does_is_not_named(#[case] yaml: &str) {
+        assert_eq!(written(yaml), Vec::<String>::new());
     }
 
     #[rstest]
@@ -568,7 +604,9 @@ mod tests {
 
     fn set_by(variable: &'static str, value: &'static str) -> Config {
         let lookup = move |name: &str| (name == variable).then(|| value.to_owned());
-        Config::default().with_environment(&lookup)
+        Config::default()
+            .with_environment(&lookup)
+            .with_process_environment(&lookup)
     }
 
     #[rstest]
@@ -584,6 +622,22 @@ mod tests {
         assert_eq!(
             found(&set_by("LITELLM_DROP_PARAMS", "true")),
             Vec::<String>::new()
+        );
+    }
+
+    #[rstest]
+    #[case::reasoning_auto_summary("LITELLM_REASONING_AUTO_SUMMARY", "yes", None)]
+    #[case::a_request_timeout("REQUEST_TIMEOUT", "30", None)]
+    #[case::a_request_timeout_float_refuses("REQUEST_TIMEOUT", "soon", None)]
+    #[case::no_request_timeout_at_all("REQUEST_TIMEOUT", "0", Some("REQUEST_TIMEOUT"))]
+    fn a_messages_setting_its_variable_set_is_named_by_it_only_where_the_native_call_differs(
+        #[case] variable: &'static str,
+        #[case] value: &'static str,
+        #[case] named: Option<&str>,
+    ) {
+        assert_eq!(
+            found(&set_by(variable, value)),
+            named.into_iter().collect::<Vec<_>>()
         );
     }
 
