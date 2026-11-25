@@ -3027,6 +3027,31 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
         assert tools == [{key: value for key, value in self._DEFERRED.items() if key != "defer_loading"}]
 
+    @staticmethod
+    def _with_first_description_edited(returned: list[object]) -> list[object]:
+        edited: Final = cast(list[dict[str, dict[str, object]]], json.loads(json.dumps(returned)))
+        edited[-1]["function"]["description"] = "edited by the guardrail"
+        return cast(list[object], edited)
+
+    async def test_a_deferred_tool_the_guardrail_edited_stays_deferred(self):
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(self._with_first_description_edited),
+            json.loads(json.dumps([self._READ, self._DEFERRED])),
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in tools] == [
+            (self._READ["name"], None),
+            (self._DEFERRED["name"], True),
+        ]
+
+    async def test_a_deferred_tool_the_guardrail_edited_loads_up_front_once_nothing_else_is_left(self):
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: self._with_first_description_edited(returned)[-1:]),
+            json.loads(json.dumps([self._READ, self._DEFERRED])),
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in tools] == [(self._DEFERRED["name"], None)]
+
     async def test_deferred_tools_stay_deferred_while_the_guardrail_keeps_a_tool_that_is_not(self):
         tools: Final = await self._tools_after(
             ToolDroppingGuardrail(tool_name="Write"),

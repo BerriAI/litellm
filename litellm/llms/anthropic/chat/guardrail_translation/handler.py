@@ -35,7 +35,7 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     is_anthropic_web_search_tool,
     is_provider_native_tool_dict,
 )
-from litellm.llms.anthropic.pass_through.deferred_tools import client_tool_search_name
+from litellm.llms.anthropic.pass_through.deferred_tools import client_tool_search_name, is_deferred
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -338,6 +338,20 @@ def _is_deferred_tool(tool: object) -> bool:
     return fields is not None and fields.get("defer_loading") is True
 
 
+def _deferred_tool_names(tools: Iterable[object]) -> frozenset[str]:
+    names: Final = (
+        (as_str_mapping(tool) or {}).get("name") for tool in tools if is_deferred(as_str_mapping(tool) or {})
+    )
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _with_request_deferral(tool: AllAnthropicToolsValues, deferred_names: frozenset[str]) -> AllAnthropicToolsValues:
+    name: Final = (as_str_mapping(tool) or {}).get("name")
+    if not isinstance(name, str) or name not in deferred_names:
+        return tool
+    return cast(AllAnthropicToolsValues, {**tool, "defer_loading": True})  # cast-ok: same tool, one more field
+
+
 def _without_deferral(tool: object) -> object:
     fields: Final = as_str_mapping(tool)
     if fields is None:
@@ -386,7 +400,8 @@ def _tools_after_guardrail(
 ) -> list[object]:  # mutable-ok: becomes the request body's tools
     """
     The guardrail's tools in the order it returned them: a tool it left alone as the caller sent it,
-    any other converted to Anthropic format. Tools it was never shown go first.
+    any other converted to Anthropic format and still deferred if the caller deferred a tool of that
+    name. Tools it was never shown go first.
     """
     never_shown: Final = tuple(tool for tool in request_tools if _is_hidden_from_guardrail(tool))
     shown: Final = tuple(tool for tool in request_tools if not _is_hidden_from_guardrail(tool))
@@ -394,22 +409,31 @@ def _tools_after_guardrail(
     returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned))
     as_sent: Final = _as_sent_by_fingerprint(shown, shown_fingerprints, Counter(returned_fingerprints))
     anthropic_config: Final = AnthropicConfig()
+    deferred_names: Final = _deferred_tool_names(shown)
     matched: Final = tuple(
         next(as_sent.get(fingerprint, iter(())), _NOT_AS_SENT) for fingerprint in returned_fingerprints
+    )
+    converted: Final = tuple(
+        _converted_tool(anthropic_config, returned_tool, original_names) if original is _NOT_AS_SENT else None
+        for returned_tool, original in zip(returned, matched)
     )
     kept: Final = tuple(
         tool
         for tool in (
-            _converted_tool(anthropic_config, returned_tool, original_names) if original is _NOT_AS_SENT else original
-            for returned_tool, original in zip(returned, matched)
+            (None if changed is None else _with_request_deferral(changed, deferred_names))
+            if original is _NOT_AS_SENT
+            else original
+            for changed, original in zip(converted, matched)
         )
         if tool is not None
     )
     all_as_sent: Final = _NOT_AS_SENT not in matched
     removed_tool_search: Final = client_tool_search_name(shown) is not None and client_tool_search_name(kept) is None
+    if not all_as_sent:
+        return list(_loaded_up_front((*never_shown, *kept), removed_tool_search))
     return [
         *never_shown,
-        *(_loaded_up_front(kept, removed_tool_search) if all_as_sent and len(returned) < len(shown) else kept),
+        *(_loaded_up_front(kept, removed_tool_search) if len(returned) < len(shown) else kept),
     ]
 
 
