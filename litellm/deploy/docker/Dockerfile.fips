@@ -102,7 +102,6 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm/deploy/docker/build_admin_ui.sh && ./litellm/deploy/docker/build_admin_ui.sh
 
-# The bridge's fips feature builds the AWS-LC FIPS module, whose delocate step fails under gcc
 ENV AWS_LC_FIPS_SYS_CC=clang \
     AWS_LC_FIPS_SYS_CXX=clang++
 ARG MATURIN_PEP517_ARGS="--features fips"
