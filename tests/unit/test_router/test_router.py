@@ -16651,11 +16651,6 @@ def setup_and_teardown_router_unit():
 
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     print(litellm)
