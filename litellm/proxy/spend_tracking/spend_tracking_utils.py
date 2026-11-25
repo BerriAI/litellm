@@ -1380,8 +1380,15 @@ def _disables_prompt_storage(tenant_metadata: object) -> bool:
     return value is False or (isinstance(value, str) and str_to_bool(value) is False)
 
 
+def is_no_log_call(kwargs: Mapping[str, object]) -> bool:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    return (
+        litellm_params is not None and litellm_params.get("no-log") is True and not litellm.global_disable_no_log_param
+    )
+
+
 def should_store_prompts_for_call(kwargs: Mapping[str, object]) -> bool:
-    return should_store_prompts_and_responses_in_spend_logs(
+    return not is_no_log_call(kwargs) and should_store_prompts_and_responses_in_spend_logs(
         _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)))
     )
 

@@ -55,3 +55,56 @@ def test_no_log_request_is_charged_to_key_team_and_spend_log(spend_gateway: Gate
         assert float(str(charged[0]["key_spend"])) == pytest.approx(cost), charged
         assert float(str(charged[0]["team_spend"])) == pytest.approx(cost), charged
         assert charged[0]["logged"] == [pytest.approx(cost)], charged
+
+
+_STORED: Final = (
+    "SELECT s.spend AS spend, s.proxy_server_request::text AS request, s.response::text AS response "
+    'FROM "LiteLLM_SpendLogs" s JOIN "LiteLLM_VerificationToken" k ON k.token = s.api_key WHERE k.key_alias=%s'
+)
+
+
+@pytest.fixture(scope="module")
+def prompt_storing_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("no-log-prompts")
+    base: Final = yaml.safe_load(_BASE_CONFIG.read_text())
+    config: Final = directory / "no-log-prompts.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                **base,
+                "general_settings": {
+                    **base["general_settings"],
+                    "use_spend_logs_ledger": False,
+                    "store_prompts_in_spend_logs": True,
+                },
+            }
+        )
+    )
+    with gateway_from_environment() as shared, owned_proxy(shared, directory, {}, config=config) as proxy:
+        yield proxy
+
+
+def test_no_log_request_spend_log_keeps_spend_and_drops_prompt_and_response(prompt_storing_gateway: Gateway) -> None:
+    with prompt_storing_gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=_INPUT_COST, output_cost_per_token=_OUTPUT_COST)
+        marker: Final = f"prompt-marker-{uuid.uuid4().hex}"
+        aliases: Final = {no_log: f"integration-no-log-{no_log}-{uuid.uuid4().hex}" for no_log in (False, True)}
+        stored: Final = {}  # mutable-ok: one row per request, filled as each request is sent and read back
+        for no_log, alias in aliases.items():
+            response = prompt_storing_gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": f"{marker} {no_log}"}], "no-log": no_log},
+                key=scenario.key(key_alias=alias, models=[model]),
+            )
+            assert response.status_code == 200, response.text
+            stored[no_log] = eventually(
+                lambda alias=alias: prompt_storing_gateway.rows(_STORED, (alias,)),
+                lambda rows: len(rows) == 1,
+                seconds=70,
+            )[0]
+        assert marker in str(stored[False]["request"]), stored[False]
+        assert str(stored[False]["response"]) != "{}", stored[False]
+        assert float(str(stored[True]["spend"])) == pytest.approx(float(str(stored[False]["spend"]))), stored
+        assert stored[True]["spend"] and float(str(stored[True]["spend"])) > 0, stored[True]
+        assert (stored[True]["request"], stored[True]["response"]) == ("{}", "{}"), stored[True]

@@ -1056,6 +1056,7 @@ def logging_payload(
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Final[str | None] = kwargs.get("agent_id") or metadata.get("agent_id")
 
+    no_log: Final = spend_tracking_utils.is_no_log_call(kwargs)
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(
             request_id=str(id),
@@ -1087,11 +1088,17 @@ def logging_payload(
             billing_agent_id=clean_metadata.get("billing_agent_id"),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=custom_llm_provider or "",
-            messages=_get_messages_for_spend_logs_payload(
+            messages="{}"
+            if no_log
+            else _get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
-            proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
+            response="{}"
+            if no_log
+            else _get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
+            proxy_server_request="{}"
+            if no_log
+            else _get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata,
                 litellm_params=(
                     _placeholder_stored_request_body(litellm_params, persisted_model_group, raw_model)
