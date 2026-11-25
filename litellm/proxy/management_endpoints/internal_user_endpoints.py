@@ -277,7 +277,7 @@ def _without_rollover_fields(row: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in row.items() if key not in {"rollover_max_budget", "rollover_credit"}}
 
 
-def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
+def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict[str, object]:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
 

@@ -96,7 +96,7 @@ class BaseAnthropicMessagesConfig(ABC):
         anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod

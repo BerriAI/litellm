@@ -132,7 +132,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         input_data: str,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-    ) -> dict:
+    ) -> dict[str, object]:
         """Process a single string input through the guardrail."""
         inputs: Final = GenericGuardrailAPIInputs(texts=[input_data])
         if model := data.get("model"):
@@ -161,7 +161,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         input_data: list[str | int | list[int]],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-    ) -> dict:
+    ) -> dict[str, object]:
         """Process a list input through the guardrail (if it contains strings or text blocks)."""
         if len(input_data) == 0:
             return data

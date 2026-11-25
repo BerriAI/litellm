@@ -16,7 +16,7 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
-from litellm.constants import REALTIME_METERED_USAGE_KEY
+from litellm.constants import REALTIME_METERED_USAGE_KEY, REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.integrations.custom_logger import CustomLogger
@@ -11472,6 +11472,48 @@ def _live_logging_object(
     if metered_usage is not None:
         model_call_details[REALTIME_METERED_USAGE_KEY] = metered_usage
     return cast(Logging, SimpleNamespace(model_call_details=model_call_details))
+
+
+_SCRIBE_CLIP_SECONDS: Final = (60.0, 30.0)
+_SCRIBE_KEYTERMS_ADDON: Final = "elevenlabs/scribe_v2_realtime/keyterms"
+
+
+def _scribe_session_cost(addon_models: tuple[str, ...]) -> float:
+    return handle_realtime_stream_cost_calculation(
+        results=_live_session_results(
+            {
+                "type": "session.created",
+                "session": {
+                    "type": "transcription",
+                    "audio": {"input": {"transcription": {"model": "scribe_v2_realtime"}}},
+                },
+            },
+            *(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": {"type": "duration", "seconds": seconds},
+                }
+                for seconds in _SCRIBE_CLIP_SECONDS
+            ),
+        ),
+        combined_usage_object=Usage(),
+        custom_llm_provider="elevenlabs",
+        litellm_model_name="scribe_v2_realtime",
+        litellm_logging_obj=cast(
+            Logging, SimpleNamespace(model_call_details={REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY: addon_models})
+        ),
+    )
+
+
+def test_realtime_transcription_addons_bill_their_rate_on_every_transcribed_second(_local_model_cost_map: None) -> None:
+    addon_rate: Final = litellm.get_model_info(_SCRIBE_KEYTERMS_ADDON)["input_cost_per_second"] or 0.0
+    base_cost: Final = _scribe_session_cost(())
+
+    assert addon_rate > 0
+    assert base_cost > 0
+    assert _scribe_session_cost((_SCRIBE_KEYTERMS_ADDON,)) - base_cost == pytest.approx(
+        sum(_SCRIBE_CLIP_SECONDS) * addon_rate
+    )
 
 
 def test_realtime_keeps_first_reported_session_model_for_pricing(_local_model_cost_map: None) -> None:
