@@ -9,7 +9,7 @@ use litellm_config::LiteLlmSettings;
 
 use super::{Admit, Reason, Refused, config::messages_only};
 
-const MESSAGES: &str = "/v1/messages";
+pub(in crate::admit) const MESSAGES: &str = "/v1/messages";
 const CALL_ID: &str = "x-litellm-call-id";
 const FORWARDED_FOR: &str = "x-forwarded-for";
 const CLAUDE_CODE: [&str; 2] = ["claude-cli/", "claude-code/"];

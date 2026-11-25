@@ -12,7 +12,7 @@ use axum::{
 use futures_util::future::BoxFuture;
 use litellm_callbacks::ErasedCallback;
 use litellm_gateway::{
-    Callbacks, Gateway,
+    Callbacks, Gateway, Registered,
     host::{NativeHost, NativeRows},
 };
 use litellm_gateway_auth::Authenticated;
@@ -102,12 +102,21 @@ pub fn app_with_callbacks(
     api_base: &str,
     callbacks: Vec<Arc<dyn ErasedCallback>>,
 ) -> Router {
+    app_with_registered(
+        model,
+        api_base,
+        callbacks.into_iter().map(Into::into).collect(),
+    )
+}
+
+/// The app with `registered` run around each call, in the order given.
+pub fn app_with_registered(model: &str, api_base: &str, registered: Vec<Registered>) -> Router {
     hosted_app(
         test_params(model, api_base),
         Value::Object(Map::new()),
         None,
         NativeHost::new(
-            Arc::new(Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap()),
+            Arc::new(Callbacks::new(registered).unwrap()),
             Arc::default(),
         ),
         &RouterSettings::default(),

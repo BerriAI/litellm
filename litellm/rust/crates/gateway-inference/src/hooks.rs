@@ -45,6 +45,9 @@ pub struct Refusal {
     pub code: Option<String>,
     /// In the order Python sends them.
     pub headers: Vec<(String, String)>,
+    /// Python raises it while it authenticates the request, before the route's handler runs, so
+    /// its exception handler renders it.
+    pub at_authentication: bool,
 }
 
 impl Refusal {
@@ -148,6 +151,7 @@ impl PostCall {
 pub(crate) async fn around<H, F, Fut>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
+    admitted: Option<&H::Admitted>,
     body: Map<String, Value>,
     serve: F,
 ) -> Result<Response, Ended>
@@ -156,7 +160,7 @@ where
     F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
     Fut: Future<Output = Result<HookResponse, Ended>>,
 {
-    let hooks = Arc::new(gateway.host.hooks(identity));
+    let hooks = Arc::new(gateway.host.hooks(identity, admitted));
     let served = match hooks.pre_call(body).await {
         Ok(body) => serve(hooks.clone(), body).await,
         Err(ended) => Err(ended.into()),

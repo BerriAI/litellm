@@ -74,6 +74,7 @@ pub struct CallState {
     first_event: Option<SystemTime>,
     request: Request,
     rate_limit_statuses: Option<Value>,
+    budget_reservation: Option<Value>,
     response_headers: Map<String, Value>,
     served: Option<ServedCall>,
     ended: Option<Ended>,
@@ -101,6 +102,7 @@ impl CallState {
                 stream: false,
             },
             rate_limit_statuses: None,
+            budget_reservation: None,
             response_headers: Map::new(),
             served: None,
             ended: None,
@@ -213,6 +215,14 @@ impl CallState {
 
     pub fn set_rate_limit_statuses(&mut self, statuses: Value) {
         self.rate_limit_statuses = Some(statuses);
+    }
+
+    pub fn budget_reservation(&self) -> Option<&Value> {
+        self.budget_reservation.as_ref()
+    }
+
+    pub fn set_budget_reservation(&mut self, reservation: Value) {
+        self.budget_reservation = Some(reservation);
     }
 
     pub fn response_headers(&self) -> &Map<String, Value> {

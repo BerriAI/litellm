@@ -48,6 +48,10 @@ pub trait Host: Send + Sync + Sized + 'static {
 
     type Hooks: CallHooks;
 
+    /// What admit decided for a call it served natively, left on the request for the call's
+    /// hooks.
+    type Admitted: Clone + Send + Sync + 'static;
+
     /// The rows of the callers this host authenticates.
     type Rows: Rows<Key: StoredKey, Team: Record>;
 
@@ -65,8 +69,13 @@ pub trait Host: Send + Sync + Sized + 'static {
         names: &BTreeSet<String>,
     ) -> impl Future<Output = Result<Credentials, litellm_gateway_auth_core::Error>> + Send;
 
-    /// The callback hooks of one call `identity` makes, which read and write the call's record.
-    fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
+    /// The callback hooks of one call `identity` makes, which read and write the call's record,
+    /// with what admit decided for it. `None` for a request admit did not see.
+    fn hooks(
+        &self,
+        identity: &Authenticated<Self::Rows>,
+        admitted: Option<&Self::Admitted>,
+    ) -> Self::Hooks;
 
     /// router-core's host for one call that runs `route` on each attempt for `identity`. The host
     /// counts `route`'s [`RouteAttempt::prompt`] for the pre-call checks.

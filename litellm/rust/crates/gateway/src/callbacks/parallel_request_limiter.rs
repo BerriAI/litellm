@@ -462,7 +462,7 @@ impl KeyLimiter {
     /// The limiter as the stage registers it, with each request's admission made from its caller.
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
         let limiter = self.clone();
-        Registered::for_caller(self.clone(), move |identity| Admission {
+        Registered::for_caller(self.clone(), move |identity, _| Admission {
             limiter: limiter.clone(),
             caller: Caller::of(identity),
             state: LimiterState::default(),

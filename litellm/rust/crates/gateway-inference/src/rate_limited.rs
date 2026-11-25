@@ -55,6 +55,7 @@ impl From<RateLimited> for Refusal {
             kind: Some(THROTTLING.to_owned()),
             code: Some(CODE.to_owned()),
             headers: limited.headers,
+            at_authentication: false,
         }
     }
 }

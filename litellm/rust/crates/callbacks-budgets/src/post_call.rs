@@ -55,6 +55,31 @@ pub async fn release(
     reservation: &mut BudgetReservation,
     window_resets: &[Option<String>],
 ) -> Result<(), EngineError> {
+    reconcile(budgets, host, reservation, window_resets, 0.0).await
+}
+
+/// `release_budget_reservation_on_cancel`: a call abandoned after the provider was asked keeps
+/// its input cost, since the provider bills the input tokens it was sent.
+pub async fn release_on_cancel(
+    budgets: &Budgets,
+    host: &Host,
+    reservation: &mut BudgetReservation,
+    window_resets: &[Option<String>],
+) {
+    let input_cost = reservation.input_cost.unwrap_or(0.0);
+    if let Err(error) = reconcile(budgets, host, reservation, window_resets, input_cost).await {
+        tracing::debug!(%error, "Failed to release a cancelled budget reservation");
+    }
+}
+
+/// `reconcile_budget_reservation`: settle each held entry at `actual` and finalize.
+async fn reconcile(
+    budgets: &Budgets,
+    host: &Host,
+    reservation: &mut BudgetReservation,
+    window_resets: &[Option<String>],
+    actual: f64,
+) -> Result<(), EngineError> {
     if reservation.finalized == Some(true) {
         return Ok(());
     }
@@ -67,7 +92,7 @@ pub async fn release(
             reservation,
             window_resets,
             observed: &observed,
-            actual: 0.0,
+            actual,
             apply_consistent: true,
         },
         &Moment::now(),
@@ -178,6 +203,20 @@ mod tests {
         assert_eq!(held.finalized, Some(true));
         let entry = held.entries.unwrap()[0].clone().unwrap();
         assert_eq!(entry.applied_adjustment, Some(-2.0));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_cancelled_call_keeps_its_input_cost_and_gives_the_rest_back() {
+        let budgets = budgets(Some(5.0));
+        let mut held = BudgetReservation {
+            input_cost: Some(0.5),
+            ..reservation(2.0)
+        };
+
+        release_on_cancel(&budgets, &Host::detached(), &mut held, &[None]).await;
+
+        assert_eq!((value(&budgets), held.finalized), (Some(3.5), Some(true)));
     }
 
     #[rstest]

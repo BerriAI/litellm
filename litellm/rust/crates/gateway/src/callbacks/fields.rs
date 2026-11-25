@@ -248,6 +248,7 @@ fn read(entries: &CallState, field: Field) -> Option<Value> {
         Field::Model => entries.model().map(Value::from),
         Field::RequestBody => entries.body().cloned().map(Value::Object),
         Field::RateLimitStatuses => entries.rate_limit_statuses().cloned(),
+        Field::BudgetReservation => entries.budget_reservation().cloned(),
         Field::ResponseHeaders => Some(Value::Object(entries.response_headers().clone())),
         Field::Outcome => record(outcome(entries.ended()?)),
         Field::Usage => record(usage(entries.served()?.usage.as_ref()?)),
@@ -349,11 +350,15 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
             value,
         } => entries.set_rate_limit_statuses(value),
         PatchOp::Set {
+            field: Field::BudgetReservation,
+            value,
+        } => entries.set_budget_reservation(value),
+        PatchOp::Set {
             field: field @ (Field::OptionalParams | Field::ResponseHeaders),
             ..
         } => return Err(Unwritable::Set(field)),
         PatchOp::Merge {
-            field: field @ (Field::Model | Field::RateLimitStatuses),
+            field: field @ (Field::Model | Field::RateLimitStatuses | Field::BudgetReservation),
             ..
         } => return Err(Unwritable::Merge(field)),
         PatchOp::Set { field, .. } | PatchOp::Merge { field, .. } => {
@@ -466,6 +471,36 @@ mod tests {
         assert_eq!(
             (on_the_same_hook, model, after),
             (seen.clone(), seen.0.clone(), seen)
+        );
+    }
+
+    #[rstest]
+    fn a_held_budget_reaches_the_hooks_after_it_and_its_settlement_replaces_it() {
+        let reservation = |entries: &CallState, hook| {
+            input(entries, hook, FieldSet::of(&[Field::BudgetReservation]))
+                .fields
+                .raw(Field::BudgetReservation)
+                .unwrap()
+                .cloned()
+        };
+        let set = |value| PatchOp::Set {
+            field: Field::BudgetReservation,
+            value,
+        };
+
+        let seen = on_a_call(|entries| {
+            write(entries, set(json!({"reserved_cost": 0.5}))).unwrap();
+            let held = reservation(entries, Hook::PostCallSuccess);
+            write(entries, set(json!({"reserved_cost": 0.5, "settled": true}))).unwrap();
+            (held, reservation(entries, Hook::PostCallFailure))
+        });
+
+        assert_eq!(
+            seen,
+            (
+                Some(json!({"reserved_cost": 0.5})),
+                Some(json!({"reserved_cost": 0.5, "settled": true}))
+            )
         );
     }
 

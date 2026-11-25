@@ -21,7 +21,7 @@ use litellm_repositories::{KeyRepository, Side};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use crate::callbacks::hosted::Answers;
+use crate::callbacks::{budget_reservation::RowSpend, hosted::Answers};
 
 /// The counter step's host calls, which `litellm-callbacks-budgets` names but does not export.
 const BUDGET_WINDOWS: &str = "budget_windows";
@@ -88,14 +88,19 @@ impl RustSpendLogHost {
         let StoredCounter::Entity { counter_key } = counter else {
             return None;
         };
-        let Ok(SpendCounter::Key {
+        self.stored_spend(&SpendCounter::parse(&counter_key).ok()?)
+            .await
+    }
+
+    async fn stored_spend(&self, counter: &SpendCounter) -> Option<f64> {
+        let SpendCounter::Key {
             token,
             window: None,
-        }) = SpendCounter::parse(&counter_key)
+        } = counter
         else {
             return None;
         };
-        match self.keys.as_ref()?.find(&token, Side::Read).await {
+        match self.keys.as_ref()?.find(token, Side::Read).await {
             Ok(key) => Some(key?.view().spend),
             Err(error) => {
                 tracing::warn!(error = %litellm_error::Report::new(&error), "the key's stored spend could not be read");
@@ -159,6 +164,12 @@ impl RustSpendLogHost {
 impl Answers for RustSpendLogHost {
     fn answer(&self, call: &'static str, request: Value) -> BoxFuture<'_, HostReply> {
         Box::pin(self.reply(call, request))
+    }
+}
+
+impl RowSpend for RustSpendLogHost {
+    fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>> {
+        Box::pin(self.stored_spend(counter))
     }
 }
 

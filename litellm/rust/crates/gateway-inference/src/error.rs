@@ -245,6 +245,11 @@ impl Error {
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
+        if let Self::Refused(refusal) = self
+            && refusal.at_authentication
+        {
+            return Value::Object(with_request_id(proxy_envelope(refusal), request_id));
+        }
         let raw = match self {
             Self::Route(error) if let Some((_, body)) = error.upstream_response() => {
                 body.to_owned()
@@ -337,6 +342,60 @@ fn ocr_status(error: &OcrError) -> StatusCode {
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+/// `anthropic_error_content` for an exception the proxy raises while it authenticates: its type
+/// by the proxy's own status map, and its `litellm_error_type` when it names one neither map
+/// gives the status.
+fn proxy_envelope(refusal: &Refusal) -> Map<String, Value> {
+    let status = refusal.status.as_u16();
+    let kind = proxy_error_type(status);
+    let litellm_error_type = refusal
+        .kind
+        .as_deref()
+        .filter(|named| *named != kind && *named != openai_error_type(status))
+        .map(|named| ("litellm_error_type".to_owned(), Value::from(named)));
+    let error = [
+        ("type".to_owned(), Value::from(kind)),
+        ("message".to_owned(), Value::from(refusal.message.as_str())),
+    ]
+    .into_iter()
+    .chain(litellm_error_type)
+    .collect();
+    Map::from_iter([
+        ("type".to_owned(), Value::from("error")),
+        ("error".to_owned(), Value::Object(error)),
+    ])
+}
+
+/// `proxy_error_type`: `ANTHROPIC_ERROR_TYPE_MAP` and the proxy's own additions, then any other
+/// client error as an invalid request.
+fn proxy_error_type(status: u16) -> &'static str {
+    match status {
+        400 => "invalid_request_error",
+        401 => "authentication_error",
+        402 => "billing_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        409 => "conflict_error",
+        413 => "request_too_large",
+        429 => "rate_limit_error",
+        504 => "timeout_error",
+        529 => "overloaded_error",
+        _ if status != 408 && (400..500).contains(&status) => "invalid_request_error",
+        _ => "api_error",
+    }
+}
+
+/// `openai_error_type_for_status`.
+fn openai_error_type(status: u16) -> &'static str {
+    match status {
+        401 => "authentication_error",
+        403 => "permission_error",
+        429 => "rate_limit_error",
+        ..500 => "invalid_request_error",
+        _ => "internal_server_error",
+    }
+}
+
 fn envelope(status: StatusCode, message: &str) -> Map<String, Value> {
     Map::from_iter([
         ("type".to_owned(), Value::from("error")),
@@ -380,6 +439,82 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    const BUDGET: &str = "Budget has been exceeded! Key=hash Current cost: 0.0, Max budget: 1e-06";
+
+    fn budget_refusal(at_authentication: bool) -> Error {
+        Error::Refused(Refusal {
+            kind: Some("budget_exceeded".to_owned()),
+            code: Some("422".to_owned()),
+            at_authentication,
+            ..Refusal::new(StatusCode::UNPROCESSABLE_ENTITY, BUDGET)
+        })
+    }
+
+    #[rstest]
+    #[case::at_authentication(
+        true,
+        json!({"type": "error", "error": {
+            "type": "invalid_request_error",
+            "message": BUDGET,
+            "litellm_error_type": "budget_exceeded",
+        }})
+    )]
+    #[case::in_the_handler(
+        false,
+        json!({"type": "error", "error": {"type": "api_error", "message": BUDGET}})
+    )]
+    fn a_refusal_raised_while_authenticating_is_rendered_by_the_proxys_exception_handler(
+        #[case] at_authentication: bool,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(budget_refusal(at_authentication).body(None), expected);
+    }
+
+    #[rstest]
+    #[case::billing(402, None, "billing_error", None)]
+    #[case::conflict(409, None, "conflict_error", None)]
+    #[case::timeout(504, None, "timeout_error", None)]
+    #[case::request_timeout(408, None, "api_error", None)]
+    #[case::unprocessable(422, None, "invalid_request_error", None)]
+    #[case::server(503, None, "api_error", None)]
+    #[case::a_kind_the_status_gives(
+        401,
+        Some("authentication_error"),
+        "authentication_error",
+        None
+    )]
+    #[case::an_openai_kind_the_status_gives(
+        422,
+        Some("invalid_request_error"),
+        "invalid_request_error",
+        None
+    )]
+    #[case::its_own_kind(401, Some("auth_error"), "authentication_error", Some("auth_error"))]
+    fn an_authentication_refusal_takes_the_proxys_type_and_names_its_own(
+        #[case] status: u16,
+        #[case] kind: Option<&str>,
+        #[case] expected_type: &str,
+        #[case] litellm_error_type: Option<&str>,
+    ) {
+        let refused = Error::Refused(Refusal {
+            kind: kind.map(str::to_owned),
+            at_authentication: true,
+            ..Refusal::new(StatusCode::from_u16(status).unwrap(), "no")
+        });
+
+        let body = refused.body(None);
+
+        assert_eq!(
+            (
+                body["error"]["type"].as_str(),
+                body["error"]
+                    .get("litellm_error_type")
+                    .and_then(Value::as_str)
+            ),
+            (Some(expected_type), litellm_error_type)
+        );
+    }
 
     fn upstream(status: u16, body: &str) -> Error {
         Error::Route(litellm_http::Error::upstream(status, body.into()).into())

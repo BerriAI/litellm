@@ -6,10 +6,6 @@
 pub mod auth;
 mod boot;
 mod capacity;
-#[expect(
-    dead_code,
-    reason = "the budget reservation that holds these lands next"
-)]
 mod hold;
 mod model_info;
 mod precall;
@@ -22,6 +18,9 @@ pub(crate) use auth::Key;
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
+#[cfg(test)]
+pub(crate) use hold::test_prices;
+pub use hold::{Hold, HoldPrices, Unheld};
 pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
 pub use spend_log::RustSpendLogHost;
@@ -56,17 +55,33 @@ pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item
 pub struct NativeHost {
     callbacks: Arc<Callbacks>,
     windows: Arc<ContextWindows>,
+    /// What a budget hold costs for each model group the gateway holds natively.
+    prices: Arc<HoldPrices>,
 }
 
 impl NativeHost {
     pub fn new(callbacks: Arc<Callbacks>, windows: Arc<ContextWindows>) -> Self {
-        Self { callbacks, windows }
+        Self {
+            callbacks,
+            windows,
+            prices: Arc::default(),
+        }
+    }
+
+    pub fn with_prices(self, prices: Arc<HoldPrices>) -> Self {
+        Self { prices, ..self }
+    }
+
+    pub(crate) fn prices(&self) -> &HoldPrices {
+        &self.prices
     }
 }
 
 impl Host for NativeHost {
     type RouterHost<'a, A: RouteAttempt + 'a> = NativeRouterHost<'a, A>;
     type Hooks = callbacks::Call;
+
+    type Admitted = crate::Admitted;
     type Rows = NativeRows;
 
     fn layers<'a>(
@@ -83,8 +98,12 @@ impl Host for NativeHost {
         body::credentials(&auth::NativeAuthHost::credential_store(), names).await
     }
 
-    fn hooks(&self, identity: &Authenticated<NativeRows>) -> callbacks::Call {
-        self.callbacks.begin(identity)
+    fn hooks(
+        &self,
+        identity: &Authenticated<NativeRows>,
+        admitted: Option<&crate::Admitted>,
+    ) -> callbacks::Call {
+        self.callbacks.begin(identity, admitted)
     }
 
     fn router_host<'a, A: RouteAttempt>(

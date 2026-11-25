@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     AppState, Gateway, StoredConfig,
-    callbacks::parallel_request_limiter,
-    host::{self, NativeHost, NativeRows},
+    callbacks::{budgets, parallel_request_limiter},
+    host::{self, Hold, NativeHost, NativeRows, Unheld},
     middleware::request_allowlist,
 };
 use checks::Fields;
@@ -91,6 +91,13 @@ pub struct Admit {
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
+}
+
+/// What admit decided for a request it admits, which the call's callbacks read: the budget hold
+/// priced from the body the client sent, as Python prices it when it authenticates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Admitted {
+    pub(crate) hold: Option<Hold>,
 }
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
@@ -188,6 +195,32 @@ impl Admit {
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
+    /// A caller with a budget holds what the call may cost before it runs, and only a
+    /// `/v1/messages` call the gateway prices as Python does is held natively, so any other goes
+    /// to Python.
+    fn budget_hold(
+        &self,
+        caller: &Authenticated<NativeRows>,
+        path: &str,
+        fields: &Fields,
+    ) -> Result<Option<Hold>, Reason> {
+        if budgets::counters(caller, budgets::Settings::default()).is_empty() {
+            return Ok(None);
+        }
+        let unheld = || Reason::new(Refused::Body, "budget_hold");
+        if path != checks::MESSAGES {
+            return Err(unheld());
+        }
+        let model = fields
+            .get("model")
+            .and_then(Value::as_str)
+            .ok_or_else(unheld)?;
+        self.host
+            .prices()
+            .hold(model, fields)
+            .map_err(|Unheld| unheld())
+    }
+
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
     /// keeps the bytes the client sent. Either carries the authentication `admit` ran, so the
@@ -245,7 +278,15 @@ impl Admit {
         if let Some(reason) = over_its_caller {
             return Err(refused(parts, body, reason));
         }
+        let held = authenticated.as_ref().map_or(Ok(None), |caller| {
+            self.budget_hold(caller, parts.uri.path(), &fields)
+        });
+        let hold = match held {
+            Ok(hold) => hold,
+            Err(reason) => return Err(refused(parts, body, reason)),
+        };
         parts.extensions.insert(JsonObject(fields));
+        parts.extensions.insert(Admitted { hold });
         if let Ok(caller) = authenticated {
             parts.extensions.insert(Preauthenticated(Ok(caller)));
         }
@@ -435,5 +476,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body, sent);
+    }
+
+    fn budgeted() -> Authenticated<NativeRows> {
+        use litellm_gateway_auth_core::{
+            Belongs, Caller, Credential,
+            record::{Budget, EndUserRecord},
+        };
+
+        Authenticated::from(Caller {
+            credential: Credential::Key {
+                key: host::Key::stored("hash", None).with_budget(Budget {
+                    max: Some(10.0),
+                    spend: 0.0,
+                }),
+            },
+            belongs: Belongs::nobody(),
+            end_user: EndUserRecord::default(),
+        })
+    }
+
+    async fn holding_one_model() -> Admit {
+        let config = "model_list:\n  - model_name: held-model\n    litellm_params:\n      model: anthropic/held-model\n      api_key: provider-key\n";
+        let prices = Arc::new(host::HoldPrices::of(config).await);
+        Admit {
+            host: NativeHost::default().with_prices(prices),
+            ..Admit::over(&Config::default(), Vec::new())
+        }
+    }
+
+    fn sent(model: &str) -> Fields {
+        let Value::Object(fields) = json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Say hi"}]})
+        else {
+            unreachable!()
+        };
+        fields
+    }
+
+    #[rstest]
+    #[case::a_call_it_holds(budgeted(), "/v1/messages", "held-model", Ok(true))]
+    #[case::a_model_it_does_not_hold(budgeted(), "/v1/messages", "claude", Err("budget_hold"))]
+    #[case::another_route(budgeted(), "/v1/ocr", "held-model", Err("budget_hold"))]
+    #[case::a_caller_with_no_budget(
+        crate::test_support::master(),
+        "/v1/messages",
+        "claude",
+        Ok(false)
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_budgeted_call_is_priced_here_or_goes_to_python(
+        #[case] caller: Authenticated<NativeRows>,
+        #[case] path: &str,
+        #[case] model: &str,
+        #[case] expected: Result<bool, &str>,
+    ) {
+        let admit = holding_one_model().await;
+
+        let hold = admit.budget_hold(&caller, path, &sent(model));
+
+        assert_eq!(
+            hold.map(|hold| hold.is_some())
+                .map_err(|reason| (reason.why, reason.over.to_string())),
+            expected.map_err(|over| (Refused::Body, over.to_owned()))
+        );
     }
 }

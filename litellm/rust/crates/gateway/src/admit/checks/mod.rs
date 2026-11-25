@@ -15,6 +15,8 @@ mod head;
 mod model;
 mod router;
 
+pub(super) use head::MESSAGES;
+
 use axum::http::request::Parts;
 use litellm_gateway_auth::Authenticated;
 use serde_json::{Map, Value};

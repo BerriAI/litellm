@@ -15,6 +15,7 @@ use litellm_callbacks::{
     Abort, Callback, CallbackError, ErasedCallback, Field, FieldSet, Hook, HookInput, HookOutput,
     Manifest, Patch, Selection, Subscription, Verdict,
 };
+use litellm_gateway::{Admitted, Registered};
 use parking_lot::Mutex;
 use rstest::rstest;
 use serde_json::{Map, Value, json};
@@ -561,4 +562,65 @@ async fn an_answer_without_an_id_is_logged_under_the_call_id() {
         ),
         (json!("call-7"), json!("call-7"))
     );
+}
+
+/// Notes on the pre-call hook whether its state for the call was made with what admit left.
+struct SeesAdmitted {
+    manifest: Manifest,
+    saw: Mutex<Option<bool>>,
+}
+
+impl Callback for SeesAdmitted {
+    type State = bool;
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn handle<'a>(
+        &'a self,
+        _: &'a HookInput,
+        state: Option<&'a bool>,
+    ) -> BoxFuture<'a, HookOutput> {
+        *self.saw.lock() = state.copied();
+        Box::pin(async { Ok(None) })
+    }
+}
+
+#[rstest]
+#[case::left_by_admit(true)]
+#[case::not_left(false)]
+#[tokio::test]
+async fn a_calls_hooks_are_made_with_what_admit_left_on_its_request(#[case] left: bool) {
+    let upstream = answering(ResponseTemplate::new(200).set_body_json(
+        json!({"id": "msg_1", "type": "message",
+        "role": "assistant", "model": "test-model", "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 14}}),
+    ))
+    .await;
+    let sees = Arc::new(SeesAdmitted {
+        manifest: Manifest {
+            selection: Selection::named("sees_admitted"),
+            subscriptions: vec![Subscription::on(Hook::PreCall)],
+            has_request_state: true,
+        },
+        saw: Mutex::default(),
+    });
+    let registered = Registered::for_caller(sees.clone(), |_, admitted| admitted.is_some());
+    let app =
+        support::app_with_registered("anthropic/test-model", &upstream.uri(), vec![registered]);
+    let body = json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16});
+    let mut request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    if left {
+        request.extensions_mut().insert(Admitted::default());
+    }
+
+    let response = app.oneshot(request).await.unwrap();
+    to_bytes(response.into_body(), 4096).await.unwrap();
+
+    assert_eq!(*sees.saw.lock(), Some(left));
 }

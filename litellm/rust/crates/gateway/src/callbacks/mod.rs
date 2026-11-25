@@ -5,14 +5,8 @@
 //! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
 //! yet is never told.
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the budgets callback that reserves against these lands next"
-    )
-)]
-mod budgets;
+pub mod budget_reservation;
+pub(crate) mod budgets;
 mod fields;
 pub mod hosted;
 pub mod model_capacity;
@@ -37,7 +31,7 @@ use serde_json::{Map, Value};
 use strum::VariantArray;
 
 use self::hosted::Answers;
-use crate::host::NativeRows;
+use crate::{Admitted, host::NativeRows};
 
 /// A hook the gateway runs for a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, VariantArray)]
@@ -107,7 +101,8 @@ enum Cause {
     NoRecord,
 }
 
-type FromCaller = Box<dyn Fn(&Authenticated<NativeRows>) -> RequestState + Send + Sync>;
+type FromCaller =
+    Box<dyn Fn(&Authenticated<NativeRows>, Option<&Admitted>) -> RequestState + Send + Sync>;
 
 /// One callback of the stage and how its state for a request is made.
 pub struct Registered {
@@ -131,11 +126,16 @@ impl Registered {
     /// `callback`, with its state for each request made from that request's caller.
     pub fn for_caller<C: Callback>(
         callback: Arc<C>,
-        state: impl Fn(&Authenticated<NativeRows>) -> C::State + Send + Sync + 'static,
+        state: impl Fn(&Authenticated<NativeRows>, Option<&Admitted>) -> C::State
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             callback,
-            from_caller: Some(Box::new(move |identity| Arc::new(state(identity)))),
+            from_caller: Some(Box::new(move |identity, admitted| {
+                Arc::new(state(identity, admitted))
+            })),
             host: None,
         }
     }
@@ -185,14 +185,18 @@ impl Callbacks {
         Ok(Self { callbacks })
     }
 
-    pub(crate) fn begin(self: &Arc<Self>, identity: &Authenticated<NativeRows>) -> Call {
+    pub(crate) fn begin(
+        self: &Arc<Self>,
+        identity: &Authenticated<NativeRows>,
+        admitted: Option<&Admitted>,
+    ) -> Call {
         Call {
             charged: fields::charged(identity),
             states: self
                 .callbacks
                 .iter()
                 .map(|registered| match &registered.from_caller {
-                    Some(state) => Some(state(identity)),
+                    Some(state) => Some(state(identity, admitted)),
                     None => registered.callback.request_state(),
                 })
                 .collect(),
@@ -212,11 +216,14 @@ pub struct Call {
 }
 
 /// The exception Python raises for `abort`: its `ProxyRateLimitError` for a limiter's refusal,
-/// with the headers in the order the limiter lists them, and the abort's own status and words
-/// for any other.
+/// with the headers in the order the limiter lists them, its budget error for a refused
+/// reservation, and the abort's own status and words for any other.
 fn refusal(abort: Abort) -> Refusal {
     if let Some(limited) = parallel_request_limiter::rate_limited(&abort) {
         return limited.into();
+    }
+    if let Some(refused) = budget_reservation::refusal(&abort) {
+        return refused;
     }
     Refusal {
         headers: abort.headers.into_iter().collect(),
@@ -488,7 +495,7 @@ mod tests {
 
     async fn call(callbacks: Vec<Arc<Scripted>>) -> Call {
         let callbacks = callbacks.into_iter().map(registered).collect();
-        Arc::new(Callbacks::new(callbacks).unwrap()).begin(&crate::test_support::master())
+        Arc::new(Callbacks::new(callbacks).unwrap()).begin(&crate::test_support::master(), None)
     }
 
     fn body() -> Map<String, Value> {
@@ -627,8 +634,8 @@ mod tests {
             .unwrap(),
         );
         let caller = crate::test_support::master();
-        in_call(callbacks.begin(&caller).failed()).await;
-        in_call(callbacks.begin(&caller).failed()).await;
+        in_call(callbacks.begin(&caller, None).failed()).await;
+        in_call(callbacks.begin(&caller, None).failed()).await;
 
         assert_eq!(
             log.lock().clone(),
@@ -640,19 +647,21 @@ mod tests {
     #[tokio::test]
     async fn a_callbacks_state_for_a_request_can_be_made_from_its_caller() {
         let log = Log::default();
-        let seeded =
-            Registered::for_caller(scripted("seeded", &log, &[ended()], silent), |identity| {
+        let seeded = Registered::for_caller(
+            scripted("seeded", &log, &[ended()], silent),
+            |identity, _| {
                 AtomicU32::new(
                     u32::from(
                         identity.credential == litellm_gateway_auth_core::Credential::MasterKey,
                     ) * 6,
                 )
-            });
+            },
+        );
         let callbacks = Arc::new(Callbacks::new(vec![seeded]).unwrap());
         let caller = crate::test_support::master();
         let started_at = 7;
 
-        in_call(callbacks.begin(&caller).failed()).await;
+        in_call(callbacks.begin(&caller, None).failed()).await;
 
         assert_eq!(
             log.lock().clone(),

@@ -26,7 +26,9 @@ use litellm_spend_log_writer::{
 use rand::Rng;
 use tokio::sync::Notify;
 
-use super::{Registered, parallel_request_limiter::REDIS_DEFAULT_TTL};
+use super::{
+    Registered, budget_reservation::Reserver, parallel_request_limiter::REDIS_DEFAULT_TTL,
+};
 use crate::{RedisClients, host::RustSpendLogHost};
 
 /// `PROXY_BATCH_WRITE_AT` when unset.
@@ -76,6 +78,8 @@ pub struct SpendLog {
     logs: Arc<SpendLogs>,
     callback: Arc<dyn ErasedCallback>,
     host: Arc<RustSpendLogHost>,
+    /// The spend counters the callback charges, which a budget reservation holds against.
+    budgets: Arc<Budgets>,
 }
 
 impl SpendLog {
@@ -95,9 +99,10 @@ impl SpendLog {
             client,
             default_ttl: REDIS_DEFAULT_TTL,
         }));
+        let budgets = Arc::new(Budgets::new(Arc::new(counters)));
         let callback = SpendLogCallback::new(SpendLogParts {
             writer: logs.writer.clone(),
-            budgets: Arc::new(Budgets::new(Arc::new(counters))),
+            budgets: budgets.clone(),
             tokens: Arc::new(TokenRedactor::new(0, Vec::new())),
         });
         Self {
@@ -106,7 +111,14 @@ impl SpendLog {
             host: Arc::new(RustSpendLogHost::new(Some(Arc::new(KeyRepository::new(
                 database.clone(),
             ))))),
+            budgets,
         }
+    }
+
+    /// The budget reservation over the counters this callback charges, so what it holds is what
+    /// the callback settles, with a cold key counter started from the key row's spend.
+    pub(crate) fn reserver(&self) -> Arc<Reserver> {
+        Reserver::new(self.budgets.clone(), self.host.clone())
     }
 
     /// The callback as one config's callback stage runs it.

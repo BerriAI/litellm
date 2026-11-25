@@ -95,7 +95,7 @@ fn missed(error: impl std::fmt::Display) {
 /// The layer outermost on the inference routes. It makes the request's record, under the trace
 /// its headers name, and runs the rest of the request with it, the response body included, since
 /// hyper polls the body after the handler returned.
-pub(crate) async fn scoped(request: Request, next: Next) -> Response {
+pub async fn scoped(request: Request, next: Next) -> Response {
     let record = CallRecord::traced(trace::of(request.headers()));
     let response = RECORD.scope(record.clone(), next.run(request)).await;
     response.map(|body| {

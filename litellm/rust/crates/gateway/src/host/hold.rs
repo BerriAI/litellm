@@ -99,11 +99,6 @@ impl HoldPrices {
         }
     }
 
-    /// Whether a call for `model` with `body` is held natively.
-    pub(crate) fn holds(&self, model: &str, body: &Map<String, Value>) -> bool {
-        self.hold(model, body).is_ok()
-    }
-
     /// `_bound` for a `/v1/messages` call. `Ok(None)` is a call the proxy holds nothing for, as
     /// it holds nothing when no rate prices the call or the hold is not positive.
     pub(crate) fn hold(

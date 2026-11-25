@@ -243,7 +243,7 @@ impl ModelCapacity {
     }
 
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
-        Registered::for_caller(self.clone(), Counted::of)
+        Registered::for_caller(self.clone(), |identity, _| Counted::of(identity))
     }
 
     /// What `model`'s group serves a minute. `None` for a name that is no model group, which the

@@ -36,6 +36,7 @@ pub struct Call<H: Host> {
     /// The `x-litellm-call-id` the gateway's call id layer resolved, `None` on a router that does
     /// not wear it.
     pub(crate) call_id: Option<String>,
+    pub(crate) admitted: Option<H::Admitted>,
 }
 
 impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
@@ -58,6 +59,7 @@ impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
             headers: parts.headers.clone(),
             request_id,
             call_id,
+            admitted: parts.extensions.get::<H::Admitted>().cloned(),
         })
     }
 }
@@ -117,7 +119,7 @@ where
         }
     });
     let served = match body {
-        Ok(body) => hooks::around(gateway, identity, body, serve).await,
+        Ok(body) => hooks::around(gateway, identity, call.admitted.as_ref(), body, serve).await,
         Err(error) => Err(Ended::from(error)),
     };
     served.unwrap_or_else(|ended| ended.response(E::ERRORS, call.request_id.as_deref()))

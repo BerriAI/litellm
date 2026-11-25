@@ -18,7 +18,7 @@ mod state;
 mod stored;
 #[cfg(test)]
 mod test_support;
-pub use admit::{Admit, Reason, Refusal, Refused};
+pub use admit::{Admit, Admitted, Reason, Refusal, Refused};
 pub use callbacks::{
     Callbacks, Registered, Unregistrable,
     model_capacity::{self, ModelCapacity},
@@ -127,6 +127,7 @@ pub(crate) async fn inference_over(
     let (router, shaping) = boot::router(config, &catalog).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
+    let prices = Arc::new(host::HoldPrices::read(&catalog, &deployments).await);
     let limits = parallel_request_limiter::Settings::read(config, variables);
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
@@ -137,10 +138,12 @@ pub(crate) async fn inference_over(
         }));
         ModelCapacity::new(read, counters, active, router.clone())
     });
+    let reserver = spend_log.map(|spend_log| spend_log.reserver());
     let callbacks = Callbacks::new(
-        model_capacity
+        reserver
             .iter()
-            .map(|capacity| capacity.registered())
+            .map(|reserver| reserver.registered())
+            .chain(model_capacity.iter().map(|capacity| capacity.registered()))
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))
             .collect(),
@@ -152,7 +155,7 @@ pub(crate) async fn inference_over(
         router,
         shaping,
         routing,
-        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
+        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)).with_prices(prices),
     )?
     .with_body_check(litellm_gateway_inference::BodyCheck::new(
         &config.general_settings,
