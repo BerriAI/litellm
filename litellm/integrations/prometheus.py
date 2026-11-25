@@ -3278,6 +3278,9 @@ class PrometheusLogger(CustomLogger):
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
             ) or self._extract_api_provider_from_exception(original_exception)
+            logged_metadata: Final = _get_combined_custom_metadata_from_standard_logging_payload(
+                standard_logging_payload=dict(standard_logging_payload)
+            )
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -3304,9 +3307,7 @@ class PrometheusLogger(CustomLogger):
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
                 custom_metadata_labels=get_custom_labels_from_metadata(
-                    metadata=_get_combined_custom_metadata_from_standard_logging_payload(
-                        standard_logging_payload=dict(standard_logging_payload)
-                    )
+                    metadata=without(logged_metadata, "user_api_key_hash") if status_code == 401 else logged_metadata
                 ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)

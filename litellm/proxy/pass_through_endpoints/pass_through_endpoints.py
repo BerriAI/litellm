@@ -241,7 +241,13 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return (
         not key.startswith("user_api_key_")
         and key not in ROUTER_RESERVED_METADATA_FIELDS
-        and key not in ("used_client_oauth_token", "claude_subscription_usage", SESSION_ID_INHERITED_METADATA_KEY)
+        and key
+        not in (
+            "used_client_oauth_token",
+            "claude_subscription_usage",
+            "routing_decision",
+            SESSION_ID_INHERITED_METADATA_KEY,
+        )
         and (key != "model_info" or isinstance(value, Mapping))
     )
 

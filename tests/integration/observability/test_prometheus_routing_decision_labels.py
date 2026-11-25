@@ -50,9 +50,14 @@ _FAILURE_METRICS: Final = (
     "litellm_deployment_failure_responses_total",
 )
 _ROUTES: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
+_PASS_THROUGH: Final = "/routing-decision-pass-through"
+_PROXY_TOTAL: Final = ("litellm_proxy_total_requests_metric_total",)
+_REFUSAL_METRICS: Final = ("litellm_proxy_failed_requests_metric_total", "litellm_proxy_total_requests_metric_total")
 
 
 def _respond_with(vendor: rv.ResponsesVendor, request: Request) -> Reply:
+    if request.target == _PASS_THROUGH:
+        return Reply()
     if request.method == "POST" and json.loads(request.body).get("model") == _DOWN_UPSTREAM_MODEL:
         return rv.error(503, "synthetic upstream outage", "server_error")
     return vendor.respond(request)
@@ -88,7 +93,10 @@ def _config(directory: Path, upstream: Wire) -> Path:
         _complexity_router(_ROUTER_DOWN, _DOWN),
     ]
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
-    configuration["litellm_settings"]["custom_prometheus_metadata_labels"] = list(_CUSTOM_LABELS)
+    configuration["litellm_settings"]["custom_prometheus_metadata_labels"] = [*_CUSTOM_LABELS, "user_api_key_hash"]
+    configuration["general_settings"]["pass_through_endpoints"] = [
+        {"path": _PASS_THROUGH, "target": f"{upstream.url}{_PASS_THROUGH}", "auth": True}
+    ]
     configuration.setdefault("router_settings", {}).update({"num_retries": 0, "disable_cooldowns": True})
     path: Final = directory / "prometheus-routing-decision-labels.yaml"
     path.write_text(yaml.safe_dump(configuration))
@@ -183,3 +191,65 @@ def test_request_metrics_are_labelled_with_the_routers_decision_and_never_the_ca
             assert found == {metric: [expected] for metric in metrics}
 
         until_asserted(landed, seconds=30)
+
+
+@pytest.mark.parametrize("metadata_key", ("litellm_metadata", "metadata"))
+def test_a_pass_through_caller_cannot_set_the_routing_decision_labels(gateway: Gateway, metadata_key: str) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(allowed_passthrough_routes=[_PASS_THROUGH])
+        response: Final = gateway.client.post(
+            _PASS_THROUGH, json={metadata_key: _CALLER_METADATA}, headers={"Authorization": f"Bearer {key}"}
+        )
+        assert response.status_code == 200, response.text
+
+        def landed() -> None:
+            found: Final = _labels_by_metric(scrape(gateway), _PROXY_TOTAL, sha256(key.encode()).hexdigest())
+            assert found == {metric: [("None",) * len(_CUSTOM_LABELS)] for metric in _PROXY_TOTAL}
+
+        until_asserted(landed, seconds=30)
+
+
+def test_a_call_refused_before_routing_takes_no_label_from_the_caller(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(models=[_UP])
+        response: Final = gateway.client.post(
+            "/v1/chat/completions",
+            json={
+                **_body("/v1/chat/completions", _ROUTER_UP, stream=False),
+                "metadata": _CALLER_METADATA,
+                "standard_logging_object": {"metadata": _CALLER_METADATA},
+            },
+            headers={
+                "Authorization": f"Bearer {key}",
+                "x-litellm-spend-logs-metadata": json.dumps(_CALLER_METADATA),
+            },
+        )
+        assert response.status_code == 403, response.text
+
+        def landed() -> None:
+            found: Final = _labels_by_metric(scrape(gateway), _REFUSAL_METRICS, sha256(key.encode()).hexdigest())
+            assert found == {metric: [("None",) * len(_CUSTOM_LABELS)] for metric in _REFUSAL_METRICS}
+
+        until_asserted(landed, seconds=30)
+
+
+def test_unknown_keys_share_one_series_even_when_the_key_hash_is_a_custom_label(gateway: Gateway) -> None:
+    statuses: Final = tuple(
+        gateway.client.post(
+            "/v1/chat/completions",
+            json=_body("/v1/chat/completions", _ROUTER_UP, stream=False),
+            headers={"Authorization": f"Bearer sk-{uuid.uuid4().hex}"},
+        ).status_code
+        for _ in range(2)
+    )
+    assert statuses == (401, 401)
+
+    def landed() -> None:
+        refused: Final = tuple(
+            sample
+            for sample in scrape(gateway)
+            if sample.name == "litellm_proxy_failed_requests_metric_total" and sample.labels["exception_status"] == "401"
+        )
+        assert [(sample.labels["user_api_key_hash"], sample.value) for sample in refused] == [("None", 2.0)]
+
+    until_asserted(landed, seconds=30)

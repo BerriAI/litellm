@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from typing import Final, TypeAlias
 
 import pytest
+from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
 import litellm
@@ -522,3 +523,36 @@ async def test_proxy_failure_metrics_take_custom_labels_only_from_the_logged_pay
     assert {name: _custom_labels_of(name) for name in _FAILURE_HOOK_METRICS} == {
         name: [expected] for name in _FAILURE_HOOK_METRICS
     }
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [pytest.param(401, ("None", "expired-alias"), id="401"), pytest.param(429, ("bad-key-hash", "expired-alias"), id="429")],
+)
+@pytest.mark.asyncio
+async def test_proxy_failure_metrics_never_label_a_401_with_the_key_hash(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, expected: tuple[str, str]
+):
+    monkeypatch.setattr(
+        litellm, "custom_prometheus_metadata_labels", ["user_api_key_hash", "metadata.user_api_key_alias"]
+    )
+    _clear_prometheus_registry()
+    await PrometheusLogger().async_post_call_failure_hook(
+        request_data={
+            "model": "smart-router",
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": "bad-key-hash", "user_api_key_alias": "expired-alias"}
+            },
+        },
+        original_exception=HTTPException(status_code=status_code, detail="refused"),
+        user_api_key_dict=UserAPIKeyAuth(token="test-token"),
+    )
+
+    assert {
+        name: [
+            (sample.labels["user_api_key_hash"], sample.labels["metadata_user_api_key_alias"])
+            for sample in _metric_samples(name)
+        ]
+        for name in _FAILURE_HOOK_METRICS
+    } == {name: [expected] for name in _FAILURE_HOOK_METRICS}
+    _clear_prometheus_registry()
