@@ -507,6 +507,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "completion",
             "embedding",
             "image_generation",
+            "video_generation",
             "chat",
             "audio_transcription",
             "audio_speech",

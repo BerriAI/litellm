@@ -904,9 +904,61 @@ async def test_video_list_target_routes_a_named_model_the_key_may_call() -> None
     assert await video_list_target("seedance-video", None, _video_list_router(), allowed) == VideoListTarget(
         model="dep-seedance", deployment_id="dep-seedance"
     )
-    assert await video_list_target("seedance-video", "openai", _video_list_router(), allowed) == VideoListTarget(
-        model="seedance-video"
+    assert await video_list_target("seedance-video", "openai", _video_list_router(), allowed) == VideoListTarget()
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lists_the_asked_provider_when_the_named_group_has_no_deployment_for_it() -> None:
+    target: Final = await video_list_target(
+        "seedance-video", "openai", _video_list_router(), UserAPIKeyAuth(api_key="hashed")
     )
+
+    assert target == VideoListTarget(model="dep-sora", deployment_id="dep-sora")
+
+
+def _scoped_to(team_id: str | None, public_name: str) -> dict[str, str]:
+    return {} if team_id is None else {"team_id": team_id, "team_public_model_name": public_name}
+
+
+def _chat_model_listed_before_the_video_model_router(chat_deployment: dict[str, object], team_id: str | None) -> Router:
+    return Router(
+        model_list=[
+            chat_deployment,
+            {
+                "model_name": "team-seedance",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "dep-seedance", **_scoped_to(team_id, "team-seedance")},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_model_info",
+    [
+        pytest.param({}, id="cost-map-chat-mode"),
+        pytest.param({"mode": "chat"}, id="deployment-chat-mode"),
+    ],
+)
+@pytest.mark.parametrize("team_id", [None, "team-a"])
+async def test_video_list_target_lists_with_a_video_deployment_over_a_chat_model_listed_first(
+    chat_model_info: dict[str, str], team_id: str | None
+) -> None:
+    chat_model: Final = "volcengine/doubao-seed-2-0-pro-260215" if not chat_model_info else "volcengine/house-chat"
+    router: Final = _chat_model_listed_before_the_video_model_router(
+        {
+            "model_name": "team-chat",
+            "litellm_params": {"model": chat_model, "api_key": "ark-chat-key"},
+            "model_info": {"id": "dep-chat", **_scoped_to(team_id, "team-chat"), **chat_model_info},
+        },
+        team_id,
+    )
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id=team_id, team_models=["team-chat", "team-seedance"] if team_id else [])
+
+    target: Final = await video_list_target(None, "volcengine", router, key)
+
+    assert target == VideoListTarget(model="dep-seedance", deployment_id="dep-seedance")
 
 
 @pytest.mark.asyncio

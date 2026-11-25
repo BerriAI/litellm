@@ -686,15 +686,20 @@ async def model_less_provider_credentials(
     return None if deployment is None else deployment.credentials
 
 
-async def provider_deployment_the_caller_may_use(
+async def video_deployment_the_caller_may_use(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
 ) -> TeamProviderDeployment | None:
     if llm_router is None:
         return None
+    registry: Final = llm_router.registry()
     team_deployment: Final = await _first_team_deployment_the_caller_may_use(
-        _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider),
+        tuple(
+            deployment
+            for deployment in _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
+            if _may_serve_videos(registry, deployment.deployment_id)
+        ),
         custom_llm_provider,
         llm_router,
         user_api_key_dict,
@@ -704,9 +709,36 @@ async def provider_deployment_the_caller_may_use(
     for deployment in _accessible_provider_deployments(
         llm_router, user_api_key_dict, custom_llm_provider, pick=_first_provider_deployment_in_group
     ):
-        if await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict):
+        if _may_serve_videos(registry, deployment.deployment_id) and await caller_may_use_model(
+            deployment.public_model_name, llm_router, user_api_key_dict
+        ):
             return deployment
     return None
+
+
+def _may_serve_videos(registry: "RouterRegistry", deployment_id: str) -> bool:
+    deployment: Final = registry.deployment(deployment_id)
+    model_info: Final = (
+        None
+        if deployment is None
+        else registry.deployment_model_info(deployment_id, deployment.litellm_params.model, cached=True)
+    )
+    return model_info is None or model_info.get("mode") in (None, "video_generation")
+
+
+def deployment_with_credentials(llm_router: Optional["Router"], deployment_id: str) -> TeamProviderDeployment | None:
+    if llm_router is None:
+        return None
+    registry: Final = llm_router.registry()
+    deployment: Final = registry.deployment(deployment_id)
+    credentials: Final = as_str_mapping(registry.credentials(deployment_id, form="with_provider"))
+    if deployment is None or credentials is None:
+        return None
+    return TeamProviderDeployment(
+        deployment_id,
+        deployment.model_info.team_public_model_name or deployment.model_name,
+        MappingProxyType({key: value for key, value in credentials.items() if key != "model"}),
+    )
 
 
 def first_deployment_id_in_group(

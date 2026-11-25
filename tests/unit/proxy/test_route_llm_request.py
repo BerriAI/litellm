@@ -2774,6 +2774,63 @@ async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
     assert chat_route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
 
 
+_ARK_TASKS_PATH: Final = "/api/v3/contents/generations/tasks"
+
+
+def _seedance_group_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "seedance-video",
+                "litellm_params": {
+                    "model": "volcengine/doubao-seedance-2-0-mini-260615",
+                    "api_key": f"{deployment_id}-key",
+                    "api_base": f"https://{deployment_id}.ark.example",
+                },
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("dep-a", "dep-b")
+        ]
+    )
+
+
+def _video_list_pinned_to(deployment_id: str) -> dict[str, object]:
+    return {"model": deployment_id, "query_params": {}, "custom_llm_provider": "volcengine"}
+
+
+@pytest.mark.asyncio
+async def test_a_video_list_pinned_to_a_deployment_lists_with_that_deployments_key_and_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"https://dep-b.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        listed: Final = await (
+            await route_request(_video_list_pinned_to("dep-b"), _seedance_group_router(), None, "avideo_list")
+        )
+
+    assert listed["data"] == [], listed
+    assert route.calls.last.request.headers["Authorization"] == "Bearer dep-b-key"
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_video_list_leaves_its_deployment_in_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _seedance_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.get(url__startswith=f"https://dep-a.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(429, json={"error": {"code": "RateLimitExceeded", "message": "slow down"}})
+        )
+        with pytest.raises(litellm.RateLimitError):
+            await (await route_request(_video_list_pinned_to("dep-a"), router, None, "avideo_list"))
+
+    assert router.health().cooldowns.get_active_cooldowns(["dep-a"], None) == []
+
+
 _DIRECT_VECTOR_STORE_FILE_ROUTES: Final = (
     "avector_store_file_content",
     "avector_store_file_delete",

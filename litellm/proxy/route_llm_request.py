@@ -30,6 +30,7 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
+    deployment_with_credentials,
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
@@ -822,6 +823,10 @@ async def _authorized_team_file_deployment(
     return await team_deployment_the_caller_may_use(llm_router, call.caller, call.custom_llm_provider)
 
 
+def _video_list_deployment(listed_by: object, llm_router: LitellmRouter | None) -> TeamProviderDeployment | None:
+    return deployment_with_credentials(llm_router, listed_by) if isinstance(listed_by, str) else None
+
+
 def _with_team_deployment_attribution(
     kwargs: Mapping[str, object],
     team_deployment: TeamProviderDeployment,
@@ -1078,6 +1083,23 @@ async def _route_request_single_attempt(
                 **_with_team_deployment_attribution(
                     {**direct_litellm_kwargs(), **team_file_deployment.credentials},
                     team_file_deployment,
+                    llm_router,
+                    route_type,
+                )
+            )
+        video_list_deployment: Final = (
+            _video_list_deployment(direct_litellm_kwargs().get("model"), llm_router)
+            if route_type == "avideo_list"
+            else None
+        )
+        if video_list_deployment is not None:
+            return direct_litellm_endpoint()(
+                **_with_team_deployment_attribution(
+                    {
+                        **{key: value for key, value in direct_litellm_kwargs().items() if key != "model"},
+                        **video_list_deployment.credentials,
+                    },
+                    video_list_deployment,
                     llm_router,
                     route_type,
                 )

@@ -12,7 +12,7 @@ from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
     first_deployment_id_in_group,
-    provider_deployment_the_caller_may_use,
+    video_deployment_the_caller_may_use,
 )
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
@@ -192,10 +192,13 @@ async def video_list_target(
         )
         group: Final = await _served_list_group(requested_model, user_api_key_dict, llm_router, router_settings)
         pinned: Final = first_deployment_id_in_group(llm_router, group, user_api_key_dict.team_id, provider)
-        return VideoListTarget(model=pinned or requested_model, deployment_id=pinned)
+        if pinned is not None:
+            return VideoListTarget(model=pinned, deployment_id=pinned)
+        if provider is None:
+            return VideoListTarget(model=requested_model)
     if provider is None:
         return VideoListTarget()
-    deployment: Final = await provider_deployment_the_caller_may_use(llm_router, user_api_key_dict, provider)
+    deployment: Final = await video_deployment_the_caller_may_use(llm_router, user_api_key_dict, provider)
     return (
         VideoListTarget() if deployment is None else VideoListTarget(deployment.deployment_id, deployment.deployment_id)
     )
