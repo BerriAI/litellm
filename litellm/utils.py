@@ -12008,6 +12008,10 @@ class ProviderConfigManager:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 
             return SonioxRealtimeConfig.from_litellm_params(litellm_params, drop_params=drop_params)
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod

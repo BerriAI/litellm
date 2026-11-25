@@ -56,7 +56,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.litellm_core_utils.attempt_settlement import release_in_background
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -459,6 +459,7 @@ DEFAULT_CHARS_PER_TOKEN: Final = 4
 # gets misclassified as an embedding and skips output-token reservation/caps.
 RESPONSES_API_CALL_TYPES: Final = ("aresponses", "responses")
 CHAT_COMPLETION_API_CALL_TYPES: Final = (CallTypes.completion.value, CallTypes.acompletion.value)
+ANTHROPIC_MESSAGES_CALL_TYPES: Final = (CallTypes.anthropic_messages.value, CallTypes.aanthropic_messages.value)
 EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
@@ -1095,6 +1096,26 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
 def _embedding_input_type(request: Mapping[str, object] | None) -> str | None:
     input_type: Final = (request.get("inputType") or request.get("input_type")) if request is not None else None
     return input_type if isinstance(input_type, str) else None
+
+
+def _instruction_text(request: Mapping[str, object], call_type: str | None) -> str:
+    instructions: Final = (
+        request.get("system")
+        if call_type in ANTHROPIC_MESSAGES_CALL_TYPES
+        else request.get("instructions")
+        if call_type in RESPONSES_API_CALL_TYPES
+        else None
+    )
+    if isinstance(instructions, str):
+        return instructions
+    texts: Final = (as_str_mapping(block) for block in as_object_list(instructions) or ())
+    return "".join(text for block in texts if block is not None and isinstance(text := block.get("text"), str))
+
+
+def _with_system_message(messages: object, system: str) -> object:
+    if not system or not isinstance(messages, list):
+        return messages
+    return [{"role": "system", "content": system}, *messages]  # pyright: ignore[reportUnknownVariableType]  # messages are validated runtime JSON
 
 
 def _is_embedding_request(data: object, call_type: str | None) -> bool:
@@ -2257,6 +2278,13 @@ def estimate_precise_input_tokens(
         if call_type in TEXT_COMPLETION_API_CALL_TYPES
         else (None, _extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(data)), None, None)
         if call_type in EXTRACTION_API_CALL_TYPES
+        else (
+            _with_system_message(request.get("messages"), _instruction_text(request, call_type)),
+            fallback_text,
+            request.get("tools"),
+            request.get("tool_choice"),
+        )
+        if call_type in ANTHROPIC_MESSAGES_CALL_TYPES
         else (request.get("messages"), fallback_text, request.get("tools"), request.get("tool_choice"))
     )
     messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
@@ -2801,7 +2829,7 @@ def estimate_tokens_and_unpriced_media(
         estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
     )
 
-    total_chars: Final = (
+    total_chars: Final = len(_instruction_text(request_data, call_type)) + (
         len(get_str_from_messages(messages))
         if isinstance(messages, list) and messages
         else len(prompt)

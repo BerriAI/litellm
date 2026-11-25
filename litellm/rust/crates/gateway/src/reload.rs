@@ -18,7 +18,8 @@
 //! credential read fails changes nothing. A poll whose settings read fails keeps the settings it
 //! last served and deletes no model, only adding and updating. A config that does not build keeps
 //! the current one. The first read that loads lifts `db_config_not_loaded`, since the swap builds
-//! `Admit` over [`StoredConfig::Loaded`].
+//! `Admit` over [`StoredConfig::Loaded`]. A poll that finds the database came to hold or stopped
+//! holding a kind of stored object the gateway does not read swaps too, so `admit` follows it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -27,24 +28,27 @@ use std::{
     time::Duration,
 };
 
+use futures_util::stream::BoxStream;
 use litellm_at_rest::AtRestKey;
 use litellm_config::{
     Config, Value,
     db::{
         models::DbModel,
         settings::{Section, SettingsRows, UiSettings},
-        switches::store_model_in_db,
+        switches::{DbObject, store_model_in_db},
     },
 };
 use litellm_config_load::Document;
 use litellm_db::Pools;
 use litellm_error::Report;
-use litellm_repositories::Database;
-use tokio::{sync::oneshot, task::JoinHandle, time::MissedTickBehavior};
+use litellm_redis_store::config_sync::{self, Heard};
+use litellm_repositories::{Database, StoredObjects};
+use tokio::{sync::Mutex, task::JoinHandle, time::MissedTickBehavior};
 
 use crate::{
     Error, Live, Served, StoredConfig,
-    stored::{self, Fetched, Secrets, StoredRows},
+    config_sync::{Pacing, listen, uniform},
+    stored::{self, Fetched, Secrets, StoredRows, holds},
 };
 
 /// Python falls back to this when `proxy_config_reload_interval_seconds` is unset or not
@@ -148,59 +152,126 @@ impl Source {
         }
     }
 
-    /// Reads the stored config again every `every` until [`Poller::stop`], and swaps `live` to
-    /// what `rebuild` builds from each config that changed, given the [`Served`] it replaces.
-    pub fn poll_every<R, F>(self, every: Duration, live: Arc<Live>, rebuild: R) -> Poller
+    /// Reads the stored config again every `every`, and soon after each change the proxy
+    /// announces on the coordination Redis `live` serves with, until [`Poller::stop`], and swaps
+    /// `live` to what `rebuild` builds from each config that changed, given the [`Served`] it
+    /// replaces. Both go through one [`Reloader`], so they never read at once and always agree on
+    /// what is served. Without a coordination Redis only the poll runs, as Python then neither
+    /// publishes nor subscribes.
+    pub fn reload_on<R, F>(self, every: Duration, live: Arc<Live>, rebuild: R) -> Poller
     where
         R: Fn(Config, StoredConfig, Arc<Served>) -> F + Send + Sync + 'static,
-        F: Future<Output = Result<Served, Error>> + Send,
+        F: Future<Output = Result<Served, Error>> + Send + 'static,
     {
+        let heard = live
+            .current()
+            .state
+            .redis
+            .coordination
+            .as_ref()
+            .map(|client| config_sync::subscribe(client, client.namespace().as_str()));
         tracing::info!(
             every_seconds = every.as_secs(),
+            on_redis_changes = heard.is_some(),
             "reading the config the proxy stores in its database again on an interval"
         );
-        let (stop, mut stopped) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            let mut source = self;
-            let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
-            ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            loop {
-                let polled = async {
-                    ticks.tick().await;
-                    // Boxed so the spawned task's type does not nest the whole rebuild: release
-                    // builds overflow the compiler's layout query depth otherwise.
-                    let reload: Pin<Box<dyn Future<Output = Reloaded> + Send + '_>> =
-                        Box::pin(source.reading.reload(&source.database, &live, &rebuild));
-                    reload.await;
-                };
-                tokio::select! {
-                    _ = &mut stopped => return source,
-                    () = polled => (),
-                }
-            }
+        let reloader = Arc::new(Reloader {
+            reading: Mutex::new(self.reading),
+            rows: self.database,
+            live,
+            rebuild,
         });
-        Poller { stop, task }
+        Poller {
+            tasks: reloader.spawn(every, heard),
+            pools: self.pools,
+        }
     }
 }
 
-/// The running poll task.
+/// The running poll task and Redis listener.
 pub struct Poller {
-    stop: oneshot::Sender<()>,
-    task: JoinHandle<Source>,
+    tasks: Vec<JoinHandle<()>>,
+    pools: Pools,
 }
 
 impl Poller {
-    /// Stops polling, dropping a poll that is under way before it swaps, and closes the pool the
-    /// polls read through.
+    /// Stops polling and listening, dropping a read that is under way before it swaps, and closes
+    /// the pool the reads go through.
     pub async fn stop(self) {
-        let _ = self.stop.send(());
-        match self.task.await {
-            Ok(source) => source.pools.close().await,
-            Err(error) => tracing::warn!(
-                error = %Report::new(&error),
-                "the task that reads the stored config again did not stop cleanly"
-            ),
+        for task in &self.tasks {
+            task.abort();
         }
+        for task in self.tasks {
+            match task.await {
+                Err(error) if !error.is_cancelled() => tracing::warn!(
+                    error = %Report::new(&error),
+                    "a task that reads the stored config again did not stop cleanly"
+                ),
+                _ => (),
+            }
+        }
+        self.pools.close().await;
+    }
+}
+
+/// The one [`Reading`] every trigger reads the stored config through, one read at a time.
+pub(crate) struct Reloader<S, R> {
+    reading: Mutex<Reading>,
+    rows: S,
+    live: Arc<Live>,
+    rebuild: R,
+}
+
+impl<S, R, F> Reloader<S, R>
+where
+    S: StoredRows,
+    R: Fn(Config, StoredConfig, Arc<Served>) -> F,
+    F: Future<Output = Result<Served, Error>>,
+{
+    pub(crate) async fn reload(&self) -> Reloaded {
+        self.reading
+            .lock()
+            .await
+            .reload(&self.rows, &self.live, &self.rebuild)
+            .await
+    }
+}
+
+impl<R, F> Reloader<Database, R>
+where
+    R: Fn(Config, StoredConfig, Arc<Served>) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<Served, Error>> + Send + 'static,
+{
+    /// [`Reloader::reload`] on the heap, since its future is too deep for a spawned task to lay
+    /// out inline in a release build.
+    fn boxed_reload(&self) -> Pin<Box<dyn Future<Output = Reloaded> + Send + '_>> {
+        Box::pin(self.reload())
+    }
+
+    /// Starts the poll every `every`, and the listener on `heard` when there is one.
+    fn spawn(
+        self: Arc<Self>,
+        every: Duration,
+        heard: Option<BoxStream<'static, Heard>>,
+    ) -> Vec<JoinHandle<()>> {
+        let polls = self.clone();
+        let poll = tokio::spawn(async move {
+            let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+            ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticks.tick().await;
+                polls.boxed_reload().await;
+            }
+        });
+        let listener = heard.map(|heard| {
+            tokio::spawn(listen(heard, Pacing::PYTHON, uniform, move || {
+                let reloader = self.clone();
+                async move {
+                    reloader.boxed_reload().await;
+                }
+            }))
+        });
+        std::iter::once(poll).chain(listener).collect()
     }
 }
 
@@ -285,8 +356,9 @@ impl Reading {
                 return Reloaded::Unbuilt;
             }
         };
+        let objects = fetched.objects;
         let swapped = live
-            .swap(|current| rebuild(config, StoredConfig::Loaded, current))
+            .swap(|current| rebuild(config, StoredConfig::Loaded(objects), current))
             .await;
         match swapped {
             Ok(_) => {
@@ -467,6 +539,7 @@ pub(crate) struct Changes {
     removed: Vec<String>,
     credentials: Vec<String>,
     settings: Vec<String>,
+    objects: Vec<String>,
 }
 
 impl Changes {
@@ -537,6 +610,7 @@ impl Changes {
                 .collect(),
             credentials: changed(&credentials(before), &credentials(now)),
             settings,
+            objects: objects(before.objects, now.objects),
         }
     }
 
@@ -551,9 +625,19 @@ impl Changes {
             removed = self.removed.join(", "),
             credentials = self.credentials.join(", "),
             settings = self.settings.join(", "),
+            objects = self.objects.join(", "),
             "the config the proxy stores in its database changed"
         );
     }
+}
+
+/// Each kind of stored object the database came to hold or stopped holding.
+fn objects(was: StoredObjects, is: StoredObjects) -> Vec<String> {
+    <DbObject as strum::VariantArray>::VARIANTS
+        .iter()
+        .filter(|object| holds(was, **object) != holds(is, **object))
+        .map(|object| <&str>::from(*object).to_owned())
+        .collect()
 }
 
 /// A stored model compared by everything the config is built from.
@@ -593,7 +677,7 @@ mod tests {
         test_support::{Rows, credential, environment, model, secrets, setting},
     };
 
-    const FILE: &str = "model_list:\n  - model_name: file\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: file-key\ngeneral_settings:\n  master_key: gateway-key\n  store_model_in_db: true\n  supported_db_objects: [models]\n";
+    const FILE: &str = "model_list:\n  - model_name: file\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: file-key\ngeneral_settings:\n  master_key: gateway-key\n  store_model_in_db: true\n";
 
     fn params(api_key: &str) -> String {
         format!(r#"{{"model": "anthropic/claude-haiku-5-5", "api_key": "{api_key}"}}"#)
@@ -618,6 +702,7 @@ mod tests {
                 &format!(r#"{{"api_key": "{credential_key}"}}"#),
             )]),
             ui_settings: Ok(None),
+            ..Rows::default()
         }
     }
 
@@ -728,6 +813,18 @@ mod tests {
             removed: owned(removed),
             credentials: owned(credentials),
             settings: owned(settings),
+            objects: Vec::new(),
+        }
+    }
+
+    /// `rows` with the database holding a default-on guardrail.
+    fn guarded(rows: Rows) -> Rows {
+        Rows {
+            objects: Ok(StoredObjects {
+                default_on_guardrails: true,
+                ..StoredObjects::default()
+            }),
+            ..rows
         }
     }
 
@@ -746,6 +843,10 @@ mod tests {
     #[case::a_stored_variable_changed(
         stored(&[("a", "key-1")], "changed", "credential-key"),
         changes(&[], &[], &[], &[], &["environment_variables.STORED_VARIABLE"])
+    )]
+    #[case::a_guardrail_turned_on_for_every_request(
+        guarded(serving(&[("a", "key-1")])),
+        Changes { objects: vec!["guardrails".to_owned()], ..Changes::default() }
     )]
     #[tokio::test]
     async fn a_read_names_what_changed_by_model_id_credential_and_settings_key(
@@ -840,6 +941,31 @@ mod tests {
         );
         assert_eq!(reloaded, Reloaded::Swapped);
         assert_eq!(refused_for(&live, "a").await, Some("settings"));
+    }
+
+    #[rstest]
+    #[case::a_guardrail_turned_on(
+        serving(&[("a", "key-1")]),
+        guarded(serving(&[("a", "key-1")])),
+        Some("settings")
+    )]
+    #[case::the_guardrail_turned_off(
+        guarded(serving(&[("a", "key-1")])),
+        serving(&[("a", "key-1")]),
+        None
+    )]
+    #[tokio::test]
+    async fn a_read_that_finds_a_stored_object_come_or_gone_swaps_admit_to_follow_it(
+        #[case] booted_rows: Rows,
+        #[case] now: Rows,
+        #[case] refused: Option<&str>,
+    ) {
+        let (live, mut reading) = booted(&booted_rows).await;
+
+        let reloaded = reading.reload(&now, &live, &rebuild).await;
+
+        assert_eq!(reloaded, Reloaded::Swapped);
+        assert_eq!(refused_for(&live, "a").await, refused);
     }
 
     #[rstest]
@@ -968,6 +1094,7 @@ mod tests {
     #[rstest]
     #[case::the_models_cannot_be_read(Rows { models: None, ..serving(&[]) })]
     #[case::the_credentials_cannot_be_read(Rows { credentials: None, ..serving(&[]) })]
+    #[case::the_stored_objects_cannot_be_read(Rows { objects: Err(()), ..guarded(serving(&[])) })]
     #[tokio::test]
     async fn a_read_that_fails_keeps_serving_every_model(#[case] now: Rows) {
         let (live, mut reading) = booted(&serving(&[("a", "key-1")])).await;
@@ -1198,12 +1325,77 @@ mod tests {
             database,
             pools,
         };
-        let poller = source.poll_every(Duration::from_millis(10), live.clone(), rebuild);
+        let poller = source.reload_on(Duration::from_millis(10), live.clone(), rebuild);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let stopped = tokio::time::timeout(Duration::from_secs(5), poller.stop()).await;
 
         assert!(stopped.is_ok());
         assert!(Arc::ptr_eq(&before, &live.current()));
+    }
+
+    /// `rows` whose model read takes a while, counting how many reads are inside it at once.
+    struct Slow {
+        rows: Rows,
+        inside: std::sync::atomic::AtomicUsize,
+        most: std::sync::atomic::AtomicUsize,
+    }
+
+    impl StoredRows for Slow {
+        async fn settings(
+            &self,
+        ) -> Result<Vec<litellm_repositories::ConfigParam>, litellm_db::Error> {
+            self.rows.settings().await
+        }
+
+        async fn models(&self) -> Result<Vec<litellm_repositories::ProxyModel>, litellm_db::Error> {
+            use std::sync::atomic::Ordering;
+            let now = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.inside.fetch_sub(1, Ordering::SeqCst);
+            self.rows.models().await
+        }
+
+        async fn credentials(
+            &self,
+        ) -> Result<Vec<litellm_repositories::Credential>, litellm_db::Error> {
+            self.rows.credentials().await
+        }
+
+        async fn ui_settings(
+            &self,
+        ) -> Result<Option<litellm_repositories::RawJson>, litellm_db::Error> {
+            self.rows.ui_settings().await
+        }
+
+        async fn objects(&self) -> Result<litellm_repositories::StoredObjects, litellm_db::Error> {
+            self.rows.objects().await
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_poll_and_a_redis_change_never_read_at_once_and_agree_on_what_is_served() {
+        let (live, reading) = booted(&serving(&[("a", "key-1")])).await;
+        let reloader = Reloader {
+            reading: Mutex::new(reading),
+            rows: Slow {
+                rows: serving(&[("a", "key-2")]),
+                inside: Default::default(),
+                most: Default::default(),
+            },
+            live: live.clone(),
+            rebuild,
+        };
+
+        let (polled, heard) = tokio::join!(reloader.reload(), reloader.reload());
+
+        assert_eq!(
+            reloader.rows.most.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!((polled, heard), (Reloaded::Swapped, Reloaded::Unchanged));
+        assert_eq!(api_key(&live, "a").as_deref(), Some("key-2"));
     }
 }
