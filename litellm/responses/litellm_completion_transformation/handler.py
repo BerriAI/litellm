@@ -9,7 +9,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.exceptions import UnresolvablePreviousResponseError
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.responses.additional_tools import hoist_additional_tools
@@ -82,13 +82,13 @@ def _sync_follow_up_refusal(
 
 def _invalid_previous_response_id(
     previous_response_id: object, model: str, provider: str | None
-) -> litellm.BadRequestError | None:
+) -> UnknownPreviousResponseError | None:
     if previous_response_id is None or isinstance(previous_response_id, str):
         return None
     message: Final = (
         f"Invalid type for 'previous_response_id': expected a string, got {type(previous_response_id).__name__}"
     )
-    return litellm.BadRequestError(
+    return UnknownPreviousResponseError(
         message=message,
         model=model,
         llm_provider=provider,
