@@ -300,7 +300,10 @@ def _ui_uri_without_cache_buster(
 ) -> tuple[tuple[str, str, str, tuple[str, ...], str], bool] | None:
     if not uri.lower().startswith("ui://"):
         return None
-    parts: Final = urlsplit(uri)
+    try:
+        parts: Final = urlsplit(uri)
+    except ValueError:
+        return None
     query_items: Final = tuple(parts.query.split("&")) if parts.query else ()
     filtered_query: Final = tuple(item for item in query_items if item.partition("=")[0] != "v")
     has_cache_buster: Final = len(filtered_query) != len(query_items)

@@ -251,6 +251,14 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
             None,
         ),
         (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=2",),
+            ("ui://[invalid",),
+            False,
+            "ui://widget/app.html?v=2",
+            None,
+        ),
+        (
             "ui://widget/app.html?theme=dark&v=1&lang=en",
             ("ui://widget/app.html?theme=dark&v=2&lang=en",),
             (),
