@@ -332,14 +332,24 @@ def _object_mapping(value: object) -> Mapping[str, object]:
     return _OBJECT_MAPPING.validate_python(value if isinstance(value, Mapping) else {})
 
 
+def _upstream(base_url: str) -> str:
+    return base_url.rstrip("/").removesuffix("/v1")
+
+
+def _targets_passthrough_base(api_base: object, passthrough_base: str | None) -> bool:
+    if passthrough_base is None or api_base is None:
+        return True
+    return isinstance(api_base, str) and _upstream(api_base) == _upstream(passthrough_base)
+
+
 def _provider_deployment_model_info(
-    deployment: object, model: str, passthrough_provider: LlmProviders
+    deployment: object, model: str, passthrough_provider: LlmProviders, passthrough_base: str | None
 ) -> Mapping[str, object] | None:
     fields: Final = _object_mapping(deployment)
     params: Final = _object_mapping(fields.get("litellm_params"))
     backend: Final = params.get("model")
     provider_override: Final = params.get("custom_llm_provider")
-    if not isinstance(backend, str):
+    if not isinstance(backend, str) or not _targets_passthrough_base(params.get("api_base"), passthrough_base):
         return None
     try:
         backend_model, provider, _, _ = get_llm_provider(
@@ -357,6 +367,7 @@ def _provider_deployment_model_info(
 
 def _passthrough_deployment_pricing_model_info(
     passthrough_provider: LlmProviders,
+    passthrough_base: str | None,
     llm_router: litellm.Router | None,
     request_body: Mapping[str, object],
     team_id: str | None,
@@ -364,7 +375,8 @@ def _passthrough_deployment_pricing_model_info(
     """
     The pass-through selects no deployment, so ``request_body`` is the body it forwards. Only a single deployment in
     that model's group serving that exact model on the pass-through's provider can say what it costs: with several,
-    any pick could bill another deployment's negotiated price.
+    any pick could bill another deployment's negotiated price. With ``passthrough_base`` set, a deployment pointing at
+    another server is not the one the pass-through pays for, so its price is ignored.
     """
     model: Final = request_body.get("model")
     if llm_router is None or not isinstance(model, str) or not model:
@@ -373,7 +385,8 @@ def _passthrough_deployment_pricing_model_info(
         model_info
         for deployment in llm_router.registry().deployments(model, team_id=team_id) or ()
         if llm_router.registry().includes(deployment, team_id=team_id)
-        and (model_info := _provider_deployment_model_info(deployment, model, passthrough_provider)) is not None
+        and (model_info := _provider_deployment_model_info(deployment, model, passthrough_provider, passthrough_base))
+        is not None
     )
     if len(candidates) != 1:
         return None
@@ -382,7 +395,7 @@ def _passthrough_deployment_pricing_model_info(
 
 
 anthropic_deployment_pricing_model_info: Final = partial(
-    _passthrough_deployment_pricing_model_info, LlmProviders.ANTHROPIC
+    _passthrough_deployment_pricing_model_info, LlmProviders.ANTHROPIC, None
 )
 openai_deployment_pricing_model_info: Final = partial(_passthrough_deployment_pricing_model_info, LlmProviders.OPENAI)
 
@@ -3987,7 +4000,9 @@ async def openai_proxy_route(
         request.state,
         LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
         DeploymentPricingResolver(
-            resolve=partial(openai_deployment_pricing_model_info, llm_router, team_id=user_api_key_dict.team_id)
+            resolve=partial(
+                openai_deployment_pricing_model_info, base_target_url, llm_router, team_id=user_api_key_dict.team_id
+            )
         ),
     )
     return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
