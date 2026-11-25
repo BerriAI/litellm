@@ -452,6 +452,37 @@ async def test_replayed_tool_use_ids_are_rewritten_only_for_an_upstream_that_enf
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "token_dir_env"),
+    [("github_copilot/gpt-5.4", "GITHUB_COPILOT_TOKEN_DIR"), ("chatgpt/gpt-5.4", "CHATGPT_TOKEN_DIR")],
+    ids=["github_copilot", "chatgpt"],
+)
+async def test_deciding_tool_use_ids_never_logs_in_to_a_provider_that_authenticates_on_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str, token_dir_env: str
+) -> None:
+    from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+
+    monkeypatch.setenv(token_dir_env, str(tmp_path))
+
+    prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model=model)
+
+    assert prepared == _replayed_tool_round("functions.Bash:0")
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", "azure_ai/my-deployment"],
+    ids=["bedrock_application_inference_profile", "azure_ai_deployment"],
+)
+def test_replayed_tool_use_ids_are_rewritten_for_a_host_that_can_serve_claude_under_any_name(model: str) -> None:
+    from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+
+    prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model=model)
+
+    assert prepared == _replayed_tool_round("functions_Bash_0")
+
+
+@pytest.mark.asyncio
 async def test_a_chat_bridged_backend_gets_and_returns_its_own_tool_call_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock(assert_all_called=True) as upstream:
