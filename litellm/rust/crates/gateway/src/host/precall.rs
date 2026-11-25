@@ -29,7 +29,7 @@ use litellm_router_core::{
     precall::{DeploymentFacts, PreCallFacts},
     registry::ModelInfo,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 
 use super::{model_info::NativeModelInfoHost, prompt_estimate::Countable};
@@ -110,6 +110,18 @@ fn without_own_window(deployment: &Deployment) -> Option<Deployment> {
 /// `_deployment_max_input_tokens`: the merged context window, or `None` when there is none or the
 /// deployment cannot be resolved.
 async fn merged_window(catalog: &Catalog, deployment: &Deployment) -> Option<i64> {
+    merged_info(catalog, deployment)
+        .await?
+        .get("max_input_tokens")?
+        .as_i64()
+}
+
+/// `get_router_model_info` for `deployment`: its own `model_info` over the cost map's row, or
+/// `None` when the deployment cannot be resolved.
+pub(super) async fn merged_info(
+    catalog: &Catalog,
+    deployment: &Deployment,
+) -> Option<Map<String, Value>> {
     let base_model = |named: Option<&Value>| named.cloned().unwrap_or(Value::Null);
     let query = RouterModelInfoQuery {
         deployment_id: Value::String(deployment.id.clone()),
@@ -124,9 +136,9 @@ async fn merged_window(catalog: &Catalog, deployment: &Deployment) -> Option<i64
         deployment,
     };
     match router_model_info(&host, &query).await {
-        Ok(merged) => merged?.info.get("max_input_tokens")?.as_i64(),
+        Ok(merged) => Some(merged?.info),
         Err(error) => {
-            tracing::debug!(%error, id = %deployment.id, "skipping the deployment's context window");
+            tracing::debug!(%error, id = %deployment.id, "the deployment's model info is not read");
             None
         }
     }

@@ -4223,6 +4223,7 @@ dependencies = [
  "litellm-config-load",
  "litellm-core-utils",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-db",
  "litellm-db-resolve",
  "litellm-db-testing",

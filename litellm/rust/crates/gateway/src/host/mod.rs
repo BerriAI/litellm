@@ -6,6 +6,11 @@
 pub mod auth;
 mod boot;
 mod capacity;
+#[expect(
+    dead_code,
+    reason = "the budget reservation that holds these lands next"
+)]
+mod hold;
 mod model_info;
 mod precall;
 mod prompt_estimate;

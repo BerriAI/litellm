@@ -33,6 +33,7 @@ litellm-spend-log-writer.workspace = true
 parking_lot.workspace = true
 arc-swap.workspace = true
 litellm-config.workspace = true
+litellm-cost.workspace = true
 litellm-config-load.workspace = true
 litellm-core-utils.workspace = true
 litellm-db.workspace = true
@@ -55,7 +56,7 @@ litellm-license.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-model-catalog.workspace = true
-litellm-token-counter = { path = "../token-counter", default-features = false, features = ["tiktoken"] }
+litellm-token-counter = { path = "../token-counter", default-features = false, features = ["huggingface", "tiktoken"] }
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true
 litellm-redaction.workspace = true
