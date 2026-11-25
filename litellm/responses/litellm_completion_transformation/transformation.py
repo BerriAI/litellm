@@ -4,6 +4,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 import json
 import re
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
@@ -41,6 +42,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
@@ -66,6 +68,7 @@ from litellm.responses.bridge_check import (
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.responses.utils import held_by_a_provider
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.bedrock import S3MediaImageUrlObject
@@ -311,8 +314,56 @@ def _attribute_fields(value: object) -> dict[str, object]:
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
 
 
+_PROXY_REPLAY_REQUIREMENTS: Final = (
+    "LiteLLM rebuilds this model's conversation from the LiteLLM proxy's spend logs, so the id must be a response "
+    "this proxy served and already logged, with a database, `disable_spend_logs` left off, and "
+    "`store_prompts_in_spend_logs: true`."
+)
+_SDK_REPLAY_REQUIREMENTS: Final = (
+    "LiteLLM can rebuild this model's conversation only inside the LiteLLM proxy, so send the earlier turns in "
+    "`input` instead of `previous_response_id`."
+)
+
+
+def previous_response_refusal(client_response_ids: tuple[str, ...]) -> type[UnresolvablePreviousResponseError]:
+    return (
+        UnresolvablePreviousResponseError
+        if held_by_a_provider(client_response_ids[0])
+        else UnknownPreviousResponseError
+    )
+
+
+def previous_response_not_found(
+    client_response_ids: tuple[str, ...], model: str, provider: str | None
+) -> UnresolvablePreviousResponseError:
+    message: Final = f"Previous response with id '{client_response_ids[-1]}' not found. " + (
+        _PROXY_REPLAY_REQUIREMENTS if "litellm.proxy.proxy_server" in sys.modules else _SDK_REPLAY_REQUIREMENTS
+    )
+    return previous_response_refusal(client_response_ids)(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+        },
+    )
+
+
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+
+
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
+
+
+def holds_an_earlier_reply(request_input: str | ResponseInputParam | None) -> bool:
+    return isinstance(request_input, list) and any(
+        _input_item_role(input_item) == "assistant" or input_item.get("type") in _TOOL_CALL_ITEM_TYPES
+        for input_item in request_input
+    )
 
 
 SessionMessage: TypeAlias = (
@@ -1056,6 +1107,7 @@ class LiteLLMCompletionResponsesConfig:
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
+        request_input: str | ResponseInputParam | None = None,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1079,6 +1131,8 @@ class LiteLLMCompletionResponsesConfig:
         )
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
+        if previous_response_id and not stored_messages and not holds_an_earlier_reply(request_input):
+            raise previous_response_not_found(previous_response_client_ids or (previous_response_id,), model, provider)
         replayed_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
                 stored_messages, CompletionRoute.model_validate(litellm_completion_request)
@@ -1108,9 +1162,6 @@ class LiteLLMCompletionResponsesConfig:
             else _messages[:instructions_end]
         )
 
-        # If session messages are empty (e.g., no database in test environment),
-        # we still need to process the new input messages
-        # Store original _messages before combining for safety check
         original_new_messages: Final = _messages.copy() if _messages else []
 
         combined_messages = [*leading_system_messages, *session_messages, *_messages[instructions_end:]]
@@ -2102,7 +2153,7 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        return input_item.get("type") in _TOOL_CALL_ITEM_TYPES
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(

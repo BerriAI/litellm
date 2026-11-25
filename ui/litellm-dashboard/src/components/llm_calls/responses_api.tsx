@@ -61,6 +61,12 @@ const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEve
   ];
 };
 
+const responsesInput = (messages: MessageType[]) =>
+  messages.map((message) => ({ role: message.role, content: message.content, type: "message" }));
+
+const isUnresolvedPreviousResponse = (error: unknown): boolean =>
+  error instanceof openai.APIError && error.status === 400 && error.param === "previous_response_id";
+
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
   updateTextUI: (role: string, delta: string, model?: string) => void,
@@ -88,6 +94,7 @@ export async function makeOpenAIResponsesRequest(
   streamingEnabled: boolean = true,
   onTotalLatency?: (latency: number) => void,
   customHeaders?: CustomHeaders,
+  replayHistory?: () => MessageType[],
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -118,24 +125,6 @@ export async function makeOpenAIResponsesRequest(
     let firstTokenReceived = false;
     let servedFromResponseCache = false;
 
-    // Format messages for the API
-    const formattedInput = messages.map((message) => {
-      // If content is already an array (multimodal), use it directly
-      if (Array.isArray(message.content)) {
-        return {
-          role: message.role,
-          content: message.content,
-          type: "message",
-        };
-      }
-      // Otherwise, wrap text content in the expected format
-      return {
-        role: message.role,
-        content: message.content,
-        type: "message",
-      };
-    });
-
     // Build tools array
     const mcpSelection: BuildMcpToolBlocksArgs = {
       selectedMCPServers,
@@ -153,28 +142,39 @@ export async function makeOpenAIResponsesRequest(
       });
     }
 
-    const requestBody = {
+    const sharedBody = {
       model: selectedModel,
-      input: formattedInput,
       litellm_trace_id: traceId,
-      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...(vector_store_ids ? { vector_store_ids } : {}),
       ...(guardrails ? { guardrails } : {}),
       ...(policies ? { policies } : {}),
       ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
     };
+    const requestBody = {
+      ...sharedBody,
+      input: responsesInput(messages),
+      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+    };
+    const sendWithHistoryReplay = async <T,>(send: (body: typeof requestBody) => Promise<T>): Promise<T> => {
+      try {
+        return await send(requestBody);
+      } catch (error) {
+        if (!previousResponseId || !replayHistory || !isUnresolvedPreviousResponse(error)) throw error;
+        return send({ ...sharedBody, input: responsesInput(replayHistory()) });
+      }
+    };
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
     const response = streamingEnabled
-      ? await (client as any).responses.create({ ...requestBody, stream: true }, { signal })
-      : await (async () => {
+      ? await sendWithHistoryReplay((body) => (client as any).responses.create({ ...body, stream: true }, { signal }))
+      : await sendWithHistoryReplay(async (body) => {
           const nonStreamingResponse = await (client as any).responses
-            .create({ ...requestBody, stream: false }, { signal })
+            .create({ ...body, stream: false }, { signal })
             .withResponse();
           servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
           return nonStreamingResponse.data;
-        })();
+        });
     const events = streamingEnabled ? response : responseAsEvents(response);
 
     let mcpToolUsed = "";
