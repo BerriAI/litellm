@@ -5,7 +5,7 @@ import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import IntEnum
@@ -693,15 +693,33 @@ async def provider_deployment_the_caller_may_use(
 ) -> TeamProviderDeployment | None:
     if llm_router is None:
         return None
-    team_deployments: Final = _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
-    if team_deployments:
-        return await _first_team_deployment_the_caller_may_use(
-            team_deployments, custom_llm_provider, llm_router, user_api_key_dict
-        )
-    for deployment in _accessible_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider):
+    team_deployment: Final = await _first_team_deployment_the_caller_may_use(
+        _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider),
+        custom_llm_provider,
+        llm_router,
+        user_api_key_dict,
+    )
+    if team_deployment is not None:
+        return team_deployment
+    for deployment in _accessible_provider_deployments(
+        llm_router, user_api_key_dict, custom_llm_provider, pick=_first_provider_deployment_in_group
+    ):
         if await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict):
             return deployment
     return None
+
+
+def first_deployment_id_in_group(
+    llm_router: Optional["Router"], model_name: str, team_id: str | None, custom_llm_provider: str | None
+) -> str | None:
+    if llm_router is None:
+        return None
+    registry: Final = llm_router.registry()
+    if custom_llm_provider is None:
+        first: Final = registry.credentials(model_name, form="deployment", team_id=team_id)
+        return None if first is None else first.model_info.id
+    for_provider: Final = _first_provider_deployment_in_group(registry, model_name, team_id, custom_llm_provider)
+    return None if for_provider is None else for_provider.deployment_id
 
 
 async def team_deployment_as_the_caller_reaches_it(
@@ -1025,6 +1043,32 @@ def _provider_deployment(
     return TeamProviderDeployment(deployment.model_info.id, model_name, credentials)
 
 
+def _deployment_id(deployment: object) -> str | None:
+    deployment_id: Final = require_attributes(subscript(deployment, "model_info"), _SupportsGet, "get").get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
+def _first_provider_deployment_in_group(
+    registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str
+) -> TeamProviderDeployment | None:
+    group_deployment_ids: Final = (
+        deployment_id
+        for deployment in registry.deployments(model_name, source="all", team_id=team_id)
+        if (deployment_id := _deployment_id(deployment)) is not None
+    )
+    in_group: Final = next(
+        (
+            TeamProviderDeployment(deployment_id, model_name, credentials)
+            for deployment_id in group_deployment_ids
+            if (credentials := _provider_credentials(registry, deployment_id, team_id, custom_llm_provider)) is not None
+        ),
+        None,
+    )
+    if in_group is not None:
+        return in_group
+    return _provider_deployment(registry, model_name, team_id, custom_llm_provider)
+
+
 def _team_provider_deployments(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
@@ -1091,6 +1135,7 @@ def _accessible_provider_deployments(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
+    pick: Callable[["RouterRegistry", str, str | None, str], TeamProviderDeployment | None] = _provider_deployment,
 ) -> Iterator[TeamProviderDeployment]:
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
@@ -1134,7 +1179,7 @@ def _accessible_provider_deployments(
     return (
         deployment
         for model_name in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
-        if (deployment := _provider_deployment(registry, model_name, team_id, custom_llm_provider)) is not None
+        if (deployment := pick(registry, model_name, team_id, custom_llm_provider)) is not None
     )
 
 

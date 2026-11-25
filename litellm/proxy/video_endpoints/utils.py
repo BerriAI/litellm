@@ -1,14 +1,16 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
 import orjson
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, has_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
+    first_deployment_id_in_group,
     provider_deployment_the_caller_may_use,
 )
 from litellm.types.videos.main import DecodedVideoId, VideoObject
@@ -150,21 +152,72 @@ async def authorized_video_model(
     return model
 
 
+@dataclass(frozen=True, slots=True)
+class VideoListTarget:
+    model: str | None = None
+    deployment_id: str | None = None
+
+
 async def video_list_target(
     requested_model: str | None,
     custom_llm_provider: object,
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
-) -> Mapping[str, object]:
+) -> VideoListTarget:
+    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
     if requested_model:
         await authorize_model_for_key(
             model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
         )
-        return {"model": requested_model}
-    if not isinstance(custom_llm_provider, str):
-        return {}
-    deployment: Final = await provider_deployment_the_caller_may_use(llm_router, user_api_key_dict, custom_llm_provider)
-    return {} if deployment is None else {"model": deployment.deployment_id}
+        pinned: Final = first_deployment_id_in_group(llm_router, requested_model, user_api_key_dict.team_id, provider)
+        return VideoListTarget(model=pinned or requested_model, deployment_id=pinned)
+    if provider is None:
+        return VideoListTarget()
+    deployment: Final = await provider_deployment_the_caller_may_use(llm_router, user_api_key_dict, provider)
+    return (
+        VideoListTarget() if deployment is None else VideoListTarget(deployment.deployment_id, deployment.deployment_id)
+    )
+
+
+def _video_id_with_deployment(video_id: object, deployment_id: str) -> object:
+    if not isinstance(video_id, str):
+        return video_id
+    decoded: Final = decode_video_id_with_provider(video_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    original_video_id: Final = decoded.get("video_id")
+    if not provider or not original_video_id or decoded.get("deployment_id"):
+        return video_id
+    return encode_video_id_with_provider(
+        video_id=original_video_id,
+        provider=provider,
+        model_id=decoded.get("model_id"),
+        served_model=decoded.get("served_model"),
+        deployment_id=deployment_id,
+        requested_model=decoded.get("requested_model"),
+    )
+
+
+def _listed_video_with_deployment(video: object, deployment_id: str) -> object:
+    fields: Final = as_str_mapping(video)
+    if fields is None or "id" not in fields:
+        return video
+    return {**fields, "id": _video_id_with_deployment(fields["id"], deployment_id)}
+
+
+def stamp_listed_video_ids(listed: object, deployment_id: str | None) -> object:
+    fields: Final = as_str_mapping(listed)
+    if deployment_id is None or fields is None:
+        return listed
+    videos: Final = as_object_list(fields.get("data"))
+    stamped_videos: Final[Mapping[str, object]] = (
+        {} if videos is None else {"data": [_listed_video_with_deployment(video, deployment_id) for video in videos]}
+    )
+    stamped_cursors: Final = {
+        cursor: _video_id_with_deployment(fields[cursor], deployment_id)
+        for cursor in ("first_id", "last_id")
+        if cursor in fields
+    }
+    return {**fields, **stamped_videos, **stamped_cursors}
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:

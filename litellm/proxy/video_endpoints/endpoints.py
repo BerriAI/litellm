@@ -30,6 +30,7 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    stamp_listed_video_ids,
     video_list_target,
     video_reference_to_id,
 )
@@ -185,15 +186,16 @@ async def video_list(
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
     )
+    target: Final = await video_list_target(
+        requested_model=request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME),
+        custom_llm_provider=custom_llm_provider,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
     data: Final[dict[str, object]] = {
         "query_params": dict(request.query_params),
         **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
-        **await video_list_target(
-            requested_model=request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME),
-            custom_llm_provider=custom_llm_provider,
-            llm_router=llm_router,
-            user_api_key_dict=user_api_key_dict,
-        ),
+        **({"model": target.model} if target.model else {}),
     }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -223,7 +225,7 @@ async def video_list(
             version=version,
         )
     else:
-        return listed
+        return stamp_listed_video_ids(listed, target.deployment_id)
 
 
 @router.get(

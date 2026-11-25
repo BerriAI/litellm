@@ -42,6 +42,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -685,9 +686,33 @@ async def test_list__provider_from_header(harness):
     [(None, {"model": "seedance-video"}), ({"x-litellm-model": "seedance-video"}, None)],
 )
 async def test_list__named_model_routes_the_list_to_its_deployment(harness, headers, query):
+    harness.router.get_credential_deployment.return_value = _seedance_deployment()
+
     await call_list(harness, headers=headers, query=query)
 
-    assert harness.processor_data() == {"query_params": query or {}, "model": "seedance-video"}
+    assert harness.processor_data() == {"query_params": query or {}, "model": "dep-seedance"}
+
+
+@pytest.mark.asyncio
+async def test_list__listed_ids_name_the_deployment_that_served_them(harness):
+    harness.router.get_credential_deployment.return_value = _seedance_deployment()
+    listed_id: Final = encode_video_id_with_provider("cgt-1", "volcengine", "doubao-seedance-2-0-mini-260615")
+    harness.respond_with({"object": "list", "data": [{"id": listed_id}], "first_id": listed_id, "last_id": listed_id})
+
+    listed: Final = await call_list(harness, query={"model": "seedance-video"})
+
+    assert [
+        decode_video_id_with_provider(video_id).get("deployment_id")
+        for video_id in (listed["data"][0]["id"], listed["first_id"], listed["last_id"])
+    ] == ["dep-seedance"] * 3
+
+
+def _seedance_deployment() -> Deployment:
+    return Deployment(
+        model_name="seedance-video",
+        litellm_params=LiteLLM_Params(model="volcengine/doubao-seedance-2-0-mini-260615"),
+        model_info=ModelInfo(id="dep-seedance"),
+    )
 
 
 # =========================================================================== #
