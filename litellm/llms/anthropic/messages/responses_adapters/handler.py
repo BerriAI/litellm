@@ -581,10 +581,11 @@ def _build_responses_kwargs(
         request_data["speed"] = speed
     if sent_mcp_servers:
         request_data["mcp_servers"] = list(sent_mcp_servers)
-    if container is not None and "container" not in explicitly_dropped:
-        request_data["container"] = container if isinstance(container, str) else dict(container)
-
-    anthropic_request: Final = AnthropicMessagesRequest(**request_data)
+    anthropic_request: Final[AnthropicMessagesRequest] = (
+        {**request_data, "container": container if isinstance(container, str) else dict(container)}
+        if container is not None and "container" not in explicitly_dropped
+        else AnthropicMessagesRequest(**request_data)
+    )
     drop_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,

@@ -491,7 +491,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     mcp_servers: list[AnthropicMcpServerTool] | None
     context_management: dict[str, object] | None
     compaction: ReadOnly[AnthropicCompaction | None]
-    container: str | dict[str, object] | None  # Container id, or config with skills for code execution
+    container: ReadOnly[str | dict[str, object] | None]  # Container id, or config with skills for code execution
     output_format: AnthropicOutputSchema | None  # Structured outputs support
     speed: str | None  # Fast mode support for Opus models
     output_config: AnthropicOutputConfig | None  # Configuration for Claude's output behavior
