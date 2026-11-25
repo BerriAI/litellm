@@ -8,7 +8,6 @@ use reqwest::{
     Request,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
-use sha2::{Digest, Sha256};
 
 use crate::{
     AwsAuthService, AwsCredentialSource, Error, SigningScope, SigningStage, aws_signature_headers,
@@ -92,8 +91,19 @@ fn signable(headers: &HeaderMap, keep_security_token: bool) -> HeaderMap {
         .collect()
 }
 
-fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
+#[cfg(not(feature = "fips"))]
+fn sha256(bytes: &[u8]) -> impl AsRef<[u8]> {
+    <sha2::Sha256 as sha2::Digest>::digest(bytes)
+}
+
+#[cfg(feature = "fips")]
+fn sha256(bytes: &[u8]) -> impl AsRef<[u8]> {
+    aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes)
+}
+
+pub fn hex_sha256(bytes: &[u8]) -> String {
+    sha256(bytes)
+        .as_ref()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
@@ -563,6 +573,27 @@ mod tests {
                 .as_str()],
             )
         );
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest::rstest]
+    #[case::sigv4_headers(CallerSigningHeaders::Dropped)]
+    #[case::botocore_date_header(CallerSigningHeaders::Botocore)]
+    fn the_fips_build_signs_in_the_fips_module(#[case] caller_headers: CallerSigningHeaders) {
+        let request = json(
+            URL,
+            &[("Date".into(), "Wed, 01 Jan 2020 00:00:00 GMT".into())],
+            &json_value!({}),
+            None,
+        )
+        .unwrap();
+        let signer = signer("bedrock").with_caller_headers(caller_headers);
+
+        let before = unsafe { aws_lc_fips_sys::FIPS_service_indicator_before_call() };
+        signer.sign(&request).unwrap();
+        let after = unsafe { aws_lc_fips_sys::FIPS_service_indicator_after_call() };
+
+        assert_eq!(after - before, 7);
     }
 
     #[test]

@@ -7,10 +7,11 @@ repository.workspace = true
 
 [features]
 test-support = []
-fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips"]
+fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips", "litellm-auth-aws/fips"]
 
 [dependencies]
 litellm-at-rest.workspace = true
+litellm-auth-aws.workspace = true
 litellm-python-compat.workspace = true
 litellm-env.workspace = true
 litellm-secret-value.workspace = true

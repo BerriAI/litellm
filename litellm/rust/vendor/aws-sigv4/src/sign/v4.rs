@@ -11,12 +11,55 @@ use crate::{
 use aws_credential_types::Credentials;
 use aws_smithy_runtime_api::{client::identity::Identity, http::Headers};
 use bytes::Bytes;
+#[cfg(not(feature = "fips"))]
 use hmac::{digest::FixedOutput, Hmac, KeyInit, Mac};
+#[cfg(not(feature = "fips"))]
 use sha2::{Digest, Sha256};
 use std::time::SystemTime;
 
+#[cfg(feature = "fips")]
+pub(crate) use aws_lc::sha256_hex_string;
+#[cfg(feature = "fips")]
+pub use aws_lc::{calculate_signature, generate_signing_key};
+
+#[cfg(feature = "fips")]
+mod aws_lc {
+    use super::format_date;
+    use aws_lc_rs::{digest, hmac};
+    use std::time::SystemTime;
+
+    fn hmac_sha256(key: &[u8], data: &[u8]) -> hmac::Tag {
+        hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), data)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn sha256_hex_string(bytes: impl AsRef<[u8]>) -> String {
+        hex::encode(digest::digest(&digest::SHA256, bytes.as_ref()))
+    }
+
+    pub fn calculate_signature(signing_key: impl AsRef<[u8]>, string_to_sign: &[u8]) -> String {
+        hex::encode(hmac_sha256(signing_key.as_ref(), string_to_sign))
+    }
+
+    pub fn generate_signing_key(
+        secret: &str,
+        time: SystemTime,
+        region: &str,
+        service: &str,
+    ) -> impl AsRef<[u8]> {
+        let k_date = hmac_sha256(
+            format!("AWS4{secret}").as_bytes(),
+            format_date(time).as_bytes(),
+        );
+        let k_region = hmac_sha256(k_date.as_ref(), region.as_bytes());
+        let k_service = hmac_sha256(k_region.as_ref(), service.as_bytes());
+        hmac_sha256(k_service.as_ref(), b"aws4_request")
+    }
+}
+
 /// HashedPayload = Lowercase(HexEncode(Hash(requestPayload)))
 #[allow(dead_code)] // Unused when compiling without certain features
+#[cfg(not(feature = "fips"))]
 pub(crate) fn sha256_hex_string(bytes: impl AsRef<[u8]>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -24,6 +67,7 @@ pub(crate) fn sha256_hex_string(bytes: impl AsRef<[u8]>) -> String {
 }
 
 /// Calculates a Sigv4 signature
+#[cfg(not(feature = "fips"))]
 pub fn calculate_signature(signing_key: impl AsRef<[u8]>, string_to_sign: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(signing_key.as_ref())
         .expect("HMAC can take key of any size");
@@ -32,6 +76,7 @@ pub fn calculate_signature(signing_key: impl AsRef<[u8]>, string_to_sign: &[u8])
 }
 
 /// Generates a signing key for Sigv4
+#[cfg(not(feature = "fips"))]
 pub fn generate_signing_key(
     secret: &str,
     time: SystemTime,

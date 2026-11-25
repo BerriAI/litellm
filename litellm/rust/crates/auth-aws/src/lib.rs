@@ -10,4 +10,4 @@ pub use aws_credential_types::Credentials;
 pub use error::{CredentialFlow, Error, SigningStage, StsFailure};
 pub use provider::AwsCredentialsProvider;
 pub use region::{AwsPartition, aws_partition, bedrock_runtime_endpoint};
-pub use signer::{CallerSigningHeaders, SigV4Signer};
+pub use signer::{CallerSigningHeaders, SigV4Signer, hex_sha256};

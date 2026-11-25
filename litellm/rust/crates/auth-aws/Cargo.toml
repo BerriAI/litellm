@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+fips = ["aws-sigv4/fips", "dep:aws-lc-rs", "dep:aws-lc-fips-sys"]
+
 [dependencies]
 litellm-auth-types.workspace = true
 litellm-error.workspace = true
@@ -29,6 +32,8 @@ aws-sigv4 = "1.5.1"
 aws-types = "1.4.0"
 aws-runtime = { version = "1.9.4", default-features = false }
 aws-smithy-runtime-api = "1.13.0"
+aws-lc-rs = { version = "1.17.3", default-features = false, features = ["fips"], optional = true }
+aws-lc-fips-sys = { version = "0.13.17", optional = true }
 
 [dev-dependencies]
 litellm-secrets.workspace = true
