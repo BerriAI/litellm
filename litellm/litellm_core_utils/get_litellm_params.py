@@ -90,6 +90,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "use_xai_oauth",
             "chatgpt_auth_file",
             "github_copilot_auth_type",
+            "litellm_credential_name",
             "github_copilot_host",
             "github_copilot_app_id",
             "github_copilot_app_installation_id",
