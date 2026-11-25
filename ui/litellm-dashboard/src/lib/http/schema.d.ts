@@ -35295,6 +35295,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
@@ -50593,6 +50597,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */

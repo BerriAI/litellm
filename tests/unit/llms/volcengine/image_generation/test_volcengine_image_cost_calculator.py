@@ -3,6 +3,7 @@ from typing import Final
 import httpx
 import pytest
 
+from litellm import get_model_info
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.volcengine.image_generation.cost_calculator import cost_calculator
@@ -161,3 +162,40 @@ def test_the_volcengine_image_route_uses_the_provider_calculator() -> None:
     )
 
     assert cost > 0
+
+
+@pytest.mark.parametrize(
+    ("size", "tier_key"), (("1024x1024", "output_cost_per_image_1K"), ("2048x2048", "output_cost_per_image_2K"))
+)
+def test_a_cataloged_seedream_image_bills_at_the_catalog_price_of_its_pixel_tier(size: str, tier_key: str) -> None:
+    catalog: Final = GetModelCostMap.load_local_model_cost_map()
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="doubao-seedream-5-5-261028",
+        completion_response=_response((size,)),
+        custom_llm_provider="volcengine",
+    )
+
+    assert cost == pytest.approx(catalog["volcengine/doubao-seedream-5-5-261028"][tier_key])
+
+
+def test_a_deployment_tier_price_replaces_the_catalog_tier_price() -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="doubao-seedream-5-5-261028",
+        completion_response=_response(("1024x1024", "2048x2048")),
+        custom_llm_provider="volcengine",
+        model_info={"output_cost_per_image_1K": 0.5, "output_cost_per_image_2K": 0.75},
+    )
+
+    assert cost == pytest.approx(1.25)
+
+
+def test_get_model_info_reports_the_catalog_tier_prices() -> None:
+    catalog_row: Final = GetModelCostMap.load_local_model_cost_map()["volcengine/doubao-seedream-5-5-261028"]
+
+    info: Final = get_model_info(model="doubao-seedream-5-5-261028", custom_llm_provider="volcengine")
+
+    assert (info.get("output_cost_per_image_1K"), info.get("output_cost_per_image_2K")) == (
+        catalog_row["output_cost_per_image_1K"],
+        catalog_row["output_cost_per_image_2K"],
+    )
