@@ -1,3 +1,4 @@
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import React, { useState, useEffect } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -482,6 +483,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
   const onLinkCopied = () => toast.success(t("users.bulkCreate.toasts.linkCopied"));
 
+  const label = (role: string) => availableRoleDisplayLabel(role, possibleUIRoles?.[role]?.ui_label);
   const renderStatusCell = (record: UserData) => {
     if (!record.isValid) {
       return (
@@ -836,7 +838,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                           <TableRow key={record.rowNumber} className={!record.isValid ? "bg-destructive/10" : ""}>
                             <TableCell>{record.rowNumber}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.user_email}</TableCell>
-                            <TableCell className="whitespace-normal break-words">{record.user_role}</TableCell>
+                            <TableCell className="whitespace-normal break-words">{label(record.user_role)}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.teams}</TableCell>
                             <TableCell className={NUMERIC_CELL_CLASS}>{record.max_budget}</TableCell>
                             <TableCell className="whitespace-normal break-words">{renderStatusCell(record)}</TableCell>

@@ -233,18 +233,12 @@ pub enum ClaimDenial {
     UnmappedScopeType { kind: &'static str },
 }
 
-/// The client half of `ModelAccessDeniedHTTPException`, which never names the models that are allowed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "The requested model '{model}' is not available for this API key, or the model name is invalid. Check the models \
-     available to you and try again."
-)]
-pub struct ModelAccessDenied<'a> {
-    pub model: &'a str,
-}
+#[error("Authentication Error, invalid credentials")]
+pub(crate) struct InvalidCredentials;
 
 /// Each model denial's message is the internal half of `ModelAccessDeniedHTTPException`, and
-/// `ModelAccessDenied` its client half.
+/// [`ModelAccessDenied`](super::ModelAccessDenied) its client half.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RbacDenial {
     /// `enforce_rbac` is on and the token maps to no role.

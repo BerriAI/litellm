@@ -1,3 +1,7 @@
+use litellm_python_compat::{
+    scalar::{known_str, python_number, value_str},
+    truthy::json_truthy,
+};
 use serde_json::Value;
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -5,6 +9,20 @@ use serde_json::Value;
 pub enum Recognized<T> {
     Known(T),
     Unrecognized(Value),
+}
+
+pub fn is_one(value: &Recognized<f64>) -> bool {
+    match value {
+        Recognized::Known(number) => *number == 1.0,
+        Recognized::Unrecognized(other) => python_number(other) == Some(1.0),
+    }
+}
+
+pub fn python_str<T: serde::Serialize>(value: &Recognized<T>) -> String {
+    match value {
+        Recognized::Known(known) => known_str(known),
+        Recognized::Unrecognized(other) => value_str(other),
+    }
 }
 
 /// `deserialize_with` for an optional `Recognized` field whose explicit `null` must stay
@@ -33,12 +51,33 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+/// `deserialize_with` for an optional typed field whose explicit `null` is refused like any other
+/// value that is not a `T`, so a caller's `null` is never re-sent as an absent key.
+pub fn non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 /// `deserialize_with` for an optional raw field whose explicit `null` Python forwards.
 pub fn present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     <Value as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+/// `deserialize_with` for an optional field typed after the contract ignored its key: a value that
+/// does not decode as `T` stays absent, as it did, instead of failing the whole object.
+pub fn known_or_absent<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 /// `deserialize_with` for an optional float Python forwards as the caller sent it: an integer
@@ -80,19 +119,8 @@ impl Recognized<bool> {
     pub fn is_truthy(&self) -> bool {
         match self {
             Self::Known(flag) => *flag,
-            Self::Unrecognized(other) => python_truthy(other),
+            Self::Unrecognized(other) => json_truthy(other),
         }
-    }
-}
-
-pub fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_none_or(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(fields) => !fields.is_empty(),
     }
 }
 
@@ -145,6 +173,28 @@ mod tests {
     #[case::object(Recognized::Unrecognized(json!({"a": 0})), true)]
     fn flags_are_read_by_python_truthiness(#[case] flag: Recognized<bool>, #[case] expected: bool) {
         assert_eq!(flag.is_truthy(), expected);
+    }
+
+    #[rstest]
+    #[case::known_one(Recognized::Known(1.0), true)]
+    #[case::known_half(Recognized::Known(0.5), false)]
+    #[case::int_one(Recognized::Unrecognized(json!(1)), true)]
+    #[case::bool_true(Recognized::Unrecognized(json!(true)), true)]
+    #[case::string_one(Recognized::Unrecognized(json!("1")), false)]
+    fn one_is_compared_as_python_compares_it(
+        #[case] value: Recognized<f64>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_one(&value), expected);
+    }
+
+    #[rstest]
+    #[case::known(Recognized::Known(0.5), "0.5")]
+    #[case::known_wide(Recognized::Known(1e16), "1e+16")]
+    #[case::bool(Recognized::Unrecognized(json!(false)), "False")]
+    #[case::null(Recognized::Unrecognized(Value::Null), "None")]
+    fn values_print_as_python_prints_them(#[case] value: Recognized<f64>, #[case] expected: &str) {
+        assert_eq!(python_str(&value), expected);
     }
 
     #[test]

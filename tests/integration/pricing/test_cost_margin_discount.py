@@ -273,8 +273,8 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
                 {"not_a_provider": 0.1},
                 {
                     "detail": {
-                        "error": "Invalid provider(s): not_a_provider. Must be valid LiteLLM providers or 'global'. "
-                        "See https://docs.litellm.ai/docs/providers for the full list."
+                        "error": "Invalid provider(s): not_a_provider. Must be valid LiteLLM providers, 'global' or "
+                        "'customer'. See https://docs.litellm.ai/docs/providers for the full list."
                     }
                 },
             ),

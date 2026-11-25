@@ -2,18 +2,21 @@ mod keys;
 mod types;
 
 use std::{
+    hash::{DefaultHasher, Hash, Hasher},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
+
+use tokio::sync::{Mutex, MutexGuard};
 
 use litellm_python_compat::repr::to_str;
 use litellm_redis_client::{Declared, Expiry, RedisBatch, commands};
 
 pub use self::keys::{NotASpendCounter, SpendCounter};
-pub use self::types::{LostSeed, PostCallSettlement, Reading};
+pub use self::types::{LostSeed, Reading};
 use crate::{
     Error, Number, Pending, RequestRedis, Send,
     dual_cache::{DualCache, MemorySettings},
@@ -32,12 +35,35 @@ const SET_MAX: &str = concat!(
     "return cur"
 );
 
+/// How many locks [`SpendCounters::lock_seeds`] spreads the counters over. Two counters share one
+/// only when their keys hash to it, so a seed rarely waits on an unrelated counter, and the memory
+/// stays fixed however many counters the process sees.
+const SEED_LOCK_STRIPES: usize = 256;
+
+/// The seed locks [`SpendCounters::lock_seeds`] took, released when dropped.
+pub struct SeedLocks<'a> {
+    #[expect(dead_code, reason = "held only to release on drop")]
+    held: Vec<MutexGuard<'a, ()>>,
+    waited: bool,
+}
+
+impl SeedLocks<'_> {
+    /// Whether another seed held one of the locks first, so a counter may have been seeded since
+    /// the caller last read it.
+    pub fn waited(&self) -> bool {
+        self.waited
+    }
+}
+
 /// The proxy's spend counters: Redis shared by every pod, and this pod's memory copy that answers
 /// only when Redis cannot. Like `spend_counter_cache`'s callers on `main`, most ops reach past
 /// `DualCache` to its Redis and its memory.
 pub struct SpendCounters {
     cache: DualCache<Number>,
     committed_ttl_millis: AtomicU64,
+    /// `SpendCounterReseed._get_lock`'s per counter locks, striped: a seed in this process holds
+    /// its counter's lock from the cold read to the write, and a memory-only increment waits for it.
+    seed_locks: Box<[Mutex<()>]>,
 }
 
 impl SpendCounters {
@@ -53,7 +79,32 @@ impl SpendCounters {
                 now,
             ),
             committed_ttl_millis: AtomicU64::new(0),
+            seed_locks: (0..SEED_LOCK_STRIPES).map(|_| Mutex::new(())).collect(),
         }
+    }
+
+    /// Locks `counters` against another seed in this process, as `SpendCounterReseed.coalesced`
+    /// does around its DB read. When [`SeedLocks::waited`], the caller reads the counters again, so
+    /// a counter another task seeded meanwhile is not read from the DB twice; an uncontended seed
+    /// skips that read. Stripes are taken in index order, so two callers locking overlapping sets
+    /// never wait on each other.
+    pub async fn lock_seeds(&self, counters: &[SpendCounter]) -> SeedLocks<'_> {
+        let mut stripes: Vec<usize> = counters.iter().map(seed_stripe).collect();
+        stripes.sort_unstable();
+        stripes.dedup();
+        let mut held = Vec::with_capacity(stripes.len());
+        let mut waited = false;
+        for stripe in stripes {
+            let lock = &self.seed_locks[stripe];
+            held.push(match lock.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    waited = true;
+                    lock.lock().await
+                }
+            });
+        }
+        SeedLocks { held, waited }
     }
 
     /// The least TTL a Redis write gives a [`SpendCounter::Committed`] twin, so it outlives the DB
@@ -68,7 +119,10 @@ impl SpendCounters {
             SpendCounter::Committed(_)
             | SpendCounter::CustomerOrg(_)
             | SpendCounter::CustomerTeam(_)
-            | SpendCounter::CustomerMember(_) => default_ttl.max(Duration::from_millis(
+            | SpendCounter::CustomerMember(_)
+            | SpendCounter::App(_)
+            | SpendCounter::AppCustomerOrg(_)
+            | SpendCounter::AppCustomerMember(_) => default_ttl.max(Duration::from_millis(
                 self.committed_ttl_millis.load(Ordering::Relaxed),
             )),
             _ => default_ttl,
@@ -158,6 +212,7 @@ impl SpendCounters {
     /// error returns. Without Redis it is a memory increment.
     pub async fn increment(&self, counter: &SpendCounter, amount: Number) -> Result<Number, Error> {
         let Some(remote) = self.cache.redis().get() else {
+            let _seeding = self.lock_seeds(std::slice::from_ref(counter)).await;
             return self.increment_local(counter, amount);
         };
         let key = counter.key();
@@ -186,6 +241,8 @@ impl SpendCounters {
         increments: &[(SpendCounter, Number)],
     ) -> Result<Vec<Number>, Error> {
         let Some(remote) = self.cache.redis().get() else {
+            let counters: Vec<SpendCounter> = increments.iter().map(|(c, _)| c.clone()).collect();
+            let _seeding = self.lock_seeds(&counters).await;
             return increments
                 .iter()
                 .map(|(counter, amount)| self.increment_local(counter, *amount))
@@ -212,14 +269,17 @@ impl SpendCounters {
     }
 
     /// `increment_many` on the request's post-call batch. Each total reaches memory once the batch
-    /// goes out, and a counter whose increment failed is dropped everywhere. `None` without Redis,
-    /// else a settlement that reports when every reply is back, whoever flushed the batch.
+    /// goes out, and a counter whose increment failed is dropped everywhere. `false` without Redis.
+    /// The request tracks the increments when a committed counter is among them, so a reader later
+    /// in the request knows whether its own charge has its reply.
     pub fn increment_many_post_call(
         self: &Arc<Self>,
         request: &RequestRedis,
         increments: &[(SpendCounter, Number)],
-    ) -> Option<PostCallSettlement> {
-        let remote = self.cache.redis().get()?;
+    ) -> bool {
+        let Some(remote) = self.cache.redis().get() else {
+            return false;
+        };
         let batch = Send::PostCall(request).batch(&remote.client);
         let declared = increments
             .iter()
@@ -233,13 +293,19 @@ impl SpendCounters {
             })
             .collect::<Vec<_>>();
         let store = Arc::clone(self);
-        let settled = Arc::new(AtomicBool::new(false));
-        let settlement = PostCallSettlement(Arc::clone(&settled));
-        request.spawn(async move {
+        let charges_committed_spend = increments
+            .iter()
+            .any(|(counter, _)| matches!(counter, SpendCounter::Committed(_)));
+        let mirror = async move {
             for (counter, total) in declared {
                 match total.settled().await {
                     Ok(total) => {
-                        if let Err(error) = store.cache.memory().set(&counter.key(), Number::Float(total), None) {
+                        if let Err(error) =
+                            store
+                                .cache
+                                .memory()
+                                .set(&counter.key(), Number::Float(total), None)
+                        {
                             tracing::warn!(%error, "mirroring a spend counter total into memory failed");
                         }
                     }
@@ -247,15 +313,21 @@ impl SpendCounters {
                         let key = counter.key();
                         crate::failure_log::redis_failure!(
                             &error,
-                            &format!("spend counter {key} increment did not land in the post-call pipeline; invalidating it"),
+                            &format!(
+                                "spend counter {key} increment did not land in the post-call pipeline; invalidating it"
+                            ),
                         );
                         store.invalidate(std::slice::from_ref(&counter)).await;
                     }
                 }
             }
-            settled.store(true, Ordering::Release);
-        });
-        Some(settlement)
+        };
+        if charges_committed_spend {
+            request.spawn_tracked(mirror);
+        } else {
+            request.spawn(mirror);
+        }
+        true
     }
 
     /// `_repair_stale_spend_counter`: raise memory and Redis to `spend`, never lowering either.
@@ -414,6 +486,13 @@ impl SpendCounters {
     }
 }
 
+/// The seed lock stripe a counter's key hashes to.
+fn seed_stripe(counter: &SpendCounter) -> usize {
+    let mut hasher = DefaultHasher::new();
+    counter.key().hash(&mut hasher);
+    usize::try_from(hasher.finish() % SEED_LOCK_STRIPES as u64).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SpendCounter, SpendCounters};
@@ -424,6 +503,9 @@ mod tests {
     #[case::organization(SpendCounter::CustomerOrg("tenant:lifetime".into()))]
     #[case::team(SpendCounter::CustomerTeam("team:lifetime".into()))]
     #[case::member(SpendCounter::CustomerMember("member:lifetime".into()))]
+    #[case::app(SpendCounter::App("app:lifetime".into()))]
+    #[case::app_organization(SpendCounter::AppCustomerOrg("app:org:lifetime".into()))]
+    #[case::app_member(SpendCounter::AppCustomerMember("app:member:lifetime".into()))]
     fn customer_counters_outlive_the_pending_database_flush(#[case] counter: SpendCounter) {
         let store = SpendCounters::new(None);
         store.set_committed_ttl(Duration::from_secs(120));

@@ -1,13 +1,11 @@
 use crate::routes::passthrough::{PassthroughAccess, PassthroughGrants, PassthroughRequest};
 
-/// The one place identity's team selection reads the route: whether `team_allowed_routes` lists
-/// it, and what the pass-through grants of a candidate team allow.
+/// The one place identity's team selection reads the route: whether a team may use it, and what
+/// the pass-through grants of a candidate team allow.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TeamEligibility<'a> {
-    /// `allowed_routes_check` for the team role: `team_allowed_routes` lists the route.
-    pub(crate) route_listed: bool,
-    /// `_is_team_route_allowed`: listed, or an auth-enforced pass-through route, which the team's
-    /// own grants gate instead.
+    /// `_is_team_route_allowed`: `team_allowed_routes` lists the route, or it is an auth-enforced
+    /// pass-through route, which the team's own grants gate instead.
     pub(crate) route_allowed: bool,
     pub(crate) passthrough: PassthroughRequest<'a>,
 }
@@ -37,7 +35,7 @@ impl TeamEligibility<'_> {
     pub(crate) fn verdict(&self, grants: &PassthroughGrants, has_model: bool) -> Verdict {
         match (
             has_model,
-            self.route_listed,
+            self.route_allowed,
             self.passthrough.team_access(grants),
         ) {
             (true, true, PassthroughAccess::Allowed) => Verdict::Selected,

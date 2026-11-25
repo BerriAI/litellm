@@ -6,12 +6,13 @@ import json
 import logging
 import os
 import sys
+import threading
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
@@ -35,14 +36,18 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import atomic_check_and_increment_by_n
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
@@ -86,6 +91,8 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -97,6 +104,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
 )
 from tests._master_key import MASTER_KEY
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
@@ -1950,6 +1958,91 @@ async def test_pass_through_request_uses_resolved_timeout():
 
 
 @pytest.mark.asyncio
+async def test_pass_through_request_logs_anthropic_base64_source_as_placeholder_and_forwards_it_whole():
+    image: Final = "QUJD" * 4096
+    body: Final = {
+        "model": "claude-haiku-5-5",
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
+                    {"type": "text", "text": "What is this?"},
+                ],
+            }
+        ],
+    }
+    logging_obj, sent_body = await _send_pass_through_with_upstream_down(body)
+
+    logged: Final = (
+        logging_obj.model_call_details["messages"][0]["content"],
+        logging_obj.model_call_details["input"][0]["content"],
+    )
+    assert all(image not in text and "[base64_data truncated: 12.0KB]" in text for text in logged)
+    assert json.loads(sent_body)["messages"][0]["content"][0]["source"]["data"] == image
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_copies_a_long_history_for_logging_off_the_event_loop():
+    turns: Final = tuple(
+        {"role": "user" if turn % 2 == 0 else "assistant", "content": f"turn {turn} " + "x" * 1_000}
+        for turn in range(300)
+    )
+    body: Final = {"model": "claude-haiku-5-5", "max_tokens": 16, "messages": list(turns)}
+    scan_threads: Final[list[int]] = []
+    original_scan: Final = logging_utils._truncate_base64_in_string
+
+    def recording_scan(value: str) -> str:
+        scan_threads.append(threading.get_ident())
+        return original_scan(value)
+
+    with patch.object(logging_utils, "_truncate_base64_in_string", recording_scan):
+        logging_obj, _ = await _send_pass_through_with_upstream_down(body)
+
+    assert scan_threads
+    assert threading.get_ident() not in scan_threads
+    assert all(
+        "turn 299 " in logging_obj.model_call_details[field][0]["content"] for field in ("messages", "input")
+    )
+
+
+async def _send_pass_through_with_upstream_down(body: dict[str, object]) -> tuple[LiteLLMLoggingObj, bytes]:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    sent_bodies: Final[list[bytes]] = []
+    logging_objs: Final[list[LiteLLMLoggingObj]] = []
+
+    def refuse_upstream(upstream_request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(upstream_request.read())
+        raise httpx.ConnectError("upstream down", request=upstream_request)
+
+    def capture_logging_obj(**kwargs):
+        logging_objs.append(kwargs["data"]["litellm_logging_obj"])
+        return kwargs["data"]
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client") as mock_get_client,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=capture_logging_obj)
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_get_client.return_value.client = httpx.AsyncClient(transport=httpx.MockTransport(refuse_upstream))
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(),
+                custom_body=body,
+            )
+    return logging_objs[0], sent_bodies[0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("allow_client_pricing_override", [True, False])
 async def test_pass_through_request_strips_client_guardrail_information(allow_client_pricing_override: bool):
     mock_request = MagicMock(spec=Request)
@@ -2196,18 +2289,17 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         mock_request.headers = Headers({})
                         mock_request.query_params = QueryParams({})
 
-                        # Create mock user API key dict
-                        mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = "test-api-key"
-                        mock_user_api_key_dict.key_alias = "test-alias"
-                        mock_user_api_key_dict.is_session_token = False
-                        mock_user_api_key_dict.user_email = "test@example.com"
-                        mock_user_api_key_dict.user_id = "test-user-id"
-                        mock_user_api_key_dict.team_id = "test-team-id"
-                        mock_user_api_key_dict.org_id = "test-org-id"
-                        mock_user_api_key_dict.team_alias = "test-team-alias"
-                        mock_user_api_key_dict.end_user_id = "test-end-user-id"
-                        mock_user_api_key_dict.request_route = "/api/endpoint"
+                        mock_user_api_key_dict = UserAPIKeyAuth(
+                            api_key="test-api-key",
+                            key_alias="test-alias",
+                            user_email="test@example.com",
+                            user_id="test-user-id",
+                            team_id="test-team-id",
+                            org_id="test-org-id",
+                            team_alias="test-team-alias",
+                            end_user_id="test-end-user-id",
+                            request_route="/api/endpoint",
+                        )
 
                         # Call pass_through_request (the parent method)
                         await pass_through_request(
@@ -2305,7 +2397,7 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
                     request=mock_request,
                     target="http://target-api.com/v1/messages",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -2373,7 +2465,7 @@ async def test_pass_through_request_preserves_caller_streaming_request_field(bod
                     request=mock_request,
                     target="https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -2436,7 +2528,7 @@ async def test_streaming_pass_through_drops_marker_after_hook_rebuilds_body_from
                     request=mock_request,
                     target="https://api.openai.com/v1/chat/completions",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                 )
 
                 upstream_json = async_client.build_request.call_args.kwargs["json"]
@@ -2512,7 +2604,7 @@ async def test_passthrough_guardrails_follow_effective_relay_stream_decision(
                     request=mock_request,
                     target="http://upstream.test/guardrail-stream-scope",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=route_stream,
                 )
                 hook_data: Final[dict[str, object]] = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
@@ -2584,7 +2676,7 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                     request=mock_request,
                     target="http://target-api.com/v1/messages",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=False,
                 )
 
@@ -3563,8 +3655,7 @@ async def test_pass_through_request_query_params_forwarding():
                         mock_request.query_params = QueryParams([("api-version", "2025-01-01-preview")])
 
                         # Create mock user API key dict
-                        mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = MASTER_KEY
+                        mock_user_api_key_dict = UserAPIKeyAuth(api_key=MASTER_KEY)
 
                         # Call pass_through_request
                         await pass_through_request(
@@ -3663,7 +3754,7 @@ async def _run_pass_through_and_capture_wire_url(
                 request=mock_request,
                 target=target,
                 custom_headers={},
-                user_api_key_dict=user_api_key_dict if user_api_key_dict is not None else MagicMock(),
+                user_api_key_dict=user_api_key_dict if user_api_key_dict is not None else UserAPIKeyAuth(),
                 merge_query_params=merge_query_params,
                 default_query_params=default_query_params,
                 custom_llm_provider=custom_llm_provider,
@@ -3818,8 +3909,8 @@ async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path,
     keys = tuple(f"sk-test-{uuid.uuid4().hex}" for _ in range(2))
     for key in keys:
         user_api_key_cache.set_cache(
-            key=hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(
                 token=hash_token(key),
                 rpm_limit=1,
                 metadata={"allowed_passthrough_routes": ["/rpm-rerank"]},
@@ -3888,7 +3979,7 @@ async def test_pass_through_request_follows_redirect_to_final_response(httpx_tra
 
     mock_request.body = mock_body
 
-    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict = UserAPIKeyAuth()
 
     with respx.mock(assert_all_called=True) as upstream:
         upstream.get("https://upstream.test/redirect/1").respond(302, headers={"Location": "/get"})
@@ -4412,8 +4503,7 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
     setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_signed)
     mock_request.body = AsyncMock(return_value=json.dumps(parsed_from_wire).encode("utf-8"))
 
-    mock_user = MagicMock()
-    mock_user.api_key = "sk-test"
+    mock_user = UserAPIKeyAuth(api_key="sk-test")
 
     upstream = httpx.Response(
         status_code=200,
@@ -4485,8 +4575,7 @@ async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
     setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_signed)
     mock_request.body = AsyncMock(return_value=json.dumps(parsed_from_wire).encode("utf-8"))
 
-    mock_user = MagicMock()
-    mock_user.api_key = "sk-test"
+    mock_user = UserAPIKeyAuth(api_key="sk-test")
 
     mock_built = MagicMock()
     mock_async_client = AsyncMock()
@@ -5145,7 +5234,7 @@ async def test_pass_through_request_non_streaming_upstream_error_returned_unchan
                         request=mock_request,
                         target="http://target-api.com/api/denied",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
                     await asyncio.sleep(0)
 
@@ -5231,7 +5320,7 @@ async def test_pass_through_request_upstream_error_failure_hook_exception_is_swa
                         request=mock_request,
                         target="http://target-api.com/api/denied",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
                     await asyncio.sleep(0)
 
@@ -5280,7 +5369,7 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
                     request=mock_request,
                     target="http://target-api.com/api/stream-denied",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -5370,7 +5459,7 @@ async def test_pass_through_request_non_streaming_upstream_error_body_logged_and
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
 
     warning_messages: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
@@ -5425,7 +5514,7 @@ async def test_pass_through_request_streaming_upstream_error_body_reaches_client
                     request=_upstream_error_request(),
                     target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -5478,7 +5567,7 @@ async def test_truncate_upstream_error_body_caps_at_log_limit():
                     request=_upstream_error_request(),
                     target="http://target-api.com/api/big-error",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                 )
 
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
@@ -5520,7 +5609,7 @@ async def test_pass_through_request_upstream_error_log_strips_provider_key_from_
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
 
     upstream_warnings: Final = [
@@ -5662,7 +5751,7 @@ async def test_pass_through_request_streaming_upstream_error_reads_only_preview_
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5727,7 +5816,7 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5799,7 +5888,7 @@ async def test_pass_through_request_streaming_upstream_error_body_read_failure_k
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5882,7 +5971,7 @@ async def test_pass_through_request_streaming_upstream_error_gzip_read_failure_r
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5936,7 +6025,7 @@ async def test_pass_through_request_streaming_upstream_error_gzip_body_decoded_f
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5989,7 +6078,7 @@ async def test_pass_through_request_upstream_error_body_sanitized_against_log_fo
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
 
     upstream_warnings: Final = [
@@ -6128,7 +6217,7 @@ async def test_pass_through_request_non_streaming_success_unchanged():
                         request=mock_request,
                         target="http://target-api.com/api/success",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
                     await asyncio.sleep(0)
 
@@ -6844,7 +6933,9 @@ async def _relay_through_pass_through(
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
             stack.enter_context(
-                patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+                patch(
+                    "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
+                )
             )
             response: Final = await pass_through_request(
                 request=request,
@@ -8107,6 +8198,48 @@ async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("code", "reason"), [(1000, ""), (1006, "connection died")], ids=["normal", "abnormal"])
+async def test_websocket_passthrough_closes_the_client_before_its_release_waits_for_turn_logging(
+    code: int, reason: str
+) -> None:
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_ws: Final = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=Close(code, reason), sent=None, rcvd_then_sent=None)
+    )
+    websocket: Final = _client_websocket(_pending_receive)
+    release_started: Final = asyncio.Event()
+    release_may_finish: Final = asyncio.Event()
+
+    async def release_waiting_for_turn_logging(*args: object) -> None:
+        release_started.set()
+        await release_may_finish.wait()
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging:
+        proxy_logging.arelease_responses_websocket_slot = AsyncMock(side_effect=release_waiting_for_turn_logging)
+        session: Final = asyncio.create_task(
+            websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+        )
+        await asyncio.wait_for(release_started.wait(), timeout=10)
+        closes_while_the_release_waited: Final = tuple(websocket.close.await_args_list)
+        release_may_finish.set()
+        await asyncio.wait_for(session, timeout=10)
+
+    assert closes_while_the_release_waited == (call(),)
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
     llm_router = MagicMock()
     llm_router.registry.return_value.deployments.return_value = [
@@ -8742,7 +8875,7 @@ async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_sess
     not free it, or a second session gets in while the first is still running.
     """
     limiter_cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-socket"), max_parallel_requests=1)
     logged_rows: Final[list[asyncio.Task[None]]] = []
 
@@ -8834,7 +8967,7 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 23, 59, 30)
     )
-    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-legacy-socket"), max_parallel_requests=2)
     logged_rows: Final[list[asyncio.Task[None]]] = []
@@ -8892,6 +9025,12 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
             )
         proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
         proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
         worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
         )
@@ -8914,6 +9053,423 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
 
     assert len(logged_rows) == len(models)
     assert (seen_while_open, after_close) == (while_open, (True, False))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_replies", "answers_due", "rows_and_sessions_after_close"),
+    [
+        pytest.param([_responses_turn("gpt-5.4-mini")], None, (1, (True, False)), id="turn_finished"),
+        pytest.param([], (0, 0), (0, (False, False)), id="turn_left_unfinished"),
+    ],
+)
+async def test_websocket_passthrough_gives_back_its_tpm_reservation_only_once_its_turns_finish(
+    upstream_replies: Sequence[Sequence[str]],
+    answers_due: Sequence[int] | None,
+    rows_and_sessions_after_close: tuple[int, tuple[bool, bool]],
+):
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-tpm-socket"), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+    )
+    logged_rows: Final[list[asyncio.Task[None]]] = []
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+
+    async def log_row(**row: object) -> None:
+        await limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def opens_another_session() -> bool:
+        await asyncio.gather(*logged_rows)
+        try:
+            await asyncio.create_task(
+                admit(key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
+        answered_by='"response.completed"',
+        answers_due=answers_due,
+    )
+    take_frame: Final = client.receive
+    while_open: Final[list[bool]] = []
+
+    async def receive() -> Mapping[str, str | bytes]:
+        message: Final = await take_frame()
+        if message["type"] == "websocket.disconnect":
+            while_open.append(await opens_another_session())
+        return message
+
+    client.receive = receive
+
+    with (
+        _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket(replies=upstream_replies)) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
+        proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    after_close: Final = (await opens_another_session(), await opens_another_session())
+
+    assert while_open == [False]
+    assert (len(logged_rows), after_close) == rows_and_sessions_after_close
+
+
+@dataclass(frozen=True, slots=True)
+class _TpmLimitedKey:
+    limiter: RustParallelRequestLimiter
+    cache: DualCache
+    key: UserAPIKeyAuth
+    proxy_logging_obj: ProxyLogging
+
+    @classmethod
+    def new(cls, api_key: str) -> "_TpmLimitedKey":
+        cache: Final = DualCache()
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+        key: Final = UserAPIKeyAuth(
+            api_key=hash_token(api_key), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+        )
+        return cls(limiter=limiter, cache=cache, key=key, proxy_logging_obj=proxy_logging_obj)
+
+    async def admit(self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await self.limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=self.cache, data=dict(data), call_type=call_type
+        )
+
+    async def log_row(self, **row: object) -> None:
+        await self.limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def admits_another_session(self) -> bool:
+        try:
+            await asyncio.create_task(
+                self.admit(self.key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_holds_its_tpm_reservation_until_its_turn_rows_charge_their_usage():
+    limited: Final = _TpmLimitedKey.new("sk-socket-turn-rows")
+    rows: Final[list[asyncio.Task[None]]] = []
+    admitted_while_its_turn_logged: Final[list[bool]] = []
+
+    async def log_row(**row: object) -> None:
+        admitted_while_its_turn_logged.append(await limited.admits_another_session())
+        await limited.log_row(**row)
+
+    async def logged_later(row: Coroutine[object, object, None]) -> None:
+        await asyncio.sleep(0.05)
+        await row
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})], answered_by='"response.completed"'
+    )
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini")])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            limited.proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            limited.proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: rows.append(asyncio.create_task(logged_later(async_coroutine)))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    await asyncio.gather(*rows)
+
+    assert admitted_while_its_turn_logged == [False]
+    assert await limited.admits_another_session()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_cancelled_mid_turn_keeps_its_tpm_reservation():
+    limited: Final = _TpmLimitedKey.new("sk-socket-cancelled-mid-turn")
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[[]])
+    client_leaves: Final = asyncio.Event()
+    frames: Final = iter([_received_frame(json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}))])
+
+    async def receive() -> Mapping[str, str | bytes]:
+        frame: Final = next(frames, None)
+        if frame is not None:
+            return frame
+        await client_leaves.wait()
+        return {"type": "websocket.disconnect"}
+
+    async def turn_sent_upstream() -> None:
+        while upstream_ws.send.await_count == 0:
+            await asyncio.sleep(0)
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging:
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            limited.proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            limited.proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        session: Final = asyncio.create_task(
+            websocket_passthrough_request(
+                websocket=_client_websocket(receive),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+        )
+        await asyncio.wait_for(turn_sent_upstream(), timeout=10)
+        tasks_before_the_cancel: Final = asyncio.all_tasks()
+        session.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await session
+        await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - tasks_before_the_cancel)), timeout=10)
+        admitted_after_the_cancel: Final = await limited.admits_another_session()
+        client_leaves.set()
+        await upstream_ws.close()
+
+    assert not admitted_after_the_cancel
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_without_a_turn_classifier_leaves_its_tpm_reservation_to_its_session_row():
+    limited: Final = _TpmLimitedKey.new("sk-socket-session-row")
+    rows: Final[list[asyncio.Task[None]]] = []
+    session_row_may_log: Final = asyncio.Event()
+
+    async def logged_once_allowed(row: Coroutine[object, object, None]) -> None:
+        await session_row_may_log.wait()
+        await row
+
+    client: Final = _turn_taking_client([json.dumps({"type": "ping"})], answered_by='"pong"')
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[[json.dumps({"type": "pong"})]])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=limited.log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            limited.proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            limited.proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: rows.append(asyncio.create_task(logged_once_allowed(async_coroutine)))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://live.example.com/v1/session",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/live/v1/session",
+                accept_websocket=False,
+            ),
+            timeout=2,
+        )
+        admitted_before_its_session_row: Final = await limited.admits_another_session()
+        session_row_may_log.set()
+        await asyncio.gather(*rows)
+
+    assert (admitted_before_its_session_row, len(rows)) == (False, 1)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_refused_by_a_later_pre_call_hook_frees_its_tpm_reservation():
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-refused-socket"), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+    )
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+
+    async def admit_then_refuse(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await admit(user_api_key_dict, data, call_type)
+        raise HTTPException(status_code=429, detail="Max iterations exceeded")
+
+    async def opens_another_session() -> bool:
+        try:
+            await asyncio.create_task(
+                admit(key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    async def refused_session() -> None:
+        with _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket()) as proxy_logging:
+            proxy_logging.pre_call_hook = AsyncMock(side_effect=admit_then_refuse)
+            proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+            proxy_logging.leave_responses_websocket_reservation_to_close = (
+                proxy_logging_obj.leave_responses_websocket_reservation_to_close
+            )
+            proxy_logging.arelease_refused_responses_websocket_slot = (
+                proxy_logging_obj.arelease_refused_responses_websocket_slot
+            )
+            await websocket_passthrough_request(
+                websocket=_turn_taking_client([], answered_by='"response.completed"'),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+            )
+
+    with pytest.raises(HTTPException, match="Max iterations exceeded"):
+        await asyncio.create_task(refused_session(), context=contextvars.Context())
+
+    assert (await opens_another_session(), await opens_another_session()) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rejected_by_its_upstream_in_a_later_minute_leaves_that_minutes_tpm_alone():
+    clock: Final = [datetime(2026, 11, 9, 12, 0, 0)]
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(
+        internal_usage_cache=InternalUsageCache(limiter_cache), time_provider=lambda: clock[-1]
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-rejected-socket"), tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60}
+    )
+    key_tokens: Final = RateLimitScope("api_key", key.api_key or "").counter("tokens")
+
+    async def admit_then_roll_the_window(
+        user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+    ) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+        clock.append(clock[-1] + timedelta(seconds=limiter.window_size + 1))
+        await atomic_check_and_increment_by_n(
+            limiter,
+            descriptors=[
+                {
+                    "key": "api_key",
+                    "value": key.api_key or "",
+                    "rate_limit": {"tokens_per_unit": 1_000, "window_size": limiter.window_size},
+                }
+            ],
+            increments=[{"tokens": 20}],
+        )
+
+    async def rejected_session() -> None:
+        with (
+            _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket()) as proxy_logging,
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                side_effect=_websocket_connect_failure("rejected_handshake"),
+            ),
+        ):
+            proxy_logging.pre_call_hook = AsyncMock(side_effect=admit_then_roll_the_window)
+            proxy_logging.post_call_failure_hook = AsyncMock(side_effect=limiter.async_post_call_failure_hook)
+            proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+            proxy_logging.leave_responses_websocket_reservation_to_close = (
+                proxy_logging_obj.leave_responses_websocket_reservation_to_close
+            )
+            proxy_logging.arelease_refused_responses_websocket_slot = (
+                proxy_logging_obj.arelease_refused_responses_websocket_slot
+            )
+            await websocket_passthrough_request(
+                websocket=_client_websocket(_pending_receive),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+            proxy_logging.post_call_failure_hook.assert_awaited_once()
+
+    before_the_socket: Final = asyncio.all_tasks()
+    await asyncio.create_task(rejected_session(), context=contextvars.Context())
+    await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - before_the_socket)), timeout=5)
+
+    assert int(limiter.rate_limits.local((key_tokens,))[0] or 0) == 20
 
 
 @pytest.mark.asyncio
@@ -10083,7 +10639,7 @@ async def _drive_streaming_pass_through(upstream_content_type, chunk_delay_secon
             request=mock_request,
             target="http://target-api.com/v1/messages",
             custom_headers={},
-            user_api_key_dict=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(),
             stream=client_asked_for_stream,
         )
         return [chunk async for chunk in response.body_iterator]
@@ -10589,7 +11145,7 @@ async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
     (e.g. team config lookup hitting a dead secret manager) must not raise; the
     request proceeds without dynamic callbacks and the error is logged."""
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        _resolve_team_callback_wiring,
+        resolve_team_callback_wiring,
     )
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -10597,7 +11153,7 @@ async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
         def load_team_config(self, team_id: str) -> dict:
             raise RuntimeError("secret manager unavailable")
 
-    wiring = _resolve_team_callback_wiring(
+    wiring = resolve_team_callback_wiring(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_id="test-team"),
         proxy_config=RaisingTeamConfig(),
         route_description="pass_through_endpoint",
@@ -10740,6 +11296,42 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
             omit_when_missing=bool(metadata.get(SESSION_ID_OMITTED_METADATA_KEY)),
         )
         == "per-call-random-trace-id"
+    )
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+def test_passthrough_client_cannot_forge_an_inherited_session(client_metadata_key: str):
+    """The inherited-session marker is proxy-owned: only a proxy sub-call carries it. A pass-through body that carries
+    it must not put the caller's session on a spend log row that `missing_session_id: omit` leaves empty."""
+    from litellm.constants import SESSION_ID_INHERITED_METADATA_KEY
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent")
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={
+            "litellm_session_id": "caller-session",
+            client_metadata_key: {SESSION_ID_INHERITED_METADATA_KEY: True},
+        },
+        litellm_call_id="lit-10761-call-id",
+    )
+
+    assert (
+        _get_session_id_for_spend_log(
+            kwargs=kwargs,
+            metadata=kwargs["litellm_params"]["metadata"],
+            standard_logging_payload={"trace_id": "per-call-random-trace-id"},
+            omit_when_missing=True,
+        )
+        is None
     )
 
 
@@ -10909,7 +11501,7 @@ async def _run_passthrough(
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         ),
         respx.mock(assert_all_called=False) as upstream_mock,
     ):
@@ -11182,7 +11774,7 @@ async def _run_websocket_connect_failure(
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside websocket_passthrough_request; there is no injection seam
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         ),
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
@@ -11444,7 +12036,7 @@ def _split_pass_through_body(
 GEMINI_BODY: Final = '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
 
 
-PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM)
+PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM, LENS_LOGGING_POLICY_PARAM)
 
 
 def _metadata_of(split: _PassThroughSplit) -> Mapping[str, object]:
@@ -11844,8 +12436,8 @@ class _StoredConfigRow:
 class _InMemoryConfigTable:
     def __init__(self, rows: Mapping[str, Mapping[str, object]]) -> None:
         self.rows: dict[str, Mapping[str, object]] = dict(rows)
-        self.db: Final = SimpleNamespace(litellm_config=self)
-        self.writer_db: Final = SimpleNamespace(litellm_config=self)
+        self.db: Final = MagicMock(litellm_config=self)
+        self.writer_db: Final = MagicMock(litellm_config=self)
 
     def _row(self, param_name: str) -> _StoredConfigRow | None:
         value: Final = self.rows.get(param_name)
@@ -13382,6 +13974,191 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
     metadata = _update_metadata_with_tags_in_header(request, {})
     assert metadata["tags"] == ["existing", "usecase:a"]
     assert await read_request_body(request) == {"model": "qa-model"}
+
+
+def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/azure/openai/v1/responses/resp_1",
+            "query_string": b"",
+            "headers": [(name.encode(), value.encode()) for name, value in headers.items()],
+        },
+        receive,
+    )
+
+
+async def _forward_through_pass_through(
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    stream: bool,
+    callbacks: list[CustomLogger],
+    body_parsed_by_auth: bool = False,
+) -> httpx.Request:
+    received: Final[list[httpx.Request]] = []
+    client_request: Final = _client_request(method, client_headers, client_body)
+    if body_parsed_by_auth:
+        safe_set_request_parsed_body(request=client_request, parsed_body={})
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        received.append(upstream_request)
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with (
+            pytest.MonkeyPatch.context() as litellm_patch,
+            patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+                "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            ),
+        ):
+            litellm_patch.setattr(litellm, "callbacks", callbacks)
+            response = await pass_through_request(
+                request=client_request,
+                target="https://upstream.test/openai/v1/responses/resp_1",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                stream=stream,
+            )
+            if isinstance(response, StreamingResponse):
+                _ = [chunk async for chunk in response.body_iterator]
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    assert len(received) == 1
+    return received[0]
+
+
+def _upstream_json(upstream_request: httpx.Request) -> object:
+    return json.loads(upstream_request.content) if upstream_request.content else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("method", "client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param("DELETE", {}, b"", None, id="delete-without-body"),
+        pytest.param(
+            "DELETE", {"content-type": "application/json", "content-length": "0"}, b"", None, id="delete-length-zero"
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-without-body",
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/x-www-form-urlencoded", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-empty-form",
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "content-length": "2"},
+            b"{}",
+            {},
+            id="delete-explicit-empty-object",
+        ),
+        pytest.param(
+            "DELETE", {"content-type": "application/json"}, b"{}", {}, id="delete-empty-object-without-length-headers"
+        ),
+        pytest.param("GET", {}, b"", None, id="get-without-body"),
+        pytest.param(
+            "GET", {"content-type": "application/json", "content-length": "0"}, b"", None, id="get-length-zero"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "0"}, b"", {}, id="sdk-post-without-body"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/x-www-form-urlencoded", "content-length": "0"},
+            b"",
+            {},
+            id="curl-empty-form",
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="explicit-empty-object"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "8"}, b'{"a": 1}', {"a": 1}, id="json-object"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"{}",
+            {},
+            id="chunked-empty-object",
+        ),
+    ],
+)
+async def test_pass_through_request_sends_no_body_on_a_get_or_delete_sent_without_one(
+    stream: bool,
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    expected_upstream_json: object,
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        method, client_headers, client_body, stream, callbacks=[]
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
+    assert upstream_request.headers.get("content-type") == (
+        None if expected_upstream_json is None else "application/json"
+    )
+
+
+class _FillsBodyOnPreCall(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> dict[str, object]:
+        return {**data, "reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+async def test_pass_through_request_forwards_a_body_a_pre_call_hook_adds_to_a_delete_sent_without_one(stream: bool):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", {}, b"", stream, callbacks=[_FillsBodyOnPreCall()]
+    )
+
+    assert _upstream_json(upstream_request) == {"reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param({}, b"", None, id="no-length-headers"),
+        pytest.param({"content-type": "application/json", "content-length": "0"}, b"", None, id="length-zero"),
+        pytest.param({"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="length-two"),
+        pytest.param({"content-type": "application/json", "transfer-encoding": "chunked"}, b"{}", {}, id="chunked"),
+    ],
+)
+async def test_pass_through_request_goes_by_the_declared_body_on_a_delete_whose_body_auth_parsed_without_reading(
+    stream: bool, client_headers: Mapping[str, str], client_body: bytes, expected_upstream_json: object
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", client_headers, client_body, stream, callbacks=[], body_parsed_by_auth=True
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
 
 
 @pytest.mark.parametrize(

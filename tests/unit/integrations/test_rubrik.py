@@ -7,7 +7,7 @@ blocking), batch logging, and Anthropic format handling.
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -19,6 +19,7 @@ from litellm.integrations.rubrik import (
     _MalformedToolBlockingResponseError,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 
 from tests.unit.integrations.rubrik_test_helpers import (
     make_inputs_with_tools,
@@ -2025,13 +2026,14 @@ class TestBlockPayloadCallerAttribution:
         assert metadata["user_api_key_org_id"] == "probe-org-1"
 
     def test_metadata_covers_the_full_caller_key_set(self, handler, user_api_key_dict):
-        """A block log and a success log agree on the caller key set."""
+        """Block metadata includes required keys and only declared optional keys."""
         from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
         payload = handler._build_fallback_payload(self._blocked_call_details(), user_api_key_dict)
 
-        expected = StandardLoggingUserAPIKeyMetadata.__required_keys__ | StandardLoggingUserAPIKeyMetadata.__optional_keys__
-        assert set(payload["metadata"]) == set(expected)
+        required: Final = StandardLoggingUserAPIKeyMetadata.__required_keys__
+        allowed: Final = required | StandardLoggingUserAPIKeyMetadata.__optional_keys__
+        assert required <= set(payload["metadata"]) <= allowed
 
     def test_virtual_key_is_logged_hashed(self, handler):
         """A virtual key reaches the webhook as its hash, never as the raw token."""
@@ -2051,8 +2053,15 @@ class TestBlockPayloadCallerAttribution:
 
         assert payload["metadata"]["user_api_key_hash"] == user_api_key_dict.api_key
 
-    async def test_enqueued_block_event_carries_attribution(self, handler, user_api_key_dict):
+    @pytest.mark.parametrize("with_app", (False, True))
+    async def test_enqueued_block_event_carries_attribution(
+        self, handler: RubrikLogger, user_api_key_dict: UserAPIKeyAuth, with_app: bool
+    ) -> None:
         """End of the real hook chain: what actually lands on the Rubrik queue."""
+        if with_app:
+            user_api_key_dict.customer_hierarchy = CustomerHierarchyAuth(
+                scopes=(), app_id="app-chat", app_alias="Chat"
+            )
         logging_obj = Mock()
         logging_obj.model_call_details = self._blocked_call_details()
         request_data = {"litellm_call_id": "call-attr", "_rubrik_logging_obj": logging_obj}
@@ -2073,6 +2082,12 @@ class TestBlockPayloadCallerAttribution:
         metadata = handler.log_queue[0]["metadata"]
         assert metadata["user_api_key_hash"] == user_api_key_dict.api_key
         assert metadata["user_api_key_user_id"] == "probe-user-1"
+        if with_app:
+            assert metadata["user_api_key_app_id"] == "app-chat"
+            assert metadata["user_api_key_app_alias"] == "Chat"
+        else:
+            assert "user_api_key_app_id" not in metadata
+            assert "user_api_key_app_alias" not in metadata
 
 
 # -- async_send_batch empty queue and flush_queue edge cases ------------------

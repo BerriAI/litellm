@@ -41,6 +41,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
             batch_size=CLICKHOUSE_BATCH_SIZE,
             flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,
         )
+        self.log_queue: list[Mapping[str, object]]
         self._flush_task: asyncio.Task[None] | None = None
         self._stop: Final = asyncio.Event()
 
@@ -88,7 +89,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
     async def async_send_batch(self) -> None:
         await self.flush_queue()
 
-    async def _insert(self, batch: list[dict[str, object]]) -> bool:
+    async def _insert(self, batch: list[Mapping[str, object]]) -> bool:
         try:
             await self.storage.insert_rows(self.table, batch)
             self.rows_written += len(batch)

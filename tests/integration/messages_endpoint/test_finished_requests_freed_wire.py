@@ -1,6 +1,8 @@
+import itertools
 import json
+import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -16,6 +18,7 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.process import owned_proxy
+from integration._support.responses_stream import completed, created, delta, frame, healthy_stream
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -41,6 +44,9 @@ def _log_records(gateway: Gateway) -> int:
 
 
 _CONFIG_MODEL: Final = "freed-config-model"
+_RESPONSES_MODEL: Final = "freed-responses-model"
+_DROPPED_MARKER: Final = "dropped-mid-stream"
+_HELD_OPEN: Final = threading.Event()
 
 
 @pytest.fixture(scope="module")
@@ -59,7 +65,11 @@ def uncached_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gatew
         {
             "model_name": _CONFIG_MODEL,
             "litellm_params": {"model": f"anthropic/{_MODEL}", "api_base": wire.url, "api_key": _API_KEY},
-        }
+        },
+        {
+            "model_name": _RESPONSES_MODEL,
+            "litellm_params": {"model": "openai/gpt-6.1-sol", "api_base": f"{wire.url}/v1", "api_key": _API_KEY},
+        },
     ]
     config.write_text(yaml.safe_dump({**stock, "litellm_settings": settings, "model_list": model_list}))
     try:
@@ -89,7 +99,20 @@ def no_cleanup_pass(uncached_gateway: Gateway) -> Iterator[None]:
         assert restored.status_code == 200, restored.text
 
 
+def _responses_answer(request: Request) -> Reply:
+    identity: Final = f"resp_{uuid.uuid4().hex}"
+    if _DROPPED_MARKER.encode() not in request.body:
+        return Reply(content_type="text/event-stream", chunks=healthy_stream(identity, "Hi!"))
+    return Reply(
+        content_type="text/event-stream",
+        chunks=(frame(created(identity)) + frame(delta(identity, "Hi!")), frame(completed(identity, "Hi!"))),
+        gate_after_first=_HELD_OPEN,
+    )
+
+
 def _answer(request: Request) -> Reply:
+    if request.method == "POST" and request.target == "/v1/responses":
+        return _responses_answer(request)
     assert request.method == "POST" and request.target == "/v1/messages"
     streamed: Final = JSON_OBJECT.validate_python(json.loads(request.body)).get("stream") is True
     return (
@@ -99,22 +122,33 @@ def _answer(request: Request) -> Reply:
     )
 
 
+def _body(path: str, stream: bool, prompt: str) -> Mapping[str, JsonValue]:
+    messages: Final[list[JsonValue]] = [{"role": "user", "content": prompt}]
+    match path:
+        case "/v1/messages":
+            return {"model": _CONFIG_MODEL, "max_tokens": 16, "messages": messages, "stream": stream}
+        case "/v1/responses":
+            return {"model": _RESPONSES_MODEL, "input": prompt, "stream": stream}
+        case _:
+            return {"model": _CONFIG_MODEL, "messages": messages, "stream": stream}
+
+
 def _call(gateway: Gateway, path: str, stream: bool) -> None:
-    messages: Final[list[JsonValue]] = [{"role": "user", "content": f"Say hi {uuid.uuid4().hex}"}]
-    body: Final[dict[str, JsonValue]] = (
-        {"model": _CONFIG_MODEL, "max_tokens": 16, "messages": messages, "stream": stream}
-        if path == "/v1/messages"
-        else {"model": _CONFIG_MODEL, "messages": messages, "stream": stream}
-    )
-    response: Final = gateway.request("POST", path, body)
+    response: Final = gateway.request("POST", path, _body(path, stream, f"Say hi {uuid.uuid4().hex}"))
     assert response.status_code == 200, response.text
     assert "Hi!" in response.text, response.text
 
 
 @pytest.mark.parametrize(
     ("path", "stream"),
-    (("/v1/messages", False), ("/v1/messages", True), ("/v1/chat/completions", False)),
-    ids=("messages", "streamed-messages", "chat-completions"),
+    (
+        ("/v1/messages", False),
+        ("/v1/messages", True),
+        ("/v1/chat/completions", False),
+        ("/v1/chat/completions", True),
+        ("/v1/responses", True),
+    ),
+    ids=("messages", "streamed-messages", "chat-completions", "streamed-chat-completions", "streamed-responses"),
 )
 def test_finished_calls_are_freed_without_a_cleanup_pass(
     uncached_gateway: Gateway, no_cleanup_pass: None, path: str, stream: bool
@@ -129,6 +163,39 @@ def test_finished_calls_are_freed_without_a_cleanup_pass(
     )
     assert after <= before + _SLACK, (
         f"{after - before} of {_CALLS} finished {'streamed ' if stream else ''}{path} calls still hold their log "
+        "record with Python's cycle collector held off, so each one waits for a full cleanup pass "
+        "before its memory comes back"
+    )
+
+
+def _drop_mid_stream(gateway: Gateway) -> None:
+    body: Final = _body("/v1/responses", True, f"{_DROPPED_MARKER} {uuid.uuid4().hex}")
+    headers: Final = {"Authorization": f"Bearer {gateway.key}"}
+    with gateway.client.stream("POST", "/v1/responses", json=body, headers=headers) as response:
+        assert response.status_code == 200, response.read()
+        assert any("Hi!" in text for text in itertools.accumulate(response.iter_text()))
+
+
+def test_a_responses_stream_the_client_drops_mid_stream_is_freed_without_a_cleanup_pass(
+    uncached_gateway: Gateway, no_cleanup_pass: None
+) -> None:
+    gateway: Final = uncached_gateway
+    _HELD_OPEN.clear()
+    try:
+        _drop_mid_stream(gateway)
+        before: Final = _log_records(gateway)
+        for _ in range(_CALLS):
+            _drop_mid_stream(gateway)
+        after: Final = eventually(
+            lambda: _log_records(gateway),
+            lambda count: count <= before + _SLACK,
+            seconds=15,
+            return_last_on_timeout=True,
+        )
+    finally:
+        _HELD_OPEN.set()
+    assert after <= before + _SLACK, (
+        f"{after - before} of {_CALLS} /v1/responses streams the client dropped mid-stream still hold their log "
         "record with Python's cycle collector held off, so each one waits for a full cleanup pass "
         "before its memory comes back"
     )

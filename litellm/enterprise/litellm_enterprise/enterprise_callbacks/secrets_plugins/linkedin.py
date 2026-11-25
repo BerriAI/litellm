@@ -15,7 +15,7 @@ class LinkedInDetector(RegexBasedDetector):
         return "LinkedIn Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # LinkedIn Client ID
             re.compile(

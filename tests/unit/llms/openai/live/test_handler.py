@@ -1,7 +1,8 @@
 import asyncio
 import json
-from collections.abc import Callable, Coroutine
-from datetime import datetime
+from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Final, NoReturn, cast
 
 import pytest
@@ -18,7 +19,7 @@ from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY, REALTIME_WEBS
 from litellm.cost_calculator import handle_realtime_stream_cost_calculation
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.openai.live import handler as live_handler
-from litellm.llms.openai.live.handler import LiveSessionStart, OpenAILiveSessions, parse_live_session_start
+from litellm.llms.openai.live.handler import LiveAttach, LiveSessionStart, OpenAILiveSessions, parse_live_session_start
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject, Usage
 
@@ -1258,7 +1259,11 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
 ) -> None:
     router: Final = Router(
         model_list=[
-            {"model_name": "live-voice", "litellm_params": {"model": "openai/gpt-live-1"}, "model_info": {"id": "live-a"}}
+            {
+                "model_name": "live-voice",
+                "litellm_params": {"model": "openai/gpt-live-1"},
+                "model_info": {"id": "live-a"},
+            }
         ],
         num_retries=0,
     )
@@ -1296,3 +1301,191 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
     if worker.coroutine is not None:
         worker.coroutine.close()
     assert get_deployment_successes_for_current_minute(router, "live-a") == counted_successes
+
+
+@pytest.mark.asyncio
+async def test_a_sideband_joins_on_the_deployment_that_created_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "live-voice",
+                "litellm_params": {"model": "openai/gpt-live-1", "api_key": f"key-{name}"},
+                "model_info": {"id": f"live-{name}"},
+            }
+            for name in ("a", "b", "c")
+        ],
+        num_retries=0,
+    )
+    reached: Final[list[Mapping[str, object]]] = []  # mutable-ok: collects what each attempt was called with
+
+    async def _arealtime(**kwargs: object) -> None:
+        reached.append(kwargs)
+
+    monkeypatch.setattr(litellm, "_arealtime", _arealtime)
+    for attempt in range(12):
+        await router._arealtime(  # the routed realtime endpoint the proxy's sideband calls
+            model="live-voice",
+            _pinned_deployment_id="live-c",
+            litellm_logging_obj=Logging(
+                model="gpt-live-1",
+                messages=[],
+                stream=False,
+                call_type="_arealtime",
+                start_time=datetime.now(),
+                litellm_call_id=f"sideband-{attempt}",
+                function_id=f"sideband-{attempt}",
+            ),
+        )
+
+    assert [call["api_key"] for call in reached] == ["key-c"] * 12, "only that deployment's account has the session"
+    assert all("_pinned_deployment_id" not in call for call in reached)
+
+
+def _attached_upstream() -> _FakeUpstream:
+    """An upstream for a session that already runs: it speaks without waiting for a `session.start`."""
+    upstream: Final = _FakeUpstream(
+        client_frames=(),
+        upstream_frames=(
+            '{"type":"session.started","session":{"model":"gpt-live-1"}}',
+            '{"type":"session.closed","usage":{"seconds":7}}',
+        ),
+    )
+    upstream.client_frames_sent.set()
+    return upstream
+
+
+@pytest.mark.parametrize(("metered", "expected_dispatches"), [(True, 1), (False, 0)], ids=["proxy-meter", "caller"])
+@pytest.mark.asyncio
+async def test_attached_live_session_joins_without_starting_or_closing_it_and_bills_only_when_metered(
+    metered: bool, expected_dispatches: int
+) -> None:
+    upstream: Final = _attached_upstream()
+    connector: Final = _FakeConnector(upstream)
+    client: Final = _FakeClientWebSocket(messages=(), disconnect_after_send_type="session.started")
+    logger: Final = _FakeLogging()
+    worker: Final = _FakeLoggingWorker()
+
+    await OpenAILiveSessions(logging_worker=worker, websocket_connector=connector).async_live_session(
+        model="gpt-live-1",
+        websocket=client,
+        logging_obj=cast(Logging, logger),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        attach=LiveAttach(session_id="live_abc", metered=metered),
+    )
+    if worker.coroutine is not None:
+        await worker.coroutine
+
+    assert connector.url == "wss://api.openai.com/v1/live/sessions/live_abc/attach"
+    assert upstream.sent_text.qsize() == 0, "an attached socket must not start or close the caller's session"
+    assert logger.dispatch_count == expected_dispatches
+    assert (REALTIME_SESSION_SUCCESS_LOGGED_KEY in logger.model_call_details) is metered, (
+        "a caller's attach logs nothing, so the proxy must still release the budget hold and slot it took"
+    )
+
+
+_STARTED: Final = '{"type":"session.started","session":{"model":"gpt-live-1"}}'
+
+
+@pytest.mark.parametrize(
+    ("upstream_frames", "metered_seconds", "billed_event"),
+    [
+        ((_STARTED, '{"type":"session.closed","usage":{"seconds":7}}'), 0.0, ("session.closed", 7.0)),
+        ((_STARTED, '{"type":"session.closed","usage":{"seconds":7}}'), 3.0, ("session.closed", 4.0)),
+        ((_STARTED, '{"type":"session.closed","usage":{"seconds":7}}'), 9.0, ("session.closed", 0.0)),
+        ((_STARTED, '{"type":"session.usage.updated","usage":{"seconds":12}}'), 3.0, ("session.usage.updated", 9.0)),
+        ((_STARTED,), 3.0, ("session.usage.updated", 5.0)),
+    ],
+    ids=[
+        "first-sideband",
+        "rejoined-sideband",
+        "earlier-sidebands-billed-more-than-the-total",
+        "dropped-after-the-provider-reported-a-total",
+        "dropped-before-the-provider-reported-a-total",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_metering_sideband_bills_the_session_total_less_what_earlier_sidebands_billed(
+    upstream_frames: tuple[str, ...], metered_seconds: float, billed_event: tuple[str, float]
+) -> None:
+    logger: Final = _FakeLogging()
+    worker: Final = _FakeLoggingWorker()
+    upstream: Final = _FakeUpstream(client_frames=(), upstream_frames=upstream_frames)
+    upstream.client_frames_sent.set()
+    reported: Final[list[float]] = []
+    connected_for_five_seconds: Final = iter(
+        (datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc), datetime(2026, 1, 1, 12, 0, 5, tzinfo=timezone.utc))
+    )
+
+    await OpenAILiveSessions(
+        logging_worker=worker,
+        websocket_connector=_FakeConnector(upstream),
+        clock=lambda: next(connected_for_five_seconds),
+    ).async_live_session(
+        model="gpt-live-1",
+        websocket=_FakeClientWebSocket(messages=(), disconnect_after_send_type="session.started"),
+        logging_obj=cast(Logging, logger),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        attach=LiveAttach(
+            session_id="live_abc", metered=True, metered_seconds=metered_seconds, on_metered=reported.append
+        ),
+    )
+    assert worker.coroutine is not None
+    await worker.coroutine
+
+    logged: Final = cast(LiteLLMRealtimeStreamLoggingObject, logger.dispatched_result)
+    assert [
+        (event["type"], event["usage"]["seconds"])
+        for event in logged.results
+        if event["type"] in ("session.closed", "session.usage.updated")
+    ] == [billed_event], "the logged events must bill what the sideband reports it billed, once"
+    assert reported == [billed_event[1]]
+
+
+@dataclass(frozen=True)
+class _GatedFrame:
+    frame: str
+    denial: str | None
+
+
+@pytest.mark.asyncio
+async def test_a_denied_client_frame_gets_an_error_and_the_rest_reach_the_provider_as_the_proxy_rewrote_them() -> None:
+    denied_frame: Final = '{"type":"session.update","session":{"delegation":{"responses":{"model":"other"}}}}'
+    client_frames: Final = (
+        '{"type":"input_audio.append","audio":"client-a"}',
+        denied_frame,
+        '{"type":"session.close"}',
+    )
+    upstream_frames: Final = (
+        '{"type":"session.started","session":{"model":"gpt-live-1"}}',
+        '{"type":"session.closed","usage":{"seconds":4}}',
+    )
+    upstream: Final = _FakeUpstream(client_frames=(client_frames[0], client_frames[2]), upstream_frames=upstream_frames)
+    client: Final = _FakeClientWebSocket(messages=client_frames)
+
+    async def _gate(client_frame: str) -> _GatedFrame:
+        return _GatedFrame(
+            frame=client_frame.replace("client-a", "rewritten-a"),
+            denial="key not allowed to access model" if client_frame == denied_frame else None,
+        )
+
+    await OpenAILiveSessions(
+        logging_worker=_FakeLoggingWorker(), websocket_connector=_FakeConnector(upstream)
+    ).async_live_session(
+        model="gpt-live-1",
+        websocket=client,
+        logging_obj=cast(Logging, _FakeLogging()),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        client_frame_gate=_gate,
+    )
+
+    sent_upstream: Final = tuple(upstream.sent_text.get_nowait() for _ in range(upstream.sent_text.qsize()))
+    sent_to_client: Final = tuple(json.loads(client.sent_text.get_nowait()) for _ in range(client.sent_text.qsize()))
+    assert sent_upstream[1:] == ('{"type":"input_audio.append","audio":"rewritten-a"}', client_frames[2])
+    errors: Final = tuple(event["error"] for event in sent_to_client if event["type"] == "error")
+    assert tuple(error["message"] for error in errors) == ("key not allowed to access model",)

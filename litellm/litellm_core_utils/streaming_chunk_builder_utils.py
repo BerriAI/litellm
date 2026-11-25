@@ -280,13 +280,16 @@ def apply_grounding_request_counts(
     return counted.model_copy(update=updates)
 
 
+_ChunkT = TypeVar("_ChunkT")
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: Sequence[object] | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
 
-    def _sort_chunks(self, chunks: list) -> list:
+    def _sort_chunks(self, chunks: list[_ChunkT]) -> list[_ChunkT]:
         if not chunks:
             return []
 
@@ -444,14 +447,16 @@ class ChunkProcessor:
 
     @staticmethod
     def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
+        choices: Final = tuple(chain.from_iterable(chunk.get("choices") or () for chunk in chunks))
+        provider_specific_fields: Final = _last_provider_specific_fields(choices)
         return Choices(
             index=index,
             finish_reason=ChunkProcessor._finish_reason_of_chunks(
                 chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
             ),
             message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
-            provider_specific_fields=None,
-            **_streamed_vllm_choice_fields(chain.from_iterable(chunk.get("choices") or () for chunk in chunks)),
+            provider_specific_fields=dict(provider_specific_fields) if provider_specific_fields is not None else None,
+            **_streamed_vllm_choice_fields(choices),
         )
 
     @staticmethod
@@ -495,6 +500,7 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
+        single_choice_fields: Final = _last_provider_specific_fields(_first_choices(chunks))
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -523,6 +529,9 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
+                            "provider_specific_fields": (
+                                dict(single_choice_fields) if single_choice_fields is not None else None
+                            ),
                             **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
@@ -1161,28 +1170,29 @@ class ChunkProcessor:
         Anthropic ``message_start`` cursor, a small placeholder whose magnitude
         varies per request (1 and 8 both observed live), so reset to None and let
         ``calculate_usage()``'s ``token_counter(...)`` fallback estimate from
-        the actually-received text and reasoning instead. Gated on
-        ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
-        Anthropic's specific message_start SSE shape) does not silently affect
-        other providers that legitimately report usage from a single event.
+        the actually-received text and reasoning instead. Gated on streams
+        parsed from Anthropic's message_start SSE shape (``anthropic``, or a
+        chunk Anthropic's parser marked as its message_start on any provider
+        that reuses it) so the heuristic does not silently affect other
+        providers that legitimately report usage from a single event.
         """
         saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
-        custom_llm_provider: str | None = None
-        if chunks:
-            first_chunk: Final = chunks[0]
-            if isinstance(first_chunk, dict):
-                hp = first_chunk.get("_hidden_params")
-            else:
-                hp = getattr(first_chunk, "_hidden_params", None)
-            if isinstance(hp, dict):
-                custom_llm_provider = hp.get("custom_llm_provider")
-
-        if custom_llm_provider == "anthropic":
+        if any(ChunkProcessor._streamed_anthropic_message_start(chunk) for chunk in chunks):
             return None
         return completion_tokens
+
+    @staticmethod
+    def _streamed_anthropic_message_start(chunk: "_UsageBearingChunk | ModelResponse") -> bool:
+        hidden_params: Final = object_mapping(
+            chunk.get("_hidden_params") if isinstance(chunk, dict) else getattr(chunk, "_hidden_params", None)
+        )
+        return hidden_params is not None and (
+            hidden_params.get("custom_llm_provider") == "anthropic"
+            or hidden_params.get("anthropic_message_start") is True
+        )
 
     def calculate_usage(
         self,
@@ -1349,7 +1359,7 @@ def _as_text_completion_chunk(
     return _text_completion_chunk_from_mapping(chunk)
 
 
-_LogprobsValue: Final = TypeVar("_LogprobsValue")
+_LogprobsValue = TypeVar("_LogprobsValue")
 
 
 def _joined_or_none(fields: Iterable[Sequence[_LogprobsValue] | None]) -> list[_LogprobsValue] | None:
@@ -1573,6 +1583,15 @@ def _streamed_vllm_choice_fields(choices: Iterable[object]) -> Mapping[str, obje
     )
     present_fields: Final = frozenset(chain.from_iterable(fields.keys() for fields in extras))
     return MappingProxyType({field: streamed_values[field] for field in VLLM_CHOICE_FIELDS if field in present_fields})
+
+
+def _last_provider_specific_fields(choices: Iterable[object]) -> Mapping[str, object] | None:
+    carried: Final = tuple(
+        fields
+        for choice in choices
+        if (fields := object_mapping(_choice_extras(choice).get("provider_specific_fields")))
+    )
+    return carried[-1] if carried else None
 
 
 def _delta_reasoning_items(delta: object) -> Sequence[object]:

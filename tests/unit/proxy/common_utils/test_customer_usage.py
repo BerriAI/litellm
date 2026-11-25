@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.customer_usage import (
     resolve_customer_usage,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +47,29 @@ class Table:
 
 
 @dataclass(frozen=True, slots=True)
+class EmptyTable:
+    async def find_unique(self, where: Mapping[str, object]) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class Database:
     litellm_customerorganizationtable: Table
     litellm_customerteamtable: Table
     litellm_customermembertable: Table
+
+    def __getattr__(self, name: str) -> "EmptyTable":
+        if not name.startswith("litellm_"):
+            raise AttributeError(name)
+        return EmptyTable()
+
+
+def _prisma(database: CustomerUsageDatabase) -> SimpleNamespace:
+    full_database: Final = prisma_with_empty_config().db
+    full_database.litellm_customerorganizationtable = database.litellm_customerorganizationtable
+    full_database.litellm_customerteamtable = database.litellm_customerteamtable
+    full_database.litellm_customermembertable = database.litellm_customermembertable
+    return SimpleNamespace(db=full_database)
 
 
 DATABASE: Final = cast(  # cast-ok: the external Prisma fake implements the lookup subset used by attribution
@@ -345,7 +365,7 @@ async def test_registered_inference_routes_reject_hierarchy_model_denials_before
     )
     completion: Final = AsyncMock(side_effect=AssertionError("provider must not run"))
     responses: Final = AsyncMock(side_effect=AssertionError("provider must not run"))
-    monkeypatch.setattr(server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(server, "prisma_client", _prisma(database))
     monkeypatch.setattr(server, "general_settings", {"use_spend_logs_ledger": True})
     router: Final = (
         Router(
@@ -428,7 +448,7 @@ async def test_request_enrichment_replaces_forged_stamps_and_preserves_valid_att
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request, get_metadata_variable_name
     from litellm.proxy.proxy_server import ProxyConfig
 
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=DATABASE))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma(DATABASE))
     request: Final = Request({"type": "http", "path": path, "method": "POST", "headers": (), "query_string": b""})
     metadata_name: Final = get_metadata_variable_name(request)
     forged: Final = CustomerUsageAttribution(customer_org_id="org-2").model_dump_json()
@@ -480,9 +500,7 @@ def customer_passthrough(monkeypatch: pytest.MonkeyPatch, httpx_transport: None)
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(
-        proxy_server, "prisma_client", SimpleNamespace(db=_budget_database(organization=("gpt-4.1-mini",)))
-    )
+    monkeypatch.setattr(proxy_server, "prisma_client", _prisma(_budget_database(organization=("gpt-4.1-mini",))))
     monkeypatch.setenv("OPENAI_API_BASE", "https://customer-provider.test")
     monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
     app: Final = FastAPI(exception_handlers={ProxyException: proxy_server.openai_exception_handler})
@@ -524,7 +542,7 @@ def test_passthrough_rejects_customer_model_without_contacting_provider(
     database: CustomerUsageDatabase,
     prefix: str,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(proxy_server, "prisma_client", _prisma(database))
     response: Final = customer_passthrough.client.post(
         f"/{prefix}/v1/chat/completions",
         headers=customer_passthrough.headers,
@@ -556,7 +574,7 @@ def test_passthrough_customer_models_do_not_grant_key_access(
     customer_passthrough: CustomerPassthrough, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     customer_passthrough.token.models = ["gpt-4.1-mini"]
-    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=_budget_database(organization=("gpt-5.5",))))
+    monkeypatch.setattr(proxy_server, "prisma_client", _prisma(_budget_database(organization=("gpt-5.5",))))
     response: Final = customer_passthrough.client.post(
         "/openai/v1/chat/completions", headers=customer_passthrough.headers, json={"model": "gpt-5.5", "messages": []}
     )

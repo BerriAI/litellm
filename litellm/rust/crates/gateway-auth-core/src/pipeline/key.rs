@@ -155,7 +155,11 @@ mod tests {
             record,
             row: "mapped".to_owned(),
         };
-        authenticate(host, &request, settings, Credential::Resolved(resolved)).await
+        let credential = Credential::Resolved {
+            key: resolved,
+            end_user_id: None,
+        };
+        authenticate(host, &request, settings, credential).await
     }
 
     /// The outcome with a denial's key dropped; `denials_carry_the_resolved_key` checks the key.
@@ -222,6 +226,22 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn a_resolved_key_stored_under_an_empty_hash_is_malformed(settings: KeySettings) {
+        let host = ScriptedHost::default();
+        let record = KeyRecord {
+            token: Some(KeyHash::new("")),
+            ..virtual_key()
+        };
+        assert_eq!(
+            run_resolved(&host, record, &settings)
+                .await
+                .map_err(|refused| *refused.error),
+            Err(KeyDenial::MalformedKey.into())
+        );
+    }
+
+    #[rstest]
     #[case::allowed(true, Ok(KeyIdentity::UserAuthRoute))]
     #[case::disabled(false, Err(KeyDenial::UserAuthDisabled.into()))]
     #[tokio::test]
@@ -277,13 +297,13 @@ mod tests {
         false,
         &["validated_end_user_id from-body", "prefetch_identity from-body unread", "end_user from-body"]
     )]
-    #[case::the_resolved_key_names_it_first(
-        Some("from-key"),
+    #[case::the_resolved_credential_names_it_first(
+        Some("from-jwt"),
         Some("from-body"),
         false,
-        &["validated_end_user_id from-key", "prefetch_identity from-key resolved", "end_user from-key"]
+        &["validated_end_user_id from-jwt", "prefetch_identity from-jwt resolved", "end_user from-jwt"]
     )]
-    #[case::an_empty_id_on_the_key_leaves_the_requests(
+    #[case::an_empty_id_on_the_credential_leaves_the_requests(
         Some(""),
         Some("from-body"),
         false,
@@ -298,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn the_end_user_is_named_validated_then_read(
         settings: KeySettings,
-        #[case] key_end_user: Option<&str>,
+        #[case] credential_end_user: Option<&str>,
         #[case] requested: Option<&str>,
         #[case] end_user_unknown: bool,
         #[case] expected: &[&str],
@@ -314,15 +334,15 @@ mod tests {
             now: NOW,
             runs_inference_checks: true,
         };
-        let credential = match key_end_user {
+        let credential = match credential_end_user {
             None => Credential::Presented(Some(&token)),
-            Some(end_user_id) => Credential::Resolved(Keyed {
-                record: KeyRecord {
-                    end_user_id: Some(end_user_id.to_owned()),
-                    ..virtual_key()
+            Some(end_user_id) => Credential::Resolved {
+                key: Keyed {
+                    record: virtual_key(),
+                    row: "mapped".to_owned(),
                 },
-                row: "mapped".to_owned(),
-            }),
+                end_user_id: Some(end_user_id),
+            },
         };
         let _ = authenticate(&host, &request, &settings, credential).await;
         assert_eq!(&host.calls()[..expected.len()], expected);
@@ -428,17 +448,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::never_configured(false, KeyDenial::NoDbConfigured)]
+    #[case::configured_but_not_connected(true, KeyDenial::NoDb)]
     #[tokio::test]
-    async fn without_db_only_the_master_key_works(settings: KeySettings) {
+    async fn without_db_only_the_master_key_works(
+        settings: KeySettings,
+        #[case] db_configured: bool,
+        #[case] denial: KeyDenial,
+    ) {
         let settings = KeySettings {
             has_db: false,
+            db_configured,
             ..settings
         };
         let host = ScriptedHost::default();
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
-            Err(KeyDenial::NoDb.into())
+            Err(denial.into())
         );
+        assert!(matches!(
+            run(&host, MASTER, "/chat/completions", &settings).await,
+            Ok(KeyIdentity::MasterKey { .. })
+        ));
     }
 
     #[rstest]
@@ -474,7 +505,10 @@ mod tests {
         let host = ScriptedHost::default();
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
-            Err(KeyDenial::NotFound.into())
+            Err(KeyDenial::NotFound {
+                hash: Token::new("sk-1").hash()
+            }
+            .into())
         );
         assert_eq!(
             host.calls(),
@@ -767,6 +801,7 @@ mod tests {
     #[rstest]
     #[case::team_newer(Some(at(2)), Some(at(1)), "cached+team+prepared")]
     #[case::team_older(Some(at(1)), Some(at(2)), "cached+prepared")]
+    #[case::refreshed_together(Some(at(1)), Some(at(1)), "cached+prepared")]
     #[case::key_never_refreshed(Some(at(2)), None, "cached+prepared")]
     #[case::team_never_refreshed(None, Some(at(1)), "cached+prepared")]
     #[tokio::test]
@@ -802,7 +837,10 @@ mod tests {
         };
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
-            Err(KeyDenial::NotFound.into())
+            Err(KeyDenial::NotFound {
+                hash: Token::new("sk-1").hash()
+            }
+            .into())
         );
     }
 
@@ -830,6 +868,32 @@ mod tests {
         };
         let context = context(run(&host, "sk-1", "/chat/completions", &settings).await);
         assert_eq!((context.key.as_str(), context.owner), (key, None));
+    }
+
+    #[rstest]
+    #[case::cached_key("cached_key")]
+    #[case::cached_team("cached_team")]
+    #[case::key_owner("key_owner")]
+    #[tokio::test]
+    async fn a_read_the_host_declines_is_not_absent(
+        settings: KeySettings,
+        #[case] declining: &'static str,
+    ) {
+        let host = ScriptedHost {
+            cached: Some(KeyRecord {
+                user_id: Some("u".to_owned()),
+                team_id: Some("t".to_owned()),
+                last_refreshed_at: Some(at(1)),
+                ..virtual_key()
+            }),
+            team_refreshed_at: Some(at(2)),
+            failing: HashMap::from([(declining, Error::HostDeclined)]),
+            ..ScriptedHost::default()
+        };
+        assert_eq!(
+            run(&host, "sk-1", "/chat/completions", &settings).await,
+            Err(Error::HostDeclined)
+        );
     }
 
     #[rstest]

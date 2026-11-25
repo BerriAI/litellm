@@ -17,18 +17,22 @@ panic-test = []
 fast = ["litellm-token-counter/fast"]
 huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
+fips = ["rustls/fips", "litellm-http/fips"]
 
 [dependencies]
 litellm-env.workspace = true
 rustls.workspace = true
 litellm-secret-value.workspace = true
 litellm-db.workspace = true
+litellm-db-resolve.workspace = true
+litellm-repositories.workspace = true
+litellm-spend-log-writer.workspace = true
 fancy-regex.workspace = true
+litellm-redaction.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
-async-trait.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
@@ -46,12 +50,17 @@ serde.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
-azure_core = "1.0.0"
+litellm-auth-gcp.workspace = true
+azure_core = { version = "1.0.0", default-features = false, features = ["reqwest", "reqwest_deflate", "reqwest_gzip", "tokio"] }
 litellm-callbacks-legacy-python.workspace = true
 litellm-callbacks-budgets.workspace = true
 litellm-callbacks.workspace = true
+litellm-callbacks-model-capacity.workspace = true
+litellm-callbacks-parallel-request-limiter.workspace = true
 litellm-callbacks-python.workspace = true
 litellm-callbacks-s3-log.workspace = true
+litellm-callbacks-spend-log.workspace = true
+litellm-callbacks-spend-logger.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
 litellm-inference-responses.workspace = true
@@ -68,16 +77,19 @@ litellm-router-types.workspace = true
 litellm-router-core.workspace = true
 litellm-config.workspace = true
 litellm-gateway-auth-core.workspace = true
+litellm-auth-store.workspace = true
+chrono.workspace = true
 http.workspace = true
 jiff.workspace = true
 litellm-coroutine.workspace = true
 litellm-host-python.workspace = true
 parking_lot.workspace = true
 litellm-model-catalog.workspace = true
+litellm-cost.workspace = true
 litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 indexmap = "2.14.0"
-pyo3 = { workspace = true, features = ["indexmap"] }
+pyo3 = { workspace = true, features = ["chrono", "indexmap", "jiff-02"] }
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
@@ -100,7 +112,7 @@ sqlx = { workspace = true, features = ["migrate"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
-aws-sdk-secretsmanager = "1.117.0"
+aws-sdk-secretsmanager = { version = "1.117.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-credential-types = "1.3.0"
 
 [[bench]]

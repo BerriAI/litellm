@@ -312,6 +312,25 @@ async def test_admin_subject_stays_within_the_service_keys_route_ceiling() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+async def test_service_key_cannot_impersonate_on_spend_logs_outside_its_route_ceiling(route: str) -> None:
+    actor: Final = _service_key({"impersonate": True}).model_copy(update={"allowed_routes": ["/user/info"]})
+
+    with pytest.raises(HTTPException) as exc:
+        await _impersonate_or_raise(
+            actor=actor,
+            impersonation=ImpersonationRequest("alice", None),
+            lookup=_directory,
+            request=Request(scope={"type": "http", "method": "GET", "path": route, "headers": []}),
+            request_data={},
+            llm_router=None,
+            model_max_budget_limiter=_BudgetLimiter(),
+            route=route,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_impersonation_is_forbidden_on_chat_completions() -> None:
     with pytest.raises(ProxyException) as exc:
         await _impersonate_or_raise(

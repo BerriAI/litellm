@@ -37,8 +37,8 @@ _DEFAULT_EXCLUDED_ROUTES: Final = (
     "/_next",  # Next.js static JS/CSS chunks (root-level mount)
     "/ui",  # admin UI single-page app
     "/swagger",  # static Swagger UI assets
+    "/scalar",
     "/docs",  # FastAPI Swagger docs page
-    "/redoc",  # FastAPI ReDoc docs page
     "/openapi.json",  # OpenAPI schema
     "favicon",  # /favicon.ico + /get_favicon
     "/.well-known",  # UI config discovery
