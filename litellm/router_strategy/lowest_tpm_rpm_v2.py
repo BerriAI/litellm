@@ -276,7 +276,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif isinstance(id, int):
                 id = str(id)
 
-            total_tokens: Final = standard_logging_object.get("total_tokens")
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
 
             # ------------
             # Setup values

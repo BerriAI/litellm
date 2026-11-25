@@ -441,7 +441,9 @@ class ModelRateLimitingCheck(CustomLogger):
             if model_id is None:
                 return
 
-            total_tokens: Final = standard_logging_object.get("total_tokens", 0)
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
             model: Final = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             if not model or not total_tokens:

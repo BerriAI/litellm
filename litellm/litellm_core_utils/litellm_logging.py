@@ -815,6 +815,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._failed_attempts_owed_on_success: tuple[tuple[Usage, float], ...] = ()
         self._image_answers_billed_on_failure: float = 0.0
         self._image_answer_tokens_counted_on_failure: int = 0
+        self._last_failure_counted_for_image_answers: object = None
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -2470,6 +2471,14 @@ class Logging(LiteLLMLoggingBaseClass):
             ),
             total_cost,
         )
+
+    def _count_image_answer_billed_on_failure(self) -> None:
+        failure: Final = self.model_call_details.get("exception")
+        if failure is self._last_failure_counted_for_image_answers:
+            return
+        self._last_failure_counted_for_image_answers = failure
+        self._image_answers_billed_on_failure += image_answer_cost_on_failure(self.model_call_details)
+        self._image_answer_tokens_counted_on_failure += image_answer_tokens_counted_on_failure(self.model_call_details)
 
     def _add_failed_attempts_spend(self, served_response: object, image_usage: Usage | None) -> None:
         failed_attempts: Final = self._failed_attempts_owed_on_success
@@ -4204,6 +4213,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
             )
+            self._count_image_answer_billed_on_failure()
             callbacks: Final = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
                 global_callbacks=litellm.failure_callback,
@@ -4408,8 +4418,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
         self.mark_logging_complete(event_type="async_failure")
-        self._image_answers_billed_on_failure += image_answer_cost_on_failure(self.model_call_details)
-        self._image_answer_tokens_counted_on_failure += image_answer_tokens_counted_on_failure(self.model_call_details)
+        self._count_image_answer_billed_on_failure()
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})

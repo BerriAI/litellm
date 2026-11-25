@@ -6,6 +6,7 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -19,6 +20,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
@@ -682,6 +684,65 @@ async def test_a_fallback_serving_a_refused_image_counts_only_its_own_tokens_tow
             await _served_image_from(router, model="backup", prompt="a single small red dot")
             with pytest.raises(litellm.RateLimitError, match="current usage=600"):
                 await router.aimage_generation(model="backup", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert serving.call_count == 2
+
+
+class _SyncSuccesses(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self._logged: Final = threading.Condition()
+        self.count = 0
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        with self._logged:
+            self.count += 1
+            self._logged.notify_all()
+
+    def wait_for(self, count: int) -> None:
+        with self._logged:
+            assert self._logged.wait_for(lambda: self.count >= count, timeout=10)
+
+
+def test_a_sync_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("refuser", {}), _gemini_image_deployment("backup", {"tpm": 599})],
+        fallbacks=[{"refuser": ["backup"]}],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+    successes: Final = _SyncSuccesses()
+    litellm.logging_callback_manager.add_litellm_callback(successes)
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="image_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="refuser",
+        prompt="a single small red dot",
+        litellm_call_id="sync-image-refused-then-served-by-a-fallback",
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://refuser.invalid").mock(
+                return_value=httpx.Response(
+                    200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE}
+                )
+            )
+            serving: Final = upstream.post(url__startswith="https://backup.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [_SERVED_IMAGE], "usageMetadata": _SERVED_USAGE})
+            )
+            router.image_generation(**request, litellm_logging_obj=logging_obj)
+            successes.wait_for(1)
+            router.image_generation(model="backup", prompt="a single small red dot")
+            successes.wait_for(2)
+            with pytest.raises(litellm.RateLimitError, match="current usage=600"):
+                router.image_generation(model="backup", prompt="a single small red dot")
     finally:
         router.discard()
 
