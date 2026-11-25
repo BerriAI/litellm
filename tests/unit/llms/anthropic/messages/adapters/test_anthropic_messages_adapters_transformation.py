@@ -6771,3 +6771,172 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+def test_translate_openai_function_call_response_to_anthropic_tool_use():
+    """A legacy OpenAI function_call finish maps to an Anthropic tool_use turn."""
+    response: Final = ModelResponse(
+        id="chatcmpl-function-call",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="function_call",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    function_call={"name": "get_weather", "arguments": '{"location": "Boston"}'},
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "tool_use"
+    [block] = result["content"] or []
+    assert block["type"] == "tool_use"
+    assert block["name"] == "get_weather"
+    assert block["input"] == {"location": "Boston"}
+    assert block["id"] and all(c.isalnum() or c in "-_" for c in block["id"])
+
+
+def test_translate_openai_stop_response_without_tools_stays_end_turn():
+    """Negative: a normal stop with no function_call or tool_calls must not become tool_use."""
+    response: Final = ModelResponse(
+        id="chatcmpl-stop",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(role="assistant", content="Hello."),
+            )
+        ],
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "end_turn"
+    assert [block["type"] for block in (result["content"] or [])] == ["text"]
+    assert result["content"][0]["text"] == "Hello."
+
+
+def test_translate_openai_function_call_response_restores_mapped_tool_name():
+    """Junction: main restores truncated tool_calls names; legacy function_call must too."""
+    original_name = "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
+    truncated_name = truncate_tool_name(original_name)
+    response: Final = ModelResponse(
+        id="chatcmpl-function-call-mapped",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="function_call",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    function_call={"name": truncated_name, "arguments": '{"arg": "value"}'},
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=response, tool_name_mapping={truncated_name: original_name}
+    )
+
+    [block] = [c for c in result["content"] if c.get("type") == "tool_use"]
+    assert result["stop_reason"] == "tool_use"
+    assert block["name"] == original_name
+    assert block["input"] == {"arg": "value"}
+
+
+def test_translate_openai_function_call_keeps_reasoning_and_text():
+    """Junction: mapping a legacy function_call must not drop thinking or assistant text."""
+    response: Final = ModelResponse(
+        id="chatcmpl-function-call-reasoning",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="function_call",
+                message=Message(
+                    role="assistant",
+                    content="I'll check Boston.",
+                    reasoning_content="The user asked for weather, so call get_weather.",
+                    function_call={"name": "get_weather", "arguments": '{"location": "Boston"}'},
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+    types = [block["type"] for block in (result["content"] or [])]
+    assert result["stop_reason"] == "tool_use"
+    assert types == ["thinking", "text", "tool_use"]
+    assert result["content"][0]["thinking"] == "The user asked for weather, so call get_weather."
+    assert result["content"][1]["text"] == "I'll check Boston."
+    assert result["content"][2]["name"] == "get_weather"
+    assert result["content"][2]["input"] == {"location": "Boston"}
+
+
+def test_translate_openai_response_keeps_modern_tool_calls_alongside_legacy_function_call():
+    """Junction: a modern tool_calls entry must still be emitted if a legacy function_call is also present."""
+    response: Final = ModelResponse(
+        id="chatcmpl-both-tool-shapes",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionAssistantToolCall(
+                            id="call_modern",
+                            type="function",
+                            function=Function(name="get_weather", arguments='{"location": "Paris"}'),
+                        )
+                    ],
+                    function_call={"name": "get_time", "arguments": '{"tz": "UTC"}'},
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+    tool_blocks = [c for c in result["content"] if c.get("type") == "tool_use"]
+    assert result["stop_reason"] == "tool_use"
+    assert [block["name"] for block in tool_blocks] == ["get_weather", "get_time"]
+    assert tool_blocks[0]["id"] == "call_modern"
+    assert tool_blocks[0]["input"] == {"location": "Paris"}
+    assert tool_blocks[1]["input"] == {"tz": "UTC"}
+
+
+def test_translate_streaming_openai_function_call_finish_reason_is_tool_use():
+    """Streaming uses the same finish-reason helper; function_call must become tool_use."""
+    response: Final = ModelResponse(
+        id="chatcmpl-stream-function-call",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="function_call",
+                message=Message(role="assistant", content=None),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+        response=response, current_content_block_index=0
+    )
+
+    assert result["type"] == "message_delta"
+    assert result["delta"]["stop_reason"] == "tool_use"
