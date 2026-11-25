@@ -392,6 +392,42 @@ def test_responses_failure_event_reads_a_numeric_status_code_the_way_base_did(st
     assert failure.response.error["code"] == code
 
 
+def test_responses_failure_event_keeps_the_routers_fallback_outcome_over_the_upstream_message() -> None:
+    error: Final = litellm.InternalServerError(
+        message="FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. Fallback to q also failed: Q-ERROR"
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    message: Final = failure.response.error["message"]
+    assert "FLASH-ERROR" in message
+    assert message.endswith("Fallback to q also failed: Q-ERROR")
+
+
+def test_responses_failure_event_keeps_the_upstream_message_when_no_fallback_was_attempted() -> None:
+    error: Final = litellm.InternalServerError(
+        message="litellm wrapped FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. No fallback was attempted."
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["message"] == "FLASH-ERROR"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("guardrail_error", "error_object"),
@@ -1737,6 +1773,29 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_mid_stream_error_frame_redacts_a_key_from_the_provider_message(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+    secret: Final = "sk-9876543210abcdef9876543210"
+    failure: Final = litellm.BadRequestError(
+        message=f"upstream rejected key {secret}", model="qwen", llm_provider="hosted_vllm"
+    )
+
+    frames: Final = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter_raises(failure), user_api_key_dict=_user_auth(), request_data={}
+        )
+    ]
+
+    error_frame: Final = next(item for item in frames if isinstance(item, str) and item.startswith('data: {"error":'))
+    error: Final = json.loads(error_frame.removeprefix("data: "))["error"]
+    assert secret not in error_frame
+    assert "upstream rejected key" in error["message"]
+    assert error["type"] == "invalid_request_error"
 
 
 _BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"

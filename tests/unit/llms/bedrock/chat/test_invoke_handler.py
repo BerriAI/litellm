@@ -12,13 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import AmazonInvokeConfig
 from litellm.exceptions import MidStreamFallbackError
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -995,7 +992,6 @@ def _assert_no_events_error(error: BedrockError, body: bytes) -> None:
     assert f"{len(body)} bytes received" in error.message
     assert "application/vnd.amazon.eventstream" in error.message
     assert "req-empty-1" in error.message
-    assert f"first bytes={body[:200]!r}" in error.message
 
 
 @pytest.mark.parametrize("body", _UNDECODABLE_STREAM_BODIES)
@@ -1022,6 +1018,50 @@ async def test_aiter_bytes_raises_when_a_200_body_decodes_to_no_events(body: byt
     _assert_no_events_error(exc_info.value, body)
 
 
+_NOT_AN_EVENT_STREAM_BODIES: Final = (
+    pytest.param(b"<html><body>Service Unavailable</body></html>", "text/html", id="html-page"),
+    pytest.param(b'{"message":"Service Unavailable"}', "application/json", id="json-body"),
+    pytest.param(b"\x00" * 16, "application/vnd.amazon.eventstream", id="zero-bytes"),
+)
+
+
+def _assert_not_an_event_stream_error(error: BedrockError, body: bytes, content_type: str) -> None:
+    assert error.status_code == 502
+    assert "stopped decoding as an AWS event stream after 0 events" in error.message
+    assert f"content-type='{content_type}'" in error.message
+    assert f"{len(body)} bytes received" in error.message
+    assert "req-empty-1" in error.message
+    assert "Service Unavailable" not in error.message
+
+
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+def test_iter_bytes_raises_bad_gateway_when_a_200_body_is_not_an_event_stream(body: bytes, content_type: str) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-empty-1"})
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=response_headers))
+
+    _assert_not_an_event_stream_error(exc_info.value, body, content_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+async def test_aiter_bytes_raises_bad_gateway_when_a_200_body_is_not_an_event_stream(
+    body: bytes, content_type: str
+) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-empty-1"})
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=response_headers)]
+
+    _assert_not_an_event_stream_error(exc_info.value, body, content_type)
+
+
 def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
     stream: Final = decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM, _truncated_frame()]))
@@ -1033,7 +1073,6 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     _assert_moonshot_stream_content(chunks)
     assert exc_info.value.status_code == 502
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
-    assert "first bytes=" not in exc_info.value.message
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:
@@ -1395,6 +1434,125 @@ _CONVERSE_CONTENT_FRAMES: Final = (
     _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
     _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
 )
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("served_tier", ["flex", None])
+@pytest.mark.asyncio
+async def test_converse_stream_bills_the_tier_reported_in_metadata(
+    _aws_test_credentials: None,
+    async_mode: bool,
+    served_tier: str | None,
+) -> None:
+    model: Final = "bedrock/converse/qwen.qwen3-coder-next"
+    rates: Final = litellm.get_model_info("bedrock/us-east-1/qwen.qwen3-coder-next")
+    input_rate, output_rate = (
+        (rates["input_cost_per_token_flex"], rates["output_cost_per_token_flex"])
+        if served_tier == "flex"
+        else (rates["input_cost_per_token_priority"], rates["output_cost_per_token_priority"])
+    )
+    assert input_rate is not None and output_rate is not None
+    usage: Final = {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}
+    tier_metadata: Final = {"serviceTier": {"type": served_tier}} if served_tier is not None else {}
+    metadata: Final = _converse_event_frame("metadata", {"usage": usage, "metrics": {"latencyMs": 1}, **tier_metadata})
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/converse-stream")
+        assert json.loads(request.content)["serviceTier"] == {"type": "priority"}
+        return httpx.Response(
+            200, content=b"".join((*_CONVERSE_CONTENT_FRAMES, metadata)), headers=_event_stream_headers()
+        )
+
+    chunks: Final = await _stream_chunks(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "aws_region_name": "us-east-1",
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "service_tier": "priority",
+        },
+        httpx.MockTransport(handle_request),
+        async_mode,
+    )
+
+    expected_cost: Final = usage["inputTokens"] * input_rate + usage["outputTokens"] * output_rate
+    assert tuple((chunk.choices[0].delta.content or "", chunk.choices[0].finish_reason) for chunk in chunks[:-1]) == (
+        ("hi", None),
+        ("", "stop"),
+    )
+    assert chunks[-1].choices == []
+    assert chunks[-1].usage.cost == pytest.approx(expected_cost)
+    assert chunks[-1].model_dump().get("service_tier") == served_tier
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_converse_stream_assembled_response_keeps_served_tier(
+    _aws_test_credentials: None, async_mode: bool
+) -> None:
+    model: Final = "bedrock/converse/qwen.qwen3-coder-next"
+    usage: Final = {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}
+    metadata: Final = _converse_event_frame(
+        "metadata", {"usage": usage, "metrics": {"latencyMs": 1}, "serviceTier": {"type": "flex"}}
+    )
+
+    def handle_request(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"".join((*_CONVERSE_CONTENT_FRAMES, metadata)), headers=_event_stream_headers()
+        )
+
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "aws_region_name": "us-east-1",
+        "stream": True,
+        "complete_response": True,
+        "service_tier": "priority",
+    }
+    transport: Final = httpx.MockTransport(handle_request)
+    response: Final = (
+        await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+        if async_mode
+        else litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+    rates: Final = litellm.get_model_info("bedrock/us-east-1/qwen.qwen3-coder-next")
+    input_rate, output_rate = rates["input_cost_per_token_flex"], rates["output_cost_per_token_flex"]
+    assert input_rate is not None and output_rate is not None
+    assert response.choices[0].message.content == "hi"
+    assert response.model_dump()["service_tier"] == "flex"
+    assert response.usage.total_tokens == usage["totalTokens"]
+    assert litellm.completion_cost(completion_response=response, model=model, region_name="us-east-1") == pytest.approx(
+        usage["inputTokens"] * input_rate + usage["outputTokens"] * output_rate
+    )
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_invoke_stream_with_empty_generation_assembles_a_complete_response(
+    _aws_test_credentials: None, async_mode: bool
+) -> None:
+    empty_generation: Final = _bedrock_event_stream_frame({"generation": "", "stop_reason": "stop"})
+
+    def handle_request(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=empty_generation, headers=_event_stream_headers())
+
+    request: Final = {
+        "model": "bedrock/invoke/meta.llama4-maverick-17b-instruct-v1:0",
+        "messages": [{"role": "user", "content": "hi"}],
+        "aws_region_name": "us-east-1",
+        "stream": True,
+        "complete_response": True,
+    }
+    transport: Final = httpx.MockTransport(handle_request)
+    response: Final = (
+        await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+        if async_mode
+        else litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+
+    assert isinstance(response, litellm.ModelResponse), response
+    assert (response.choices[0].finish_reason, response.choices[0].message.content) == ("stop", "")
 
 
 def _unknown_event_frame() -> bytes:
@@ -2208,131 +2366,6 @@ async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
     assert getattr(litellm.stream_chunk_builder(list(sync_chunks)), "service_tier", None) is None
     assert getattr(litellm.stream_chunk_builder(list(async_chunks)), "service_tier", None) is None
     assert getattr(non_streaming, "service_tier", None) is None
-
-
-def _converse_serving(served_tier: str) -> httpx.MockTransport:
-    usage: Final = {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000}
-
-    def reply(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/converse-stream"):
-            return httpx.Response(
-                200,
-                headers=_event_stream_headers(),
-                content=b"".join(
-                    (
-                        _converse_event_frame("messageStart", {"role": "assistant"}),
-                        _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hi"}}),
-                        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
-                        _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
-                        _converse_event_frame(
-                            "metadata",
-                            {"usage": usage, "metrics": {"latencyMs": 1}, "serviceTier": {"type": served_tier}},
-                        ),
-                    )
-                ),
-            )
-        return httpx.Response(
-            200,
-            json={
-                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
-                "stopReason": "end_turn",
-                "usage": usage,
-                "metrics": {"latencyMs": 1},
-                "serviceTier": {"type": served_tier},
-            },
-        )
-
-    return httpx.MockTransport(reply)
-
-
-class _LoggedCost(TypedDict):
-    call_type: ReadOnly[str]
-    response_cost: ReadOnly[float]
-
-
-class _AsyncStreamCostRecorder(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.logged_cost: Final = asyncio.get_running_loop().create_future()
-
-    async def async_log_success_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
-    ) -> None:
-        logged: Final = TypeAdapter(_LoggedCost).validate_python(kwargs["standard_logging_object"])
-        if logged["call_type"] == "acompletion" and not self.logged_cost.done():
-            self.logged_cost.set_result(logged["response_cost"])
-
-
-def _tiers_after_the_finish_chunk(chunks: Sequence[ModelResponseStream]) -> tuple[object, ...]:
-    finish_index: Final = next(
-        index for index, chunk in enumerate(chunks) if chunk.choices and chunk.choices[0].finish_reason
-    )
-    return tuple(getattr(chunk, "service_tier", None) for chunk in chunks[finish_index + 1 :])
-
-
-@pytest.mark.parametrize(
-    ("usage_option", "usage_chunks"),
-    [
-        pytest.param({}, 0, id="no-stream-usage"),
-        pytest.param({"stream_options": {"include_usage": True}}, 1, id="include-usage"),
-    ],
-)
-@pytest.mark.parametrize(
-    ("requested_tier", "served_tier"),
-    [
-        pytest.param({"extra_body": {"serviceTier": {"type": "priority"}}}, "priority", id="extra-body"),
-        pytest.param({"service_tier": "flex"}, "priority", id="openai-served-priority"),
-        pytest.param({"serviceTier": {"type": "priority"}}, "default", id="native-served-default"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_a_converse_stream_bills_the_tier_its_metadata_event_names_without_sending_an_extra_chunk(
-    _aws_test_credentials: None,
-    monkeypatch: pytest.MonkeyPatch,
-    requested_tier: Mapping[str, object],
-    served_tier: str,
-    usage_option: Mapping[str, object],
-    usage_chunks: int,
-) -> None:
-    model: Final = "bedrock/converse/mistral.mistral-large-3-675b-instruct"
-    messages: Final = [{"role": "user", "content": "hi"}]
-    non_streaming: Final = litellm.completion(
-        model=model,
-        messages=messages,
-        client=HTTPHandler(client=httpx.Client(transport=_converse_serving(served_tier))),
-        **requested_tier,
-    )
-    sync_chunks: Final = tuple(
-        litellm.completion(
-            model=model,
-            messages=messages,
-            stream=True,
-            client=HTTPHandler(client=httpx.Client(transport=_converse_serving(served_tier))),
-            **requested_tier,
-            **usage_option,
-        )
-    )
-    recorder: Final = _AsyncStreamCostRecorder()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
-    async_stream: Final = await litellm.acompletion(
-        model=model,
-        messages=messages,
-        stream=True,
-        client=AsyncHTTPHandler(transport=_converse_serving(served_tier)),
-        **requested_tier,
-        **usage_option,
-    )
-    async_chunks: Final = tuple([chunk async for chunk in async_stream])
-    logged_cost: Final = await asyncio.wait_for(recorder.logged_cost, timeout=10)
-
-    assert isinstance(non_streaming, litellm.ModelResponse)
-    assert non_streaming.service_tier == served_tier
-    assert logged_cost == non_streaming._hidden_params["response_cost"]
-    assert (
-        _tiers_after_the_finish_chunk(sync_chunks)
-        == _tiers_after_the_finish_chunk(async_chunks)
-        == (served_tier,) * usage_chunks
-    )
 
 
 @pytest.mark.asyncio

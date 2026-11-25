@@ -19,7 +19,10 @@
     "agent_id": 42,
     "invoked_agent_id": 42,
     "team_priority": 42,
-    "key_priority": 42
+    "key_priority": 42,
+    "customer_org_id": "text",
+    "customer_team_id": "text",
+    "customer_member_id": "text"
   },
   "deployment": {
     "rejected": [
@@ -179,7 +182,10 @@
       ],
       "reason": 42,
       "reason_present": true
-    }
+    },
+    "cost_finalized": true,
+    "response_cost_failure_debug_info": "text",
+    "failure_row_response_cost": 1.5
   },
   "key_limits": {
     "rejected": [
@@ -227,7 +233,25 @@
       "tpm_limit": 42,
       "session_rpm_limit": 42,
       "session_tpm_limit": 42
-    }
+    },
+    "customer_scopes": [
+      {
+        "rejected": [
+          "member"
+        ],
+        "key": "text",
+        "entity_id": "text",
+        "rpm_limit": 7,
+        "tpm_limit": 7,
+        "model_rpm_limit": {
+          "x-ratelimit-key-remaining-requests": 7
+        },
+        "model_tpm_limit": {
+          "x-ratelimit-key-remaining-requests": 7
+        },
+        "borrows": true
+      }
+    ]
   },
   "budget_plan": {
     "rejected": [
@@ -468,5 +492,48 @@
     "fallback_on_saturation": true,
     "fallback_on_saturation_invalid": "text",
     "fallback_walk_armed": true
-  }
+  },
+  "spend_log_id": {
+    "rejected": [
+      "member"
+    ],
+    "id": "text"
+  },
+  "billed_retry_attempts": [
+    {
+      "rejected": [
+        "member"
+      ],
+      "position": 7,
+      "spend_log_id": {
+        "rejected": [
+          "member"
+        ],
+        "id": "text"
+      },
+      "litellm_call_id": "text",
+      "parent_request_id": "text",
+      "attempted_retries": 7,
+      "deployment_id": "text",
+      "response_cost": 1.5,
+      "usage": {
+        "rejected": [
+          "member"
+        ],
+        "prompt_tokens": 42,
+        "completion_tokens": 42,
+        "total_tokens": 42,
+        "cached_tokens": 42,
+        "prompt_audio_tokens": 42,
+        "cache_write_tokens": 42,
+        "cache_creation_tokens": 42,
+        "reasoning_tokens": 42,
+        "completion_audio_tokens": 42,
+        "cache_read_input_tokens": 42,
+        "cache_creation_input_tokens": 42,
+        "duration_seconds": 42,
+        "output_image_count": 42
+      }
+    }
+  ]
 }

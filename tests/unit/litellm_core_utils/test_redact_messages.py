@@ -26,8 +26,10 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import Field, Patch
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
+    TokenDataCheckedFields,
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
@@ -183,6 +185,35 @@ def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted()
     assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_redacts_a_chat_refusal(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": None, "refusal": SECRET}}]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"refusal": SECRET}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+
+    redacted: Final = perform_redaction({"litellm_params": _request_params({})}, result)
+
+    assert SECRET not in str(redacted), redacted
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_redacts_a_delta_refusal(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(refusal=SECRET))]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)
@@ -276,6 +307,75 @@ def test_streaming_redaction_drops_delta_audio(key: str) -> None:
     perform_redaction(details, None)
 
     assert SECRET not in str(response.choices[0].delta), response
+
+
+_IMAGE_URL: Final = f"https://example.com/generated.png?signature={SECRET}"
+
+
+def _image_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(
+                    content=None,
+                    images=[{"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}],
+                )
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("shape", ["object", "dict", "standard"])
+def test_redaction_drops_generated_images_from_the_logged_chat_response_only(shape: str) -> None:
+    client_response: Final = _image_response()
+
+    redacted: Final = (
+        redacted_standard_logging_payload({"response": client_response.model_dump()})
+        if shape == "standard"
+        else perform_redaction({}, client_response if shape == "object" else client_response.model_dump())
+    )
+
+    assert SECRET not in str(redacted), redacted
+    assert client_response.choices[0].message.images == [
+        {"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}
+    ]
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_drops_delta_images(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(images=[{"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}])
+            )
+        ]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
+@pytest.mark.parametrize("shape", ["object", "dict", "standard"])
+def test_redaction_hides_the_image_generation_result_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="gpt-5.6",
+        object="response",
+        status="completed",
+        output=[{"id": "ig_1", "type": "image_generation_call", "status": "completed", "result": SECRET}],
+    )
+
+    redacted: Final = (
+        redacted_standard_logging_payload({"response": response.model_dump()})["response"]
+        if shape == "standard"
+        else perform_redaction({}, response if shape == "object" else response.model_dump())
+    )
+
+    item: Final = redacted.output[0].model_dump() if shape == "object" else redacted["output"][0]
+    assert (item["id"], item["status"], item["result"]) == ("ig_1", "completed", REDACTED_BY_LITELLM)
+    assert response.output[0].result == SECRET
 
 
 _SECRET_URL: Final = f"https://example.com/?q={SECRET}"
@@ -2114,6 +2214,17 @@ def test_one_callback_opting_out_redacts_a_query_image_only_for_itself() -> None
     assert SECRET in json.dumps(details, default=str)
 
 
+def test_one_callback_opting_out_redacts_an_image_sent_to_apply_guardrail_only_for_itself() -> None:
+    details: Final[dict[str, object]] = {
+        "litellm_params": {"proxy_server_request": {"body": {"images": [f"data:image/png;base64,{SECRET}"]}}},
+    }
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_responses_api_stream():
@@ -2495,3 +2606,30 @@ def test_redaction_keeps_the_compression_savings_a_guardrail_reports() -> None:
 
     assert "4111" not in str(redacted["guardrail_information"])
     assert extract_compression_saved_tokens(redacted) == extract_compression_saved_tokens(payload) == 600
+
+
+def _token_ids_answer(content: str) -> dict[str, object]:
+    return {
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": content}, "token_ids": [785, 6722, 12095, 13]}
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("patched_answer", "served_token_ids"),
+    [("The capital of France is [MASKED].", None), ("The capital of France is Paris. Enjoy!", [785, 6722, 12095, 13])],
+    ids=["masked", "extended"],
+)
+def test_token_data_checked_fields_checks_each_patch_on_a_plain_mapping(
+    patched_answer: str, served_token_ids: object
+) -> None:
+    fields = TokenDataCheckedFields(MappingProxyType({Field.response: _token_ids_answer("The capital of France is Paris.")}))
+
+    patched = fields.apply(Patch().set(Field.response, _token_ids_answer(patched_answer)))
+
+    choice = patched[Field.response]["choices"][0]
+    assert choice["message"]["content"] == patched_answer
+    assert choice["token_ids"] == served_token_ids
+    assert dict(patched) == {Field.response: patched[Field.response]}
+    assert len(patched) == 1

@@ -86,7 +86,7 @@ class LoggingCallbackManager:
                 parent_list=litellm.callbacks,
             )
 
-    def add_litellm_success_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
+    def add_litellm_success_callback(self, callback: object):
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
@@ -103,7 +103,7 @@ class LoggingCallbackManager:
             else:
                 self._safe_add_callback_to_list(callback=callback, parent_list=litellm.success_callback)
 
-    def add_litellm_failure_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
+    def add_litellm_failure_callback(self, callback: object):
         """
         Add a failure callback to `litellm.failure_callback`.
         Auto-routes async callbacks to litellm._async_failure_callback.
@@ -128,7 +128,9 @@ class LoggingCallbackManager:
         with _callback_lists_lock:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_failure_callback)
 
-    def remove_callback_from_list_by_object(self, callback_list, obj, require_self=True):
+    def remove_callback_from_list_by_object(
+        self, callback_list: object, obj: object, require_self: bool = True
+    ) -> None:
         """
         Remove callbacks that are methods of a particular object (e.g., router cleanup)
         """
@@ -144,7 +146,7 @@ class LoggingCallbackManager:
             for c in remove_list:
                 callback_list.remove(c)
 
-    def remove_callbacks_by_type(self, callback_list, callback_type):
+    def remove_callbacks_by_type(self, callback_list: object, callback_type: type[object]) -> None:
         """
         Remove all callbacks of a specific type from a callback list.
 
@@ -229,30 +231,44 @@ class LoggingCallbackManager:
                 )
                 return callback
 
-            cached_logger = _generic_api_logger_cache.get(callback)
-            if (
-                isinstance(cached_logger, GenericAPILogger)
-                and cached_logger.endpoint == endpoint
-                and cached_logger.headers == headers
-                and cached_logger.event_types == event_types
-                and cached_logger.log_format == log_format
-                and cached_logger.max_retries == max_retries
-                and cached_logger.retry_delay == retry_delay
-                and cached_logger.timeout == timeout
-            ):
-                return cached_logger
+            with _callback_lists_lock:
+                cached_logger = _generic_api_logger_cache.get(callback)
+                if (
+                    isinstance(cached_logger, GenericAPILogger)
+                    and cached_logger.endpoint == GenericAPILogger.resolve_endpoint(endpoint)
+                    and cached_logger.headers == GenericAPILogger.resolve_headers(headers)
+                    and cached_logger.event_types == event_types
+                    and cached_logger.log_format == (log_format if log_format is not None else "json_array")
+                    and cached_logger.max_retries == max_retries
+                    and cached_logger.retry_delay == retry_delay
+                    and cached_logger.timeout == timeout
+                ):
+                    return cached_logger
 
-            new_logger = GenericAPILogger(
-                endpoint=endpoint,
-                headers=headers,
-                event_types=event_types,
-                log_format=log_format,
-                max_retries=max_retries,
-                retry_delay=retry_delay,
-                timeout=timeout,
-            )
-            _generic_api_logger_cache[callback] = new_logger
-            return new_logger
+                new_logger = GenericAPILogger(
+                    endpoint=endpoint,
+                    headers=headers,
+                    event_types=event_types,
+                    log_format=log_format,
+                    max_retries=max_retries,
+                    retry_delay=retry_delay,
+                    timeout=timeout,
+                )
+                if isinstance(cached_logger, GenericAPILogger):
+                    for callbacks in (
+                        litellm.callbacks,
+                        litellm.input_callback,
+                        litellm._async_input_callback,  # pyright: ignore[reportPrivateUsage]  # Manager owns callback lists.
+                        litellm.success_callback,
+                        litellm.failure_callback,
+                        litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # Manager owns callback lists.
+                        litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Manager owns callback lists.
+                        litellm.service_callback,
+                    ):
+                        callbacks[:] = [new_logger if entry is cached_logger else entry for entry in callbacks]
+                    cached_logger.shutdown(replacement=new_logger)
+                _generic_api_logger_cache[callback] = new_logger
+                return new_logger
 
         # Check if callback is in generic_api_compatible_callbacks.json
         from litellm.integrations.generic_api.generic_api_callback import (
@@ -277,7 +293,7 @@ class LoggingCallbackManager:
 
     def _safe_add_callback_to_list(
         self,
-        callback: CustomLogger | CustomLoggerV2 | Callable[..., object] | str,
+        callback: object,
         parent_list: list[CustomLogger | Callable[..., object] | str],
     ):
         """
@@ -524,7 +540,7 @@ class LoggingCallbackManager:
         Get all custom loggers that are instances of the given class type
         """
         # ensure we don't have duplicate instances
-        all_callbacks: Final = []
+        all_callbacks: Final[list[CustomLogger]] = []
         for callback in self.get_all_callbacks():
             if isinstance(callback, callback_type) and callback not in all_callbacks:
                 all_callbacks.append(callback)
@@ -574,7 +590,7 @@ class LoggingCallbackManager:
 
         return result
 
-    def get_callback_objects(self) -> tuple[tuple[str, CustomLogger | Callable], ...]:
+    def get_callback_objects(self) -> tuple[tuple[str, CustomLogger | Callable[..., object]], ...]:
         return tuple(
             (self._get_callback_string(callback), callback)
             for callback in self.get_all_callbacks()

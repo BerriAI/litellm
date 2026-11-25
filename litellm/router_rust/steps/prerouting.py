@@ -31,6 +31,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -863,6 +864,7 @@ class PreRouter:
         if selected is None:
             await arm_compaction(request_kwargs, None)
             _stamp_or_clear_metadata_key(request_kwargs, SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, None)
+            _stamp_or_clear_metadata_key(request_kwargs, SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY, None)
             _stamp_or_clear_metadata_key(request_kwargs, CONSUMED_REQUEST_TAGS_METADATA_KEY, None)
             return None
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
@@ -945,6 +947,11 @@ class PreRouter:
             request_kwargs,
             SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
             response.session_affinity_ttl_seconds if response else None,
+        )
+        _stamp_or_clear_metadata_key(
+            request_kwargs,
+            SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
+            response.session_affinity_conversation_id if response else None,
         )
         request_tags: Final = get_routing_tags_from_request_kwargs(request_kwargs)
         consumed: Final = (
@@ -1126,7 +1133,10 @@ class PreRouter:
         unsupported: Final = frozenset(
             param
             for param in candidates
-            if not any(deployment_accepts_param(deployment, model, param, self._host) for deployment in deployments)
+            if not any(
+                deployment_accepts_param(deployment, model, param, tier_params.get(param), self._host)
+                for deployment in deployments
+            )
         )
         if not unsupported:
             return tier_params

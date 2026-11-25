@@ -11,7 +11,7 @@ import httpx
 import pytest
 import yaml
 from fastapi import FastAPI, HTTPException
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from pytest_mock import MockerFixture
 
 import litellm
@@ -53,6 +53,7 @@ from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureCo
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -210,6 +211,11 @@ class _PatchScopeSupportedGuardrail(CustomGuardrail):
         logging_obj: object | None = None,
     ) -> GenericGuardrailAPIInputs:
         return inputs
+
+
+class _PatchDescriptionScanGuardrail(_PatchScopeSupportedGuardrail):
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
 
 
 class _PatchScopeUnsupportedGuardrail(_PatchScopeSupportedGuardrail):
@@ -1692,6 +1698,67 @@ async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
         callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
         assert callback.logging_only_scope is None
         assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_params", "patch_params"),
+    [
+        (
+            {"mode": "pre_call", "scan_tool_descriptions_as_text": True},
+            BaseLitellmParams(mode="post_call"),
+        ),
+        ({"mode": "post_call"}, BaseLitellmParams(scan_tool_descriptions_as_text=True)),
+    ],
+    ids=["mode_drops_pre_call", "description_scan_added_to_post_call"],
+)
+async def test_patch_guardrail_rejects_description_scan_that_never_runs_with_422(
+    mocker, monkeypatch, mock_guardrail_registry, stored_params: dict[str, object], patch_params: BaseLitellmParams
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchDescriptionScanGuardrail,
+        "patch_description_scan_test",
+        stored_params,
+    )
+    request = PatchGuardrailRequest(litellm_params=patch_params)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        assert exc_info.value.status_code == 422
+        assert "tool descriptions would never be scanned" in str(exc_info.value.detail)
+        assert mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"] == stored_guardrail
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_keeps_accepting_unrelated_edits_on_a_stored_unscanned_description_setting(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchDescriptionScanGuardrail,
+        "patch_description_scan_test",
+        {"mode": "post_call", "scan_tool_descriptions_as_text": True},
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(default_on=True))
+
+    try:
+        result = await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        assert result["guardrail_id"] == stored_guardrail["guardrail_id"]
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.default_on is True
+        assert callback.scan_tool_descriptions_as_text is None
     finally:
         handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
 
@@ -4215,7 +4282,12 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
 
 
 _GUARDRAIL_RECORDS: Final = "standard_logging_guardrail_information"
+_PNG_BASE64: Final = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+_PNG: Final = f"data:image/png;base64,{_PNG_BASE64}"
 _BEDROCK_TEXT_ALLOWED: Final = {"action": "NONE", "outputs": [], "assessments": []}
+_BEDROCK_IMAGE_ALLOWED: Final = {**_BEDROCK_TEXT_ALLOWED, "guardrailCoverage": {"images": {"guarded": 1, "total": 1}}}
 _BEDROCK_BLOCKED: Final = {
     "action": "GUARDRAIL_INTERVENED",
     "outputs": [{"text": "blocked"}],
@@ -4269,6 +4341,10 @@ def _bedrock_guard(handler: AsyncHTTPHandler, latest_user_message_only: bool = F
         experimental_use_latest_role_message_only=latest_user_message_only,
         event_hook=GuardrailEventHooks.pre_call,
     )
+
+
+def _another_provider_guard(handler: AsyncHTTPHandler) -> CustomGuardrail:
+    return CustomGuardrail(guardrail_name="bedrock-guard", event_hook=GuardrailEventHooks.pre_call)
 
 
 async def _apply_bedrock_guardrail_over_http(
@@ -4334,6 +4410,10 @@ async def _apply_bedrock_guardrail_over_http(
 
 def _logged_verdicts(call: _BedrockGuardrailCall) -> list[tuple[object, object]]:
     return [(record["guardrail_name"], record["guardrail_status"]) for record in call.logged["guardrail_information"]]
+
+
+def _scanned_content(call: _BedrockGuardrailCall) -> list[list[str]]:
+    return [[next(iter(item)) for item in payload["content"]] for payload in call.bedrock_payloads]
 
 
 @pytest.mark.asyncio
@@ -4446,3 +4526,171 @@ async def test_one_callback_opting_out_of_message_logging_leaves_the_guardrail_d
     assert "please bill my card" in str(call.logged["guardrail_information"])
     assert [record["guardrail_name"] for record in opted_out.logged[0]["guardrail_information"]] == ["bedrock-guard"]
     assert "please bill my card" not in str(opted_out.logged[0]["guardrail_information"])
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_an_image_sent_without_text(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_IMAGE_ALLOWED,), {"images": [_PNG]})
+
+    assert call.response.status_code == 200
+    assert call.response.json() == {"response_text": ""}
+    assert _scanned_content(call) == [["image"]]
+    assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+    assert _PNG_BASE64 not in json.dumps(call.logged, default=str)
+    assert [[part["type"] for part in message["content"]] for message in call.logged["messages"]] == [["image_url"]]
+    assert call.logged["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_an_image_and_its_text_separately(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED, _BEDROCK_TEXT_ALLOWED), {"text": "hello", "images": [_PNG]}
+    )
+
+    assert call.response.json() == {"response_text": "hello"}
+    assert _scanned_content(call) == [["image"], ["text"]]
+    assert call.logged["messages"][0]["content"][0] == {"type": "text", "text": "hello"}
+    assert [part["type"] for part in call.logged["messages"][0]["content"]] == ["text", "image_url"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_stops_at_a_blocked_image(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_BLOCKED, _BEDROCK_TEXT_ALLOWED), {"text": "hello", "images": [_PNG]}
+    )
+
+    assert call.response.status_code == 400
+    assert _scanned_content(call) == [["image"]]
+    assert _logged_verdicts(call) == [("bedrock-guard", "guardrail_intervened")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_stores_the_image_in_the_spend_log_request(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"images": [_PNG]})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True})
+    spend_row: Final = call.spend_rows[0]
+
+    stored_request: Final = get_logging_payload(
+        kwargs=spend_row["kwargs"],
+        response_obj=spend_row["completion_response"],
+        start_time=spend_row["start_time"],
+        end_time=spend_row["end_time"],
+    )["proxy_server_request"]
+
+    assert call.response.status_code == 400
+    assert json.loads(stored_request)["images"] == [_PNG]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_keeps_the_image_out_of_the_spend_log_when_message_logging_is_off(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(litellm, "turn_off_message_logging", True)
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"images": [_PNG]})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True})
+    spend_row: Final = call.spend_rows[0]
+
+    stored_request: Final = get_logging_payload(
+        kwargs=spend_row["kwargs"],
+        response_obj=spend_row["completion_response"],
+        start_time=spend_row["start_time"],
+        end_time=spend_row["end_time"],
+    )["proxy_server_request"]
+
+    assert call.response.status_code == 400
+    assert _PNG_BASE64[:64] not in stored_request
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ({"text": "hello", "images": [_PNG, _PNG]}, "at most 1 item"),
+        ({}, "Provide 'text', 'images', or both"),
+    ],
+    ids=["two-images", "neither-text-nor-image"],
+)
+def test_apply_guardrail_request_refuses_a_body_it_cannot_judge(body: Mapping[str, object], reason: str) -> None:
+    with pytest.raises(ValidationError, match=reason):
+        ApplyGuardrailRequest.model_validate({"guardrail_name": "bedrock-guard", **body})
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_an_unreadable_image_without_calling_the_guardrail(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED,), {"text": "hello", "images": [f"data:image/webp;base64,{_PNG_BASE64}"]}
+    )
+
+    assert call.response.status_code == 422
+    assert call.bedrock_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_native_response_returns_the_image_findings(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED,), {"images": [_PNG], "response_format": "native"}
+    )
+
+    assert call.response.status_code == 200
+    assert call.response.json() == _BEDROCK_IMAGE_ALLOWED
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_a_response_image_as_model_output(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED,), {"images": [_PNG], "input_type": "response"}
+    )
+
+    assert call.response.status_code == 200
+    assert [payload["source"] for payload in call.bedrock_payloads] == ["OUTPUT"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_text_sent_with_an_allowed_image(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED, _BEDROCK_BLOCKED), {"text": "hello", "images": [_PNG]}
+    )
+
+    assert call.response.status_code == 400
+    assert _logged_verdicts(call) == [("bedrock-guard", "success"), ("bedrock-guard", "guardrail_intervened")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_still_scans_message_text_sent_with_an_image(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker,
+        (_BEDROCK_IMAGE_ALLOWED, _BEDROCK_BLOCKED),
+        {"images": [_PNG], "messages": [{"role": "user", "content": "hello"}]},
+        guardrail=lambda handler: _bedrock_guard(handler, latest_user_message_only=True),
+    )
+
+    assert call.response.status_code == 400
+    assert _scanned_content(call) == [["image"], ["text"]]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_message_text_a_bedrock_guardrail_would_not_scan(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (), {"images": [_PNG], "messages": [{"role": "user", "content": "hello"}]}
+    )
+
+    assert call.response.status_code == 422
+    assert "ignores 'messages'" in call.response.text
+    assert call.bedrock_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_an_image_for_a_guardrail_that_cannot_scan_it(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (), {"text": "hello", "images": [_PNG]}, guardrail=_another_provider_guard
+    )
+
+    assert call.response.status_code == 422
+    assert call.logged.get("guardrail_information") in (None, [])
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_still_accepts_an_explicitly_empty_text(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_TEXT_ALLOWED,), {"text": ""})
+
+    assert call.response.status_code == 200
+    assert call.response.json() == {"response_text": ""}

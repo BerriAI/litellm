@@ -17,7 +17,7 @@ import os
 import re
 import ssl
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
@@ -37,13 +38,13 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_SSL_CIPHERS
+from litellm.integrations.lens.config import is_lens_tracing_enabled
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
-from litellm.router_api import ApplyResult, RouterSettings
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -58,7 +59,9 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.proxy.utils import evict_config_param
-from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.router_api import ApplyResult, RouterSettings
+from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.utils import CredentialItem
 
 from .conftest import normalize
 
@@ -107,6 +110,48 @@ async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, mo
     assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
     await ProxyConfig()._delete_deployment(db_models=[])
     assert router.get_model_ids() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_general_settings", "discovered_max_input_tokens"),
+    [({}, 8192), ({"disable_model_info_refresh": True}, None)],
+    ids=["refresh-on", "refresh-disabled"],
+)
+async def test_a_deployment_the_db_sync_adds_gets_its_backend_limits_without_waiting_for_the_next_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    db_general_settings: Mapping[str, object],
+    discovered_max_input_tokens: int | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", dict(db_general_settings))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    backend: Final = respx_mock.get("https://backend.invalid/v1/models").respond(
+        200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}
+    )
+    model: Final = SimpleNamespace(
+        model_id="db-vllm",
+        model_name="local",
+        model_info={"id": "db-vllm"},
+        litellm_params={
+            "model": encrypt_value_helper("hosted_vllm/local-model"),
+            "api_base": encrypt_value_helper("https://backend.invalid/v1"),
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig().add_deployments_and_refresh_model_info(db_models=[model]) == 1
+    pending: Final = asyncio.all_tasks() - {asyncio.current_task()}
+    if pending:
+        await asyncio.wait(pending, timeout=5)
+
+    assert router.registry().discovered_model_info("db-vllm").get("max_input_tokens") == discovered_max_input_tokens
+    assert backend.call_count == (0 if discovered_max_input_tokens is None else 1)
 
 
 def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,9 +226,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 ) -> None:
     import httpx
 
-    from litellm.proxy.tracing_runtime import manage_tracing
-    from litellm.tracing.exporter import LensExporter
-    from litellm.tracing.remote import LensConnection
+    from litellm.integrations.lens.exporter import LensExporter
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
+    from litellm.integrations.lens.remote import LensConnection
 
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
@@ -221,7 +266,7 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 
     monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
     monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
@@ -4028,20 +4073,22 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
-async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
-    tmp_path, monkeypatch, configured, expected
+@pytest.mark.parametrize("configured, expected", [('"true"', True), ('"false"', False), ("null", False)])
+async def test_ProxyConfig_load_config_reads_a_flag_string_or_null_litellm_settings_drop_params_without_a_warning(
+    tmp_path, monkeypatch, caplog, configured, expected
 ):
     f = tmp_path / "c.yaml"
-    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(litellm, "drop_params", not expected)
 
-    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is expected
+    assert "drop_params" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -4060,21 +4107,31 @@ async def test_ProxyConfig_load_config_resolves_a_litellm_settings_drop_params_e
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_settings_drop_params(
-    tmp_path, monkeypatch, caplog
+@pytest.mark.parametrize("configured, logged", [("ture", "'ture'"), ('"maybe"', "'maybe'"), ("2", "2")])
+async def test_ProxyConfig_load_config_warns_that_a_non_flag_litellm_settings_drop_params_is_off_except_for_agentic_clis(
+    tmp_path, monkeypatch, caplog, configured, logged
 ):
     f = tmp_path / "c.yaml"
-    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: ture\n")
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(litellm, "drop_params", True)
+    proxy_config = ProxyConfig()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        await proxy_config.load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is False
-    assert "litellm_settings.drop_params='ture' is not a flag value, treating it as off" in caplog.text
+    assert caplog.text.count("is not a flag value") == 1
+    assert (
+        f"litellm_settings.drop_params={logged} is not a flag value, treating it as off, except for Claude Code, "
+        "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on" in caplog.text
+    )
+    assert should_auto_drop_params_for_agentic_cli("claude-cli/2.1.299 (external, cli)", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("codex_cli_rs/0.165.0", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("GitHubCopilotChat/0.74.0", False, proxy_config)
+    assert not should_auto_drop_params_for_agentic_cli("curl/8.5.0", False, proxy_config)
 
 
 # ---------------------------------------------------------------------------
@@ -4772,6 +4829,120 @@ async def test_ProxyConfig_get_credentials_carries_the_stored_display_name_and_m
     )
 
 
+class _ComparisonCounter:
+    def __init__(self) -> None:
+        self.count = 0
+
+
+class _CountedName(str):
+    counter: _ComparisonCounter
+
+    def __new__(cls, value: str, counter: _ComparisonCounter) -> _CountedName:
+        name: Final = super().__new__(cls, value)
+        name.counter = counter
+        return name
+
+    def __eq__(self, other: object) -> bool:
+        self.counter.count += 1
+        return str.__eq__(self, other)
+
+    __hash__ = str.__hash__
+
+
+def _loaded_credential(name: str, api_key: str) -> CredentialItem:
+    return CredentialItem.model_construct(
+        credential_name=name, credential_values={"api_key": api_key}, credential_info={}
+    )
+
+
+def _prisma_returning_credential_rows(rows: Sequence[Mapping[str, object]]) -> MagicMock:
+    fake_prisma: Final = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=rows)
+    return fake_prisma
+
+
+def _proxy_config_reading_credential_names_from_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config_credential_names: tuple[str, ...]
+) -> ProxyConfig:
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        json.dumps(
+            {
+                "credential_list": [
+                    {"credential_name": name, "credential_values": {"api_key": f"{name}-yaml"}, "credential_info": {}}
+                    for name in config_credential_names
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_file))
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    return ProxyConfig()
+
+
+@pytest.mark.parametrize(
+    ("loaded", "db_rows", "config_names", "expected"),
+    [
+        pytest.param(
+            (("a", "a-1"), ("stale", "s-1"), ("b", "b-1"), ("a", "a-2"), ("from-config", "cfg-old")),
+            (("a", "a-new"), ("c", "c-1"), ("b", "b-new"), ("c", "c-2"), ("a", "a-newer")),
+            ("from-config",),
+            (("a", "a-newer"), ("b", "b-new"), ("a", "a-2"), ("from-config", "cfg-old"), ("c", "c-1"), ("c", "c-2")),
+            id="first-duplicate-replaced-unloaded-names-appended-stale-dropped-config-kept",
+        ),
+        pytest.param((("a", "a-1"), ("b", "b-1")), (), (), (), id="empty-db-and-config-clear-the-list"),
+        pytest.param((), (("a", "a-1"), ("a", "a-2")), (), (("a", "a-1"), ("a", "a-2")), id="empty-list-appends-all"),
+    ],
+)
+async def test_ProxyConfig_get_credentials_syncs_the_loaded_list_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    loaded: tuple[tuple[str, str], ...],
+    db_rows: tuple[tuple[str, str], ...],
+    config_names: tuple[str, ...],
+    expected: tuple[tuple[str, str], ...],
+) -> None:
+    credential_list: Final = [_loaded_credential(name, api_key) for name, api_key in loaded]
+    monkeypatch.setattr(litellm, "credential_list", credential_list)
+    pc: Final = _proxy_config_reading_credential_names_from_file(monkeypatch, tmp_path, config_names)
+
+    await pc.get_credentials(
+        prisma_client=_prisma_returning_credential_rows(
+            [_encrypted_credential_row(name, api_key) for name, api_key in db_rows]
+        )
+    )
+
+    assert litellm.credential_list is credential_list
+    assert tuple((cred.credential_name, cred.credential_values["api_key"]) for cred in credential_list) == expected
+
+
+async def test_ProxyConfig_get_credentials_compares_names_linearly_in_credential_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    count: Final = 2_000
+    counter: Final = _ComparisonCounter()
+    credential_list: Final = [_loaded_credential(_CountedName(f"cred-{i}", counter), f"old-{i}") for i in range(count)]
+    monkeypatch.setattr(litellm, "credential_list", credential_list)
+    pc: Final = _proxy_config_reading_credential_names_from_file(monkeypatch, tmp_path, ())
+    db_names: Final = (*(f"cred-{i}" for i in range(1, count)), "cred-new")
+
+    await pc.get_credentials(
+        prisma_client=_prisma_returning_credential_rows(
+            [{"credential_name": name, "credential_values": {}, "credential_info": {}} for name in db_names]
+        )
+    )
+    comparisons: Final = counter.count
+
+    assert [cred.credential_name for cred in credential_list] == list(db_names)
+    assert comparisons <= 3 * count, f"{comparisons} name comparisons to sync {count} credentials"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._reschedule_spend_log_cleanup_job
 # ---------------------------------------------------------------------------
@@ -5253,7 +5424,7 @@ async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch):
+async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch, caplog):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5267,7 +5438,9 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
 
-    await pc._update_general_settings({"unrelated": "value"})
+    await pc._update_general_settings({"unrelated": "value", "required_customer_headers": ["X-Tenant-ID"]})
+    assert "required_customer_headers" not in pc.settings
+    assert "proxy does not apply" in caplog.text
 
     initialize_endpoints.assert_not_awaited()
     reschedule.assert_not_awaited()
@@ -5277,7 +5450,7 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch):
+async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch, caplog):
     pc = ProxyConfig()
     config = {
         "general_settings": {
@@ -5292,6 +5465,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
     db_values = {
         "general_settings": {
             "max_file_size_mb": 9,
+            "required_customer_headers": ["X-Tenant-ID"],
             "max_parallel_requests": 11,
             "alerting": ["db"],
             "pass_through_endpoints": [{"path": "/db"}],
@@ -5309,6 +5483,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
 
     resolved = await pc._update_config_from_db(MagicMock(), config, store_model_in_db=True)
 
+    assert "proxy does not apply" in caplog.text
     assert resolved["general_settings"] == {
         "max_file_size_mb": 7,
         "max_parallel_requests": 3,
@@ -5422,6 +5597,7 @@ async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from
     await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=True)
 
     assert rebuild_routes.await_count == (1 if rebuilds_routes else 0)
+
 
 
 # ---------------------------------------------------------------------------
@@ -6076,50 +6252,58 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agents_source", ["config", "db", "api"])
 async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
-    clean_agent_registry, agents_source
+    clean_agent_registry, agents_source, monkeypatch
 ):
     """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
+    import jwt
+
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy.auth import core
+    from litellm.proxy.auth import jwt as proxy_jwt
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.types.agents import AgentResponse
 
-    original_lookup = proxy_server.jwt_handler.agent_lookup
-    try:
-        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
-            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
-            prisma_client=None,
-            user_api_key_cache=UserApiKeyCache(),
+    jwks_url: Final = "https://idp.example/jwks"
+    signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    proxy_server.jwks_cache.set_cache(
+        key=f"litellm_jwt_auth_keys_{jwks_url}", value=[{**public_jwk, "kid": "k1"}]
+    )
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
+    proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+        general_settings={"enable_jwt_auth": True, "litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    if agents_source == "config":
+        await ProxyConfig()._init_non_llm_configs(
+            config={"agents": [_config_agent("loaded-agent")]},
+            config_file_path=None,
         )
-        if agents_source == "config":
-            await ProxyConfig()._init_non_llm_configs(
-                config={"agents": [_config_agent("loaded-agent")]},
-                config_file_path=None,
-            )
-        elif agents_source == "db":
-            prisma_client = MagicMock()
-            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-                return_value=[_agent_db_row("db-id", "loaded-agent")]
-            )
-            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
-        else:
-            clean_agent_registry.register_agent(
-                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
-            )
+    elif agents_source == "db":
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+            return_value=[_agent_db_row("db-id", "loaded-agent")]
+        )
+        await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+    else:
+        clean_agent_registry.register_agent(
+            agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+        )
+    token: Final = jwt.encode(
+        {"sub": "agent-caller", "appid": "loaded-agent", "exp": 4102444800},
+        signing_key,
+        algorithm="RS256",
+        headers={"kid": "k1"},
+    )
 
-        resolved = JWTAuthManager.resolve_agent_id(
-            jwt_handler=proxy_server.jwt_handler,
-            jwt_valid_token={"appid": "loaded-agent"},
-            agent_registry=proxy_server.jwt_handler.agent_lookup,
-        )
-    finally:
-        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
-        proxy_server.jwt_handler.update_environment(
-            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
-        )
+    result: Final = await proxy_jwt.authorize(
+        core.proxy_settings(), token, "/chat/completions", "POST", provisioning=False
+    )
 
-    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
+    assert result["agent_id"] == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
 
 
 @pytest.mark.asyncio

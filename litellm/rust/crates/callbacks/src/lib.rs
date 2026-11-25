@@ -22,14 +22,16 @@ pub use input::{
 };
 pub use manifest::{
     Activation, Manifest, ManifestError, OptOutBy, Selection, Subscription, SubscriptionProblem,
+    Violation,
 };
 pub use payload::{PayloadHost, PayloadRef, RenderOptions, Rendered, render_all};
 pub use record::{
-    AgentPolicy, AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
-    EstimatedOutputTokens, GuardrailEntry, InputSequenceLength, KeyIdentity, KeyLimits,
-    LimiterRequest, LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind,
-    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
-    RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
+    AgentPolicy, AttemptTiming, BilledRetryAttempt, BudgetPlan, BudgetPlanCounter,
+    BudgetReservation, Cost, CustomerScope, Deployment, EstimatedOutputTokens, GuardrailEntry,
+    InputSequenceLength, KeyIdentity, KeyLimits, LimiterRequest, LoggedKeyIdentity,
+    LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind, MetadataLabel, ModelInfo, Moment,
+    Outcome, OutputCap, RateLimitState, RateLimitStatus, RateLimitStatuses, ReservationEntry,
+    SpendLogId, Usage, UsageRecord, ZeroCost,
 };
 pub use scalar::Scalar;
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};

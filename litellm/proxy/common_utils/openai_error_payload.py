@@ -2,21 +2,29 @@
 ``type`` is a required string and ``param`` is nullable, neither of which the literal
 string ``"None"`` satisfies."""
 
+import json
+import re
 import sys
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
 
-from litellm._logging import redact_internal_details_from_client_fields
-from litellm.constants import STRINGIFIED_NONE
+from litellm._logging import (
+    redact_internal_details_from_client_fields,
+    redact_internal_details_from_client_message,
+)
+from litellm.constants import PROVIDER_ERROR_BODY_ATTRIBUTE, STRINGIFIED_NONE
+from litellm.litellm_core_utils.core_helpers import error_status_code, http_error_status
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
+SHOULD_RETRY_HEADER: Final = "x-should-retry"
 _SERVER_IS_OVERLOADED_CODE: Final = "server_is_overloaded"
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
@@ -29,9 +37,15 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
 
-_HTTP_ERROR_STATUSES: Final = range(status.HTTP_400_BAD_REQUEST, 600)
-
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
+
+_NO_PROVIDER_SPECIFIC_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+_OPENAI_ERROR_TYPE_SHAPE: Final = re.compile(r"[a-z][a-z0-9_]*")
+
+_OPENAI_ERROR_OBJECT_FIELDS: Final = frozenset(
+    {"object", "message", "type", "param", "code", "provider_specific_fields"}
+)
 
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
@@ -74,34 +88,12 @@ def attribute_of(value: object, name: str, default: object = None) -> object:
     return getattr(value, name, default)
 
 
-def error_status_code(exc: object, default: int) -> int:
-    """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
-    the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_of(exc, "status_code"))
-    if carried is not None:
-        return carried
-    stringified: Final = attribute_of(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
-    return default if from_code is None else from_code
-
-
-def _http_error_status(value: object) -> int | None:
-    match value:
-        case bool():
-            return None
-        case int() if value in _HTTP_ERROR_STATUSES:
-            return value
-        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
-            return int(value)
-        case _:
-            return None
-
-
 def openai_error_type(exc: object, status_code: int) -> str:
-    """OpenAI types ``error.type`` as a required string, so an exception carrying none
-    falls back to the type its status code stands for."""
-    carried: Final = attribute_of(exc, "type")
-    if isinstance(carried, str) and carried != STRINGIFIED_NONE:
+    """OpenAI types ``error.type`` as a required snake_case string, so an exception carrying none,
+    or a backend's own class name such as vLLM's ``BadRequestError``, falls back to the type its
+    status code stands for."""
+    carried: Final = _relayable_text(attribute_of(exc, "type"))
+    if _OPENAI_ERROR_TYPE_SHAPE.fullmatch(carried):
         return carried
     return openai_error_type_for_status(status_code)
 
@@ -118,20 +110,68 @@ def openai_error_type_for_status(status_code: int) -> str:
 def openai_error_param(exc: object) -> str | None:
     """OpenAI types ``error.param`` as nullable, so an exception carrying none
     serializes as JSON ``null``."""
-    carried: Final = attribute_of(exc, "param")
-    return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+    return _relayable_text(attribute_of(exc, "param")) or None
+
+
+def _relayable_text(carried: object) -> str:
+    if not isinstance(carried, str) or carried == STRINGIFIED_NONE:
+        return ""
+    return redact_internal_details_from_client_message(carried).strip()
 
 
 def relayed_provider_specific_fields(
     exc: object,
 ) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+    carried: Final = attribute_of(exc, "provider_specific_fields")
+    relayed: Final = {
+        **_error_body_provider_specific_fields(exc),
+        **(_ERROR_BODY.validate_python(carried) if isinstance(carried, dict) else {}),
+    }
+    return redacted_provider_specific_fields(relayed) if relayed else None
+
+
+def redacted_provider_specific_fields(
+    carried: object,
+) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+    if not isinstance(carried, dict):
+        return None
+    redacted: Final = _ERROR_BODY.validate_python(
+        redact_internal_details_from_client_fields(_ERROR_BODY.validate_python(carried))
+    )
+    return redacted if _is_json_compliant(redacted) else None
+
+
+def _error_body_provider_specific_fields(exc: object) -> Mapping[str, object]:
     body: Final = attribute_of(exc, "body")
-    if not isinstance(body, dict):
-        return None
-    fields: Final = _ERROR_BODY.validate_python(body).get("provider_specific_fields")
-    if not isinstance(fields, dict):
-        return None
-    return _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(_ERROR_BODY.validate_python(fields)))
+    carried: Final = body if isinstance(body, dict) else attribute_of(exc, PROVIDER_ERROR_BODY_ATTRIBUTE)
+    if not isinstance(carried, dict):
+        return _NO_PROVIDER_SPECIFIC_FIELDS
+    error_object: Final = _ERROR_BODY.validate_python(carried)
+    declared: Final = error_object.get("provider_specific_fields")
+    if isinstance(declared, dict):
+        return _ERROR_BODY.validate_python(declared)
+    return _openai_error_object_extras(error_object)
+
+
+def _is_json_compliant(fields: Mapping[str, object]) -> bool:
+    try:
+        _ = json.dumps(fields, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    return True
+
+
+def _openai_error_object_extras(error_object: Mapping[str, object]) -> Mapping[str, object]:
+    relayable: Final = error_object.keys() if isinstance(error_object.get("message"), str) else {"code"}
+    return MappingProxyType(
+        {key: value for key, value in error_object.items() if key in relayable and _is_provider_specific(key, value)}
+    )
+
+
+def _is_provider_specific(key: str, value: object) -> bool:
+    if key == "code":
+        return value not in (None, "") and http_error_status(value) is None
+    return key not in _OPENAI_ERROR_OBJECT_FIELDS
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
@@ -208,6 +248,7 @@ def route_failure_proxy_exception(
         headers=headers,
         openai_code=openai_code,
         code=answered_status,
+        provider_specific_fields=relayed_provider_specific_fields(exc),
     )
 
 
@@ -255,6 +296,30 @@ def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> Pr
     if litellm_call_id is not None:
         exc.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return exc
+
+
+_CREATE_MAY_EXIST_NOTICES: Final[Mapping[Literal["file", "batch"], str]] = MappingProxyType(
+    {
+        "file": "The provider may already have created this file, so check your newest files before you send it again",
+        "batch": "The provider may already have created this batch, so check your newest batches before you send it again",
+    }
+)
+
+
+def with_notice_when_the_create_may_exist(
+    exc: ProxyException, error: BaseException, created: Literal["file", "batch"]
+) -> ProxyException:
+    if not create_may_already_exist(error):
+        return exc
+    return ProxyException(
+        message=f"{exc.message}\n\n{_CREATE_MAY_EXIST_NOTICES[created]}",
+        type=exc.type,
+        param=exc.param,
+        code=exc.code,
+        headers={**exc.headers, SHOULD_RETRY_HEADER: "false"},
+        openai_code=None if exc.openai_code is None else str(exc.openai_code),
+        provider_specific_fields=exc.provider_specific_fields,  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
+    )
 
 
 def headers_with_litellm_call_id(headers: Mapping[str, str] | None, litellm_call_id: str) -> Mapping[str, str]:

@@ -6,6 +6,8 @@ from functools import partial
 from typing import Final, Literal, overload
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -13,6 +15,7 @@ from litellm.containers.utils import (
     ContainerRequestUtils,
     decode_managed_container_id_for_request,
 )
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.main import base_llm_http_handler
@@ -45,6 +48,12 @@ __all__ = [
     "upload_container_file",
 ]
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _MockResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
 
 ##### Container Create #######################
 async def _encode_created_container_id(
@@ -67,7 +76,7 @@ async def acreate_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerObject:
     """Asynchronously calls the `create_container` function with the given arguments and keyword arguments.
 
@@ -204,9 +213,11 @@ def create_container(
         mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = ContainerObject(**mock_response)
+            response: Final = ContainerObject.model_validate(
+                _MockResponseFields(**keyword_arguments(mock_response, ContainerObject))
+            )
             return response
 
         # get llm provider logic
@@ -232,9 +243,11 @@ def create_container(
         )
 
         # Get optional parameters for the container API
-        container_create_request_params: Final[dict] = ContainerRequestUtils.get_optional_params_container_create(
-            container_provider_config=container_provider_config,
-            container_create_optional_params=container_create_optional_params,
+        container_create_request_params: Final[dict[str, object]] = (
+            ContainerRequestUtils.get_optional_params_container_create(
+                container_provider_config=container_provider_config,
+                container_create_optional_params=container_create_optional_params,
+            )
         )
 
         # Pre Call logging
@@ -297,7 +310,7 @@ async def alist_containers(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerListResponse:
     """Asynchronously list containers.
 
@@ -422,9 +435,11 @@ def list_containers(
         mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = ContainerListResponse(**mock_response)
+            response: Final = ContainerListResponse.model_validate(
+                _MockResponseFields(**keyword_arguments(mock_response, ContainerListResponse))
+            )
             return response
 
         # get llm provider logic
@@ -497,7 +512,7 @@ async def aretrieve_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerObject:
     """Asynchronously retrieve a container.
 
@@ -613,9 +628,11 @@ def retrieve_container(
         mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = ContainerObject(**mock_response)
+            response: Final = ContainerObject.model_validate(
+                _MockResponseFields(**keyword_arguments(mock_response, ContainerObject))
+            )
             return response
 
         # get llm provider logic
@@ -712,7 +729,7 @@ async def adelete_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteContainerResult:
     """Asynchronously delete a container.
 
@@ -828,9 +845,11 @@ def delete_container(
         mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = DeleteContainerResult(**mock_response)
+            response: Final = DeleteContainerResult.model_validate(
+                _MockResponseFields(**keyword_arguments(mock_response, DeleteContainerResult))
+            )
             return response
 
         # get llm provider logic
@@ -928,7 +947,7 @@ async def alist_container_files(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerFileListResponse:
     """Asynchronously list files in a container.
 
@@ -1057,9 +1076,11 @@ def list_container_files(
         mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = ContainerFileListResponse(**mock_response)
+            response: Final = ContainerFileListResponse.model_validate(
+                _MockResponseFields(**keyword_arguments(mock_response, ContainerFileListResponse))
+            )
             return response
 
         # get llm provider logic
@@ -1139,7 +1160,7 @@ async def aupload_container_file(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerFileObject:
     """Asynchronously upload a file to a container.
 
@@ -1308,9 +1329,11 @@ def upload_container_file(
         mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = ContainerFileObject(**mock_response)
+            response: Final = ContainerFileObject.model_validate(
+                _MockResponseFields(**keyword_arguments(mock_response, ContainerFileObject))
+            )
             return response
 
         # get llm provider logic

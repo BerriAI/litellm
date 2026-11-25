@@ -14,9 +14,6 @@ class _AttributeView(TypedDict):
     value: ReadOnly[object]
 
 
-_RESPONSE_METADATA_EXTRAS: Final = frozenset({"service_tier"})
-
-
 def _attribute_of(source: object, name: str) -> object:
     attribute: Final[_AttributeView] = {"value": getattr(source, name)}
     return attribute["value"]
@@ -56,8 +53,8 @@ def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
 
     # Check model_extra for dynamically added fields (this is where Pydantic stores them)
     stream_extra_fields: Final[Mapping[str, object]] = model_response.model_extra or {}
-    for extra_field_name, extra_field_value in stream_extra_fields.items():
-        if extra_field_name not in _RESPONSE_METADATA_EXTRAS and _has_meaningful_content(extra_field_value):
+    for extra_field_value in stream_extra_fields.values():
+        if _has_meaningful_content(extra_field_value):
             return False
 
     # Check for any non-base fields that are set

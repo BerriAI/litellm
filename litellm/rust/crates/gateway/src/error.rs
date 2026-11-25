@@ -2,22 +2,24 @@
 pub enum Error {
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
-    #[error("MCP host does not yet support configured setting {0}")]
-    McpSetting(String),
-    #[error("MCP host does not yet support guardrails or policies")]
-    McpGuardrails,
-    #[error(transparent)]
-    Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error(transparent)]
     Config(#[from] litellm_config_load::Error),
     #[error(transparent)]
+    Environment(#[from] litellm_config::Error),
+    #[error(transparent)]
     Redis(#[from] litellm_redis_resolve::Error),
-    #[error("Redis setting {setting} is not plain data")]
-    RedisNotPlainData { setting: String },
     #[error(transparent)]
     RedisConnect(#[from] litellm_redis_connect::Error),
-    #[error("MCP requires working gateway authentication")]
-    Auth(#[from] litellm_gateway_auth::Error),
+    #[error(transparent)]
+    Database(#[from] litellm_db_resolve::Error),
+    #[error(transparent)]
+    DatabasePool(#[from] litellm_db::Error),
     #[error(transparent)]
     ModelCatalog(#[from] litellm_model_catalog::Error),
+    #[error(transparent)]
+    RouterConfig(#[from] litellm_router_core::ConfigError),
+    #[error(transparent)]
+    Router(#[from] litellm_router_core::Error),
+    #[error(transparent)]
+    Callback(#[from] crate::callbacks::Unregistrable),
 }

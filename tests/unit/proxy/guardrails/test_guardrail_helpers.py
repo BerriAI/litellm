@@ -1,13 +1,14 @@
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 
 DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "submitted": "pending_review"})
@@ -15,7 +16,9 @@ DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "s
 
 def _filter(where: Mapping[str, object]) -> Mapping[str, object]:
     clauses: Final = where.get("AND", (where,))
-    return {key: value for clause in clauses for key, value in clause.items()}  # comprehension-ok: flattens prisma AND clauses
+    return {
+        key: value for clause in clauses for key, value in clause.items()
+    }  # comprehension-ok: flattens prisma AND clauses
 
 
 def _prisma(rows: Mapping[str, str] = DB_ROWS) -> MagicMock:
@@ -226,3 +229,196 @@ async def test_other_stored_dicts_fail_loudly_since_they_never_run(entries: dict
 
     assert exc.value.status_code == 400
     assert exc.value.detail["error"].startswith("Invalid guardrail detected - {")
+
+
+async def _pre_call(
+    data: dict[str, object], reject_unregistered: object, skip_guardrails: bool = False
+) -> dict[str, object] | None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import CallTypes
+    from litellm.proxy.utils import ProxyLogging
+
+    ProxyLogging._callback_capabilities_cache.clear()
+    with patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": reject_unregistered}):
+        return await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            data=data,
+            call_type=CallTypes.acompletion.value,
+            skip_guardrails=skip_guardrails,
+        )
+
+
+def _request(metadata: dict[str, object]) -> dict[str, object]:
+    return {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "metadata": metadata}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_rejects_a_named_guardrail_when_none_are_registered() -> None:
+    with patch("litellm.callbacks", []), pytest.raises(HTTPException) as exc:
+        await _pre_call(_request({"guardrails": ["deleted-guardrail"]}), reject_unregistered=True)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"].startswith("Unknown guardrail(s): deleted-guardrail.")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_names_only_the_unregistered_guardrails(guardrail_loaded_here: str) -> None:
+    data: Final = _request({"guardrails": [guardrail_loaded_here, {"typo": {}}]})
+    data["litellm_metadata"] = {"guardrails": ["other-typo"]}
+
+    with pytest.raises(HTTPException) as exc:
+        await _pre_call(data, reject_unregistered=True)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"].startswith("Unknown guardrail(s): other-typo, typo.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entries",
+    ({"ghost": True}, ["ghost", 5], "ghost"),
+    ids=("toggle_map", "list_with_a_non_name_entry", "bare_string"),
+)
+async def test_pre_call_rejects_unregistered_names_in_any_shape_the_runtime_reads(entries: object) -> None:
+    with patch("litellm.callbacks", []), pytest.raises(HTTPException) as exc:
+        await _pre_call(_request({"guardrails": entries}), reject_unregistered=True)
+
+    assert exc.value.detail["error"].startswith("Unknown guardrail(s): ghost.")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_reads_a_string_true_setting_as_on() -> None:
+    with patch("litellm.callbacks", []), pytest.raises(HTTPException) as exc:
+        await _pre_call(_request({"guardrails": ["ghost"]}), reject_unregistered="true")
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_pre_call_treats_a_non_boolean_setting_as_off() -> None:
+    with patch("litellm.callbacks", []):
+        assert await _pre_call(_request({"guardrails": ["ghost"]}), reject_unregistered="sometimes") is not None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_serves_a_request_whose_guardrails_are_all_registered(guardrail_loaded_here: str) -> None:
+    data: Final = _request({"guardrails": [guardrail_loaded_here]})
+
+    assert await _pre_call(data, reject_unregistered=True) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reject_unregistered", "skip_guardrails"), ((False, False), (True, True)), ids=("flag_off", "skip_guardrails")
+)
+async def test_pre_call_serves_unregistered_guardrails_without_the_flag_or_when_skipping(
+    reject_unregistered: bool, skip_guardrails: bool
+) -> None:
+    data: Final = _request({"guardrails": ["deleted-guardrail"]})
+
+    with patch("litellm.callbacks", []):
+        assert await _pre_call(data, reject_unregistered, skip_guardrails) is not None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_accepts_legacy_metadata_toggles() -> None:
+    from litellm.types.guardrails import GuardrailItem
+
+    legacy: Final = GuardrailItem(callbacks=["legacy_callback"], guardrail_name="legacy")
+    with patch.dict(litellm.guardrail_name_config_map, {"legacy": legacy}, clear=True):
+        assert (
+            await _pre_call(_request({"guardrails": {"legacy": True, "disabled": False}}), reject_unregistered=True)
+            is not None
+        )
+        with pytest.raises(HTTPException, match=r"Unknown guardrail.*legacy"):
+            await _pre_call(_request({"guardrails": ["legacy"]}), reject_unregistered=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
+async def test_pre_call_rejects_missing_policy_pipeline_step(mode: str, guardrail_loaded_here: str) -> None:
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+    pipeline: Final = GuardrailPipeline(
+        mode=mode,
+        steps=[
+            PipelineStep(guardrail=guardrail_loaded_here, on_pass="next"),
+            PipelineStep(guardrail="missing-pipeline-step", on_error="allow"),
+        ],
+    )
+    data: Final = _request({"user_id": "caller-metadata"})
+    data["litellm_metadata"] = {"_guardrail_pipelines": [("policy", pipeline)]}
+    with pytest.raises(HTTPException, match=r"Unknown guardrail.*missing-pipeline-step") as exc:
+        await _pre_call(data, reject_unregistered=True)
+    assert exc.value.status_code == 400
+    assert guardrail_loaded_here not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_fails", "fallback_missing", "strict", "stream", "authenticated", "expected"),
+    (
+        (False, True, True, False, True, "primary"),
+        (True, False, True, False, True, "backup"),
+        (True, True, True, False, True, None),
+        (True, True, True, True, True, None),
+        (True, True, False, False, True, "backup"),
+        (True, True, True, False, False, "backup"),
+    ),
+    ids=("unused", "known", "terminal", "stream", "flag_off", "sdk"),
+)
+async def test_strict_guardrails_validate_the_selected_fallback(
+    primary_fails: bool,
+    fallback_missing: bool,
+    strict: bool,
+    stream: bool,
+    authenticated: bool,
+    expected: str | None,
+    guardrail_loaded_here: str,
+) -> None:
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "unused",
+                    "mock_response": RuntimeError("primary unavailable") if primary_fails else "primary",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "unused",
+                    "guardrails": ["missing-backup-guard"] if fallback_missing else [guardrail_loaded_here],
+                    "mock_response": "backup",
+                },
+            },
+            {
+                "model_name": "last",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "unused", "mock_response": "last"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup", "last"]}],
+        num_retries=0,
+    )
+    token: Final = REQUEST_AUTH.set(UserAPIKeyAuth(api_key="test-key") if authenticated else None)
+    try:
+        with patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": strict}):
+            if expected is None:
+                with pytest.raises(HTTPException, match="missing-backup-guard") as exc:
+                    await router.acompletion(
+                        model="primary", messages=[{"role": "user", "content": "hello"}], stream=stream
+                    )
+                assert exc.value.status_code == 400
+            else:
+                result: Final = await router.acompletion(
+                    model="primary", messages=[{"role": "user", "content": "hello"}]
+                )
+                assert isinstance(result, litellm.ModelResponse)
+                assert result.choices[0].message.content == expected
+    finally:
+        REQUEST_AUTH.reset(token)

@@ -2,16 +2,21 @@
 Utility functions for the Agents API SDK.
 """
 
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping
+from typing import Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
+
+
+class _SupportsItems(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
 
 
 def merge_agent_headers(
     *,
     dynamic_headers: Mapping[str, str] | None = None,
-    static_headers: Mapping[str, str] | None = None,
+    static_headers: object = None,
 ) -> dict[str, str] | None:
     """Merge outbound HTTP headers for A2A agent calls.
 
@@ -30,9 +35,9 @@ def merge_agent_headers(
         merged.update({str(k): str(v) for k, v in dynamic_headers.items()})
 
     if static_headers:
-        static_lower: Final = {str(k).lower() for k in static_headers}
+        static_lower: Final = {str(k).lower() for k in iter_items(static_headers)}
         merged = {k: v for k, v in merged.items() if k.lower() not in static_lower}
-        merged.update({str(k): str(v) for k, v in static_headers.items()})
+        merged.update({str(k): str(v) for k, v in require_attributes(static_headers, _SupportsItems, "items").items()})
 
     return merged or None
 

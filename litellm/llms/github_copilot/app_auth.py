@@ -62,23 +62,33 @@ def _value(source: object, key: str) -> object:
     return getattr(source, key, None)
 
 
+def _is_blank_text(value: object) -> bool:
+    return isinstance(value, str) and not value.strip()
+
+
+def _is_blank(value: object) -> bool:
+    return value is None or _is_blank_text(value)
+
+
+def blank_app_fields(values: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(key for key in APP_FIELDS if _is_blank_text(values.get(key)))
+
+
 def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfig | None:
     name: Final = _value(source, "litellm_credential_name")
     credential: Final = CredentialAccessor.find_credential(name) if isinstance(name, str) else None
     values: Final = credential.credential_values if credential is not None else source
     mode: Final = _value(values, "github_copilot_auth_type")
-    configured: Final = any(_value(values, key) is not None for key in APP_FIELDS)
+    configured: Final = not all(_is_blank(_value(values, key)) for key in APP_FIELDS)
     if mode != APP_AUTH_TYPE and not configured:
         return None
     app_id: Final = _value(values, APP_FIELDS[0])
     installation: Final = _value(values, APP_FIELDS[1])
     key_ref: Final = _value(values, APP_FIELDS[2])
     stored_key: Final = _value(values, APP_PRIVATE_KEY)
-    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key)
-    valid_key_source: Final = (
-        stored_key_selected and not key_ref and (credential is not None or validate_stored_key)
-    ) or (
-        stored_key is None
+    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key) and _is_blank(key_ref)
+    valid_key_source: Final = (stored_key_selected and (credential is not None or validate_stored_key)) or (
+        _is_blank(stored_key)
         and isinstance(key_ref, str)
         and bool(key_ref.strip())
         and "-----BEGIN" not in key_ref

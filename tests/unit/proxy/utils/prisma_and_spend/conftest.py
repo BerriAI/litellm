@@ -128,6 +128,9 @@ def mock_prisma_client() -> MagicMock:
     client.proxy_logging_obj = MagicMock()
     client.proxy_logging_obj.failure_handler = AsyncMock()
     client.spend_log_transactions = []
+    client.baseline_accounting_transactions = []
+    client.baseline_accounting_lock = asyncio.Lock()
+    client.baseline_accounting_recovery_due_at = 0.0
     client._spend_log_transactions_lock = asyncio.Lock()
     client.spend_logs_queue_monitor_task = None
     client.spend_log_write_lock = asyncio.Lock()

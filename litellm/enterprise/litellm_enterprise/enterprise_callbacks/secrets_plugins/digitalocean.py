@@ -15,7 +15,7 @@ class DigitaloceanDetector(RegexBasedDetector):
         return "DigitalOcean Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # OAuth Access Token
             re.compile(r"""(?i)\b(doo_v1_[a-f0-9]{64})(?:['|\"|\n|\r|\s|\x60|;]|$)"""),

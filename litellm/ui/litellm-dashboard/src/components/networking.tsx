@@ -97,8 +97,11 @@ import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./e
 import type {
   ListPluginsResponse,
   SkillRegisterRequest,
+  SkillHubRegisterRequest,
   SkillMutationResponse,
   SkillImport,
+  SkillUpdate,
+  SkillUploadMetadata,
 } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
@@ -1165,6 +1168,9 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  rollover_max_budget?: number | null;
+  rollover_credit?: number | null;
+  effective_max_budget?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   models: string[];
@@ -1196,11 +1202,19 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const teamInfoCall = async (accessToken: string, teamID: string | null, options?: { keyLimit?: number }) => {
+export const teamInfoCall = async (
+  accessToken: string,
+  teamID: string | null,
+  options?: { keyLimit?: number; includeMembers?: boolean },
+) => {
   try {
     return await apiClient.get(`/team/info`, {
       accessToken,
-      query: { team_id: teamID || undefined, key_limit: options?.keyLimit },
+      query: {
+        team_id: teamID || undefined,
+        key_limit: options?.keyLimit,
+        include_members: options?.includeMembers === false ? false : undefined,
+      },
     });
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -1481,11 +1495,15 @@ export const dailyActivityExportCall = (
   entity: DailyActivityEntity,
   req: DailyActivityRequest,
   exportType: ExportType,
-  format: ExportFormat,
+  { format, includeMetadata = false }: { format: ExportFormat; includeMetadata?: boolean },
 ): Promise<Blob> =>
   apiClient.getBlob(`/${entity}/daily/activity/export`, {
     accessToken: req.accessToken,
-    query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+    query: dailyActivityQuery(entity, req, {
+      export_type: exportType,
+      format,
+      ...(includeMetadata ? { include_metadata: "true" } : {}),
+    }),
   });
 
 export const userDailyActivityUserPageCall = (
@@ -1886,7 +1904,7 @@ export const modelAvailableCall = async (
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    return await apiClient.get(`/user/filter/ui`, {
+    return await apiClient.get<components["schemas"]["LiteLLM_UserTableFiltered"][]>(`/user/filter/ui`, {
       accessToken,
       query: {
         user_email: params.get("user_email") || undefined,
@@ -1917,6 +1935,7 @@ interface UiSpendLogsParams {
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
+  model_group?: string;
   /** Filter by model ID (litellm model deployment id) */
   model_id?: string;
   key_alias?: string;
@@ -6917,24 +6936,22 @@ export const getSkillHubSkill = (accessToken: string, name: string) =>
     accessToken,
   });
 
-export const importSkillHubSkill = (accessToken: string, body: SkillImport) =>
+export const importSkillHubSkill = (accessToken: string, body: SkillImport | SkillHubRegisterRequest) =>
   apiClient.post<SkillMutationResponse>("/skill-hub/skills/import", { accessToken, body });
 
-export const updateSkillHubSkill = (
-  accessToken: string,
-  name: string,
-  body: components["schemas"]["SkillHubMetadata"],
-) => apiClient.put<SkillMutationResponse>(`/skill-hub/skills/${encodeURIComponent(name)}`, { accessToken, body });
+export const updateSkillHubSkill = (accessToken: string, name: string, body: SkillUpdate) =>
+  apiClient.put<SkillMutationResponse>(`/skill-hub/skills/${encodeURIComponent(name)}`, { accessToken, body });
 
 export const uploadSkillHubSkill = (
   accessToken: string,
   file: File,
   version: string,
-  skill?: components["schemas"]["SkillHubSkill"],
+  { skill, metadata }: { skill?: components["schemas"]["SkillHubSkill"]; metadata?: SkillUploadMetadata } = {},
 ): Promise<SkillMutationResponse> => {
   const body = new FormData();
   body.append("file", file);
   if (version.trim()) body.append("version", version.trim());
+  if (!skill && metadata) body.append("metadata", JSON.stringify(metadata));
   if (skill?.updated_at) body.append("expected_updated_at", skill.updated_at);
   return skill
     ? apiClient.put(`/skill-hub/skills/${encodeURIComponent(skill.name)}/upload`, { accessToken, rawBody: body })
@@ -6975,12 +6992,12 @@ export const uploadSkillSubmission = (
   accessToken: string,
   submission: components["schemas"]["SkillHubSubmission"],
   file: File,
-  version: string,
+  version?: string,
 ): Promise<components["schemas"]["SkillHubSubmission"]> => {
   const body = new FormData();
   body.append("file", file);
   body.append("expected_revision", String(submission.revision ?? 0));
-  if (version.trim()) body.append("version", version.trim());
+  if (version !== undefined) body.append("version", version.trim());
   return apiClient.put(`/skill-hub/submissions/${encodeURIComponent(submission.id)}/upload`, {
     accessToken,
     rawBody: body,
