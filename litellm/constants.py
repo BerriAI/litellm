@@ -1203,6 +1203,7 @@ openai_compatible_providers: Final[list[str]] = [
     "lm_studio",
     "galadriel",
     "zerogpu",
+    "lokutor",  # Lokutor - JSON-configured provider (audio speech and transcription)
     "github_copilot",  # GitHub Copilot Chat API
     "chatgpt",  # ChatGPT subscription API
     "novita",

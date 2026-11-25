@@ -716,6 +716,7 @@ resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shar
 wally_models: Final[Set[str]] = set()
 huawei_maas_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
+lokutor_models: Final[Set[str]] = set()
 v0_models: Set[str] = set()
 vispark_models: Final[Set[str]] = set()
 morph_models: Set[str] = set()
@@ -1026,6 +1027,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             huawei_maas_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
+        elif value.get("litellm_provider") == "lokutor":
+            lokutor_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "vispark":
@@ -1217,6 +1220,7 @@ model_list = list(
     | wally_models
     | huawei_maas_models
     | zerogpu_models
+    | lokutor_models
     | v0_models
     | vispark_models
     | morph_models
@@ -1356,6 +1360,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "wally": wally_models,
         "huawei_maas": huawei_maas_models,
         "zerogpu": zerogpu_models,
+        "lokutor": lokutor_models,
         "v0": v0_models,
         "vispark": vispark_models,
         "morph": morph_models,
