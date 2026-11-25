@@ -373,8 +373,9 @@ def _assert_bridged_conversation_caches_like_direct(
 
     assert all(turn.text for turn in turns), turns
     assert _matches_direct(direct)(turns), (
-        f"continued turns bridged to {backend.id} cached {[turn.cached_tokens for turn in _continued(turns)]} "
-        f"tokens, the same conversation sent as Responses input cached "
+        f"continued turns sent to {backend.id} through litellm cached "
+        f"{[turn.cached_tokens for turn in _continued(turns)]} tokens, "
+        f"the same conversation sent as Responses input cached "
         f"{[turn.cached_tokens for turn in _continued(direct)]}"
     )
 
