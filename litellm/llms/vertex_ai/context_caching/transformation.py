@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -237,6 +237,7 @@ def transform_openai_messages_to_gemini_context_caching(
     vertex_project: str | None,
     vertex_location: str | None,
     drop_params: bool = False,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> CachedContentRequestBody:
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -251,7 +252,7 @@ def transform_openai_messages_to_gemini_context_caching(
     transformed_messages: Final = gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
-        litellm_params={"drop_params": drop_params},
+        litellm_params={**(litellm_params or {}), "drop_params": drop_params},
         custom_llm_provider=custom_llm_provider,
         ends_request=False,
     )

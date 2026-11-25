@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 import httpx
@@ -414,6 +414,7 @@ class ContextCachingEndpoints(VertexBase):
         extra_headers: dict | None = None,
         cached_content: str | None = None,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -532,6 +533,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             drop_params=drop_params,
+            litellm_params=litellm_params,
         )
 
         cached_content_request_body["tools"] = tools
@@ -587,6 +589,7 @@ class ContextCachingEndpoints(VertexBase):
         extra_headers: dict | None = None,
         cached_content: str | None = None,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -701,6 +704,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             drop_params=drop_params,
+            litellm_params=litellm_params,
         )
 
         cached_content_request_body["tools"] = tools

@@ -1742,6 +1742,7 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
         drop_params=drops_unsupported_params(request_settings.get("drop_params")),
+        litellm_params=request_settings,
     )
 
     return transform_request_body(
@@ -1818,6 +1819,7 @@ async def async_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
         drop_params=drops_unsupported_params(request_settings.get("drop_params")),
+        litellm_params=request_settings,
     )
 
     inlined_messages: Final = await async_inline_remote_media(
