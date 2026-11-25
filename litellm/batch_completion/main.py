@@ -1,8 +1,13 @@
+from collections.abc import Coroutine, Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import Future as _Future
+from types import MappingProxyType
 from typing import Final
 
 import litellm
 from litellm._logging import print_verbose
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.utils import ModelResponse
 from litellm.utils import get_optional_params
 
 from ..llms.vllm.completion import handler as vllm_handler
@@ -12,24 +17,24 @@ def batch_completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: list = [],
-    functions: list | None = None,
+    functions: Sequence[object] | None = None,
     function_call: str | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
     stream: bool | None = None,
-    stop=None,
+    stop: object = None,
     max_tokens: int | None = None,
     presence_penalty: float | None = None,
     frequency_penalty: float | None = None,
-    logit_bias: dict | None = None,
+    logit_bias: Mapping[str, object] | None = None,
     user: str | None = None,
-    deployment_id=None,
+    deployment_id: object = None,
     request_timeout: int | None = None,
     timeout: int | None = 600,
     max_workers: int | None = 100,
     # Optional liteLLM function params
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Batch litellm.completion function for a given model.
@@ -56,10 +61,16 @@ def batch_completion(
     Returns:
         list: A list of completion results.
     """
-    args: Final = locals()
+    args: Final = MappingProxyType[str, object](locals())
 
     batch_messages: Final = messages
-    completions: Final = []
+    completions: Final[
+        list[
+            _Future[
+                ModelResponse | CustomStreamWrapper | Coroutine[object, object, ModelResponse | CustomStreamWrapper]
+            ]
+        ]
+    ] = []
     model = model
     custom_llm_provider = None
     if model.split("/", 1)[0] in litellm.provider_list:
@@ -92,7 +103,7 @@ def batch_completion(
     # all non VLLM models for batch completion models
     else:
 
-        def chunks(lst, n):
+        def chunks(lst: Sequence[object], n: int) -> Iterator[Sequence[object]]:
             """Yield successive n-sized chunks from lst."""
             for i in range(0, len(lst), n):
                 yield lst[i : i + n]
@@ -100,31 +111,37 @@ def batch_completion(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for sub_batch in chunks(batch_messages, 100):
                 for message_list in sub_batch:
-                    kwargs_modified = args.copy()
+                    kwargs_modified = dict(args)
                     kwargs_modified.pop("max_workers")
                     kwargs_modified["messages"] = message_list
-                    original_kwargs = {}
-                    if "kwargs" in kwargs_modified:
-                        original_kwargs = kwargs_modified.pop("kwargs")
-                    future = executor.submit(litellm.completion, **kwargs_modified, **original_kwargs)
+                    del kwargs_modified["kwargs"]
+                    future = executor.submit(litellm.completion, **kwargs_modified, **kwargs)
                     completions.append(future)
 
         # Retrieve the results from the futures
         # results = [future.result() for future in completions]
         # return exceptions if any
-        results = []
+        collected: Final[
+            list[
+                ModelResponse
+                | CustomStreamWrapper
+                | Coroutine[object, object, ModelResponse | CustomStreamWrapper]
+                | Exception
+            ]
+        ] = []
         for future in completions:
             try:
-                results.append(future.result())
+                collected.append(future.result())
             except Exception as exc:
-                results.append(exc)
+                collected.append(exc)
+        results = collected
 
     return results
 
 
 # send one request to multiple models
 # return as soon as one of the llms responds
-def batch_completion_models(*args, **kwargs):
+def batch_completion_models(*args: object, **kwargs):
     """
     Send a request to multiple language models concurrently and return the response
     as soon as one of the models responds.
@@ -200,7 +217,9 @@ def batch_completion_models(*args, **kwargs):
     return None  # If no response is received from any model
 
 
-def batch_completion_models_all_responses(*args, **kwargs):
+def batch_completion_models_all_responses(
+    *args: object, **kwargs: object
+) -> Sequence[ModelResponse | CustomStreamWrapper | Coroutine[object, object, ModelResponse | CustomStreamWrapper]]:
     """
     Send a request to multiple language models concurrently and return a list of responses
     from all models that respond.
@@ -239,7 +258,9 @@ def batch_completion_models_all_responses(*args, **kwargs):
     if len(models) == 0:
         return []
 
-    responses: Final = []
+    responses: Final[
+        list[ModelResponse | CustomStreamWrapper | Coroutine[object, object, ModelResponse | CustomStreamWrapper]]
+    ] = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
         futures: Final = [executor.submit(litellm.completion, *args, model=model, **kwargs) for model in models]

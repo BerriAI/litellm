@@ -11,19 +11,25 @@ vi.mock("@/components/networking", () => ({
 }));
 
 const mockResponsesCreate = vi.fn();
+const mockPost = vi.fn();
 const mockClient = {
   responses: {
     create: mockResponsesCreate,
   },
+  post: mockPost,
 };
 
-vi.mock("openai", () => ({
-  default: {
-    OpenAI: vi.fn(function () {
-      return mockClient;
-    }),
-  },
-}));
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    default: {
+      OpenAI: vi.fn(function () {
+        return mockClient;
+      }),
+      APIError: actual.APIError,
+    },
+  };
+});
 
 const nonStreamingResponse = (data: unknown, headers: Record<string, string> = {}) => ({
   withResponse: async () => ({ data, response: { headers: new Headers(headers) } }),
@@ -325,6 +331,46 @@ describe("responses_api", () => {
       { completionTokens: 12, promptTokens: 12, totalTokens: 24, cost: 0.000063 },
       "",
     );
+  });
+
+  it("should report the response id and usage when the stream ends with response.incomplete", async () => {
+    async function* streamCutOffAtTheTokenLimit() {
+      yield { type: "response.output_text.delta", delta: "Hi" };
+      yield {
+        type: "response.incomplete",
+        response: {
+          id: "resp_cut_off",
+          status: "incomplete",
+          usage: { output_tokens: 16, input_tokens: 13, total_tokens: 29 },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamCutOffAtTheTokenLimit());
+
+    const onUsageData = vi.fn();
+    const onResponseId = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      onUsageData,
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // previousResponseId
+      onResponseId,
+    );
+
+    expect(onResponseId).toHaveBeenCalledWith("resp_cut_off");
+    expect(onUsageData).toHaveBeenCalledWith({ completionTokens: 16, promptTokens: 13, totalTokens: 29 }, "");
   });
 
   it("should omit cost when the proxy reports none", async () => {
@@ -896,5 +942,131 @@ describe("responses_api custom headers", () => {
     expect(vi.mocked(openai.OpenAI).mock.calls[0][0]).toMatchObject({
       defaultHeaders: { "x-litellm-tags": "team-a", "anthropic-beta": "context-1m-2025-08-07" },
     });
+  });
+});
+
+describe("responses_api when the proxy cannot resolve previous_response_id", () => {
+  const mockUpdateTextUI = vi.fn();
+
+  beforeEach(() => {
+    async function* stream() {
+      yield { type: "response.output_text.delta", delta: "Hi" };
+      yield { type: "response.completed", response: { id: "resp_123" } };
+    }
+    mockResponsesCreate.mockResolvedValue(stream());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const earlierTurns: MessageType[] = [
+    { role: "user", content: "My name is Ada" },
+    { role: "assistant", content: "Nice to meet you, Ada" },
+  ];
+  const followUp: MessageType = { role: "user", content: "What is my name?" };
+  const wholeConversation = [
+    { role: "user", content: "My name is Ada", type: "message" },
+    { role: "assistant", content: "Nice to meet you, Ada", type: "message" },
+    { role: "user", content: "What is my name?", type: "message" },
+  ];
+  const rejection = (status: number, param: string) =>
+    openai.APIError.generate(
+      status,
+      { error: { message: "rejected", type: "invalid_request_error", param, code: String(status) } },
+      undefined,
+      new Headers(),
+    );
+  const sendFollowUp = (
+    onResponseId: (id: string) => void,
+    replayHistory?: () => MessageType[],
+    onBackgroundResponse?: (response: unknown) => void,
+  ) =>
+    makeOpenAIResponsesRequest(
+      [followUp],
+      mockUpdateTextUI,
+      "bridged-model",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "resp_unknown",
+      onResponseId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      onBackgroundResponse,
+      undefined,
+      replayHistory,
+    );
+
+  it("resends the whole conversation without the id and continues the session from the new response", async () => {
+    mockResponsesCreate.mockRejectedValueOnce(rejection(400, "previous_response_id"));
+    const onResponseId = vi.fn();
+
+    await sendFollowUp(onResponseId, () => [...earlierTurns, followUp]);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
+    expect(mockResponsesCreate.mock.calls[0][0]).toMatchObject({
+      previous_response_id: "resp_unknown",
+      input: [wholeConversation[2]],
+    });
+    const replay = mockResponsesCreate.mock.calls[1][0];
+    expect(replay).not.toHaveProperty("previous_response_id");
+    expect(replay).toMatchObject({ model: "bridged-model", stream: true, input: wholeConversation });
+    expect(mockUpdateTextUI).toHaveBeenCalledWith("assistant", "Hi", "bridged-model");
+    expect(onResponseId).toHaveBeenCalledWith("resp_123");
+  });
+
+  it("resends the whole conversation for a background request", async () => {
+    mockPost
+      .mockRejectedValueOnce(rejection(400, "previous_response_id"))
+      .mockResolvedValueOnce({ id: "resp_background", status: "queued" });
+    const onBackgroundResponse = vi.fn();
+
+    await sendFollowUp(vi.fn(), () => [...earlierTurns, followUp], onBackgroundResponse);
+
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    const replay = mockPost.mock.calls[1][1].body;
+    expect(replay).not.toHaveProperty("previous_response_id");
+    expect(replay).toMatchObject({ background: true, input: wholeConversation });
+    expect(onBackgroundResponse).toHaveBeenCalledWith({ id: "resp_background", status: "queued" });
+  });
+
+  it.each([
+    ["a 400 about another parameter", rejection(400, "model")],
+    ["a server error", rejection(500, "previous_response_id")],
+  ])("surfaces %s without resending", async (_case, error) => {
+    mockResponsesCreate.mockRejectedValueOnce(error);
+    const replayHistory = vi.fn(() => [...earlierTurns, followUp]);
+
+    await expect(sendFollowUp(vi.fn(), replayHistory)).rejects.toBe(error);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
+    expect(replayHistory).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the error when the caller has no conversation to resend", async () => {
+    const error = rejection(400, "previous_response_id");
+    mockResponsesCreate.mockRejectedValueOnce(error);
+
+    await expect(sendFollowUp(vi.fn())).rejects.toBe(error);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
 });

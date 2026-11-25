@@ -6,7 +6,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 )
 from litellm.rust_bridge.catalog import Route
 
-ResultT: Final = TypeVar("ResultT")
+ResultT = TypeVar("ResultT")
 
 
 def mark_rust_response(response: ResultT, route: Route) -> ResultT:

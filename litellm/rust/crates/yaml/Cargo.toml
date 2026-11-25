@@ -1,0 +1,18 @@
+[package]
+name = "litellm-yaml"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PyYAML's safe_load reproduced for LiteLLM config files"
+
+[dependencies]
+litellm-python-compat.workspace = true
+saphyr-parser = "=0.3.3"
+serde_yaml_ng = "0.10.0"
+strum.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+serde.workspace = true

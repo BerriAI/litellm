@@ -1,13 +1,16 @@
 import { getLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 
+import { DEFAULT_LANGUAGE } from "./defaultLanguage";
+
 export type Messages = { readonly [key: string]: string | Messages };
 export type Locales = ReadonlyMap<string, () => Promise<Messages>>;
 export type LanguageStore = { readonly read: () => string | null; readonly write: (language: string) => void };
 
-export const DEFAULT_LANGUAGE = "en";
 export const LANGUAGE_STORAGE_KEY = "litellm_language";
 
-export const LOCALES: Locales = new Map();
+export const LOCALES: Locales = new Map([
+  ["zh-CN", () => import("./locales/zh-CN.json").then((module) => module.default)],
+]);
 
 export const browserLanguageStore: LanguageStore = {
   read: () => getLocalStorageItem(LANGUAGE_STORAGE_KEY),

@@ -1,10 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Pencil, Trash2, Search, MessageSquare, Clock3 } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Pencil, Trash2, Clock3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,10 +28,6 @@ interface Props {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, newTitle: string) => void;
-  searchOpen?: boolean;
-  onSearchOpenChange?: (open: boolean) => void;
-  hideSearchButton?: boolean;
-  enableSearchShortcut?: boolean;
 }
 
 type DateGroup = "Recents" | "Yesterday" | "Last 7 Days" | "Older";
@@ -234,154 +229,33 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
   );
 };
 
-interface SearchModalProps {
-  open: boolean;
-  conversations: Conversation[];
-  onSelect: (id: string) => void;
-  onClose: () => void;
-}
-
-const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
+const ConversationList: React.FC<Props> = ({ conversations, activeConversationId, onSelect, onDelete, onRename }) => {
   const { t } = useTranslation();
-  const [query, setQuery] = useState("");
-  const [wasOpen, setWasOpen] = useState(open);
-
-  if (open !== wasOpen) {
-    setWasOpen(open);
-    if (!open) setQuery("");
-  }
-
-  const filtered = query.trim()
-    ? conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()))
-    : conversations;
-
-  const handleSelect = (id: string) => {
-    onSelect(id);
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="chat-theme sm:max-w-[480px] p-4 gap-0">
-        <DialogTitle className="sr-only">{t("chat.conversationList.searchTitle")}</DialogTitle>
-        <div className="relative mb-3">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            autoFocus
-            aria-label={t("chat.conversationList.searchLabel")}
-            placeholder={t("chat.conversationList.searchPlaceholder")}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-
-        <ScrollArea className="h-[320px]">
-          {filtered.length === 0 ? (
-            <div className="text-center py-6 text-muted-foreground text-sm">{t("chat.conversationList.noResults")}</div>
-          ) : (
-            filtered.map((conv) => {
-              return (
-                <Button
-                  key={conv.id}
-                  variant="ghost"
-                  onClick={() => handleSelect(conv.id)}
-                  className="w-full justify-start gap-2 px-2.5"
-                >
-                  <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="text-left text-[13px] flex-1 truncate">{conv.title}</span>
-                  <span className="text-[11px] text-muted-foreground shrink-0 ml-auto">
-                    {dayjs(conv.updatedAt).format("MMM D")}
-                  </span>
-                </Button>
-              );
-            })
-          )}
-        </ScrollArea>
-      </DialogContent>
-    </Dialog>
-  );
-};
-
-const ConversationList: React.FC<Props> = ({
-  conversations,
-  activeConversationId,
-  onSelect,
-  onDelete,
-  onRename,
-  searchOpen,
-  onSearchOpenChange,
-  hideSearchButton = false,
-  enableSearchShortcut = true,
-}) => {
-  const { t } = useTranslation();
-  const [localSearchOpen, setLocalSearchOpen] = useState(false);
-  const searchModalOpen = searchOpen ?? localSearchOpen;
-  const setSearchModalOpen = onSearchOpenChange ?? setLocalSearchOpen;
-
-  const handleGlobalKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      const isSearchShortcut = e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey);
-      if (isSearchShortcut && !e.shiftKey) {
-        e.preventDefault();
-        setSearchModalOpen(!searchModalOpen);
-      }
-    },
-    [searchModalOpen, setSearchModalOpen],
-  );
-
-  useEffect(() => {
-    if (!enableSearchShortcut) return;
-    document.addEventListener("keydown", handleGlobalKeyDown);
-    return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [handleGlobalKeyDown, enableSearchShortcut]);
-
   const grouped = groupConversations(conversations);
 
   return (
-    <>
-      <div className="flex flex-col h-full w-full overflow-hidden">
-        {!hideSearchButton && (
-          <div className="px-2 pt-2">
-            <Button
-              variant="ghost"
-              onClick={() => setSearchModalOpen(true)}
-              className="chat-nav-item w-full justify-start gap-2.5 text-muted-foreground hover:bg-sidebar-accent"
-            >
-              <Search className="size-4" />
-              {t("chat.conversationList.searchChats")}
-            </Button>
-          </div>
-        )}
-        <ScrollArea className="flex-1 h-0 px-1.5 pt-2">
-          {grouped.map(({ group, items }) => (
-            <div key={group} className="mb-2">
-              <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
-                <Clock3 className="size-3.5" aria-hidden="true" />
-                {t(DATE_GROUP_LABEL_KEYS[group])}
-              </div>
-              {items.map((conv) => (
-                <ConversationRow
-                  key={conv.id}
-                  conv={conv}
-                  isActive={conv.id === activeConversationId}
-                  onSelect={onSelect}
-                  onDelete={onDelete}
-                  onRename={onRename}
-                />
-              ))}
+    <div className="flex flex-col h-full w-full overflow-hidden">
+      <ScrollArea className="flex-1 h-0 px-1.5 pt-2">
+        {grouped.map(({ group, items }) => (
+          <div key={group} className="mb-2">
+            <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
+              <Clock3 className="size-3.5" aria-hidden="true" />
+              {t(DATE_GROUP_LABEL_KEYS[group])}
             </div>
-          ))}
-        </ScrollArea>
-      </div>
-
-      <SearchModal
-        open={searchModalOpen}
-        conversations={conversations}
-        onSelect={onSelect}
-        onClose={() => setSearchModalOpen(false)}
-      />
-    </>
+            {items.map((conv) => (
+              <ConversationRow
+                key={conv.id}
+                conv={conv}
+                isActive={conv.id === activeConversationId}
+                onSelect={onSelect}
+                onDelete={onDelete}
+                onRename={onRename}
+              />
+            ))}
+          </div>
+        ))}
+      </ScrollArea>
+    </div>
   );
 };
 

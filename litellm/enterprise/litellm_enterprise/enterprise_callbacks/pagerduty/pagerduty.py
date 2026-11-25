@@ -12,8 +12,9 @@ However, this is under the enterprise license
 
 import asyncio
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -48,7 +49,7 @@ def _metadata_of(payload: StandardLoggingPayload) -> StandardLoggingMetadata:
     return payload["metadata"]
 
 
-_CustomerIdKey = Literal[
+_CustomerIdKey: TypeAlias = Literal[
     "user_api_key_customer_member_id", "user_api_key_customer_team_id", "user_api_key_customer_org_id"
 ]
 
@@ -63,7 +64,7 @@ class PagerDutyAlerting(SlackAlerting):
     If threshold is crossed for either type, triggers a PagerDuty alert.
     """
 
-    def __init__(self, alerting_args: AlertingConfig | dict | None = None, **kwargs):
+    def __init__(self, alerting_args: AlertingConfig | dict | None = None, **kwargs: object):
         super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
@@ -92,7 +93,7 @@ class PagerDutyAlerting(SlackAlerting):
 
     # ------------------ MAIN LOGIC ------------------ #
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """
         Record a failure event. Only send an alert to PagerDuty if the
         configured *failure* threshold is exceeded in the specified window.
@@ -170,7 +171,9 @@ class PagerDutyAlerting(SlackAlerting):
         asyncio.create_task(self.hanging_response_handler(request_data=data, user_api_key_dict=user_api_key_dict))
         return None
 
-    async def hanging_response_handler(self, request_data: dict | None, user_api_key_dict: UserAPIKeyAuth):
+    async def hanging_response_handler(
+        self, request_data: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth
+    ):
         """
         Checks if request completed by the time 'hanging_threshold_seconds' elapses.
         If not, we classify it as a hanging request.
@@ -297,7 +300,7 @@ class PagerDutyAlerting(SlackAlerting):
         Example: "ValueError (code: 500, provider: openai)"
         """
         recent = events[-max_errors:]
-        summaries = []
+        summaries: list[PagerDutyInternalEvent] = []
         for fe in recent:
             # If any of these is None, show "N/A" to avoid messing up the summary string
             fe.pop("timestamp")

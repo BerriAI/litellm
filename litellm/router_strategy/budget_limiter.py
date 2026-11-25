@@ -43,7 +43,6 @@ from litellm.litellm_core_utils.batch_utils import (
     job_to_charge_once,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
     require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
@@ -53,7 +52,7 @@ from litellm.router_utils.cooldown_callbacks import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import LiteLLM_Params, RouterErrors
-from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
+from litellm.types.utils import BudgetConfig, FailureLoggedCost, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
@@ -63,6 +62,19 @@ _JOB_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
 
 class _SupportsGet(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
+    payload: Final = kwargs.get("standard_logging_object")
+    cost: Final = _CALLBACK_FIELDS.validate_python(payload).get("response_cost") if isinstance(payload, dict) else None
+    return float(cost) if isinstance(cost, int | float) else 0.0
+
+
+def cost_left_after_failed_attempts(kwargs: Mapping[str, object], response_cost: float) -> float:
+    already_counted: Final = kwargs.get("failure_logged_cost_billed_on_success")
+    if not isinstance(already_counted, FailureLoggedCost):
+        return response_cost
+    return max(response_cost - already_counted.cost, 0.0)
 
 
 def _model_info_id(deployment: Mapping[str, object]) -> object:
@@ -204,9 +216,9 @@ class RouterBudgetLimiting(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         Filter out deployments that have exceeded their provider budget limit.
 
@@ -262,7 +274,6 @@ class RouterBudgetLimiting(CustomLogger):
                 potential_deployments=potential_deployments,
                 request_tags=get_tags_from_request_kwargs(
                     request_kwargs=request_kwargs,
-                    metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
                 ),
             )
 
@@ -362,7 +373,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[
         list[str],
         dict[str, GenericBudgetInfo],
@@ -389,7 +400,6 @@ class RouterBudgetLimiting(CustomLogger):
         if self.tag_budget_config:
             _request_tags = get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
-                metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
             )
 
         for deployment in healthy_deployments:
@@ -567,7 +577,7 @@ class RouterBudgetLimiting(CustomLogger):
         return True
 
     @with_service_target("router_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
@@ -577,9 +587,10 @@ class RouterBudgetLimiting(CustomLogger):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        polled_response, response_cost = _JOB_CHARGE_VALUES.validate_python(
+        polled_response, billed_cost = _JOB_CHARGE_VALUES.validate_python(
             (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
         )
+        response_cost: Final = cost_left_after_failed_attempts(callback_fields, billed_cost)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
@@ -618,7 +629,6 @@ class RouterBudgetLimiting(CustomLogger):
 
         request_tags: Final = get_tags_from_request_kwargs(
             callback_fields,
-            metadata_variable_name=get_metadata_variable_name_from_kwargs(callback_fields),
         )
         if len(request_tags) > 0:
             for _tag in request_tags:
@@ -633,6 +643,12 @@ class RouterBudgetLimiting(CustomLogger):
                         response_cost=response_cost,
                         job=job,
                     )
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if _billed_failure_cost(kwargs) > 0:
+            await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     async def _increment_spend_for_key(
         self,
@@ -758,7 +774,7 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
-        cache_keys: Final = []
+        cache_keys: Final[list[str]] = []
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
@@ -919,7 +935,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     @staticmethod
     def should_init_router_budget_limiter(
-        provider_budget_config: dict | None,
+        provider_budget_config: Mapping[str, object] | None,
         model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         """

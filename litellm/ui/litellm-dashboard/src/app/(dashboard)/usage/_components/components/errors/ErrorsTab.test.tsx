@@ -169,7 +169,7 @@ describe("ErrorsTab", () => {
     const user = userEvent.setup();
     renderWithProviders(<ErrorsTab activity={activity} loading={false} failed={false} />);
 
-    const keys = screen.getByRole("table", { name: "Virtual keys ranked by failed requests" });
+    const keys = screen.getByRole("table", { name: "Virtual Keys ranked by failed requests" });
     const row = within(keys).getAllByRole("row")[1];
     expect(row).toHaveTextContent("batch-runner");
     expect(row).toHaveTextContent("88aa");

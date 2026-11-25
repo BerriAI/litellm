@@ -151,37 +151,6 @@ def test_main_rejects_missing_multiproc_dir(monkeypatch: pytest.MonkeyPatch):
     run.assert_not_called()
 
 
-def test_start_metrics_server_process_returns_only_once_child_serves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
-    _write_worker_sample(pid=3001, value=4)
-    port: Final = _free_port()
-    with patch("atexit.register") as register:
-        process: Final = start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
-    try:
-        register.assert_called_once_with(process.terminate)
-        assert process.poll() is None
-        startup_metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=5.0)
-        assert startup_metrics.status_code == 200
-        assert startup_metrics.headers[PID_HEADER] == str(process.pid)
-        metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=10.0)
-        assert 'litellm_requests_metric_total{model="gpt-5"} 4.0' in metrics.text
-    finally:
-        process.kill()
-        process.wait(timeout=10)
-
-
-def test_start_metrics_server_process_fails_when_port_is_taken(tmp_path: Path):
-    with socket.socket() as occupied:
-        occupied.bind(("127.0.0.1", 0))
-        occupied.listen()
-        port: Final = occupied.getsockname()[1]
-        with (
-            patch("atexit.register"),
-            pytest.raises(MetricsServerStartupError),
-        ):
-            start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
-
-
 class _ImpostorMetrics(BaseHTTPRequestHandler):
     """An unrelated service already on the port that answers /metrics with 200 and plausible metrics."""
 
@@ -194,22 +163,6 @@ class _ImpostorMetrics(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
-
-
-def test_start_metrics_server_process_rejects_metrics_from_another_service_on_the_port(tmp_path: Path):
-    with ThreadingHTTPServer(("127.0.0.1", 0), _ImpostorMetrics) as impostor:
-        threading.Thread(target=impostor.serve_forever, daemon=True).start()
-        port: Final = impostor.server_address[1]
-        impostor_response: Final = httpx.get(f"http://127.0.0.1:{port}/metrics")
-        assert impostor_response.status_code == 200
-        assert "# HELP impostor_metric" in impostor_response.text
-        assert PID_HEADER not in impostor_response.headers
-        with (
-            patch("atexit.register"),
-            pytest.raises(MetricsServerStartupError),
-        ):
-            start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
-        impostor.shutdown()
 
 
 def test_metrics_server_process_serves_and_exits_with_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

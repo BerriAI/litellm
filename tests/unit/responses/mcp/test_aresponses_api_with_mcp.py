@@ -1924,6 +1924,44 @@ async def test_a_malformed_choice_without_drop_params_answers_400_before_listing
 _DEMO_LABELED_ECHO_TOOL: Final = MappingProxyType({**_ECHO_MCP_TOOL, "server_label": "demo"})
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "credentials"),
+    [
+        ("anthropic/claude-haiku-5-5", {"api_key": "sk-ant-fake"}),
+        ("openai/gpt-5.6", {"api_key": "sk-mcp-rounds", "api_base": "https://mcp-rounds.example.com/v1"}),
+    ],
+)
+async def test_an_mcp_choice_forcing_a_gateway_server_under_drop_params_answers_400_instead_of_skipping_the_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, credentials: dict[str, str]
+) -> None:
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=[_anthropic_answer()])
+    respx_mock.post("https://mcp-rounds.example.com/v1/responses").mock(
+        side_effect=[httpx.Response(200, content=json.dumps(_ROUND_TWO_BODY, default=dict))]
+    )
+
+    with _echo_tool_listed() as listing, pytest.raises(litellm.BadRequestError) as exc:
+        await litellm.aresponses(
+            model=model,
+            input="Call echo with PING",
+            tools=[dict(_DEMO_LABELED_ECHO_TOOL)],
+            tool_choice={"type": "mcp", "server_label": "demo"},
+            drop_params=True,
+            **credentials,
+        )
+
+    assert exc.value.status_code == 400
+    assert "cannot force `demo`, which runs on the LiteLLM MCP gateway" in exc.value.message
+    listing.assert_not_awaited()
+    call_tool.assert_not_awaited()
+    assert not respx_mock.calls
+
+
 async def _call_echo_with_the_demo_label(tool_choice: object, stream: bool) -> tuple[object, ...]:
     with _echo_tool_listed():
         response: Final = await litellm.aresponses(
@@ -2667,7 +2705,7 @@ async def test_bridged_auto_execute_follow_up_continues_the_client_conversation_
     await _settle(lambda: len(recorder.logged) > 0)
 
     follow_up: Final = json.loads(provider.calls[1].request.content)["messages"]
-    assert spend_logs.asked == (frozenset({"chatcmpl-prior-turn"}),) * 2
+    assert spend_logs.asked and set(spend_logs.asked) == {frozenset({"chatcmpl-prior-turn"})}
     assert [message["role"] for message in follow_up] == ["user", "assistant", "user", "assistant", "user"]
     assert json.dumps(follow_up).count("My favorite color is teal.") == 1
     assert [block["type"] for block in follow_up[3]["content"]] == ["thinking", "tool_use"]

@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.secret_managers.main import str_to_bool
 
 # Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
@@ -175,6 +176,8 @@ class PrismaDBExceptionHandler:
         """
         import prisma.engine.errors
 
+        if isinstance(e, NativeDatabaseFailure):
+            return e.unavailable
         if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
@@ -625,7 +628,7 @@ def _coerce_timeout(value: object, fallback: float) -> float:
     return fallback
 
 
-_ReadResultT: Final = TypeVar("_ReadResultT")
+_ReadResultT = TypeVar("_ReadResultT")
 
 
 class _DBReconnectClient(Protocol):
@@ -764,15 +767,14 @@ async def call_with_db_reconnect_retry(
         return await coro_factory()
 
 
-_DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
-
-
 def db_write_failure_is_requeue_safe(e: Exception) -> bool:
     """Whether a failed write provably never applied, so its rows can be sent again without double counting."""
+    if isinstance(e, NativeDatabaseFailure):
+        return e.requeue_safe
     if isinstance(e, DB_CONNECTION_ERROR_TYPES):
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
-    return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
+    return sqlstate is None or sqlstate[:2] not in _REJECTED_ROW_SQLSTATE_CLASSES
 
 
 def db_write_never_sent(e: Exception) -> bool:

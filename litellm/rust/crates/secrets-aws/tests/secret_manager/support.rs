@@ -7,7 +7,7 @@ pub(super) fn manager(server: &MockServer, settings: KeyManagementSettings) -> A
 
 pub(super) fn loaded_manager(server: &MockServer) -> AwsSecretsManagerV2 {
     let endpoint_url = server.uri();
-    let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
+    let environment: Arc<dyn litellm_env::Lookup + Send + Sync> =
         Arc::new(move |name: &str| match name {
             "AWS_BEDROCK_RUNTIME_ENDPOINT" => Some(endpoint_url.clone()),
             "AWS_ACCESS_KEY_ID" => Some("test".into()),

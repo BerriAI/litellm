@@ -15,7 +15,16 @@ SpendIncrement: TypeAlias = tuple[str, float]
 SpendReading: TypeAlias = tuple[float | None, bool]
 """(value, authoritative): authoritative when Redis answered, a clean miss included."""
 
-CustomerCounterScope: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
+CustomerCounterScope: TypeAlias = Literal[
+    "customer_org",
+    "customer_team",
+    "customer_member",
+    "app",
+    "app_customer_org",
+    "app_customer_member",
+    "app_group",
+    "app_group_customer_org",
+]
 
 
 def customer_window_counter(
@@ -28,13 +37,24 @@ def customer_window_counter(
     )
 
 
-def parse_customer_window_counter(counter_key: str) -> tuple[CustomerCounterScope, str, str, datetime] | None:
+def parse_customer_window_counter(
+    counter_key: str,
+) -> tuple[CustomerCounterScope, str, str, datetime] | None:
     prefix, separator, window = counter_key.rpartition(":window:")
     parts: Final = prefix.split(":", 2)
     if not separator or len(parts) != 3 or parts[0] != "spend":
         return None
     scope: Final = parts[1]
-    if scope not in ("customer_org", "customer_team", "customer_member"):
+    if scope not in (
+        "customer_org",
+        "customer_team",
+        "customer_member",
+        "app",
+        "app_customer_org",
+        "app_customer_member",
+        "app_group",
+        "app_group_customer_org",
+    ):
         return None
     duration, at, start = window.rpartition("@")
     if not at or not duration:
@@ -108,3 +128,8 @@ def committed_counter(counter_key: str) -> str:
 def is_unavailable(error: BaseException) -> bool:
     """Redis timed out or its breaker is open, the failures a post-call increment drops."""
     return isinstance(error, NativeRedisStoreError) and error.args[:1] in (("timeout",), ("breaker_open",))
+
+
+def is_rejected(error: BaseException) -> bool:
+    """Redis answered and refused the command, so it did not apply."""
+    return isinstance(error, NativeRedisStoreError) and error.args[:1] == ("rejected",)

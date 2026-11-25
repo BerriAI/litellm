@@ -54,7 +54,7 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
-	@echo "  make rust-sqlx-prepare  - Refresh litellm/rust/crates/db/.sqlx against a migrated Postgres container"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm/rust/crates/repositories/.sqlx against a migrated Postgres container"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."

@@ -462,8 +462,16 @@ def test_anthropic_sdk_cache_control_sends_no_mark_to_a_deployment_that_does_not
     _anthropic_text(message, marker)
     request: Final = pcb.posted(bridge.wire, marker)
     body: Final = _wire_body(request)
-    assert body["instructions"] == "Answer briefly\nStable rules", body
+    assert "instructions" not in body, body
     assert body["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Answer briefly"},
+                {"type": "input_text", "text": "Stable rules"},
+            ],
+        },
         {
             "type": "message",
             "role": "user",
@@ -471,7 +479,7 @@ def test_anthropic_sdk_cache_control_sends_no_mark_to_a_deployment_that_does_not
                 {"type": "input_text", "text": pcb.prompt(marker)},
                 {"type": "input_text", "text": "and nothing else"},
             ],
-        }
+        },
     ], body
     assert b"cache_control" not in request.body and b"prompt_cache_breakpoint" not in request.body, request.body
 
