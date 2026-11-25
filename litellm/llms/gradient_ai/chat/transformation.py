@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -37,7 +37,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
         temperature: float | None = None,
         top_p: float | None = None,
         k: int | None = None,
-        kb_filters: list[dict] | None = None,
+        kb_filters: Sequence[Mapping[str, object]] | None = None,
         filter_kb_content_by_query_metadata: bool | None = None,
         instruction_override: str | None = None,
         include_functions_info: bool | None = None,
@@ -54,7 +54,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         supported_params: Final = [
             "frequency_penalty",
             "max_tokens",
@@ -83,11 +83,11 @@ class GradientAIConfig(OpenAILikeChatConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ):
+    ) -> dict[str, object]:
         api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         if api_key is None:
             raise ValueError("GradientAI API key not found")
@@ -102,8 +102,8 @@ class GradientAIConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         clean_api_base: Final = (api_base or "").rstrip("/")
@@ -136,12 +136,12 @@ class GradientAIConfig(OpenAILikeChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
         replace_max_completion_tokens_with_max_tokens: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:

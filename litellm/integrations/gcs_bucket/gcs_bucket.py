@@ -5,7 +5,7 @@ import os
 import time
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -16,7 +16,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
@@ -26,6 +26,10 @@ if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
 
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
@@ -55,7 +59,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
 
     #### ASYNC ####
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         from litellm.proxy.proxy_server import premium_user
         from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
@@ -80,7 +84,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         except Exception as e:
             verbose_logger.exception("GCS Bucket logging error: %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             verbose_logger.debug(
                 "GCS Logger: async_log_failure_event logging kwargs: %s, response_obj: %s",
@@ -189,7 +193,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Combine multiple log payloads into newline-delimited JSON (NDJSON) format.
         Each line is a valid JSON object representing one log entry.
         """
-        lines: Final = []
+        lines: Final[list[str]] = []
         for item in items:
             logging_payload = item["payload"]
             json_line = json.dumps(logging_payload, default=str, ensure_ascii=False)
@@ -298,7 +302,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             await self._send_individual_logs(items_to_process)
 
     def _get_object_name(
-        self, kwargs: Mapping[str, object], logging_payload: StandardLoggingPayload, response_obj: Any
+        self, kwargs: Mapping[str, object], logging_payload: StandardLoggingPayload, response_obj: object
     ) -> str:
         """
         Get the object name to use for the current payload
@@ -313,7 +317,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             return f"{current_date}/custom-{uuid.uuid4().hex}-{safe_log_id}"
         if logging_payload.get("error_str", None) is not None:
             return self._generate_failure_object_name(request_date_str=current_date)
-        raw_response_id: Final[object] = response_obj.get("id", "")
+        raw_response_id: Final[object] = require_attributes(response_obj, _SupportsGetWithDefault, "get").get("id", "")
         response_id: Final = raw_response_id if isinstance(raw_response_id, str) else ""
         return self._generate_success_object_name(
             request_date_str=current_date,
@@ -325,7 +329,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         request_id: str,
         start_time_utc: datetime | None,
         end_time_utc: datetime | None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the request and response payload for a given `request_id`
         Tries current day, next day, and previous day until it finds the payload
@@ -360,7 +364,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def _generate_success_object_name(
         self,
         request_date_str: str,
-        response_id: str,
+        response_id: object,
     ) -> str:
         return f"{request_date_str}/{response_id}"
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator, Mapping
 from functools import partial
 from types import TracebackType
 from typing import Final, cast
@@ -57,11 +57,17 @@ def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, bytes, None]:
 class _SpendCollection:
     """Feeds relayed chunks to the provider's stream collector without letting spend tracking break the relay."""
 
-    def __init__(self, provider_config: BasePassthroughConfig, litellm_logging_obj: LiteLLMLoggingObj) -> None:
+    def __init__(
+        self,
+        provider_config: BasePassthroughConfig,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        response_headers: httpx.Headers,
+    ) -> None:
         self.collector: Final[PassthroughStreamCollector] = provider_config.create_stream_collector(
             model=litellm_logging_obj.model,
             custom_llm_provider=litellm_logging_obj.model_call_details.get("custom_llm_provider", ""),
             endpoint=litellm_logging_obj.model_call_details.get("endpoint", ""),
+            response_headers=response_headers,
         )
         self.chunk_count = 0
         self._failed = False
@@ -97,7 +103,8 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         self._response: httpx.Response
         self._iterator: AsyncGenerator[bytes, bytes]
         self._litellm_logging_obj = litellm_logging_obj
-        self._spend = _SpendCollection(provider_config, litellm_logging_obj)
+        self._provider_config: Final = provider_config
+        self._spend: _SpendCollection
         self._flush_scheduled = False
         self._background_tasks: set[asyncio.Task[bool]] = set()  # mutable-ok: instance set for background task tracking
         self._flush: asyncio.Task[bool] | None = None
@@ -129,6 +136,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 self._response = await self._response_coro
                 self.headers = self._response.headers
                 self.status_code = self._response.status_code
+                self._spend = _SpendCollection(self._provider_config, self._litellm_logging_obj, self._response.headers)
                 self._initialized = True
                 try:
                     raise_for_provider_status(self._response)
@@ -148,7 +156,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         return _init().__await__()
 
     def _start_flush(self) -> None:
-        if self._flush_scheduled or not self._spend.should_flush:
+        if self._flush_scheduled or not self._initialized or not self._spend.should_flush:
             return
         self._flush_scheduled = True
 
@@ -237,7 +245,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
         self.status_code = response.status_code
         self._litellm_logging_obj = litellm_logging_obj
         self._iterator: Generator[bytes, bytes, None] = _as_generator(response.iter_bytes())
-        self._spend = _SpendCollection(provider_config, litellm_logging_obj)
+        self._spend = _SpendCollection(provider_config, litellm_logging_obj, response.headers)
         self._flush_scheduled = False
 
     def _start_flush(self) -> None:
@@ -303,16 +311,16 @@ async def allm_passthrough_route(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-    request_query_params: dict | None = None,
-    request_headers: dict | None = None,
+    request_query_params: dict[str, object] | None = None,
+    request_headers: Mapping[str, object] | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Async: Reranks a list of documents based on their relevance to the query
@@ -428,10 +436,10 @@ def llm_passthrough_route(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-    request_query_params: dict | None = None,
-    request_headers: dict | None = None,
+    request_query_params: dict[str, object] | None = None,
+    request_headers: dict[str, str] | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
@@ -545,7 +553,9 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
-    _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    _request_data: dict[str, object] | None = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    )
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params={**litellm_params_dict, "guardrailConfig": guardrailConfig},
@@ -579,8 +589,14 @@ def llm_passthrough_route(
         request_data=_streaming_request_data,
     )
 
-    # Update logging object with streaming status
     litellm_logging_obj.stream = is_streaming_request
+    litellm_logging_obj.model_call_details["stream"] = is_streaming_request
+    litellm_logging_obj.passthrough_stream = is_streaming_request
+    logged_request: Final = provider_config.logged_request(endpoint=endpoint, request_data=_streaming_request_data)
+    if logged_request is not None:
+        litellm_logging_obj.passthrough_model_parameters = logged_request.model_parameters
+    if logged_request is not None and logged_request.messages:
+        litellm_logging_obj.update_messages(list(logged_request.messages))
 
     ## LOGGING PRE-CALL
     request_data: Final = data if data else json

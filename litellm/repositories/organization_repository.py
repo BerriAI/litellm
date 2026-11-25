@@ -3,28 +3,21 @@ Organization repository for database operations on LiteLLM_OrganizationTable.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.organization import LiteLLM_OrganizationTable
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.rust_bridge._native import RustOrganizationRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
-class _OrganizationDb(Protocol):
-    """The single Prisma table this repository reaches for on ``prisma_client.db``."""
-
-    @property
-    def litellm_organizationtable(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]: ...
-
-
-class _PrismaClientView(Protocol):
-    """The one attribute this repository reads off the untyped Prisma client wrapper."""
-
-    @property
-    def db(self) -> _OrganizationDb: ...
+class _OrganizationTable(PrismaTableRepository["prisma_models.LiteLLM_OrganizationTable"]):
+    table_name = "litellm_organizationtable"
 
 
 class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
@@ -32,8 +25,7 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return client.db.litellm_organizationtable
+        return _OrganizationTable(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_OrganizationTable]:
@@ -43,6 +35,22 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
         self, organization_id: str, id_field: str = "organization_id"
     ) -> LiteLLM_OrganizationTable | None:
         return await super().find_by_id(organization_id, id_field)
+
+    async def find_with_optional_budget(
+        self, organization_id: str, *, include_budget_table: bool = False
+    ) -> LiteLLM_OrganizationTable | None:
+        """An organization, with its budget row when asked."""
+        found: Final = await rust_database.required_repository(RustOrganizationRepository).find_with_optional_budget(
+            organization_id, include_budget_table=include_budget_table
+        )
+        return rust_database.decode(LiteLLM_OrganizationTable, found)
+
+    async def find_up_to_two_by_alias(self, organization_alias: str) -> tuple[LiteLLM_OrganizationTable, ...]:
+        """At most two organizations with this alias, so the caller can refuse an ambiguous alias."""
+        found: Final = await rust_database.required_repository(RustOrganizationRepository).find_up_to_two_by_alias(
+            organization_alias
+        )
+        return tuple(LiteLLM_OrganizationTable.model_validate_json(organization) for organization in found)
 
     async def find_by_alias(self, organization_alias: str) -> LiteLLM_OrganizationTable | None:
         """Find an organization by alias."""

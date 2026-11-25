@@ -11,13 +11,15 @@ A2A Protocol Format:
 """
 
 import json
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import Mapping, Sequence
+from functools import reduce
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes, require_get, subscript
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -30,6 +32,38 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_UNSUPPORTED_RESPONSE: Final = object()
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _ResultLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _item_assignment_target(value: object) -> _SupportsSetItem:
+    if isinstance(value, _SupportsSetItem):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _response_payload(response: object) -> object:
+    if has_attributes(response, _ModelDumpable, "model_dump"):
+        return response.model_dump()
+    if isinstance(response, dict):
+        return response
+    return _UNSUPPORTED_RESPONSE
+
+
+def _path_step(current: object, key: str) -> object:
+    return subscript(current, int(key) if key.isdigit() else key)
 
 
 class _A2ATextPart(TypedDict, total=False):
@@ -57,7 +91,7 @@ class A2AGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process A2A input messages by applying guardrails to text content.
 
@@ -123,11 +157,11 @@ class A2AGuardrailHandler(BaseTranslation):
 
     async def process_output_response(
         self,
-        response: Any,
+        response: object,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         """
         Process A2A output response by applying guardrails to text content.
@@ -147,17 +181,12 @@ class A2AGuardrailHandler(BaseTranslation):
         Returns:
             Modified response with guardrails applied to text content
         """
-        # Handle both dict and Pydantic model responses
-        if hasattr(response, "model_dump"):
-            response_dict = response.model_dump()
-            is_pydantic = True
-        elif isinstance(response, dict):
-            response_dict = response
-            is_pydantic = False
-        else:
+        payload: Final = _response_payload(response)
+        if payload is _UNSUPPORTED_RESPONSE:
             verbose_proxy_logger.warning("A2A: Unknown response type %s, skipping guardrail", type(response))
             return response
 
+        response_dict: Final = require_attributes(payload, _ResultLookup, "get")
         result: Final = response_dict.get("result", {})
         if not result or not isinstance(result, dict):
             verbose_proxy_logger.debug("A2A: No result in response, skipping guardrail")
@@ -218,15 +247,8 @@ class A2AGuardrailHandler(BaseTranslation):
 
         verbose_proxy_logger.debug("A2A: Processed output response")
 
-        # Update the original response
-        if is_pydantic:
-            # For Pydantic models, we need to update the underlying dict
-            # and the model will reflect the changes
-            response_dict["result"] = result
-            return response
-        else:
-            response["result"] = result
-            return response
+        _item_assignment_target(response_dict)["result"] = result
+        return response
 
     async def process_output_streaming_response(
         self,
@@ -234,7 +256,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> list[object]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
@@ -387,8 +409,9 @@ class A2AGuardrailHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
+        result_fields: Final = require_get(result)
         # Case 2: Nested message
-        message: Final = result.get("message")
+        message: Final = result_fields.get("message")
         if message and isinstance(message, dict) and "parts" in message:
             self._extract_texts_from_parts(
                 parts=message["parts"],
@@ -398,7 +421,7 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 3: Streaming artifact-update (singular artifact)
-        artifact: Final = result.get("artifact")
+        artifact: Final = result_fields.get("artifact")
         if artifact and isinstance(artifact, dict) and "parts" in artifact:
             self._extract_texts_from_parts(
                 parts=artifact["parts"],
@@ -408,7 +431,7 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 4: Task with status message
-        status: Final = result.get("status", {})
+        status: Final = result_fields.get("status", {})
         if isinstance(status, dict):
             status_message: Final = status.get("message")
             if status_message and isinstance(status_message, dict) and "parts" in status_message:
@@ -420,7 +443,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 )
 
         # Case 5: Task with artifacts (plural, array)
-        artifacts: Final = result.get("artifacts", [])
+        artifacts: Final = result_fields.get("artifacts", [])
         if artifacts and isinstance(artifacts, list):
             for artifact_idx, art in enumerate(artifacts):
                 if isinstance(art, dict) and "parts" in art:
@@ -448,20 +471,11 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _apply_text_to_path(
         self,
-        result: dict[str | int, Any],
+        result: Mapping[str, object],
         path: tuple[str, ...],
         part_idx: int,
         text: str,
     ) -> None:
         """Apply guardrailed text back to the specified path in the result."""
-        # Navigate to the parts list
-        current = result
-        for key in path:
-            if key.isdigit():
-                # Array index
-                current = current[int(key)]
-            else:
-                current = current[key]
-
-        # Update the text in the part
-        current[part_idx]["text"] = text
+        parts: Final = reduce(_path_step, path, result)
+        _item_assignment_target(subscript(parts, part_idx))["text"] = text

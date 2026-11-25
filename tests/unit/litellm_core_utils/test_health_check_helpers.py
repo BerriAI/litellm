@@ -4,6 +4,7 @@ import json
 import socket
 import struct
 import zlib
+from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,10 +28,12 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
+    AdminApiKeySecretReference,
     TextChoices,
     TextCompletionResponse,
     Usage,
 )
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
 
 
 def _png_chunks(png: bytes, offset: int = 8) -> tuple[tuple[bytes, bytes], ...]:
@@ -808,6 +811,36 @@ def test_native_health_check_mode_routes_mantle_claude_to_messages_and_soniox_re
     assert native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider) == expected
 
 
+@pytest.mark.parametrize(
+    ("requested_model", "model", "expected"),
+    (
+        ("elevenlabs/scribe_v2_realtime", "scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v2_realtime", "elevenlabs/scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v9_realtime", "scribe_v9_realtime", "realtime"),
+        ("elevenlabs/scribe_v2", "scribe_v2", "audio_transcription"),
+        ("elevenlabs/eleven_v3", "eleven_v3", "audio_speech"),
+    ),
+)
+def test_elevenlabs_health_checks_use_the_websocket_for_models_the_cost_map_lists_as_realtime(
+    requested_model: str, model: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v9_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v2": {"mode": "audio_transcription", "supported_endpoints": ["/v1/audio/transcriptions"]},
+            "elevenlabs/eleven_v3": {"mode": "audio_speech"},
+        },
+    )
+
+    assert (
+        default_health_check_mode(requested_model=requested_model, model=model, custom_llm_provider="elevenlabs")
+        == expected
+    )
+
+
 def test_default_health_check_mode_prefers_the_native_surface_over_the_cost_map(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -853,71 +886,66 @@ def test_default_health_check_mode_falls_back_to_cost_map_then_chat(
     )
 
 
+_MANTLE_CLAUDE_REPLY: Final = MappingProxyType(
+    {
+        "id": "msg_health",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic.claude-haiku-4-5",
+        "content": [{"type": "text", "text": "pong"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+)
+
+
+@pytest.fixture
+def mantle_server() -> Iterator[RecordingServer]:
+    """Bedrock Mantle /v1/messages runs in Rust, so the probe is answered by a local server instead of respx."""
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=dict(_MANTLE_CLAUDE_REPLY))
+        yield server
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode_kwargs", [{}, {"mode": None}], ids=["omitted", "explicit_none"])
 async def test_ahealth_check_probes_mantle_claude_through_messages_without_mode(
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
+    mantle_server: RecordingServer,
     mode_kwargs: dict[str, None],
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    upstream: Final = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
-        json={
-            "id": "msg_health",
-            "type": "message",
-            "role": "assistant",
-            "model": "anthropic.claude-haiku-4-5",
-            "content": [{"type": "text", "text": "pong"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 3, "output_tokens": 1},
-        }
-    )
-
     result: Final = await ahealth_check(
         {
             "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
             "api_key": "test-bearer",
             "aws_region_name": "us-east-2",
+            "api_base": mantle_server.base_url,
         },
         prompt="test from litellm",
         **mode_kwargs,
     )
 
     assert "error" not in result, result
-    assert upstream.call_count == 1
-    sent: Final = json.loads(upstream.calls.last.request.content)
-    assert sent["model"] == "anthropic.claude-haiku-4-5"
-    assert sent["max_tokens"] == 16
-    assert sent["messages"] == [{"role": "user", "content": "test from litellm"}]
+    assert len(mantle_server.requests) == 1
+    sent: Final = mantle_server.requests[0]
+    assert sent.path == "/anthropic/v1/messages"
+    assert sent.headers["authorization"] == "Bearer test-bearer"
+    assert isinstance(sent.body, dict)
+    assert sent.body["model"] == "anthropic.claude-haiku-4-5"
+    assert sent.body["max_tokens"] == 16
+    assert sent.body["messages"] == [{"role": "user", "content": "test from litellm"}]
 
 
 @pytest.mark.asyncio
 async def test_ahealth_check_anthropic_messages_mode_keeps_caller_supplied_messages(
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
+    mantle_server: RecordingServer,
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    upstream: Final = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
-        json={
-            "id": "msg_health",
-            "type": "message",
-            "role": "assistant",
-            "model": "anthropic.claude-haiku-4-5",
-            "content": [{"type": "text", "text": "pong"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 3, "output_tokens": 1},
-        }
-    )
-
     result: Final = await ahealth_check(
         {
             "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
             "api_key": "test-bearer",
             "aws_region_name": "us-east-2",
+            "api_base": mantle_server.base_url,
             "messages": [{"role": "user", "content": "operator probe"}],
             "max_tokens": 4,
         },
@@ -926,9 +954,11 @@ async def test_ahealth_check_anthropic_messages_mode_keeps_caller_supplied_messa
     )
 
     assert "error" not in result, result
-    sent: Final = json.loads(upstream.calls.last.request.content)
-    assert sent["max_tokens"] == 4
-    assert sent["messages"] == [{"role": "user", "content": "operator probe"}]
+    sent: Final = mantle_server.requests[0]
+    assert sent.path == "/anthropic/v1/messages"
+    assert isinstance(sent.body, dict)
+    assert sent.body["max_tokens"] == 4
+    assert sent.body["messages"] == [{"role": "user", "content": "operator probe"}]
 
 
 @pytest.mark.asyncio
@@ -946,6 +976,11 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
     result: Final = await ahealth_check(model_params, prompt="test from litellm")
 
     assert expected_error in result["error"], result["error"]
+    assert result["error"] == str(result["exception"])
+    assert "Traceback" not in result["error"]
+    assert "stack trace" not in result["error"]
+    assert ahealth_check.__code__.co_filename not in result["error"]
+    assert 'File "' not in result["error"]
     assert "Missing `mode`" not in result["error"]
     assert "raw_request_typed_dict" in result
 
@@ -1885,6 +1920,60 @@ async def test_ahealth_check_probes_extraction_models_through_the_extraction_api
     assert sent["fields"]["reachable"]["type"] == "text"
 
 
+
+@pytest.mark.parametrize(
+    ("mode", "model", "upstream_url", "answer"),
+    (
+        (
+            "decisions",
+            "perplexity/pplx-decider-v1-27b",
+            "https://api.perplexity.ai/v1/decisions",
+            {
+                "model": "perplexity/pplx-decider-v1-27b",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+        (
+            "extraction",
+            "cloudflare/clairic",
+            "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clairic",
+            {
+                "result": {
+                    "model": "clairic",
+                    "answers": {"reachable": {"type": "text", "value": "health"}},
+                    "truncated": False,
+                    "usage": {"input_tokens": 20, "output_tokens": 0},
+                },
+                "success": True,
+                "errors": [],
+                "messages": [],
+            },
+        ),
+    ),
+)
+async def test_ahealth_check_sends_the_secret_an_admin_oidc_reference_points_to(
+    mode: str,
+    model: str,
+    upstream_url: str,
+    answer: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setenv("QA_HEALTH_OIDC_KEY", "resolved-health-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(json=answer)
+    reference: Final = AdminApiKeySecretReference("oidc/env/QA_HEALTH_OIDC_KEY", frozenset())
+
+    result: Final = await ahealth_check({"model": model, "api_key": reference}, mode=mode)
+
+    assert "error" not in result, result
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer resolved-health-key"
+
+
 VERTEX_AUTHORIZED_USER: Final = json.dumps(
     {
         "type": "authorized_user",
@@ -1987,3 +2076,77 @@ async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_
     assert "error" not in result, result
     assert json.loads(together_route.calls.last.request.content)["model"] == "fake-together-chat"
     assert not other_hosts.called
+
+
+HEALTH_CHECK_ROUTES: Final = (
+    pytest.param(
+        "chat",
+        {"model": "openai/missing-model", "api_base": "https://deployment.example/v1"},
+        "https://deployment.example/v1/chat/completions",
+        id="chat",
+    ),
+    pytest.param(
+        "responses",
+        {"model": "anthropic/missing-model", "api_base": "https://deployment.example"},
+        "https://deployment.example/v1/messages",
+        id="responses-bridged-to-chat",
+    ),
+)
+
+
+def _mock_failing_deployment_with_a_healthy_openai_fallback(
+    respx_mock: respx.MockRouter, deployment_url: str
+) -> respx.Route:
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "healthy-fallback",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    return respx_mock.post(deployment_url).mock(
+        return_value=httpx.Response(404, json={"error": {"message": "model unavailable", "type": "not_found"}})
+    )
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("mode", "deployment_params", "deployment_url"), HEALTH_CHECK_ROUTES)
+@pytest.mark.asyncio
+async def test_ahealth_check_reports_a_failing_deployment_whatever_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["chat", "responses"],
+    deployment_params: dict[str, str],
+    deployment_url: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    deployment: Final = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, deployment_url)
+
+    result: Final = await ahealth_check({**deployment_params, "api_key": "sk-test"}, mode=mode)
+
+    assert "error" in result
+    assert len(deployment.calls) == 1
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_calls_after_a_health_check_still_use_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+    deployment: Final = {"model": "anthropic/missing-model", "api_base": "https://deployment.example", "api_key": "sk-test"}
+    _ = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, "https://deployment.example/v1/messages")
+
+    _ = await ahealth_check(deployment, mode="chat")
+    response: Final = await litellm.acompletion(**deployment, messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "ok"

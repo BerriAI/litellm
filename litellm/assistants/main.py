@@ -5,14 +5,16 @@ import contextvars
 import os
 from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
@@ -31,6 +33,21 @@ from .utils import get_optional_params_add_message
 ####### ENVIRONMENT VARIABLES ###################
 openai_assistants_api: Final = OpenAIAssistantsAPI()
 azure_assistants_api: Final = AzureAssistantsAPI()
+_EXTRA_BODY: Final = TypeAdapter(object)
+
+
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
+
+
+def _pop_azure_ad_token(extra_body: object) -> object:
+    return require_attributes(extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
+
+
+def _popped_azure_ad_token(extra_body: object) -> str | None:
+    token: Final = _pop_azure_ad_token(extra_body)
+    return token if isinstance(token, str) else None
+
 
 ### ASSISTANTS ###
 
@@ -38,7 +55,7 @@ azure_assistants_api: Final = AzureAssistantsAPI()
 async def aget_assistants(
     custom_llm_provider: Literal["openai", "azure"],
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AsyncCursorPage[Assistant]:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -146,10 +163,10 @@ def get_assistants(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -331,10 +348,10 @@ def create_assistants(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -376,7 +393,7 @@ def create_assistants(
 async def adelete_assistant(
     custom_llm_provider: Literal["openai", "azure"],
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AssistantDeleted:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -481,10 +498,10 @@ def delete_assistant(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -526,7 +543,7 @@ def delete_assistant(
 ### THREADS ###
 
 
-async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs) -> Thread:
+async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs: object) -> Thread:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["acreate_thread"] = True
@@ -657,10 +674,10 @@ def create_thread(
 
         api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -698,7 +715,7 @@ async def aget_thread(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Thread:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -804,10 +821,10 @@ def get_thread(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -849,9 +866,9 @@ async def a_add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
-    client=None,
-    **kwargs,
+    metadata: dict[str, object] | None = None,
+    client: object | None = None,
+    **kwargs: object,
 ) -> OpenAIMessage:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -900,7 +917,7 @@ def add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     client=None,
     **kwargs,
 ) -> OpenAIMessage | Coroutine[None, None, OpenAIMessage]:
@@ -982,10 +999,10 @@ def add_message(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -1021,7 +1038,7 @@ async def aget_messages(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AsyncCursorPage[OpenAIMessage]:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -1134,10 +1151,10 @@ def get_messages(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -1184,12 +1201,12 @@ async def arun_thread(
     assistant_id: str,
     additional_instructions: str | None = None,
     instructions: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, str] | None = None,
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
     client: object | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -1249,7 +1266,7 @@ def run_thread(
     assistant_id: str,
     additional_instructions: str | None = None,
     instructions: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, str] | None = None,
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
@@ -1333,10 +1350,10 @@ def run_thread(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _pop_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 

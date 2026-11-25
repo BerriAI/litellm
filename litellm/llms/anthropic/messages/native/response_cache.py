@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, finish_evidence_of
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -54,10 +55,18 @@ class AnthropicMessagesStreamCacheWriter:
         return getattr(self.stream, "has_buffered_provider_output", False) is True
 
     @property
+    def litellm_logging_obj(self) -> "LiteLLMLoggingObj | None":
+        return self.stream.litellm_logging_obj if isinstance(self.stream, AnthropicMessagesStreamingResponse) else None
+
+    @property
     def chunks(self) -> "list[ModelResponseStream] | None":
         return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
             "list[ModelResponseStream] | None", getattr(self.stream, "chunks", None)
         )
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self.stream)
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":
@@ -115,7 +124,7 @@ class AnthropicMessagesStreamCacheWriter:
             return
         cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
         if is_response_without_output(cached_payload):
-            verbose_logger.debug("LiteLLM Cache: not caching a stream with no content blocks")
+            verbose_logger.debug("LiteLLM Cache: not caching a stream with no output")
             return
         dual_cache: Final = self.caching_handler.dual_cache
 

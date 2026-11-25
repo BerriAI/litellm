@@ -2,6 +2,8 @@
 #    On success, logs events to Helicone
 import os
 import traceback
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final
 
 import litellm
@@ -10,6 +12,23 @@ from litellm.integrations.helicone_mock_client import (
     create_mock_helicone_client,
     should_use_helicone_mock,
 )
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+from litellm.types.utils import ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall
+
+
+def _tool_use_block(
+    tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+) -> dict[str, object]:
+    match tool_call:
+        case ChatCompletionMessageCustomToolCall(custom=custom):
+            return {"type": "tool_use", "id": tool_call.id, "name": custom.name, "input": custom.input}
+        case _:
+            return {
+                "type": "tool_use",
+                "id": tool_call.id,
+                "name": tool_call.function.name,
+                "input": tool_call.function.arguments,
+            }
 
 
 class HeliconeLogger:
@@ -27,7 +46,7 @@ class HeliconeLogger:
         "command-nightly",
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         self.is_mock_mode = should_use_helicone_mock()
         if self.is_mock_mode:
@@ -39,7 +58,7 @@ class HeliconeLogger:
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
         self.api_base = self.api_base.removesuffix("/")
 
-    def claude_mapping(self, model, messages, response_obj):
+    def claude_mapping(self, model: str, messages, response_obj):
         from anthropic import AI_PROMPT, HUMAN_PROMPT
 
         prompt = f"{HUMAN_PROMPT}"
@@ -57,23 +76,8 @@ class HeliconeLogger:
         message = choice["message"]
 
         content = []
-        if "tool_calls" in message and message["tool_calls"]:
-            for tool_call in message["tool_calls"]:
-                function = tool_call.get("function")
-                custom = tool_call.get("custom")
-                if not function and not custom:
-                    continue
-                name, tool_input = (
-                    (function["name"], function["arguments"]) if function else (custom["name"], custom["input"])
-                )
-                content.append(
-                    {
-                        "type": "tool_use",
-                        "id": tool_call["id"],
-                        "name": name,
-                        "input": tool_input,
-                    }
-                )
+        if tool_calls := tool_calls_with_server_tool_calls(message):
+            content = [_tool_use_block(tool_call) for tool_call in tool_calls]
         elif "content" in message and message["content"]:
             content = [{"type": "text", "text": message["content"]}]
 
@@ -124,7 +128,16 @@ class HeliconeLogger:
 
         return metadata
 
-    def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs):
+    def log_success(
+        self,
+        model: str,
+        messages: object,
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[..., object],
+        kwargs,
+    ) -> None:
         # Method definition
         try:
             print_verbose(f"Helicone Logging - Enters logging function for model {model}")

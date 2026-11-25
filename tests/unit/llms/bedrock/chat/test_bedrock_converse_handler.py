@@ -23,6 +23,7 @@ from botocore.exceptions import ClientError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
@@ -327,7 +328,6 @@ async def test_live_stream_with_a_text_stream_timeout_reports_the_stream_timeout
     assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
-
 _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
     ("model", "request_params"),
     [
@@ -338,15 +338,22 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
         ),
         (
             "bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
-            {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}}},
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                }
+            },
         ),
         ("bedrock/invoke/ai21.j2-ultra-v1", {}),
+        ("bedrock/converse/meta.llama3-3-70b-instruct-v1:0", {"fake_stream": True}),
     ],
     ids=[
         "model_without_streaming",
         "request_shape_without_streaming",
         "json_schema_without_native_structured_output",
         "invoke_route_without_streaming",
+        "caller_fake_stream",
     ],
 )
 
@@ -491,24 +498,11 @@ async def test_fake_stream_through_a_router_adapter_is_bounded_by_the_request_ti
 
     assert isinstance(response, AsyncIterator)
     contents: Final = [
-        chunk.choices[0].delta.content or "" async for chunk in response if isinstance(chunk, litellm.ModelResponseStream)
+        chunk.choices[0].delta.content or ""
+        async for chunk in response
+        if isinstance(chunk, litellm.ModelResponseStream)
     ]
     assert "".join(contents) == "hi"
-
-
-@pytest.mark.asyncio
-async def test_live_anthropic_messages_stream_through_the_router_fails_at_the_stream_timeout(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer())
-    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
-        "bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0"
-    )
-
-    with pytest.raises(litellm.Timeout) as excinfo:
-        await _anthropic_messages_text(router)
-    assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
 def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> None:
@@ -517,7 +511,10 @@ def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> No
     )
     with pytest.raises(litellm.Timeout):
         router.completion(
-            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_sync_client()
+            model="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=slow_upstream_sync_client(),
         )
 
 
@@ -528,7 +525,10 @@ async def test_async_live_stream_through_the_router_fails_at_the_stream_timeout(
     )
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
-            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_async_client()
+            model="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=slow_upstream_async_client(),
         )
     assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
@@ -599,6 +599,141 @@ async def test_native_output_retry_is_bounded_by_the_request_timeout_not_the_str
     assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
 
 
+# Bedrock's 403 for a role without the streaming action, seen live on us.anthropic.claude-sonnet-5 on 2026-11-06
+_STREAM_PERMISSION_DENIAL: Final = json.dumps(
+    {
+        "Message": "User: arn:aws:sts::123456789012:assumed-role/invoke-only/qa is not authorized to perform: "
+        "bedrock:InvokeModelWithResponseStream on resource: arn:aws:bedrock:us-east-1:123456789012:inference-profile/"
+        "us.anthropic.claude-opus-5-5 because no identity-based policy allows the "
+        "bedrock:InvokeModelWithResponseStream action"
+    }
+).encode()
+
+
+def _denies_streaming_then_answers(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/converse-stream"):
+        return httpx.Response(403, content=_STREAM_PERMISSION_DENIAL, request=request)
+    return httpx.Response(200, content=CONVERSE_ANSWER, headers={"content-type": "application/json"}, request=request)
+
+
+@pytest.mark.asyncio
+async def test_a_denied_native_output_stream_is_sent_again_buffered_with_native_output(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_streaming_then_answers)
+    router: Final = _bedrock_router(
+        "bedrock/converse/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
+
+    response: Final = await router.acompletion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        thinking={"type": "disabled"},
+        response_format={"type": "json_schema", "json_schema": {"name": "answer", "schema": _ANSWER_SCHEMA}},
+    )
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+    assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
+    retry_body: Final = json.loads(respx_mock.calls[1].request.content)
+    assert "textFormat" in retry_body.get("outputConfig", {}) and "toolConfig" not in retry_body
+
+
+_INVOKE_ANSWER: Final = json.dumps(
+    {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [{"type": "text", "text": '{"answer": "hi"}'}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+).encode()
+
+
+def _denies_invoke_streaming_then_answers(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/invoke-with-response-stream"):
+        return httpx.Response(403, content=_STREAM_PERMISSION_DENIAL, request=request)
+    return httpx.Response(200, content=_INVOKE_ANSWER, headers={"content-type": "application/json"}, request=request)
+
+
+@pytest.mark.asyncio
+async def test_a_denied_native_output_stream_on_the_invoke_route_is_sent_again_buffered_to_invoke(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_invoke_streaming_then_answers)
+    router: Final = _bedrock_router(
+        "bedrock/invoke/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
+
+    response: Final = await router.acompletion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        thinking={"type": "disabled"},
+        response_format={"type": "json_schema", "json_schema": {"name": "answer", "schema": _ANSWER_SCHEMA}},
+    )
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == '{"answer": "hi"}'
+    assert _sent_paths(respx_mock) == ["invoke-with-response-stream", "invoke"]
+    retry_body: Final = json.loads(respx_mock.calls[1].request.content)
+    assert "format" in retry_body.get("output_config", {}) and "tools" not in retry_body
+
+
+_INVOKE_JSON_TOOL_ANSWER: Final = json.dumps(
+    {
+        "id": "msg_2",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "json_tool_call", "input": {"answer": "hi"}}],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+).encode()
+
+
+def _denies_invoke_streaming_and_rejects_native_output(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/invoke-with-response-stream"):
+        return httpx.Response(403, content=_STREAM_PERMISSION_DENIAL, request=request)
+    if "format" in json.loads(request.content).get("output_config", {}):
+        return httpx.Response(400, content=_NATIVE_OUTPUT_REJECTION, request=request)
+    return httpx.Response(
+        200, content=_INVOKE_JSON_TOOL_ANSWER, headers={"content-type": "application/json"}, request=request
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_schema_after_a_denied_invoke_stream_falls_back_to_the_json_tool_still_buffered(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=_denies_invoke_streaming_and_rejects_native_output
+    )
+    router: Final = _bedrock_router(
+        "bedrock/invoke/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
+
+    response: Final = await router.acompletion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        thinking={"type": "disabled"},
+        response_format={"type": "json_schema", "json_schema": {"name": "answer", "schema": _ANSWER_SCHEMA}},
+    )
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == '{"answer": "hi"}'
+    assert _sent_paths(respx_mock) == ["invoke-with-response-stream", "invoke", "invoke"]
+    json_tool_body: Final = json.loads(respx_mock.calls[2].request.content)
+    assert "format" not in json_tool_body.get("output_config", {}) and "tools" in json_tool_body
+
+
 @pytest.mark.asyncio
 async def test_failed_native_output_retry_reports_the_request_timeout_it_was_bounded_by(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -614,7 +749,6 @@ async def test_failed_native_output_retry_reports_the_request_timeout_it_was_bou
         await _stream_json_schema_with_thinking(router)
     assert getattr(excinfo.value, "timeout", None) == request_timeout
     assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
-
 
 
 @pytest.mark.asyncio
@@ -640,12 +774,16 @@ async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_b
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
-    router: Final = _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
+    router: Final = _bedrock_router(
+        model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
 
     with pytest.raises(openai.APIError) as excinfo:
         await stream_text(router)
     assert getattr(excinfo.value, "timeout", None) == bounding_timeout
+
 
 RECORDED_REASONING: Final = "Tokyo proper has about 14 million people."
 RECORDED_THINKING_TOKENS: Final = 309
@@ -959,3 +1097,32 @@ def test_converse_profile_override_records_cost_without_changing_response_model(
         CONVERSE_RESPONSE["usage"]["inputTokens"] * prices["input_cost_per_token"]
         + CONVERSE_RESPONSE["usage"]["outputTokens"] * prices["output_cost_per_token"]
     )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/openai/v1/chat/completions",
+        "https://gateway.example.com/openai/v1/responses",
+        "https://gateway.example.com/openai/v1",
+    ],
+)
+def test_converse_fallback_on_a_full_route_url_api_base_calls_converse_on_that_host(
+    api_base: str, respx_mock: respx.MockRouter
+) -> None:
+    gateway: Final = respx_mock.post(url__startswith="https://gateway.example.com/").mock(
+        return_value=httpx.Response(200, json=CONVERSE_RESPONSE)
+    )
+
+    litellm.completion(
+        model="bedrock/us.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=api_base,
+        api_key="bedrock-api-key",
+        aws_region_name="us-east-1",
+        response_format={"type": "json_object"},
+    )
+
+    assert [call.request.url for call in gateway.calls] == [
+        httpx.URL("https://gateway.example.com/model/us.openai.gpt-6.1-sol/converse")
+    ]

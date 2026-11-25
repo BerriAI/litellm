@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 from typing import Final
@@ -15,7 +16,63 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.types.llms.openai import AllMessageValues
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponse
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("dependent_options", [False, True])
+@pytest.mark.parametrize("tools_state", ["empty", "absent", "nonempty"])
+@pytest.mark.asyncio
+async def test_hosted_vllm_omits_empty_tools_at_http_edge(
+    asynchronous: bool, dependent_options: bool, tools_state: str
+) -> None:
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    messages: Final = [
+        {"role": "user", "content": "Look up x"},
+        {"role": "assistant", "tool_calls": [
+            {"id": "call_123", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+        ]},
+        {"role": "tool", "tool_call_id": "call_123", "content": "OK"},
+        {"role": "user", "content": "Say OK"},
+    ]
+    options: Final = {
+        **({} if tools_state == "absent" else {"tools": [] if tools_state == "empty" else tools}),
+        **({"tool_choice": "required", "parallel_tool_calls": False} if dependent_options else {}),
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json={
+            "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "test",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+        })
+
+    if asynchronous:
+        async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        try:
+            await litellm.acompletion(
+                model="hosted_vllm/test", api_base="https://upstream.test/v1", api_key="test-key",
+                messages=messages, client=async_client, **options,
+            )
+        finally:
+            await async_client.close()
+    else:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as sync_client:
+            litellm.completion(
+                model="hosted_vllm/test", api_base="https://upstream.test/v1", api_key="test-key",
+                messages=messages, client=HTTPHandler(client=sync_client), **options,
+            )
+    sent: Final = requests.get_nowait()
+    assert str(sent.url) == "https://upstream.test/v1/chat/completions"
+    assert json.loads(sent.content) == {
+        "model": "test", "messages": messages,
+        **({"tools": tools} if tools_state == "nonempty" else {}),
+        **({"tool_choice": "required"} if dependent_options and tools_state == "nonempty" else {}),
+        **({"parallel_tool_calls": False} if dependent_options and tools_state != "empty" else {}),
+    }
 
 
 def test_hosted_vllm_chat_transformation_file_url():
@@ -342,6 +399,57 @@ def test_hosted_vllm_assistant_tool_use_does_not_duplicate_existing_tool_calls()
             },
         }
     ]
+
+
+def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched() -> None:
+    video_url: Final = "https://example.com/clip.mp4"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Where was this clip filmed, and what is the weather there?"},
+                {"type": "file", "file": {"file_id": video_url, "format": "video/mp4"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "It was filmed in Boston. Checking the weather."},
+                {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Boston"}},
+            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "The skyline is Boston.", "signature": "sig1"}],
+            "reasoning_content": [{"type": "text", "text": "The skyline is Boston."}],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
+    ]
+    snapshot: Final = copy.deepcopy(messages)
+
+    transformed: Final = HostedVLLMChatConfig().transform_request(
+        model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert transformed["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Where was this clip filmed, and what is the weather there?"},
+                {"type": "video_url", "video_url": {"url": video_url}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "It was filmed in Boston. Checking the weather.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": json.dumps({"city": "Boston"})},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
+    ]
+    assert messages == snapshot
 
 
 def test_hosted_vllm_custom_tools_are_converted_to_function_tools():

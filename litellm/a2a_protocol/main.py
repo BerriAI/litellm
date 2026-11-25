@@ -14,7 +14,7 @@ import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine, Mapping
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 from typing_extensions import TypedDict, Unpack
 
@@ -24,6 +24,7 @@ from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -36,7 +37,6 @@ if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
     from a2a.client import ClientCallContext as A2ACallContextType
     from a2a.compat.v0_3.types import (
-        AgentCard,
         Message,
         SendMessageRequest,
         SendMessageResponse,
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
         SendStreamingMessageSuccessResponse,
         Task,
     )
+    from a2a.types import AgentCard
     from a2a.types.a2a_pb2 import SendMessageRequest as CoreSendMessageRequest
     from a2a.types.a2a_pb2 import StreamResponse as CoreStreamResponse
 
@@ -93,6 +94,12 @@ A2ACardResolver: Final = LiteLLMA2ACardResolver
 
 class _SendMessageOptions(TypedDict, total=False, extra_items=object):
     pass
+
+
+class _StreamingRequestConverter(Protocol):
+    def to_core_send_message_request(
+        self, compat_req: "SendStreamingMessageRequest", /
+    ) -> "CoreSendMessageRequest": ...
 
 
 def _set_usage_on_logging_obj(
@@ -375,7 +382,9 @@ async def _stream_messages(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    pb_request: Final[CoreSendMessageRequest] = _a2a_conversions.to_core_send_message_request(request)
+    pb_request: Final[CoreSendMessageRequest] = require_attributes(
+        _a2a_conversions, _StreamingRequestConverter, "to_core_send_message_request"
+    ).to_core_send_message_request(request)
     async for event in a2a_client.send_message(pb_request, context=_get_a2a_call_context(a2a_client)):
         compat_chunk = _to_compat_stream_response(event, request_id=request.id)
         yield SendStreamingMessageResponse(root=compat_chunk)

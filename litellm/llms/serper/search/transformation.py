@@ -4,7 +4,7 @@ Calls Serper's /search endpoint to search Google.
 Serper API Reference: https://serper.dev
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, TypedDict
 
 import httpx
@@ -53,11 +53,11 @@ class SerperSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -77,9 +77,9 @@ class SerperSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -91,8 +91,8 @@ class SerperSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to Serper API format.
 
@@ -139,7 +139,7 @@ class SerperSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Serper API response to LiteLLM unified SearchResponse format.
@@ -159,10 +159,8 @@ class SerperSearchConfig(BaseSearchConfig):
         """
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        results: Final = []
-        for raw_result in _JSON_VALUES.validate_python(response_json.get("organic", [])):
-            result = _JSON_OBJECT.validate_python(raw_result)
-            search_result = SearchResult.model_validate(
+        results: Final = [
+            SearchResult.model_validate(
                 {
                     "title": result.get("title", ""),
                     "url": result.get("link", ""),
@@ -171,7 +169,10 @@ class SerperSearchConfig(BaseSearchConfig):
                     "last_updated": None,
                 }
             )
-            results.append(search_result)
+            for result in map(
+                _JSON_OBJECT.validate_python, _JSON_VALUES.validate_python(response_json.get("organic", []))
+            )
+        ]
 
         return SearchResponse(
             results=results,
