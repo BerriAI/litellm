@@ -5976,7 +5976,7 @@ async def test_a_body_key_named_like_a_gateway_dependency_reaches_the_provider_l
     _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
     provider: Final = _serve_responses(respx.mock, monkeypatch, _rounds_for(turn, stream), _DEEPSEEK_URL)
     server: Final = _ScriptedMCPServer()
-    reads: Final = _StoredTurnReads(StoredTurns(spend_logs=(), proxy_server_requests=()))
+    reads: Final = _prior_turn_reads()
     body_keys: Final = {name: f"body-{name}" for name in _GATEWAY_DEPENDENCY_NAMES}
 
     with using_responses_dependencies(
@@ -5986,7 +5986,7 @@ async def test_a_body_key_named_like_a_gateway_dependency_reaches_the_provider_l
             await litellm.aresponses(
                 model=_DEEPSEEK_MODEL,
                 input="Ask DeepWiki what LiteLLM is",
-                previous_response_id="resp_unknown" if turn == "follow_up" else None,
+                previous_response_id=_PRIOR_RESPONSE_ID if turn == "follow_up" else None,
                 tools=[dict(_GITMCP_TOOL)] if turn == "hosted_tool" else None,
                 stream=stream,
                 **body_keys,
@@ -5999,7 +5999,7 @@ async def test_a_body_key_named_like_a_gateway_dependency_reaches_the_provider_l
         _rounds_for(turn, stream)
     )
     assert [call.name for call in server.calls] == (["ask_question"] if turn == "hosted_tool" else [])
-    assert reads.asked == ((("resp_unknown", ("resp_unknown",)),) if turn == "follow_up" else ())
+    assert reads.asked == (((_PRIOR_RESPONSE_ID, (_PRIOR_RESPONSE_ID,)),) if turn == "follow_up" else ())
     assert _output_types(response.output)[-1] == "message"
 
 
