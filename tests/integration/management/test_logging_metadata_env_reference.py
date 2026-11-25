@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from collections.abc import Mapping
 from typing import Final
@@ -236,6 +237,88 @@ def test_bulk_user_creation_refuses_only_the_row_with_an_env_reference(gateway: 
         assert (refused["user_id"], refused["success"], refused["key"]) == (refused_user, False, None), response.text
         assert _refusal(field) in string_value(refused["error"]), response.text
         assert (plain["success"], plain["error"]) == (True, None), response.text
+        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (refused_user,)) == []
+
+
+def _json_string_reference_logging() -> dict[str, JsonValue]:
+    return {"logging": json.dumps(_logging(SPACE_ID)["logging"])}
+
+
+def test_key_generate_refuses_an_env_reference_in_json_string_logging(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        alias: Final = f"env-reference-{uuid.uuid4().hex}"
+        refused: Final = gateway.request(
+            "POST", "/key/generate", {"key_alias": alias, "metadata": _json_string_reference_logging()}
+        )
+        _drop_created_key(scenario, refused)
+        _assert_refused(refused, SPACE_ID)
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s', (alias,)) == []
+
+
+def test_team_update_refuses_an_env_reference_in_json_string_logging(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"owner": "env-reference-audit"})
+        refused: Final = gateway.request(
+            "POST", "/team/update", {"team_id": team, "metadata": _json_string_reference_logging()}
+        )
+        _assert_refused(refused, SPACE_ID)
+        assert _team_metadata(team) == {"owner": "env-reference-audit"}
+
+
+def _encrypted_reference_logging(monkeypatch: pytest.MonkeyPatch) -> dict[str, JsonValue]:
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
+    encrypted: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_type": "success", "callback_vars": {API_KEY: REFERENCE}}]}
+    )
+    assert isinstance(encrypted, dict) and "os.environ" not in json.dumps(encrypted), encrypted
+    return encrypted
+
+
+@pytest.mark.parametrize(
+    "route", [pytest.param("/team/new", id="team-new"), pytest.param("/user/new", id="user-new")]
+)
+def test_a_copied_ciphertext_of_an_env_reference_is_refused_on_create(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    metadata: Final = _encrypted_reference_logging(monkeypatch)
+    with gateway.scenario() as scenario:
+        name: Final = f"env-reference-{uuid.uuid4().hex}"
+        body: Final[dict[str, JsonValue]] = (
+            {"team_alias": name, "metadata": metadata}
+            if route == "/team/new"
+            else {"user_id": name, "auto_create_key": False, "metadata": metadata}
+        )
+        refused: Final = gateway.request("POST", route, body)
+        if refused.status_code == 200:
+            created: Final = string_value(refused.json()["team_id" if route == "/team/new" else "user_id"])
+            scenario.cleanups.callback(scenario.delete_team if route == "/team/new" else scenario.delete_user, created)
+        _assert_refused(refused, API_KEY)
+        assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias = %s', (name,)) == []
+        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (name,)) == []
+
+
+def test_bulk_user_creation_refuses_a_copied_ciphertext_of_an_env_reference(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metadata: Final = _encrypted_reference_logging(monkeypatch)
+    with gateway.scenario() as scenario:
+        refused_user, plain_user = (f"env-reference-{uuid.uuid4().hex}" for _ in range(2))
+        response: Final = gateway.request(
+            "POST",
+            BULK_ROUTE,
+            {"users": [{"user_id": refused_user, "metadata": metadata}, {"user_id": plain_user}]},
+        )
+        if response.status_code == 200:
+            for row in response.json()["data"]:
+                if row["success"]:
+                    scenario.cleanups.callback(scenario.delete_user, string_value(row["user_id"]))
+        assert response.status_code == 200, response.text
+        refused, plain = response.json()["data"]
+        assert (refused["user_id"], refused["success"]) == (refused_user, False), response.text
+        assert _refusal(API_KEY) in string_value(refused["error"]), response.text
+        assert (plain["user_id"], plain["success"]) == (plain_user, True), response.text
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (refused_user,)) == []
 
 
