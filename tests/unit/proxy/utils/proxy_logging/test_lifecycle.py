@@ -9,7 +9,7 @@ because they are direct dependents on the lifecycle state.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +19,9 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import (
     ProxyLogging,
 )
+from litellm.types.integrations.slack_alerting import HangingRequestData
+
+TRACKED_AT: Final = 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -510,9 +513,39 @@ async def test_update_request_status_when_alerting_set_writes_cache(proxy_loggin
 @pytest.mark.asyncio
 async def test_update_request_status_no_alerting_skips_cache(proxy_logging):
     proxy_logging.alerting = None
+    tracked: Final = proxy_logging.slack_alerting_instance.hanging_request_check.hanging_request_cache
+    await tracked.async_set_cache(
+        key="call-1", value=HangingRequestData(request_id="call-1", model="m", created_at=TRACKED_AT)
+    )
     proxy_logging.internal_usage_cache.async_set_cache = AsyncMock()
     await proxy_logging.update_request_status(litellm_call_id="call-1", status="success")
     proxy_logging.internal_usage_cache.async_set_cache.assert_not_called()
+    assert await tracked.async_get_cache(key="call-1") is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["success", "fail"])
+async def test_update_request_status_stops_tracking_only_that_request_as_hanging(proxy_logging, status):
+    proxy_logging.alerting = ["slack"]
+    tracked: Final = proxy_logging.slack_alerting_instance.hanging_request_check.hanging_request_cache
+    for call_id in ("call-1", "call-2"):
+        await tracked.async_set_cache(
+            key=call_id, value=HangingRequestData(request_id=call_id, model="m", created_at=TRACKED_AT)
+        )
+    await proxy_logging.update_request_status(litellm_call_id="call-1", status=status)
+    assert await tracked.async_get_cache(key="call-1") is None
+    assert await tracked.async_get_cache(key="call-2") is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_id", [{"id": "call-1"}, ["call-1"], 7], ids=["dict", "list", "int"])
+async def test_update_request_status_still_records_non_string_ids(proxy_logging, call_id):
+    proxy_logging.alerting = ["slack"]
+    await proxy_logging.update_request_status(litellm_call_id=call_id, status="fail")
+    recorded: Final = await proxy_logging.internal_usage_cache.async_get_cache(
+        key=f"request_status:{call_id}", litellm_parent_otel_span=None, local_only=True
+    )
+    assert recorded == "fail"
 
 
 @pytest.mark.asyncio

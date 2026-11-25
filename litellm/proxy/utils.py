@@ -2692,6 +2692,9 @@ class ProxyLogging:
         if self.alerting is None:
             return
 
+        if isinstance(litellm_call_id, str):
+            self.slack_alerting_instance.hanging_request_check.hanging_request_cache.delete_cache(key=litellm_call_id)
+
         # current alerting threshold
         alerting_threshold: float = self.alerting_threshold
 
