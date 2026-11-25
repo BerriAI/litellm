@@ -1,5 +1,6 @@
 """Tests for MCP OAuth discoverable endpoints"""
 
+import copy
 import hashlib
 import json
 import time
@@ -67,7 +68,9 @@ def _stored_grant(access_token="access-token", refresh_token=None, expires_in_se
         ({"expires_in_seconds": -300, "refresh_token": "refresh-token"}, True),
     ],
 )
-async def test_vendor_credential_state_agrees_with_egress_token_resolution(monkeypatch, fields, egress_has_token):
+async def test_vendor_credential_state_agrees_with_egress_token_resolution(
+    monkeypatch: pytest.MonkeyPatch, fields: "Mapping[str, object] | None", egress_has_token: bool
+) -> None:
     from litellm.proxy.mcp_server import db as mcp_db
     from litellm.proxy.mcp_server import discoverable_endpoints
 
@@ -81,7 +84,7 @@ async def test_vendor_credential_state_agrees_with_egress_token_resolution(monke
     monkeypatch.setattr(mcp_db, "refresh_user_oauth_token", refresh)
 
     connect = await discoverable_endpoints._vendor_credential_state("user-1", "server-1")
-    read.assert_awaited_once_with(prisma, "user-1", "server-1")
+    read.assert_awaited_once_with(prisma, "user-1", "server-1", use_writer=True)
     refresh.assert_not_awaited()
     egress = await mcp_db.resolve_valid_user_oauth_token(
         user_id="user-1", server=MagicMock(), cred=credential, prisma_client=prisma
@@ -15522,6 +15525,22 @@ async def test_connect_is_present_for_a_usable_grant_whatever_scopes_the_provide
 
     await db.store_user_oauth_credential(credentials_prisma, "owner", "server", "vendor-token", scopes=reply_scopes)
     assert await endpoints._vendor_credential_state("owner", "server") == "present"
+
+
+@pytest.mark.asyncio
+async def test_connect_reads_the_saved_grant_from_the_writer_not_a_lagging_replica(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    await db.store_user_oauth_credential(credentials_prisma, "owner", "server", "vendor-token", scopes=["repo"])
+    replica_before_the_refusal: Final = copy.copy(credentials_prisma.writer_db.litellm_mcpusercredentials)
+    await db.record_oauth_scope_refusal(credentials_prisma, "owner", "server", "gist")
+    lagging_replica: Final = SimpleNamespace(litellm_mcpusercredentials=replica_before_the_refusal)
+    monkeypatch.setattr(credentials_prisma, "db", lagging_replica)
+
+    assert await endpoints._vendor_credential_state("owner", "server") == "absent", "a lagging replica must not win"
 
 
 @pytest.mark.asyncio

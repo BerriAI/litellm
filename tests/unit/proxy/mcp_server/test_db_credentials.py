@@ -1437,6 +1437,60 @@ async def test_v1_refusal_is_logged_on_one_line_whatever_the_provider_sends(
     assert refusals and all("\n" not in message for message in refusals), "a provider cannot add log lines"
 
 
+@pytest.mark.asyncio
+async def test_v1_token_request_that_never_answers_gives_up_at_the_refresh_deadline(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    import litellm.proxy.mcp_server.db as db_mod
+
+    async def never_answers(_request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+        return httpx.Response(200, json={"access_token": "too-late"})
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(db_mod, "MCP_OAUTH_REFRESH_TIMEOUT_SECONDS", 0.05)
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    respx_mock.post("https://idp.example.com/token").mock(side_effect=never_answers)
+    assert expired is not None
+    refreshed: Final = await asyncio.wait_for(
+        refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), expired), 5
+    )
+
+    assert refreshed is None, "a hung token endpoint is a miss once the deadline passes"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 200])
+async def test_v1_failed_refresh_logs_the_providers_error_code(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter", status: int
+) -> None:
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    respx_mock.post("https://idp.example.com/token").respond(
+        status, json={"error": "invalid_client", "error_description": "Client authentication failed"}
+    )
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_proxy_logger.addHandler(capture)
+    try:
+        assert expired is not None
+        assert await refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), expired) is None
+    finally:
+        verbose_proxy_logger.removeHandler(capture)
+
+    logged: Final = " ".join(handled.args[0].getMessage() for handled in capture.handle.call_args_list)
+    assert "error='invalid_client'" in logged and "Client authentication failed" in logged
+
+
 def _row_written_under_previous_salt_key(monkeypatch, payload: str):
     """A row encrypted under a salt key the proxy no longer holds.
 

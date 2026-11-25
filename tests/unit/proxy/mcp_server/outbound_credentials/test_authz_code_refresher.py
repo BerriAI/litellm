@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
     refusal_body,
+    refusal_summary,
     refused_refresh_error,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
@@ -526,3 +527,37 @@ def test_every_400_or_401_from_the_token_endpoint_is_read_as_a_refusal(
     status: int, content: bytes, expected: Mapping[str, object] | None
 ) -> None:
     assert refusal_body(httpx.Response(status, content=content)) == expected
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            {"error": "invalid_client", "error_description": "Client authentication failed"},
+            "error='invalid_client', error_description='Client authentication failed'",
+        ),
+        ({"error": "invalid_grant"}, "error='invalid_grant', error_description='None'"),
+        ({"error": "x", "error_description": "a\nforged line"}, "error='x', error_description='a\\nforged line'"),
+        (None, "no error body"),
+    ],
+)
+def test_a_refused_refresh_is_summarized_by_its_error_fields_only(
+    body: Mapping[str, object] | None, expected: str
+) -> None:
+    assert refusal_summary(body) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", ["incorrect_client_credentials", "bad_refresh_token"])
+async def test_a_refusal_sent_with_a_success_status_logs_the_providers_error_code(error: str) -> None:
+    refused: Final = _endpoint({"error": error, "error_description": "bad client"})
+    refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), refused, AsyncMock())
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_logger.addHandler(capture)
+    try:
+        assert await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="rt")) is None
+    finally:
+        verbose_logger.removeHandler(capture)
+
+    logged: Final = " ".join(handled.args[0].getMessage() for handled in capture.handle.call_args_list)
+    assert f"error={error!r}" in logged and "bad client" in logged

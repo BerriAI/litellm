@@ -14,7 +14,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+from litellm.constants import MCP_OAUTH_REFRESH_TIMEOUT_SECONDS, MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, single_log_line
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
@@ -46,7 +46,11 @@ from litellm.proxy.mcp_server.oauth_identity_binding import (
 from litellm.proxy.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
 )
-from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import refusal_body, refused_refresh_error
+from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
+    refusal_body,
+    refusal_summary,
+    refused_refresh_error,
+)
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     InProcessRefreshCoordinator,
     OAuthToken,
@@ -2314,27 +2318,33 @@ async def refresh_user_oauth_token(
             **token_request.body,
         }
         async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-        response: Final = await async_client.post(
-            token_url,
-            headers={"Accept": "application/json", **token_request.headers},
-            data=token_data,
+        response: Final = await asyncio.wait_for(
+            async_client.post(
+                token_url,
+                headers={"Accept": "application/json", **token_request.headers},
+                data=token_data,
+            ),
+            MCP_OAUTH_REFRESH_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         body: Final[_OAuthTokenRefreshResponse] = response.json()
     except httpx.HTTPStatusError as exc:
+        refusal: Final = refusal_body(exc.response)
         verbose_proxy_logger.warning(
-            "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
+            "refresh_user_oauth_token: refresh request failed for user=%s server=%s (%s): %s",
             user_id,
             server_id,
+            refusal_summary(refusal),
             exc,
         )
-        await _note_refused_refresh(prisma_client, user_id, server_id, refresh_token, refusal_body(exc.response))
+        await _note_refused_refresh(prisma_client, user_id, server_id, refresh_token, refusal)
         return None
     except Exception as exc:
         verbose_proxy_logger.warning(
-            "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
+            "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s: %s",
             user_id,
             server_id,
+            type(exc).__name__,
             exc,
         )
         return None
@@ -2355,9 +2365,10 @@ async def refresh_user_oauth_token(
     access_token: Final[str | None] = body.get("access_token")
     if not access_token:
         verbose_proxy_logger.warning(
-            "refresh_user_oauth_token: token response missing access_token for user=%s server=%s",
+            "refresh_user_oauth_token: token response missing access_token for user=%s server=%s (%s)",
             user_id,
             server_id,
+            refusal_summary(as_str_mapping(body)),
         )
         await _note_refused_refresh(prisma_client, user_id, server_id, refresh_token, as_str_mapping(body))
         return None
