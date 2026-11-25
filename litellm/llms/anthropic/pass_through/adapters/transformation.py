@@ -12,7 +12,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
-from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred, usable_deferred_tools_mode
+from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.pass_through.utils import (
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
@@ -1433,7 +1433,10 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping = self._translate_tools_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
-            keeps_deferral=usable_deferred_tools_mode(deployment_model_info, custom_llm_provider) == "passthrough",
+            keeps_deferral=routed_deferred_tools_mode(
+                deployment_model_info, custom_llm_provider, anthropic_message_request["model"]
+            )
+            == "passthrough",
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(
