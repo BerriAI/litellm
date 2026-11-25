@@ -195,7 +195,7 @@ def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
         return raw_usage
 
 
-def _extract_cache_read_input_tokens(usage_obj) -> int:
+def _extract_cache_read_input_tokens(usage_obj: _UsageObject) -> int:
     """
     Extract cache_read_input_tokens from usage object.
 
@@ -322,12 +322,12 @@ def _trace_public_flag(value: object) -> bool | None:
 
 
 def resolve_langfuse_credentials(
-    langfuse_public_key=None,
-    langfuse_secret=None,
-    langfuse_secret_key=None,
-    langfuse_host=None,
+    langfuse_public_key: str | None = None,
+    langfuse_secret: str | None = None,
+    langfuse_secret_key: str | None = None,
+    langfuse_host: str | None = None,
     allow_env_credentials: bool = True,
-):
+) -> tuple[str | None, str | None, str]:
     if allow_env_credentials is False and langfuse_host is not None:
         secret_key = langfuse_secret or langfuse_secret_key
         public_key = langfuse_public_key
@@ -612,10 +612,10 @@ class LangFuseLogger:
         | RerankResponse
         | HttpxBinaryResponseContent
         | ResponsesAPIResponse,
-        prompt: dict,
+        prompt: Mapping[str, object],
         level: str,
         status_message: str | None,
-    ) -> tuple[dict | None, str | Mapping[str, object] | Sequence[object] | None]:
+    ) -> tuple[Mapping[str, object] | None, str | Mapping[str, object] | Sequence[object] | None]:
         """
         Get the input and output content for Langfuse logging
 
@@ -679,7 +679,9 @@ class LangFuseLogger:
             output = response_obj.get("response", "")
         return input, output
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, user_id):
+    async def _async_log_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object, user_id: object
+    ):
         """
         Langfuse SDK uses a background thread to log events
 
@@ -695,12 +697,12 @@ class LangFuseLogger:
         start_time: datetime | None,
         end_time: datetime | None,
         kwargs: dict,
-        optional_params: dict,
-        input: dict | None,
+        optional_params: dict[str, object],
+        input: Mapping[str, object] | None,
         response_obj,
         level: str,
         litellm_call_id: str | None,
-    ) -> tuple:
+    ) -> tuple[str | None, str | None]:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse via sdk v%s", self.langfuse_sdk_version)
 
         try:
@@ -1084,7 +1086,7 @@ class LangFuseLogger:
             return []
         return standard_logging_object.get("request_tags", []) or []
 
-    def add_default_langfuse_tags(self, tags: list[str], kwargs, metadata) -> list[str]:
+    def add_default_langfuse_tags(self, tags: list[str], kwargs: Mapping[str, object], metadata) -> list[str]:
         """
         Helper function to add litellm default langfuse tags
 
@@ -1228,11 +1230,11 @@ class LangFuseLogger:
 
 
 def _add_prompt_to_generation_params(
-    generation_params: dict,
-    clean_metadata: dict,
+    generation_params: dict[str, object],
+    clean_metadata: dict[str, object],
     prompt_management_metadata: StandardLoggingPromptManagementMetadata | None,
     langfuse_client: "LangfuseApiClient",
-) -> dict:
+) -> dict[str, object]:
     from langfuse.model import (
         ChatPromptClient,
         Prompt_Chat,
@@ -1337,7 +1339,7 @@ def _end_grounding_span(*, tracing: "LangfuseTracing", parent: "LangfuseObservat
     ).end()
 
 
-def log_requester_metadata(clean_metadata: Mapping[str, object]):
+def log_requester_metadata(clean_metadata: Mapping[str, object]) -> Mapping[str, object]:
     returned_metadata: Final = {}
     requester_metadata: Final[object] = clean_metadata.get("requester_metadata") or {}
     for k, v in clean_metadata.items():

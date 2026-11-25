@@ -1598,7 +1598,7 @@ def get_api_key(
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
+                headers: Mapping[str, object] | None = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
                     if request.headers.get(header_key) is not None:
@@ -3777,7 +3777,7 @@ async def _lookup_end_user_and_apply_budget(
 async def enforce_key_and_fallback_model_access(
     *,
     valid_token: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
     request: Request | None,
     llm_model_list: Sequence[object] | None,

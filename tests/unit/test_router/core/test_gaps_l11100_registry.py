@@ -9,7 +9,7 @@ model group info merges its deployments.
 
 import os
 import uuid
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -599,10 +599,10 @@ VLLM_CARDS: Final = {"data": [{"id": "my-model", "max_model_len": 8192}, {"id": 
 
 
 def _vllm(
-    deployment_id: str = "v", **params: object
+    deployment_id: str = "v", api_base: str = "http://vllm.local", **params: object
 ) -> dict[str, object]:  # mutable-ok: a model_list entry  # kwargs-ok: litellm_params
     return deployment(
-        "vllm", deployment_id, model="hosted_vllm/my-model", api_base="http://vllm.local", api_key="sk-vllm", **params
+        "vllm", deployment_id, model="hosted_vllm/my-model", api_base=api_base, api_key="sk-vllm", **params
     )
 
 
@@ -667,14 +667,23 @@ async def test_an_unreachable_models_endpoint_discovers_nothing(make_core: MakeC
 
 
 @pytest.mark.asyncio
-async def test_discovered_limits_are_forgotten_when_the_deployment_is_replaced(make_core: MakeCore) -> None:
+@pytest.mark.parametrize(
+    ("api_base", "rpm", "expected"),
+    (
+        ("http://vllm.local", 5, {"max_tokens": 8192, "max_input_tokens": 8192, "max_output_tokens": 8192}),
+        ("http://other-vllm.local", None, {}),
+    ),
+)
+async def test_discovered_limits_outlive_a_replacement_only_while_it_reaches_the_same_backend(
+    make_core: MakeCore, api_base: str, rpm: int | None, expected: Mapping[str, int]
+) -> None:
     endpoint: Final = ModelsEndpoint(VLLM_CARDS)
     core: Final = make_core(model_list=[_vllm()])
     await core.aapply(ChangeSet(refresh_model_info=True, refresh_client=endpoint))  # pyright: ignore[reportAttributeAccessIssue, reportArgumentType]
 
-    core.apply(ChangeSet(upsert=[Deployment(**_vllm(rpm=5))]))  # pyright: ignore[reportArgumentType]
+    core.apply(ChangeSet(upsert=[Deployment(**_vllm(api_base=api_base, rpm=rpm))]))  # pyright: ignore[reportArgumentType]
 
-    assert dict(core.registry().discovered_model_info("v")) == {}
+    assert dict(core.registry().discovered_model_info("v")) == expected
 
 
 # --- failed upserts and replays under ignore_invalid_deployments ---------------------------------------------

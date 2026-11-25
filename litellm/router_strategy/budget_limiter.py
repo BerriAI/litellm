@@ -203,7 +203,7 @@ class RouterBudgetLimiting(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """

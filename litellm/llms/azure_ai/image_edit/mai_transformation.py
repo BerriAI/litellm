@@ -33,9 +33,16 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         return ["prompt", "image", "model", "n"]
 
+    def uses_json_body(
+        self,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> bool:
+        return False
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,

@@ -983,8 +983,6 @@ def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
     chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
     if chunk_model is None:
         raise AttributeError(
@@ -992,27 +990,33 @@ def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream
             name="model_fields",
             obj=type(original_chunk),
         )
+    _assign_attributes(model_response, upstream_non_openai_attributes(type(model_response), chunk_model))
+
+
+def upstream_non_openai_attributes(
+    model_response_type: type[BaseModel], original_chunk: BaseModel
+) -> tuple[tuple[str, object], ...]:
+    expected_keys: Final = frozenset(model_response_type.model_fields) | frozenset({"usage"})
     candidate_keys: Final = tuple(
         key
-        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
+        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
         if key not in expected_keys
     )
     if not candidate_keys:
-        return
+        return ()
     candidate_values: Final[tuple[tuple[str, object], ...]] = tuple(
         (
             key,
             cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
                 object,
-                getattr(chunk_model, key),
+                getattr(original_chunk, key),
             ),
         )
         for key in candidate_keys
     )
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
-        _assign_attributes(model_response, candidate_values)
-        return
-    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
+        return candidate_values
+    return tuple(original_chunk.model_dump(include=set(candidate_keys)).items())
 
 
 def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:

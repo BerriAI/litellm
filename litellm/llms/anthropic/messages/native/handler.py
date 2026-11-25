@@ -364,8 +364,8 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 async def _execute_pre_request_hooks(
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
+    messages: list[dict[str, object]],
+    tools: object,
     stream: bool | None,
     custom_llm_provider: str | None,
     **kwargs: object,
@@ -462,8 +462,8 @@ async def _try_websearch_short_circuit(
     tools: list[dict] | None,
     custom_llm_provider: str | None,
     stream: bool | None,
-    kwargs: dict | None = None,
-) -> AnthropicMessagesResponse | AsyncIterator | None:
+    kwargs: Mapping[str, object] | None = None,
+) -> AnthropicMessagesResponse | AsyncIterator[object] | None:
     """
     Attempt to short-circuit a web-search-only request.
 
@@ -559,13 +559,13 @@ async def anthropic_messages(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
@@ -707,7 +707,7 @@ async def anthropic_messages(
         )
 
 
-def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
+def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict[str, object] | None:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
 
@@ -723,17 +723,17 @@ def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict | None = None,
+    container: dict[str, object] | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,
