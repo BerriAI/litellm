@@ -5777,18 +5777,30 @@ def _bridge_params_without_unretrievable_background_run(
 
 
 def _responses_bridge_optional_params(
-    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    mapped_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
     summary_alias: object,
     requested: RequestedReasoningEffort,
     *,
+    streams_upstream: bool | None,
+    fakes_stream: Callable[[Mapping[str, object]], bool],
+    routing_kwargs: Mapping[str, object],
     custom_llm_provider: str,
     model: str,
     base_model: str | None,
     api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
-    additional_drop_params: object,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    optional_params: Final = _bridge_params_without_unretrievable_background_run(
+        mapped_params,
+        streams_upstream=streams_upstream,
+        fakes_stream=fakes_stream,
+        routing_kwargs=routing_kwargs,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+    )
     if isinstance(requested, dict):
         from litellm.responses.utils import (
             RefusedReasoningFields,
@@ -5806,7 +5818,7 @@ def _responses_bridge_optional_params(
             api_base=api_base,
             deployment_model_info=deployment_model_info,
             drop_params=drop_params,
-            additional_drop_params=additional_drop_params,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
         )
         if isinstance(bridged_reasoning, RefusedReasoningFields):
             raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
@@ -6750,27 +6762,19 @@ def completion(
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-            mapped_bridge_params: Final = _responses_bridge_optional_params(
+            bridge_optional_params: Final = _responses_bridge_optional_params(
                 optional_params,
                 rs_val,
                 resolved_reasoning_effort,
+                streams_upstream=dispatch_stream,
+                fakes_stream=fakes_stream,
+                routing_kwargs=routing_kwargs,
                 custom_llm_provider=custom_llm_provider,
                 model=model,
                 base_model=deployment_base_model,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
                 drop_params=drop_unsupported_reasoning,
-                additional_drop_params=routing_kwargs.get("additional_drop_params"),
-            )
-            bridge_optional_params: Final = _bridge_params_without_unretrievable_background_run(
-                mapped_bridge_params,
-                streams_upstream=dispatch_stream,
-                fakes_stream=fakes_stream,
-                routing_kwargs=routing_kwargs,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                deployment_model_info=typed_deployment_model_info,
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             bridged: Final = responses_api_bridge.completion(
