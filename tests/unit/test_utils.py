@@ -64,7 +64,6 @@ from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.db.request_error_tracking import status_code_from_metadata
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import is_valid_api_key
-from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, STREAM_OPTIONS_STASH_KEYS
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
@@ -12571,56 +12570,71 @@ async def test_completion_with_retry_policy(sync_mode):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRouter, monkeypatch):
-    """
-    Test that responses API actually retries when encountering authentication errors.
-    This validates that the @client decorator properly handles responses/aresponses retries.
-    """
+@pytest.mark.parametrize("endpoint", ["chat", "responses"])
+@pytest.mark.parametrize(
+    ("status_code", "num_retries", "requests"),
+    [(500, 1, 2), (500, 3, 4), (401, 1, 1), (401, 3, 1)],
+)
+async def test_num_retries_is_one_loop_and_skips_auth_errors(
+    sync_mode: bool,
+    endpoint: str,
+    status_code: int,
+    num_retries: int,
+    requests: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", None)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
-            401,
-            json={
-                "error": {
-                    "message": "Incorrect API key provided",
-                    "type": "invalid_request_error",
-                    "code": "invalid_api_key",
-                }
-            },
-        )
+    url: Final = (
+        "https://stub.openai.local/v1/chat/completions"
+        if endpoint == "chat"
+        else "https://stub.openai.local/v1/responses"
     )
-    num_retries = 2
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(status_code, json={"error": {"message": "boom", "type": "server_error"}})
+    )
 
-    if sync_mode:
-        with patch.object(litellm, "responses_with_retries") as mock_retry:
-            mock_retry.return_value = None
-            try:
-                responses(
-                    model="gpt-4o",
-                    input="Test input",
-                    num_retries=num_retries,
-                    api_key="sk-invalid-key-12345",
-                )
-            except Exception:
-                pass
+    async def send() -> None:
+        if endpoint == "chat" and sync_mode:
+            litellm.completion(
+                model="openai/gpt-4o-mini",
+                api_base="https://stub.openai.local/v1",
+                api_key="sk-test",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=num_retries,
+            )
+            return
+        if endpoint == "chat":
+            await litellm.acompletion(
+                model="openai/gpt-4o-mini",
+                api_base="https://stub.openai.local/v1",
+                api_key="sk-test",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=num_retries,
+            )
+            return
+        if sync_mode:
+            litellm.responses(
+                model="openai/gpt-4o-mini",
+                api_base="https://stub.openai.local/v1",
+                api_key="sk-test",
+                input="hi",
+                num_retries=num_retries,
+            )
+            return
+        await litellm.aresponses(
+            model="openai/gpt-4o-mini",
+            api_base="https://stub.openai.local/v1",
+            api_key="sk-test",
+            input="hi",
+            num_retries=num_retries,
+        )
 
-            assert mock_retry.called
-            assert mock_retry.call_args.kwargs.get("num_retries") == num_retries
-    else:
-        with patch.object(litellm, "aresponses_with_retries") as mock_retry:
-            mock_retry.return_value = None
-            try:
-                await aresponses(
-                    model="gpt-4o",
-                    input="Test input",
-                    num_retries=num_retries,
-                    api_key="sk-invalid-key-12345",
-                )
-            except Exception:
-                pass
+    with pytest.raises((litellm.AuthenticationError, litellm.InternalServerError)) as failure:
+        await send()
 
-            assert mock_retry.called
-            assert mock_retry.call_args.kwargs.get("num_retries") == num_retries
+    assert (failure.value.status_code, route.call_count) == (status_code, requests)
 
 
 @respx.mock

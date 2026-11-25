@@ -6162,7 +6162,8 @@ def completion(
         if is_router_call:
             max_retries = 0
         elif num_retries is not None:
-            max_retries = num_retries
+            # The client wrapper spends num_retries. Handing the same count to the provider client runs a second loop.
+            max_retries = 0
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
         if fallbacks is not None:
             fallback_runner: Final = (
