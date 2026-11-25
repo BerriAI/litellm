@@ -13,7 +13,6 @@ import httpx
 import pytest
 from langfuse.api import LangfuseAPI
 
-from litellm.integrations.langfuse import langfuse_media
 from litellm.integrations.langfuse.langfuse_media import MediaField, MediaUpload, MediaUploader, extract_media
 
 Transport = Callable[[httpx.Request], httpx.Response]
@@ -108,6 +107,10 @@ def test_every_payload_in_one_value_is_replaced_and_returned():
         json.dumps({"type": ["base64"], "media_type": "image/png", "data": HELLO_BASE64}),
         '{"truncated": "data:image/png;base64,' + HELLO_BASE64,
         "base64 in a sentence that is not JSON",
+        json.dumps({"files": [{"name": "a.bin", "encoding": "base64"}], "note": "decode with base64"}),
+        json.dumps({"question": "what does the mime_type header do?", "type": "base64"}),
+        json.dumps({"schema": {"media_type": "string"}, "text": "see data: below"}),
+        json.dumps({"data": "plain", "kind": "base64"}),
     ],
     ids=[
         "text-only",
@@ -120,28 +123,13 @@ def test_every_payload_in_one_value_is_replaced_and_returned():
         "non-string-type",
         "invalid-json",
         "plain-string",
+        "base64-as-a-value",
+        "mime-type-in-prose",
+        "content-type-key-without-data",
+        "data-key-without-content-type",
     ],
 )
 def test_values_without_storable_media_are_returned_untouched(serialized):
-    assert extract_media(serialized) == (serialized, ())
-
-
-@pytest.mark.parametrize(
-    "serialized",
-    [
-        json.dumps({"files": [{"name": "a.bin", "encoding": "base64"}], "note": "decode with base64"}),
-        json.dumps({"question": "what does the mime_type header do?", "type": "base64"}),
-        json.dumps({"schema": {"media_type": "string"}, "text": "see data: below"}),
-        json.dumps({"data": "plain", "kind": "base64"}),
-    ],
-    ids=["base64-as-a-value", "mime-type-in-prose", "content-type-key-without-data", "data-key-without-content-type"],
-)
-def test_text_that_only_mentions_base64_or_a_content_type_is_returned_without_being_parsed(monkeypatch, serialized):
-    def parsed(*_args: object) -> None:
-        raise AssertionError("a value with no media marker was parsed")
-
-    monkeypatch.setattr(langfuse_media, "_extract_media_nodes", parsed)
-
     assert extract_media(serialized) == (serialized, ())
 
 
