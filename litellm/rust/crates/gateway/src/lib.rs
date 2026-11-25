@@ -185,5 +185,9 @@ pub fn router(state: AppState, config: &Config) -> Router {
         state.auth(config),
         litellm_gateway_auth::authenticate::<host::NativeRows>,
     ));
+    let inference = middleware::allowlisted(
+        inference,
+        middleware::request_allowlist::Settings::from_general(&config.general_settings),
+    );
     middleware::inference(inference).merge(health::router(state))
 }

@@ -166,6 +166,8 @@ impl Sent {
 #[rstest]
 #[case::mixed_groups("mixed_groups")]
 #[case::honored_settings("honored_settings")]
+#[case::allowed_routes("allowed_routes")]
+#[case::allowed_routes_unwritten("allowed_routes_unwritten")]
 #[case::setting_for_every_request("setting_for_every_request")]
 #[case::setting_for_messages_only("setting_for_messages_only")]
 #[case::fallback_shapes("fallback_shapes")]

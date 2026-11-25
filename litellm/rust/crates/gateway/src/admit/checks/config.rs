@@ -178,8 +178,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
 /// honored, since boot layers the stored config in, and [`settings`] checks what it could not
 /// load. `encryption_algorithm` only picks the format Python writes a secret in, and the at-rest
 /// crate reads either format. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
-/// who sends no key. `use_x_forwarded_for` only picks the address `allowed_ips` reads, which
-/// still sends every request to Python.
+/// who sends no key. `allowed_routes` is `middleware::request_allowlist`, and `use_x_forwarded_for`
+/// only picks the address `allowed_ips` reads, which still sends every request to Python.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -207,6 +207,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         litellm_jwtauth: _,
         allow_user_auth: _,
         token_rate_limit_type: _,
+        allowed_routes: _,
         use_x_forwarded_for: _,
         completion_model,
         max_in_flight_requests_per_worker,
@@ -229,7 +230,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         allow_requests_on_db_unavailable,
         allow_client_side_credentials,
         allowed_ips,
-        allowed_routes,
         custom_auth,
         litellm_key_header_name,
         required_customer_headers,
@@ -258,7 +258,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             allow_requests_on_db_unavailable,
             allow_client_side_credentials,
             allowed_ips,
-            allowed_routes,
             custom_auth,
             litellm_key_header_name,
             required_customer_headers,
