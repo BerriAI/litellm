@@ -6,7 +6,8 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -524,3 +525,115 @@ async def test_an_image_answer_without_an_image_counts_its_answered_tokens_towar
         router.discard()
 
     assert route.call_count == 1
+
+
+_IMAGE_REFUSAL: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+_BILLED_REFUSAL_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+
+def _gemini_image_deployment(name: str, limit: dict[str, int]) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "gemini/gemini-3.1-flash-image",
+            "api_key": "test-key",
+            "api_base": f"https://{name}.invalid/v1",
+            **limit,
+        },
+        "model_info": {"id": name},
+    }
+
+
+@pytest.mark.parametrize("limit", [pytest.param({"tpm": 1000}, id="tpm"), pytest.param({"itpm": 700}, id="itpm")])
+def test_a_sync_image_refusal_counts_its_answered_tokens_toward_the_deployment_limits(
+    limit: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", limit)],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                router.image_generation(model="image", prompt="a single small red dot")
+            with pytest.raises(litellm.RateLimitError, match="Model rate limit exceeded"):
+                router.image_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [pytest.param({"tpm": 1000}, id="tpm"), pytest.param({"itpm": 700}, id="itpm")])
+async def test_an_image_refusal_from_a_fallback_counts_its_answered_tokens_toward_the_fallback_limits(
+    limit: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("outage", {}), _gemini_image_deployment("image", limit)],
+        fallbacks=[{"outage": ["image"]}],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="image-refusal-from-a-fallback",
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://outage.invalid").mock(
+                return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+            )
+            refusing = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            with pytest.raises(litellm.RateLimitError, match="Model rate limit exceeded"):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert refusing.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_async_image_edit_refusal_counts_its_answered_tokens_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", {"tpm": 2000})],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+    image: Final = tmp_path / "dot.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            for _ in range(2):
+                with image.open("rb") as file, pytest.raises(litellm.ContentPolicyViolationError):
+                    await router.aimage_edit(model="image", image=file, prompt="make it blue")
+            with image.open("rb") as file, pytest.raises(litellm.RateLimitError, match="current usage=2220"):
+                await router.aimage_edit(model="image", image=file, prompt="make it blue")
+    finally:
+        router.discard()
+
+    assert route.call_count == 2

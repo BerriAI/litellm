@@ -6,6 +6,8 @@ import importlib
 import os
 import time
 import traceback
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -767,3 +769,104 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+_IMAGE_REFUSAL: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+_BILLED_REFUSAL_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+
+def _gemini_image_deployment(name: str, tpm: int | None) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "gemini/gemini-3.1-flash-image",
+            "api_key": "test-key",
+            "api_base": f"https://{name}.invalid/v1",
+            **({} if tpm is None else {"tpm": tpm}),
+        },
+        "model_info": {"id": name},
+    }
+
+
+def test_a_sync_image_refusal_counts_its_answered_tokens_toward_the_deployment_tpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", 1000)],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__startswith="https://image.invalid").mock(
+            return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            router.image_generation(model="image", prompt="a single small red dot")
+        with pytest.raises(ValueError, match="No deployments available"):
+            router.image_generation(model="image", prompt="a single small red dot")
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_image_refusal_from_a_fallback_counts_its_answered_tokens_toward_the_fallback_tpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("outage", None), _gemini_image_deployment("image", 1000)],
+        fallbacks=[{"outage": ["image"]}],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="image-refusal-from-a-fallback",
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__startswith="https://outage.invalid").mock(
+            return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+        )
+        refusing: Final = upstream.post(url__startswith="https://image.invalid").mock(
+            return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+        with pytest.raises(litellm.RateLimitError):
+            await router.aimage_generation(model="image", prompt="a single small red dot")
+
+    assert refusing.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_async_image_edit_refusal_counts_its_answered_tokens_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", 2000)],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+    image: Final = tmp_path / "dot.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__startswith="https://image.invalid").mock(
+            return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+        )
+        for _ in range(2):
+            with image.open("rb") as file, pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_edit(model="image", image=file, prompt="make it blue")
+        with image.open("rb") as file, pytest.raises(litellm.RateLimitError):
+            await router.aimage_edit(model="image", image=file, prompt="make it blue")
+
+    assert route.call_count == 2

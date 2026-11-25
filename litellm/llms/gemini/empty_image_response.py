@@ -12,7 +12,7 @@ from litellm.exceptions import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.utils import ImageResponse, Usage
+from litellm.types.utils import CallTypes, ImageResponse, Usage
 
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
 _REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
@@ -29,6 +29,7 @@ class ImageRefusalError(ContentPolicyViolationError):
 
 IMAGE_ANSWER_ERRORS: Final = (ImageRefusalError, UnservedImageError)
 IMAGE_ANSWERS_BILLED_ON_FAILURE: Final = "image_answers_billed_on_failure"
+SETTLED_BY_THE_ASYNC_FAILURE_HOOK: Final = frozenset({CallTypes.aimage_generation.value, CallTypes.aimage_edit.value})
 
 
 def image_answer_cost_on_failure(call_details: Mapping[str, object]) -> float:
