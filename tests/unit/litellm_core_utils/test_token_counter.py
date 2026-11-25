@@ -168,6 +168,21 @@ def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     assert abs(actual - expected) <= 4
 
 
+@pytest.mark.parametrize("model", ["gpt-4", "chat-latest"])
+@pytest.mark.parametrize(
+    "separator",
+    [" ", "\n", "\t", "  ", ". ", ".\n", ":\r\n", " \n ", "\n\n    "],
+)
+def test_token_counter_long_text_with_whitespace_counts_the_same_as_the_whole_text(model: str, separator: str):
+    words: Final = ("tokenization", "boundary", "MAX_INPUT_TOKENS", "x", "provider's", "42", "naïve", "日本語")
+    long_text: Final = separator.join(words[index % len(words)] for index in range(40_000))
+    assert len(long_text) > 100 * litellm.constants.TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
+
+    assert token_counter_new(model=model, text=long_text) == len(
+        openai_tokenizer_encoding(model).encode(long_text, disallowed_special=())
+    )
+
+
 @pytest.mark.parametrize(
     "configured",
     ["0", "-1", "-1024", "not-an-int", "", "   ", "999999999", "inf", "1e9"],

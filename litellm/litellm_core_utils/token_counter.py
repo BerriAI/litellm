@@ -848,9 +848,29 @@ def _get_tiktoken_count_function(
     chunk_size: int = TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
 ) -> TokenCounterFunction:
     def count_tokens(text: str) -> int:
-        return sum(encode_length(text[start : start + chunk_size]) for start in range(0, len(text), chunk_size))
+        return sum(encode_length(chunk) for chunk in _chunks_cut_at_whitespace(text, chunk_size))
 
     return count_tokens
+
+
+def _chunks_cut_at_whitespace(text: str, chunk_size: int) -> Iterator[str]:
+    """``text`` in pieces of at most ``chunk_size`` characters, each ended at its last run of whitespace:
+    after the line breaks that open the run, which the tokenizer joins to punctuation before them, and before
+    the rest, which it joins to the word after. A cut there counts the same as the whole text, where a cut
+    inside a word adds a token. A piece with no such run is cut at ``chunk_size``."""
+    start = 0
+    while start < len(text):
+        window = text[start : start + chunk_size]
+        length = len(window) if start + chunk_size >= len(text) else _whitespace_cut(window)
+        yield window[:length]
+        start += length
+
+
+def _whitespace_cut(window: str) -> int:
+    last_whitespace: Final = max(window.rfind(" "), window.rfind("\n"), window.rfind("\t"))
+    run_start: Final = len(window[: last_whitespace + 1].rstrip())
+    line_breaks: Final = len(window) - run_start - len(window[run_start:].lstrip("\r\n"))
+    return run_start + line_breaks or len(window)
 
 
 class _MessageCountParams:
