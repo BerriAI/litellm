@@ -164,7 +164,7 @@ async def can_access_mcp_server(
     return False
 
 
-def has_mcp_grants(permission: LiteLLM_ObjectPermissionTable | None) -> bool:
+def _restricts_mcp(permission: LiteLLM_ObjectPermissionTable | None) -> bool:
     return permission is not None and bool(
         permission.mcp_servers
         or permission.mcp_toolsets
@@ -221,7 +221,7 @@ async def _own_toolset_ids(
         return ()
     if own is None:
         return ()
-    if not has_mcp_grants(own):
+    if not _restricts_mcp(own):
         return None
     return own.mcp_toolsets or ()
 

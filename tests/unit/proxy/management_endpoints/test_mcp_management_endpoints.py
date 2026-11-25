@@ -9821,7 +9821,7 @@ class TestMCPServerResolutionRegressions:
 @pytest.mark.usefixtures("rust_auth_stores", "mcp_resolution_auth_stores")
 class TestMCPServerResolutionCharacterization:
     @pytest.mark.asyncio
-    async def test_personal_mcp_grant_only_limits_the_admins_scoped_credentials(
+    async def test_full_admin_lists_full_catalog_whatever_the_key_mcp_scope(
         self, rust_auth_stores: RustAuthStores, mcp_resolution_auth_stores: RustAuthStores
     ) -> None:
         granted: Final = "personal-server"
@@ -9836,7 +9836,7 @@ class TestMCPServerResolutionCharacterization:
         admin: Final = member.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN, "team_id": None})
         key_permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="key", mcp_servers=[granted])
         key: Final = admin.model_copy(update={"object_permission": key_permission})
-        vector_permission: Final = key_permission.model_copy(update={"mcp_servers": None, "vector_stores": ["store"]})
+        vector_permission: Final = key_permission.model_copy(update={"mcp_servers": [], "vector_stores": ["store"]})
         vector_key: Final = admin.model_copy(update={"object_permission": vector_permission})
         organization: Final = LiteLLM_OrganizationTable(
             organization_id="org", organization_alias="org", budget_id="budget", created_by="admin", updated_by="admin"
@@ -9854,11 +9854,11 @@ class TestMCPServerResolutionCharacterization:
             for caller, expected in (
                 (admin, {granted, other}),
                 (vector_key, {granted, other}),
-                (key, {granted}),
+                (key, {granted, other}),
+                (admin.model_copy(update={"object_permission": empty_permission}), {granted, other}),
+                (admin.model_copy(update={"object_permission_id": "unloaded"}), {granted, other}),
                 (admin.model_copy(update={"org_id": organization.organization_id}), set()),
                 (admin.model_copy(update={"access_group_ids": [group.access_group_id]}), set()),
-                (admin.model_copy(update={"object_permission": empty_permission}), set()),
-                (admin.model_copy(update={"object_permission_id": "unloaded"}), set()),
                 (member.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY}), {granted}),
                 (member, {granted}),
             ):

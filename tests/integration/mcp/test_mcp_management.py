@@ -1,6 +1,7 @@
 import itertools
 import uuid
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -70,11 +71,19 @@ def test_admin_can_grant_a_server_outside_their_personal_mcp_list(gateway: Gatew
         plain_key: Final = scenario.key(user_id=admin)
         group_key: Final = scenario.key(user_id=admin, access_group_ids=[group_id])
         scoped_key: Final = scenario.key(user_id=admin, object_permission={"mcp_servers": [first]})
-        for credential in (session, plain_key):
+        vector_key: Final = scenario.key(user_id=admin, object_permission={"vector_stores": ["store"]})
+        stored: Final = proxy.rows(
+            'SELECT p.mcp_servers FROM "LiteLLM_VerificationToken" t JOIN "LiteLLM_ObjectPermissionTable" p'
+            " ON p.object_permission_id = t.object_permission_id WHERE t.token = %s",
+            (sha256(vector_key.encode()).hexdigest(),),
+        )
+        assert stored == [{"mcp_servers": []}]
+        for credential in (session, plain_key, scoped_key, vector_key):
             assert {first, second} <= _servers(proxy, credential).keys()
         assert second not in _servers(proxy, group_key)
-        assert {first, second}.intersection(_servers(proxy, scoped_key)) == {first}
-        assert call_tool(proxy, session, second, "add", ADD).status_code == 403
+        for credential in (session, scoped_key, vector_key):
+            assert call_tool(proxy, credential, second, "add", ADD).status_code == 403
+        assert call_tool(proxy, scoped_key, first, "add", ADD).status_code == 200
 
         recipient: Final = scenario.user(user_role="internal_user")
         recipient_session: Final = _dashboard_ui_session_token(recipient)

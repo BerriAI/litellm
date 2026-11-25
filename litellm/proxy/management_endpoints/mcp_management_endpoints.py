@@ -265,7 +265,6 @@ if MCP_AVAILABLE:
         admitted_user_context,
         build_effective_auth_contexts,
         granted_toolset_ids,
-        has_mcp_grants,
         is_ui_session_credential,
     )
     from litellm.types.mcp import (
@@ -1350,16 +1349,9 @@ if MCP_AVAILABLE:
         )
 
     async def _admin_can_list_full_mcp_catalog(auth: UserAPIKeyAuth) -> bool:
-        permission: Final = auth.object_permission
-        unscoped_permission: Final = (
-            auth.object_permission_id is None
-            if permission is None
-            else permission.mcp_servers is None and not has_mcp_grants(permission)
-        )
         return (
             _user_is_full_admin(auth)
             and (auth.team_id is None or is_ui_session_credential(auth))
-            and unscoped_permission
             and auth.org_id is None
             and auth.end_user_id is None
             and auth.agent_id is None
