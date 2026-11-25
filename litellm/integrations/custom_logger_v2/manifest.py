@@ -8,7 +8,7 @@ from litellm.integrations.custom_logger_v2.hooks import InvalidDeclarationError,
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.selection import Selection
 
-ResultT: Final = TypeVar("ResultT")
+ResultT = TypeVar("ResultT")
 
 LegacyBinding: TypeAlias = Callable[[object, object], Awaitable[object] | None]
 

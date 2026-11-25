@@ -7,8 +7,6 @@ import io
 from collections.abc import Mapping
 from typing import Final
 
-import httpx  # noqa: F401 - used at runtime (AsyncClient, HTTPStatusError)
-
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,

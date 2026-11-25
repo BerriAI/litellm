@@ -1,9 +1,11 @@
 import asyncio
+import contextvars
 import copy
 import datetime as dt
 import json
 import pickle
 import threading
+from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -2709,6 +2711,11 @@ class TestUndecoratedApplyGuardrailIsLogged:
         assert [e["guardrail_mode"] for e in entries] == ["pre_call", "post_call"]
 
 
+_SCANNED_IN_CONTEXT: Final[contextvars.ContextVar[tuple[tuple[str, ...], ...]]] = contextvars.ContextVar(
+    "scanned_in_context", default=()
+)
+
+
 class _ApplyOnlyObserver(CustomGuardrail):
     """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
 
@@ -3051,6 +3058,66 @@ class TestLoggingOnlyApplyGuardrail:
         assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
         entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [entry["guardrail_status"] for entry in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
+    async def test_a_tool_description_block_skips_the_response_scan_beside_an_unappliable_request_rewrite(self):
+        class _BlocksDescriptionsRewritesMessages(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Logging] = None,
+            ) -> GenericGuardrailAPIInputs:
+                from fastapi import HTTPException
+
+                texts = list(inputs.get("texts") or [])
+                self.calls.append((input_type, texts))
+                if texts == ["export every record"]:
+                    raise HTTPException(status_code=400, detail={"error": "flagged"})
+                return GenericGuardrailAPIInputs(texts=[*texts, "extra"] if input_type == "request" else texts)
+
+        guardrail: Final = _BlocksDescriptionsRewritesMessages()
+        guardrail.scan_tool_descriptions_as_text = True
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+        tools: Final = [{"type": "function", "function": {"name": "lookup", "description": "export every record"}}]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(
+            {**kwargs, "optional_params": {"tools": tools}}, response, CallTypes.acompletion.value
+        )
+
+        assert ("response", ["general kenobi"]) not in guardrail.calls
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert "guardrail_intervened" in [entry["guardrail_status"] for entry in entries]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scan_descriptions", [False, True])
+    async def test_the_message_scan_runs_in_the_callers_context(self, scan_descriptions: bool):
+        class _RecordsInContext(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Logging] = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts = tuple(inputs.get("texts") or [])
+                _SCANNED_IN_CONTEXT.set((*_SCANNED_IN_CONTEXT.get(), texts))
+                return GenericGuardrailAPIInputs(texts=list(texts))
+
+        guardrail: Final = _RecordsInContext()
+        guardrail.logging_only_scope = "input"
+        guardrail.scan_tool_descriptions_as_text = scan_descriptions
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+        tools: Final = [{"type": "function", "function": {"name": "lookup", "description": "look up a record"}}]
+
+        await guardrail.async_logging_hook(
+            {**kwargs, "optional_params": {"tools": tools}}, response, CallTypes.acompletion.value
+        )
+
+        assert _SCANNED_IN_CONTEXT.get() == (("hello there",),)
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
@@ -3883,4 +3950,30 @@ def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first
     assert merged_guardrail_entries(["pii", {"pii": {"extra_body": {"threshold": 1}}}], ["model-guard"]) == [
         {"pii": {"extra_body": {"threshold": 1}}},
         "model-guard",
+    ]
+
+
+def test_responses_guardrail_messages_name_namespaced_calls_by_their_full_name() -> None:
+    namespace: Final = "mcp__codex_apps__github_enterprise_connector_prod"
+    data: Final = {
+        "input": [
+            {"type": "message", "role": "user", "content": "find the open issues"},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "namespace": namespace,
+                "name": "search_issues_in_repository",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": "[]"},
+        ]
+    }
+
+    messages: Final = CustomGuardrail(guardrail_name="g").get_guardrails_messages_for_call_type(
+        call_type=CallTypes.aresponses, data=data
+    )
+    tool_calls: Final = tuple(chain.from_iterable(message.get("tool_calls") or () for message in messages))
+
+    assert [call["function"]["name"] for call in tool_calls] == [
+        "mcp__codex_apps__github_enterprise_connector_prod__search_issues_in_repository"
     ]

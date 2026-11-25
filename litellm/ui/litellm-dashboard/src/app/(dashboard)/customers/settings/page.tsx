@@ -1,10 +1,13 @@
 "use client";
 
+import { Settings } from "lucide-react";
+
 import { useTranslation } from "react-i18next";
 import { parseAsStringLiteral, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uiHref } from "@/utils/uiHref";
@@ -27,14 +30,21 @@ export default function CustomerSettings() {
   const canManage = Boolean(accessToken && isProxyAdminRole(userRole));
   if (!canManage) return <ErrorState message={t("customerPortal.hierarchy.adminOnly")} />;
   return (
-    <main className="space-y-5 px-6 py-5">
-      <h1 className="text-lg font-semibold">{t("customerPortal.budgetGroups.title")}</h1>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">{t("customerPortal.budgetGroups.settingsHint")}</p>
-        <Button variant="outline" nativeButton={false} render={<a href={uiHref("apps")} />}>
-          {t("apps.definition.title")}
-        </Button>
-      </div>
+    <>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Settings />
+          {t("customerPortal.budgetGroups.title")}
+        </PageHeaderTitle>
+        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3">
+          <PageHeaderDescription className="mt-0">
+            {t("customerPortal.budgetGroups.settingsHint")}
+          </PageHeaderDescription>
+          <Button variant="outline" nativeButton={false} render={<a href={uiHref("apps")} />}>
+            {t("apps.definition.title")}
+          </Button>
+        </div>
+      </PageHeader>
       <Tabs value={tab} onValueChange={changeTab} className="gap-6">
         <div className="overflow-x-auto border-b">
           <TabsList variant="line" aria-label={t("customerPortal.budgetGroups.title")} className="h-auto gap-6 p-0">
@@ -55,6 +65,6 @@ export default function CustomerSettings() {
           </TabsContent>
         ))}
       </Tabs>
-    </main>
+    </>
   );
 }

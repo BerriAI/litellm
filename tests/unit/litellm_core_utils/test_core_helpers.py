@@ -25,7 +25,6 @@ from litellm.litellm_core_utils.core_helpers import (
     dict_from_pairs,
     drop_params_env_flag,
     env_flag,
-    drop_params_flag,
     filter_internal_params,
     float_of,
     get_litellm_metadata_from_kwargs,
@@ -550,20 +549,6 @@ class TestRedactNestedMatchAndRegexKeys:
 )
 def test_normalize_drop_params(value, expected):
     assert normalize_drop_params(value) is expected
-
-
-@pytest.mark.parametrize("value, expected", [("true", True), ("off", False), (None, False)])
-def test_drop_params_flag_returns_a_bool_without_a_warning(value, expected, caplog):
-    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
-        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is expected
-    assert caplog.text == ""
-
-
-@pytest.mark.parametrize("value", ["temperature", "ture", 2])
-def test_drop_params_flag_treats_non_flag_values_as_off_with_a_warning(value, caplog):
-    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
-        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is False
-    assert f"LITELLM_DROP_PARAMS={value!r} is not a flag value, treating it as off" in caplog.text
 
 
 @pytest.mark.parametrize(

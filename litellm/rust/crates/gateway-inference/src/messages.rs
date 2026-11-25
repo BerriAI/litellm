@@ -1,36 +1,32 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use litellm_gateway_auth::AuthenticatedRequest;
-use std::sync::Arc;
-
-use axum::{
-    Extension, Json,
-    body::Bytes,
-    extract::State,
-    http::HeaderMap,
-    response::{IntoResponse, Response},
-};
+use axum::{Json, body::Bytes, http::HeaderMap, response::Response};
+use futures_util::StreamExt;
 use litellm_cache_response::CachePolicy;
+use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
+use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
-use litellm_router_core::{Attempt, Deployment, Op, Served};
+use litellm_router_core::{Attempt, Deployment, Op};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Error, Gateway, JsonObject, RequestId,
+    Error, Gateway, JsonObject,
     caching::CacheHeaders,
-    headers::Routing,
+    error::ErrorFormat,
+    hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
-    request,
-    routing::{self, Host, RouteAttempt, RouteChunks},
+    routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
+    serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
     stream_outcome::{self, Streamed},
 };
@@ -45,66 +41,11 @@ const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 const TOOLS: &str = "tools";
 
-pub async fn create<H: Host>(
-    State(gateway): State<Arc<Gateway<H>>>,
-    identity: AuthenticatedRequest,
-    RequestId(request_id): RequestId,
-    headers: HeaderMap,
-    body: Result<JsonObject, Error>,
-) -> impl IntoResponse {
-    let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
-        Err(error) => Err(error.into()),
-    };
-    result.map_err(|ended| {
-        (
-            ended.error.status(),
-            ended.routing(),
-            Json(ended.error.body(request_id.as_deref())),
-        )
+pub async fn create<H: Host>(call: Call<H>, body: Result<JsonObject, Error>) -> Response {
+    serve::run(&call, body.map(|JsonObject(body)| body), |body| {
+        MessagesAttempt::new(&call, body)
     })
-}
-
-async fn handle<H: Host>(
-    gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
-    body: Map<String, Value>,
-) -> Result<Response, Ended> {
-    let model = request::model(&body)?.to_owned();
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
-    let route = gateway.messages.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
-    let attempt = MessagesAttempt {
-        gateway,
-        route,
-        body,
-        headers,
-        policy: cache_options.policy,
-    };
-    let routed = routing::call(
-        gateway,
-        identity,
-        Op::ANTHROPIC_MESSAGES,
-        "/v1/messages",
-        &model,
-        &attempt,
-    )
-    .await?;
-    let routing = Routing::served(&routed);
-    let reported = ReportedModel::of(&model, &routed);
-    let (ran, cache) = routed.output.response;
-    let stream =
-        Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let ran = reported.answer(ran, message_start);
-    let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
-    Ok((Extension(routing), cache.apply(response)).into_response())
+    .await
 }
 
 /// Where a Messages stream names its model: the `message_start` event, the first one that is
@@ -137,10 +78,72 @@ struct MessagesAttempt<'a, H> {
     policy: CachePolicy,
 }
 
+impl<'a, H: Host> MessagesAttempt<'a, H> {
+    fn new(call: &'a Call<H>, body: Map<String, Value>) -> Result<Self, Error> {
+        let gateway = &*call.gateway;
+        let (body, cache_options) = crate::caching::prepare(&call.identity, body)?;
+        let route = gateway.messages.clone();
+        let route = match &gateway.cache {
+            Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                cache.clone(),
+                cache_options.scope,
+            )),
+            None => route,
+        };
+        Ok(Self {
+            gateway,
+            route,
+            body,
+            headers: &call.headers,
+            policy: cache_options.policy,
+        })
+    }
+}
+
+impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
+    const CALL_TYPE: CallType = CallType::AnthropicMessages;
+    const OP: Op = Op::ANTHROPIC_MESSAGES;
+    const PATH: &'static str = "/v1/messages";
+    const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
+
+    fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
+        Some(counts.messages_usage())
+    }
+
+    fn response_id((ran, _): &Self::Outcome) -> Option<String> {
+        match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => Some(message.id.clone()),
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => {
+                fields.get("id").and_then(Value::as_str).map(str::to_owned)
+            }
+            CallOutput::Stream { .. } => None,
+        }
+    }
+
+    fn stream_response_id(data: &str) -> Option<String> {
+        match serde_json::from_str(data) {
+            Ok(MessagesStreamEvent::MessageStart { message }) => message.id,
+            _ => None,
+        }
+    }
+
+    fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
+        let stream =
+            Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
+        let ran = reported.answer(ran, message_start);
+        let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
+        Ok(cache.apply(response))
+    }
+}
+
 impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     type Outcome = (Streamed<Messages>, CacheHeaders);
 
-    async fn run(&self, attempt: &Attempt) -> Result<Served<Self::Outcome>, Error> {
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        Some(Prompt::Messages(&self.body))
+    }
+
+    async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
         let call = MessagesCall {
             timeout: routing::timeout(attempt, routing::streamed(&self.body)),
@@ -154,23 +157,18 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
         let machine = self.route.clone().machine(call, self.policy);
         let cache = CacheHeaders::default();
         let ran = litellm_host_http::run(machine, (), cache.clone(), None).await?;
-        Ok(match ran {
-            CallOutput::Complete(body) => {
-                let total_tokens = routing::total_tokens(match &body {
-                    MessagesBody::Message(message) => message.usage.as_ref(),
-                    MessagesBody::Unchecked(fields) => fields.get("usage"),
-                });
-                Served::new((CallOutput::Complete(body), cache), total_tokens)
-            }
-            CallOutput::Stream { head, chunks } => {
-                let chunks =
-                    stream_outcome::reporting_outcome(self.gateway, deployment, chunks, read_event);
-                Served {
-                    deferred: true,
-                    ..Served::new((CallOutput::Stream { head, chunks }, cache), 0)
-                }
-            }
-        })
+        let ran = match ran {
+            CallOutput::Complete(body) => CallOutput::Complete(body),
+            CallOutput::Stream { head, chunks } => CallOutput::Stream {
+                head,
+                chunks: sse::blocks(chunks).boxed(),
+            },
+        };
+        Ok((ran, cache))
+    }
+
+    fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
+        counts(ran)
     }
 
     fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
@@ -264,6 +262,18 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
     (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
 }
 
+/// What a complete answer's `usage` counts. A stream's is read from its events.
+fn counts(ran: &Streamed<Messages>) -> Option<Counts> {
+    let usage = match ran {
+        CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
+        CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
+        CallOutput::Stream { .. } => None,
+    }?;
+    MessagesStreamUsage::deserialize(usage)
+        .ok()
+        .map(Counts::from)
+}
+
 /// An Anthropic Messages event. `message_start` counts the input and `message_delta` the output,
 /// only a `content_block_delta` carries generated output (`is_anthropic_content_delta_chunk`),
 /// and an `error` event is answered as its error type is before a stream, with the event's own
@@ -295,6 +305,8 @@ impl From<MessagesStreamUsage> for Counts {
         Self {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
         }
     }
 }
@@ -304,6 +316,22 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    const CACHED_USAGE: &str = r#""usage":{"input_tokens":7,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}"#;
+
+    #[rstest]
+    #[case::a_message(
+        r#"{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":"end_turn","stop_sequence":null,USAGE}"#
+    )]
+    #[case::a_body_that_is_not_a_message(r#"{"type":"message",USAGE}"#)]
+    fn a_complete_answer_counts_the_cache_it_wrote_and_read(#[case] body: &str) {
+        let body: MessagesBody =
+            serde_json::from_str(&body.replace("USAGE", CACHED_USAGE)).unwrap();
+        assert_eq!(
+            counts(&CallOutput::Complete(body)).map(Counts::total),
+            Some(132)
+        );
+    }
 
     #[rstest]
     #[case::message_start(
@@ -347,6 +375,11 @@ mod tests {
         r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#,
         Kind::Lifecycle,
         Some(7)
+    )]
+    #[case::a_start_counts_the_cache_it_wrote_and_read(
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}}}"#,
+        Kind::Lifecycle,
+        Some(127)
     )]
     #[case::a_closing_delta_counts_its_output(
         r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":5}}"#,

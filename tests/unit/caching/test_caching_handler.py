@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import asyncio
+import contextlib
 import hashlib
 import threading
 import random
@@ -14,11 +15,11 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm import aembedding, completion, embedding, aresponses, responses
+from litellm import aembedding, completion, embedding, aresponses, responses, text_completion
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.caching.caching import Cache
 from litellm.exceptions import MidStreamFallbackError
-from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
+from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator, drain_logging_tasks
 
 from unittest.mock import AsyncMock, patch, MagicMock
 from litellm.caching.caching_handler import (
@@ -43,8 +44,8 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections import Counter, OrderedDict, UserDict
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import timedelta, datetime
 from typing import Final, cast
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -59,6 +60,12 @@ from fastapi.testclient import TestClient
 from contextlib import nullcontext
 from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm import CustomLLM
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION
+from litellm.types.utils import PromptTokensDetailsWrapper
+from litellm.utils import token_counter
+from types import MappingProxyType
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -577,6 +584,121 @@ async def test_async_log_cache_hit_on_callbacks():
         end_time=end_time,
         cache_hit=cache_hit,
     )
+
+
+@pytest.mark.asyncio
+async def test_a_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import CustomLLM
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+
+    class ChatOnlyProvider(CustomLLM):
+        async def acompletion(self, *args: object, **kwargs: object) -> ModelResponse:
+            return ModelResponse(
+                choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            )
+
+    logged_cache_hits: Final[list[object]] = []
+
+    class Recorder(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "chat-only", "custom_handler": ChatOnlyProvider()}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [Recorder()])
+    monkeypatch.setattr(
+        litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=[CallTypes.acompletion.value])
+    )
+    large_image_prompt: Final = "describe data:image/png;base64," + "A" * (2 * 1024 * 1024)
+
+    for _ in range(2):
+        await aresponses(model="chat-only/model", input=large_image_prompt)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        await drain_logging_tasks()
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert logged_cache_hits[1:] == [True], logged_cache_hits
+
+
+@pytest.mark.parametrize(
+    "send",
+    [
+        pytest.param(lambda: responses(model="chat-only/model", input="describe this"), id="responses"),
+        pytest.param(lambda: text_completion(model="chat-only/model", prompt="describe this"), id="text_completion"),
+    ],
+)
+def test_a_sync_bridged_call_on_a_chat_only_provider_logs_once_with_and_without_a_cache_hit(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[], object]
+) -> None:
+    from litellm import CustomLLM
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class ChatOnlyProvider(CustomLLM):
+        def completion(self, *args: object, **kwargs: object) -> ModelResponse:
+            return ModelResponse(
+                choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            )
+
+    class ConcurrentLoggingExecutor:
+        def __init__(self) -> None:
+            self.jobs: Final[list[Callable[[], object]]] = []
+            self.every_job_in_logging_hook = threading.Barrier(1)
+
+        def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+            self.jobs.append(lambda: fn(*args, **kwargs))
+
+        def run_queued_jobs_at_once(self) -> None:
+            self.every_job_in_logging_hook = threading.Barrier(len(self.jobs), timeout=5)
+            workers: Final = tuple(threading.Thread(target=job) for job in self.jobs)
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+            self.jobs.clear()
+
+    logging_executor: Final = ConcurrentLoggingExecutor()
+    logged_cache_hits: Final[list[object]] = []
+
+    class Recorder(CustomLogger):
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            with contextlib.suppress(threading.BrokenBarrierError):
+                logging_executor.every_job_in_logging_hook.wait()
+            return kwargs, result
+
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+
+    monkeypatch.setattr(litellm.utils, "executor", logging_executor)
+    monkeypatch.setattr(litellm.litellm_core_utils.litellm_logging, "executor", logging_executor)
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "chat-only", "custom_handler": ChatOnlyProvider()}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [Recorder()])
+    monkeypatch.setattr(
+        litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=[CallTypes.completion.value])
+    )
+
+    send()
+    logging_executor.run_queued_jobs_at_once()
+    assert logged_cache_hits == [None], logged_cache_hits
+
+    send()
+    logging_executor.run_queued_jobs_at_once()
+    assert logged_cache_hits == [None, True], logged_cache_hits
 
 
 @pytest.mark.parametrize(
@@ -2786,6 +2908,455 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
 
 
+def _embedding_length(item: object) -> float:
+    return float(len(item)) if isinstance(item, (str, list)) else 1.0
+
+
+class _LengthEmbedder(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.provider_calls: tuple[object, ...] = ()
+
+    def _respond(self, model: str, input: Sequence[object]) -> EmbeddingResponse:
+        self.provider_calls = (*self.provider_calls, input)
+        items: Final = input if isinstance(input, list) else [input]
+        return EmbeddingResponse(
+            model=model,
+            data=[
+                Embedding(embedding=[_embedding_length(item)], index=idx, object="embedding")
+                for idx, item in enumerate(items)
+            ],
+        )
+
+    def embedding(
+        self,
+        model: str,
+        input: Sequence[object],
+        model_response: EmbeddingResponse,
+        print_verbose: Callable[[object], object],
+        logging_obj: LiteLLMLogging,
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+    async def aembedding(
+        self,
+        model: str,
+        input: Sequence[object],
+        model_response: EmbeddingResponse,
+        print_verbose: Callable[[object], object],
+        logging_obj: LiteLLMLogging,
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+
+class _QueuedLoggingExecutor:
+    def __init__(self) -> None:
+        self.jobs: Final[list[Callable[[], object]]] = []
+
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+        self.jobs.append(lambda: fn(*args, **kwargs))
+
+    def drain(self) -> None:
+        while self.jobs:
+            self.jobs.pop(0)()
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cache_hits: Final[list[object]] = []
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.cache_hits.append(kwargs.get("cache_hit"))
+
+
+_EMBEDDER_MODEL: Final = "length-embedder/m"
+
+
+@pytest.fixture
+def length_embedder(monkeypatch: pytest.MonkeyPatch) -> _LengthEmbedder:
+    embedder: Final = _LengthEmbedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "length-embedder", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "length-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "length-embedder"])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    return embedder
+
+
+@pytest.fixture
+def queued_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[_QueuedLoggingExecutor, _SuccessRecorder]]:
+    logging_executor: Final = _QueuedLoggingExecutor()
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm.utils, "executor", logging_executor)
+    monkeypatch.setattr(litellm.litellm_core_utils.litellm_logging, "executor", logging_executor)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    try:
+        yield logging_executor, recorder
+    finally:
+        logging_executor.drain()
+
+
+async def _warm_per_input_entries_and_settle_logging(logging_executor: _QueuedLoggingExecutor) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    await drain_logging_tasks()
+    await GLOBAL_LOGGING_WORKER.flush()
+    logging_executor.drain()
+
+
+def _rewrite_stored_embeddings(
+    monkeypatch: pytest.MonkeyPatch, rewrite: Callable[[dict[str, object]], dict[str, object]]
+) -> None:
+    store: Final = litellm.cache.cache.cache_dict
+    monkeypatch.setattr(
+        litellm.cache.cache,
+        "cache_dict",
+        {key: {**entry, "response": rewrite(dict(entry["response"]))} for key, entry in store.items()},
+    )
+
+
+_KNOWN_STORED_ENTRY: Final = MappingProxyType(
+    {"embedding": [4.0], "index": 2, "model": "stored-model", "prompt_tokens": 3, "prompt_tokens_details": None}
+)
+_COUNTED: Final = object()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored, expected_vector, expected_model, expected_tokens, expected_details",
+    [
+        pytest.param({}, [4.0], "stored-model", 3, None, id="stored-tokens"),
+        pytest.param({"prompt_tokens": 0}, [4.0], "stored-model", 0, None, id="stored-zero-tokens"),
+        pytest.param({"prompt_tokens": None}, [4.0], "stored-model", _COUNTED, None, id="no-stored-tokens"),
+        pytest.param({"model": None}, [4.0], _EMBEDDER_MODEL, 3, None, id="no-stored-model"),
+        pytest.param({"embedding": "AACAQA=="}, "AACAQA==", "stored-model", 3, None, id="base64-vector"),
+        pytest.param(
+            {"prompt_tokens_details": {"text_tokens": 3}},
+            [4.0],
+            "stored-model",
+            3,
+            PromptTokensDetailsWrapper(text_tokens=3),
+            id="stored-details",
+        ),
+        pytest.param(
+            {"prompt_tokens_details": {"text_tokens": 0}},
+            [4.0],
+            "stored-model",
+            3,
+            PromptTokensDetailsWrapper(text_tokens=0),
+            id="zero-details",
+        ),
+        pytest.param({"prompt_tokens_details": {}}, [4.0], "stored-model", 3, None, id="empty-details"),
+        pytest.param(
+            {"prompt_tokens_details": {"text_tokens": "not a count"}},
+            [4.0],
+            "stored-model",
+            3,
+            None,
+            id="invalid-details",
+        ),
+    ],
+)
+async def test_sync_embedding_serves_the_entry_a_batch_aembedding_stored_like_aembedding_does(
+    length_embedder: _LengthEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+    stored: dict[str, object],
+    expected_vector: object,
+    expected_model: str,
+    expected_tokens: object,
+    expected_details: PromptTokensDetailsWrapper | None,
+) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    _rewrite_stored_embeddings(monkeypatch, lambda entry: {**entry, **_KNOWN_STORED_ENTRY, **stored})
+
+    sync_hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+    async_hit: Final = await litellm.aembedding(model=_EMBEDDER_MODEL, input="bbbb")
+
+    prompt_tokens: Final = (
+        token_counter(text="bbbb", count_response_tokens=True) if expected_tokens is _COUNTED else expected_tokens
+    )
+    assert length_embedder.provider_calls == (["aa", "bbbb"],), length_embedder.provider_calls
+    assert sync_hit._hidden_params["cache_hit"] is True
+    assert [(item["index"], item["embedding"]) for item in sync_hit.data] == [(0, expected_vector)]
+    assert sync_hit.model == expected_model
+    assert sync_hit.usage.prompt_tokens == prompt_tokens
+    assert sync_hit.usage.total_tokens == prompt_tokens
+    assert sync_hit.usage.completion_tokens == 0
+    assert sync_hit.usage.prompt_tokens_details == expected_details
+    assert [(item["index"], item["embedding"]) for item in async_hit.data] == [(0, expected_vector)]
+    assert (async_hit.model, async_hit.usage.prompt_tokens, async_hit.usage.prompt_tokens_details) == (
+        expected_model,
+        prompt_tokens,
+        expected_details,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_embedding_per_input_hit_carries_the_metadata_of_a_full_response_hit(
+    length_embedder: _LengthEmbedder,
+) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    litellm.embedding(model=_EMBEDDER_MODEL, input="x")
+
+    per_input_hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb", litellm_call_id="per-input-hit")
+    full_response_hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="x", litellm_call_id="full-response-hit")
+
+    assert len(length_embedder.provider_calls) == 2, length_embedder.provider_calls
+    assert set(per_input_hit._hidden_params) == set(full_response_hit._hidden_params)
+    assert (per_input_hit._hidden_params["litellm_call_id"], full_response_hit._hidden_params["litellm_call_id"]) == (
+        "per-input-hit",
+        "full-response-hit",
+    )
+    assert per_input_hit._hidden_params["litellm_model_name"] == _EMBEDDER_MODEL
+    assert per_input_hit._hidden_params["cache_hit"] is True
+    assert (per_input_hit._response_ms is None, full_response_hit._response_ms is None) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_sync_embedding_hit_on_a_per_input_entry_logs_success_once(
+    length_embedder: _LengthEmbedder, queued_logging: tuple[_QueuedLoggingExecutor, _SuccessRecorder]
+) -> None:
+    logging_executor, recorder = queued_logging
+    await _warm_per_input_entries_and_settle_logging(logging_executor)
+    assert recorder.cache_hits == [None], recorder.cache_hits
+
+    litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+    logging_executor.drain()
+
+    assert recorder.cache_hits == [None, True], recorder.cache_hits
+
+
+@pytest.mark.asyncio
+async def test_sync_embedding_returns_a_cached_detail_entry_as_is_without_logging_a_hit(
+    length_embedder: _LengthEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+    queued_logging: tuple[_QueuedLoggingExecutor, _SuccessRecorder],
+) -> None:
+    logging_executor, recorder = queued_logging
+    await _warm_per_input_entries_and_settle_logging(logging_executor)
+    assert recorder.cache_hits == [None], recorder.cache_hits
+    _rewrite_stored_embeddings(monkeypatch, lambda entry: {**entry, "detail": "stored error"})
+
+    returned: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+    logging_executor.drain()
+
+    assert isinstance(returned, dict), returned
+    assert (returned["detail"], returned["embedding"]) == ("stored error", [4.0])
+    assert len(length_embedder.provider_calls) == 1, length_embedder.provider_calls
+    assert recorder.cache_hits == [None], recorder.cache_hits
+
+
+@pytest.mark.asyncio
+async def test_sync_embedding_no_store_still_reads_a_per_input_entry(length_embedder: _LengthEmbedder) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb", cache={"no-store": True})
+
+    assert len(length_embedder.provider_calls) == 1, length_embedder.provider_calls
+    assert hit._hidden_params["cache_hit"] is True
+    assert [(item["index"], item["embedding"]) for item in hit.data] == [(0, [4.0])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        pytest.param(lambda entry: {k: v for k, v in entry.items() if k != "format_version"}, id="no-format-version"),
+        pytest.param(
+            lambda entry: {**entry, "format_version": EMBEDDING_CACHE_FORMAT_VERSION - 1}, id="older-format-version"
+        ),
+        pytest.param(lambda entry: {**entry, "embedding": None}, id="no-vector"),
+        pytest.param(lambda entry: {**entry, "embedding": {"not": "a vector"}}, id="malformed-vector"),
+    ],
+)
+async def test_sync_embedding_refetches_an_unusable_per_input_entry(
+    length_embedder: _LengthEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+    rewrite: Callable[[dict[str, object]], dict[str, object]],
+) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    _rewrite_stored_embeddings(monkeypatch, rewrite)
+
+    fetched: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+    repeated: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+
+    assert len(length_embedder.provider_calls) == 2, length_embedder.provider_calls
+    assert [item["embedding"] for item in fetched.data] == [[4.0]]
+    assert repeated._hidden_params["cache_hit"] is True
+    assert [item["embedding"] for item in repeated.data] == [[4.0]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_tokens, expected_tokens",
+    [pytest.param(None, 0, id="no-stored-tokens"), pytest.param(5, 5, id="stored-tokens")],
+)
+async def test_sync_embedding_serves_a_single_token_array_from_its_per_input_entry(
+    length_embedder: _LengthEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+    stored_tokens: int | None,
+    expected_tokens: int,
+) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=[[1, 2, 3], [4, 5]])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    _rewrite_stored_embeddings(monkeypatch, lambda entry: {**entry, "prompt_tokens": stored_tokens})
+
+    hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input=[4, 5])
+
+    assert len(length_embedder.provider_calls) == 1, length_embedder.provider_calls
+    assert hit._hidden_params["cache_hit"] is True
+    assert [(item["index"], item["embedding"]) for item in hit.data] == [(0, [2.0])]
+    assert (hit.usage.prompt_tokens, hit.usage.total_tokens, hit.usage.completion_tokens) == (
+        expected_tokens,
+        expected_tokens,
+        0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_embedding_does_not_serve_one_per_input_vector_for_several_inputs(
+    length_embedder: _LengthEmbedder,
+) -> None:
+    several_inputs: Final = [[1, 2], [3, 4]]
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=[several_inputs])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    fetched: Final = litellm.embedding(model=_EMBEDDER_MODEL, input=several_inputs)
+
+    assert len(length_embedder.provider_calls) == 2, length_embedder.provider_calls
+    assert [item["embedding"] for item in fetched.data] == [[2.0], [2.0]]
+
+
+@pytest.mark.parametrize("request_input", [pytest.param("x", id="string"), pytest.param(["a", "bb"], id="list")])
+def test_sync_embedding_full_response_cache_hits_are_unchanged(
+    length_embedder: _LengthEmbedder, request_input: object
+) -> None:
+    fetched: Final = litellm.embedding(model=_EMBEDDER_MODEL, input=request_input)
+    hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input=request_input)
+
+    assert len(length_embedder.provider_calls) == 1, length_embedder.provider_calls
+    assert hit._hidden_params["cache_hit"] is True
+    assert [(item["index"], item["embedding"]) for item in hit.data] == [
+        (item["index"], item["embedding"]) for item in fetched.data
+    ]
+    assert hit.model == fetched.model
+    assert hit.usage.prompt_tokens == fetched.usage.prompt_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "controls",
+    [pytest.param({"cache": {"no-cache": True}}, id="no-cache"), pytest.param({"caching": False}, id="caching-off")],
+)
+async def test_sync_embedding_cache_controls_still_skip_a_per_input_entry(
+    length_embedder: _LengthEmbedder, controls: dict[str, object]
+) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    fetched: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb", **controls)
+
+    assert len(length_embedder.provider_calls) == 2, length_embedder.provider_calls
+    assert fetched._hidden_params.get("cache_hit") is not True
+    assert [item["embedding"] for item in fetched.data] == [[4.0]]
+
+
+class _FixedEntryCache(InMemoryCache):
+    def __init__(self, entry: object) -> None:
+        super().__init__()
+        self.entry: Final = entry
+
+    def get_cache(self, key: str, **kwargs: object) -> object:
+        return self.entry
+
+
+def _valid_per_input_entry() -> dict[str, object]:
+    return {
+        "embedding": [4.0],
+        "index": 1,
+        "object": "embedding",
+        "model": "stored-model",
+        "prompt_tokens": 3,
+        "prompt_tokens_details": None,
+        "format_version": EMBEDDING_CACHE_FORMAT_VERSION,
+    }
+
+
+def _legacy_per_input_entry() -> dict[str, object]:
+    return {k: v for k, v in _valid_per_input_entry().items() if k != "format_version"}
+
+
+@pytest.mark.parametrize(
+    "make_entry",
+    [
+        pytest.param(lambda: UserDict(_valid_per_input_entry()), id="user-dict-current"),
+        pytest.param(lambda: UserDict(_legacy_per_input_entry()), id="user-dict-legacy"),
+        pytest.param(lambda: MappingProxyType(_valid_per_input_entry()), id="mapping-proxy-current"),
+        pytest.param(lambda: MappingProxyType(_legacy_per_input_entry()), id="mapping-proxy-legacy"),
+    ],
+)
+def test_sync_embedding_returns_a_non_dict_mapping_from_a_custom_cache_unchanged(
+    length_embedder: _LengthEmbedder, monkeypatch: pytest.MonkeyPatch, make_entry: Callable[[], object]
+) -> None:
+    stored: Final = make_entry()
+    monkeypatch.setattr(litellm.cache, "cache", _FixedEntryCache(stored))
+
+    returned: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+
+    assert returned is stored
+    assert length_embedder.provider_calls == ()
+
+
+@pytest.mark.parametrize(
+    "make_entry",
+    [
+        pytest.param(_valid_per_input_entry, id="dict"),
+        pytest.param(lambda: OrderedDict(_valid_per_input_entry()), id="dict-subclass"),
+    ],
+)
+def test_sync_embedding_expands_a_dict_per_input_entry_from_a_custom_cache(
+    length_embedder: _LengthEmbedder, monkeypatch: pytest.MonkeyPatch, make_entry: Callable[[], dict[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm.cache, "cache", _FixedEntryCache(make_entry()))
+
+    hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+
+    assert length_embedder.provider_calls == ()
+    assert isinstance(hit, EmbeddingResponse)
+    assert hit._hidden_params["cache_hit"] is True
+    assert [(item["index"], item["embedding"]) for item in hit.data] == [(0, [4.0])]
+    assert (hit.model, hit.usage.prompt_tokens) == ("stored-model", 3)
+
+
+def test_sync_embedding_refetches_a_legacy_dict_per_input_entry_from_a_custom_cache(
+    length_embedder: _LengthEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.cache, "cache", _FixedEntryCache(_legacy_per_input_entry()))
+
+    fetched: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb")
+
+    assert len(length_embedder.provider_calls) == 1, length_embedder.provider_calls
+    assert [item["embedding"] for item in fetched.data] == [[4.0]]
+
+
 @pytest.mark.asyncio
 async def test_response_cache_lookup_and_write_declare_the_llm_response_target(monkeypatch):
     """Both the lookup and the write run under ``service_target("llm_response")`` so the
@@ -3634,6 +4205,47 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
     assert lookup.cached_result is None
     assert await handler.dual_cache.async_get_cache(key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("enabled", "ttl", "hit"), [(False, None, False), (True, 5, False), (True, 15, True)])
+async def test_embedding_cache_lookup_applies_scoped_policy(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, ttl: int | None, hit: bool
+) -> None:
+    from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
+    from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
+
+    monkeypatch.setattr(time, "time", lambda: 100.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=_FIXED_START)
+    model: Final = "openai/text-embedding-3-small"
+    kwargs: Final = {"model": model, "input": ["a red bus"], "caching": True}
+    await cache.async_add_cache_pipeline(
+        EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
+        **kwargs,
+    )
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id="embedding-cache-test",
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id="embedding-cache-test",
+        stream=False,
+        start_time=_FIXED_START,
+    )
+    policy: Final = SemanticCachePolicy(scope="team", params=SemanticCacheParams(enabled=enabled, ttl=ttl))
+    result: Final = await handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=_FIXED_START,
+        call_type=CallTypes.aembedding.value,
+        kwargs={**kwargs, "cache": {SEMANTIC_CACHE_POLICY_KEY: policy}},
+    )
+
+    assert bool(result.embedding_all_elements_cache_hit) is hit
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use litellm_repositories::{NewUserDefaults, Side, SignIn, UserRepository};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::prelude::*;
 
 use crate::db::{NativeDatabase, map_error};
 
@@ -224,7 +224,6 @@ impl RustUserRepository {
 }
 
 fn json_argument(name: &str, text: Option<&str>) -> PyResult<Option<serde_json::Value>> {
-    text.map(serde_json::from_str)
+    text.map(|text| litellm_host_python::json_parse(name, text))
         .transpose()
-        .map_err(|error| PyValueError::new_err(format!("{name} is not JSON: {error}")))
 }

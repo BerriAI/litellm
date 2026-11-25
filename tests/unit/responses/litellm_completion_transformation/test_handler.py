@@ -23,18 +23,157 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames, qualified_member_name
+from litellm.litellm_core_utils.tool_fields import (
+    BRIDGED_TOOL_NAMES_KWARG,
+    BridgedToolNames,
+    NamespaceMember,
+    full_names_by_sent_name,
+    qualified_member_name,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.responses.litellm_completion_transformation.compaction_trigger import SUMMARY_PROMPT
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
+
+
+_UPSTREAM_PARAM_CASES: Final = [
+    pytest.param("max_tokens", "max_output_tokens", id="renamed_by_the_bridge"),
+    pytest.param("max_completion_tokens", "max_output_tokens", id="renamed_twice"),
+    pytest.param("reasoning_effort", "reasoning.effort", id="moved_under_reasoning"),
+    pytest.param("response_format.json_schema.schema", "text.format", id="moved_under_text"),
+    pytest.param("verbosity", "text.verbosity", id="verbosity_moved_under_text"),
+    pytest.param("tools[0].function.name", "tools", id="reshaped_tool"),
+    pytest.param("messages[0].content[1].image_url", "input", id="message_path_under_input"),
+    pytest.param("stream_options", None, id="sent_only_by_the_bridge"),
+    pytest.param("frequency_penalty", None, id="not_a_responses_field"),
+    pytest.param("user", "user", id="shared_field"),
+    pytest.param(["body", "max_tokens"], None, id="non_string_param"),
+]
+
+
+def _request_sending_every_renamed_field() -> ResponsesAPIOptionalRequestParams:
+    return {
+        "max_output_tokens": 16,
+        "reasoning": {"effort": "low"},
+        "text": {"format": {"type": "text"}, "verbosity": "low"},
+        "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}}],
+        "user": "user-1",
+    }
+
+
+def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: object) -> respx.Route:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            400,
+            json={"error": {"message": "rejected", "type": "invalid_request_error", "param": param, "code": None}},
+        )
+    )
+
+
+@pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
+def test_sync_bridged_turn_names_an_upstream_param_as_the_responses_field_the_caller_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: object, relayed_param: str | None
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request=_request_sending_every_renamed_field(),
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
+async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field_the_caller_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: object, relayed_param: str | None
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+    bridged_turn: Final = LiteLLMCompletionTransformationHandler().response_api_handler(
+        model="gpt-5.6",
+        input="hi",
+        responses_api_request=_request_sending_every_renamed_field(),
+        custom_llm_provider="openai",
+        _is_async=True,
+        api_key="sk-bridge-test",
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await bridged_turn
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
+
+
+@pytest.mark.parametrize(
+    "upstream_param",
+    ["max_tokens", "max_completion_tokens", "reasoning_effort", "response_format", "tools[0].function.name"],
+)
+def test_bridged_turn_names_no_responses_field_the_caller_did_not_send(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request={"user": "user-1"},
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+            max_tokens=100000,
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param is None
+
+
+@pytest.mark.parametrize(
+    "responses_api_request, upstream_param, relayed_param",
+    [
+        pytest.param({"instructions": "Answer in one word"}, "messages.[0].content", "instructions", id="instructions"),
+        pytest.param({"instructions": "Answer in one word"}, "messages.[1].role", "input", id="input_after_instructions"),
+        pytest.param({"previous_response_id": "resp_stored"}, "messages.[1].role", None, id="stored_turns_first"),
+    ],
+)
+def test_bridged_turn_names_a_message_path_by_the_request_field_the_message_came_from(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    responses_api_request: dict[str, str],  # mutable-ok: response_api_handler takes the request as a dict
+    upstream_param: str,
+    relayed_param: str | None,
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
 
 
 class _StopForwarding(Exception):
@@ -60,6 +199,30 @@ def test_sync_fallback_tags_skip_responses_api_bridge():
             )
 
     assert captured.get("_skip_responses_api_bridge") is True
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_stores_an_empty_path_to_the_root_so_a_fork_off_it_replays_only_it():
+    litellm_metadata: Final[dict[str, object]] = {"user_api_key": "hashed"}
+    handler = LiteLLMCompletionTransformationHandler()
+    captured: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        raise _StopForwarding()
+
+    with patch("litellm.acompletion", fake_acompletion), pytest.raises(_StopForwarding):
+        await handler.response_api_handler(
+            model="gpt-4o",
+            input="hello",
+            responses_api_request={},
+            custom_llm_provider="openai",
+            _is_async=True,
+            litellm_metadata=litellm_metadata,
+        )
+
+    assert captured["litellm_metadata"] == {"user_api_key": "hashed", PREVIOUS_RESPONSE_IDS_METADATA_KEY: []}
+    assert captured["litellm_metadata"] is litellm_metadata
 
 
 @pytest.mark.asyncio
@@ -329,9 +492,7 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
@@ -464,7 +625,111 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
     logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
     assert full_name not in sent_names
     assert isinstance(logged, BridgedToolNames)
-    assert logged.as_mapping() == {sent_name: full_name for sent_name in sent_names}
+    assert full_names_by_sent_name(logged.tools()) == {
+        sent_name: full_name for sent_name in (*sent_names, _LONG_MEMBER)
+    }
+
+
+@pytest.mark.asyncio
+async def test_bridged_turn_logs_a_shortened_name_known_only_from_an_earlier_call_in_history():
+    """Codex can resume before it lists its MCP tools again, so the earlier call is the only trace of the tool."""
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini/gemini-flash-latest",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="history-tool-names",
+        function_id="test",
+    )
+
+    def fake_completion(**kwargs: object) -> None:
+        raise _StopForwarding()
+
+    history: Final = [
+        {"type": "message", "role": "user", "content": "Read the document tool schemas"},
+        {
+            "type": "function_call",
+            "call_id": "call_earlier",
+            "name": _LONG_MEMBER,
+            "namespace": _LONG_NAMESPACE,
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "schemas"},
+    ]
+
+    with (
+        patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        pytest.raises(_StopForwarding),
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gemini/gemini-flash-latest",
+            input=history,
+            responses_api_request={"tools": []},
+            custom_llm_provider="gemini",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+
+    logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
+    assert isinstance(logged, BridgedToolNames)
+    assert list(logged.tools().values()) == [NamespaceMember(_LONG_NAMESPACE, _LONG_MEMBER)]
+    assert all(len(sent_name) <= 64 for sent_name in logged.tools())
+
+
+@pytest.mark.parametrize(
+    ("returned_name", "logged_name"),
+    [("run", "exec__run"), ("exec__run", "exec__run"), ("read", "read"), ("shell", "shell")],
+    ids=["bare namespace member", "joined namespace member", "deferred top-level tool", "plain function"],
+)
+def test_spend_logs_name_a_bridged_call_by_the_tool_the_caller_gets_back(returned_name: str, logged_name: str):
+    from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="spend-log-tool-names",
+        function_id="test",
+    )
+
+    def fake_completion(**kwargs: object) -> None:
+        raise _StopForwarding()
+
+    tools: Final = [
+        {"type": "namespace", "name": "exec", "description": "", "tools": [{"type": "function", "name": "run"}]},
+        {"type": "function", "name": "read", "defer_loading": True, "parameters": {"type": "object"}},
+        {"type": "function", "name": "shell", "parameters": {"type": "object"}},
+    ]
+    with (
+        patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        pytest.raises(_StopForwarding),
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="anthropic/claude-sonnet-5-5",
+            input="go",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+
+    response: Final = litellm.ModelResponse(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": returned_name, "arguments": "{}"}}
+                    ],
+                }
+            }
+        ]
+    )
+    logged_names: Final = response_tool_call_names(response, logged_full_tool_names(logging_obj.model_call_details))
+    assert logged_names == (logged_name,)
 
 
 def _anthropic_streams_a_call_to_the_first_tool(request: httpx.Request) -> httpx.Response:
@@ -674,3 +939,39 @@ async def test_converse_turn_after_a_blank_user_turn_resends_the_messages_that_f
     assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)
     assert [message["role"] for message in next_turn_messages] == ["user", "assistant", "user", "assistant", "user"]
     assert next_turn_messages[: len(follow_up_messages)] == follow_up_messages
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_trigger_after_a_stored_turn_asks_for_the_summary_after_that_turn():
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn(previous_response_id),))
+    provider: Final = _RecordingAnthropicHandler(
+        {**_ANTHROPIC_MESSAGE_PAYLOAD, "content": [{"type": "text", "text": "<summary>The number is 7.</summary>"}]}
+    )
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[{"type": "compaction_trigger"}],
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [
+        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
+    ] == [
+        ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
+        ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
+        ("user", json.dumps([{"type": "text", "text": SUMMARY_PROMPT}])),
+    ]
+    assert isinstance(response, ResponsesAPIResponse)
+    assert [(item.type, item.encrypted_content) for item in response.output] == [
+        ("compaction", '{"type":"compaction","content":"The number is 7."}')
+    ]

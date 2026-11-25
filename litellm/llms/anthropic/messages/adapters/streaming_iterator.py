@@ -66,7 +66,9 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
-_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_THINKING_BLOCK: Final[TypeAdapter[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = TypeAdapter(
+    ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 _AnthropicStreamEvent: TypeAlias = dict[str, object] | MessageBlockDelta | ContentBlockDelta
@@ -713,7 +715,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Per-instance queue for buffering multiple chunks. Must be initialized
         # here (not at class level) so concurrent streams don't share the same
         # deque and corrupt each other's SSE event order.
-        self.chunk_queue: deque = deque()
+        self.chunk_queue: deque[_AnthropicStreamEvent] = deque()
         # Per-instance default content block. Must be initialized here (not at
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in

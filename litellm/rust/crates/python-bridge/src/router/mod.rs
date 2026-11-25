@@ -420,7 +420,7 @@ impl RouterCoreHandle {
     /// (`cooled`, `cooldown_time`). `counts_request` also counts the failed request against the deployment's
     /// per-minute requests, as an async call's failure callback does. `callbacks` is the logged
     /// request's `OutcomeCallbacks`.
-    #[pyo3(signature = (id, failure, deployment_cooldown=false, count_only=false, requested_group=None, cooldown_time=None, uncounted=false, counts_request=false, usage_model=None, callbacks=None))]
+    #[pyo3(signature = (id, failure, deployment_cooldown=false, count_only=false, requested_group=None, cooldown_time=None, uncounted=false, counts_request=false, usage_model=None, callbacks=None, batch_api=false))]
     #[allow(clippy::too_many_arguments)]
     fn report_failure(
         &self,
@@ -434,6 +434,7 @@ impl RouterCoreHandle {
         counts_request: bool,
         usage_model: Option<String>,
         callbacks: Option<&Bound<'_, PyAny>>,
+        batch_api: bool,
     ) -> PyResult<RouterCall> {
         let failure = match attempt_outcome(failure)? {
             Err(failure) => failure,
@@ -450,6 +451,7 @@ impl RouterCoreHandle {
             cooldown_time,
             count_only,
             requested_group,
+            batch_api,
             uncounted,
             counts_request,
             usage_model,
@@ -1454,7 +1456,7 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::MultipleModelGroups { model }
         | Error::DefaultDeploymentRaises { model }
         | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
-        Error::ContextWindowExceeded { model, detail } => {
+        Error::ContextWindowExceeded { model, detail, .. } => {
             dict.set_item("error_model", model)?;
             dict.set_item("error_detail", detail)
         }

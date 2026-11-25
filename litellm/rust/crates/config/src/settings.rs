@@ -1,12 +1,13 @@
 use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
-use serde_with::serde_as;
+use serde_with::{Map, serde_as};
 use veil::Redact;
 
 use crate::{
     AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
-    RedisSettings, RolePermissions, RouteList, Spelled, Value, value::one_or_many,
+    PriorityReservation, PriorityReservationSettings, RedisSettings, RolePermissions, RouteList,
+    Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -89,7 +90,8 @@ pub struct GeneralSettings {
     pub global_max_parallel_requests: Option<u64>,
     pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
-    pub proxy_config_reload_interval_seconds: u64,
+    /// `None` when neither the config nor `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS` sets it.
+    pub proxy_config_reload_interval_seconds: Option<i64>,
     pub background_health_checks: Option<bool>,
     pub health_check_interval: u64,
     pub health_check_concurrency: Option<u64>,
@@ -129,6 +131,8 @@ pub struct GeneralSettings {
     #[serde_as(as = "Truthy")]
     pub enforce_rbac: bool,
     pub user_header_name: Option<String>,
+    /// Which tokens a TPM limit counts: `input`, `output`, or anything else for their total.
+    pub token_rate_limit_type: Option<String>,
     #[serde(deserialize_with = "user_header_mappings")]
     pub user_header_mappings: Box<[UserHeaderMapping]>,
     #[serde(flatten)]
@@ -160,7 +164,7 @@ impl Default for GeneralSettings {
             global_max_parallel_requests: None,
             max_request_size_mb: None,
             max_response_size_mb: None,
-            proxy_config_reload_interval_seconds: 30,
+            proxy_config_reload_interval_seconds: None,
             background_health_checks: None,
             health_check_interval: 300,
             health_check_concurrency: None,
@@ -191,6 +195,7 @@ impl Default for GeneralSettings {
             role_permissions: None,
             enforce_rbac: false,
             user_header_name: None,
+            token_rate_limit_type: None,
             user_header_mappings: Box::default(),
             additional_fields: AdditionalFields::default(),
         }
@@ -234,6 +239,8 @@ pub struct LiteLlmSettings {
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
     pub cache_params: Option<CacheSettings>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_redis_auth_cache: Option<bool>,
     #[serde(deserialize_with = "one_or_many")]
     #[redact(fixed = 3)]
     pub callbacks: Option<Vec<Value>>,
@@ -245,6 +252,10 @@ pub struct LiteLlmSettings {
     pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
+    /// In the order written, which the proxy's dict keeps.
+    #[serde_as(as = "Option<Map<_, _>>")]
+    pub priority_reservation: Option<Vec<(String, PriorityReservation)>>,
+    pub priority_reservation_settings: Option<PriorityReservationSettings>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }

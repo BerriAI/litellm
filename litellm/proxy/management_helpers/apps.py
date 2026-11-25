@@ -104,9 +104,9 @@ class _SharedProfiles(BaseModel):
 _DEFINITION_PARAM: Final = "customer_app_definition"
 _DEFINITION: Final = AuthObject.customer_app_definition()
 _PARENT_ORG_ID: Final = TypeAdapter(str)
-AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
-AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
-CachedModel: Final = TypeVar("CachedModel", bound=BaseModel)
+AppEntity = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
+AppAssociation = TypeVar("AppAssociation", AppOrganization, AppMember)
+CachedModel = TypeVar("CachedModel", bound=BaseModel)
 
 
 class AppRepository(PrismaTableRepository[PrismaRecord]):
@@ -176,15 +176,17 @@ class _AssociationBudget:
     effective: Budget | None
 
 
+def _dumped_fields(values: Mapping[str, object]) -> Mapping[str, object]:
+    return values
+
+
 def app_budget_selection(
     data: AppCreate | AppPatch | AppOrganizationPut | AppMemberPut | AppGroupBudgetPut,
     field: Literal["budget", "default_customer_member_budget", "customer_member_budget"] = "budget",
 ) -> MemberPatch:
+    selected: Final = _dumped_fields(data.model_dump(include={field, f"{field}_id"}, exclude_unset=True))
     return MemberPatch.model_validate(
-        {
-            "budget" if name == field else "budget_id": value
-            for name, value in data.model_dump(include={field, f"{field}_id"}, exclude_unset=True).items()
-        }
+        {"budget" if name == field else "budget_id": value for name, value in selected.items()}
     )
 
 

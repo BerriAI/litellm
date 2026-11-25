@@ -102,9 +102,10 @@ beforeEach(() => {
 });
 
 describe("OrganizationsPanel", () => {
-  it("gates non-premium users behind the enterprise notice", () => {
-    renderPanel({ premiumUser: false });
+  it.each(["", "?org=org-from-url"])("keeps the heading while gating non-premium users at %s", (searchParams) => {
+    renderPanel({ premiumUser: false, searchParams });
 
+    expect(screen.getByRole("heading", { level: 1, name: "Organizations" })).toBeVisible();
     expect(screen.getByText(/LiteLLM Enterprise feature/i)).toBeInTheDocument();
     expect(screen.queryByText("+ Create New Organization")).not.toBeInTheDocument();
   });

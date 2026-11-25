@@ -4,14 +4,19 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
+from decimal import Decimal
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, cast
+from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
+from typing_extensions import Self
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_get, subscript
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -143,12 +148,65 @@ def _is_data_url(s: str) -> bool:
     return s.startswith("data:") and ";base64," in s
 
 
+_DEFAULT_VIDEO_FPS: Final = 1.0
+_HALF_FRAME: Final = Decimal("0.5")
+_SHORTEST_AUDIO_ONLY_WINDOW_SECONDS: Final = Decimal(1)
+_DURATION_SECONDS: Final = re.compile(r"\s*([+-]?[0-9]+(?:\.[0-9]*)?)s")
+
+
+def _duration_seconds(duration: str) -> Decimal | None:
+    parsed: Final = _DURATION_SECONDS.fullmatch(duration)
+    return Decimal(parsed.group(1)) if parsed else None
+
+
+def _window_seconds(start_offset: str | None, end_offset: str | None) -> tuple[Decimal, Decimal] | None:
+    end: Final = _duration_seconds(end_offset) if end_offset is not None else None
+    given_start: Final = _duration_seconds(start_offset if start_offset is not None else "0s")
+    if end is None or given_start is None:
+        return None
+    return max(Decimal(0), given_start), end
+
+
 class _EmbeddingVideoMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    fps: float | None = None
+    fps: Annotated[float, Field(allow_inf_nan=False)] | None = None
     start_offset: str | None = None
     end_offset: str | None = None
+
+    @model_validator(mode="after")
+    def _window_ends_after_it_starts(self) -> Self:
+        window: Final = _window_seconds(self.start_offset, self.end_offset)
+        if window is not None and window[1] <= window[0]:
+            raise PydanticCustomError(
+                "window_ends_before_it_starts",
+                "end_offset ({end_offset}) must be later than the window start ({start})",
+                {"end_offset": self.end_offset, "start": f"{window[0]:g}s"},
+            )
+        return self
+
+
+def _video_frame_error(video_metadata: _EmbeddingVideoMetadata, audio_track_extraction: bool) -> str | None:
+    fps: Final = video_metadata.fps if video_metadata.fps is not None else _DEFAULT_VIDEO_FPS
+    if fps <= 0:
+        return f"file.video_metadata.fps: must be greater than 0, got {fps:g}"
+    window: Final = _window_seconds(video_metadata.start_offset, video_metadata.end_offset)
+    if window is None:
+        return None
+    start, end = window
+    if (end - start) * Decimal(fps) >= _HALF_FRAME:
+        return None
+    if audio_track_extraction and end - start >= _SHORTEST_AUDIO_ONLY_WINDOW_SECONDS:
+        return None
+    return (
+        f"file.video_metadata: end_offset - start_offset ({end - start:g}s) at {fps:g} fps rounds to 0 frames, "
+        "so widen the window or raise fps"
+    )
+
+
+def _is_video_part(part: PartType) -> bool:
+    media: Final = part.get("inline_data") or part.get("file_data")
+    return media is not None and media["mime_type"].lower().startswith("video/")
 
 
 class _EmbeddingFile(LiteLLMBaseModel):
@@ -410,6 +468,7 @@ def _build_part_for_input(
     element: GeminiEmbeddingElement,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
     drop_params: bool = False,
+    audio_track_extraction: bool = False,
 ) -> PartType:
     """
     Build a single PartType for an input element, handling text, data URIs,
@@ -428,6 +487,11 @@ def _build_part_for_input(
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
         return part
+    frame_error: Final = (
+        _video_frame_error(block.file.video_metadata, audio_track_extraction) if _is_video_part(part) else None
+    )
+    if frame_error is not None:
+        raise _invalid_input(f"Invalid file content block in embedding input: {frame_error}")
     video_metadata: Final = _gemini_video_metadata(block.file.video_metadata)
     if not video_metadata:
         return part
@@ -438,7 +502,12 @@ def _build_part_for_input(
 _SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
 _GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), ("task_type", "taskType"))
 _EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
+_EMBED_CONTENT_CONFIG_SPELLINGS: Final = (_EMBED_CONTENT_CONFIG_FIELD, "embed_content_config")
+_AUDIO_TRACK_EXTRACTION_FIELD: Final = "audioTrackExtraction"
+_AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = (_AUDIO_TRACK_EXTRACTION_FIELD, "audio_track_extraction")
+_GOOGLE_TRUE_VALUES: Final = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_ANY_KEYED_FIELDS: Final = TypeAdapter(Mapping[object, object])
 _EMBED_CONTENT_CONFIG_FIELD_BY_PARAM: Final = MappingProxyType(
     {
         "document_ocr": "documentOcr",
@@ -455,6 +524,31 @@ def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[s
     """The `embedContentConfig` object of a Gemini embedding request body, empty when the body has none."""
     config: Final = request_body.get(_EMBED_CONTENT_CONFIG_FIELD)
     return _STRING_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
+
+
+def audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
+    request_fields: Final = _embed_content_request_fields(optional_params)
+    return any(_turns_on_audio_track_extraction(request_fields.get(field)) for field in _EMBED_CONTENT_CONFIG_SPELLINGS)
+
+
+def vertex_batch_row_audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
+    config: Final = embed_content_config_fields(_embed_content_request_fields(optional_params))
+    return _is_google_true(config.get(_AUDIO_TRACK_EXTRACTION_FIELD))
+
+
+def _embed_content_request_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
+
+
+def _turns_on_audio_track_extraction(config: object) -> bool:
+    fields: Final[Mapping[object, object]] = (
+        _ANY_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
+    )
+    return any(_is_google_true(fields.get(field)) for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
+
+
+def _is_google_true(value: object) -> bool:
+    return str(value).lower() in _GOOGLE_TRUE_VALUES
 
 
 def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -474,7 +568,7 @@ def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str,
     }
 
 
-def _filter_embed_params(optional_params: dict) -> dict:
+def _filter_embed_params(optional_params: Mapping[str, object]) -> dict:
     """Map and filter optional_params to only include Gemini embedding fields."""
     params: Final = _STRING_KEYED_FIELDS.validate_python(optional_params)
     gemini_params: Final = {
@@ -494,7 +588,7 @@ def _filter_embed_params(optional_params: dict) -> dict:
 def transform_openai_input_gemini_content(
     input: GeminiEmbeddingInput,
     model: str,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     resolved_files: dict[str, dict[str, str]] | None = None,
     drop_params: bool = False,
 ) -> VertexAIBatchEmbeddingsRequestBody:
@@ -519,6 +613,7 @@ def transform_openai_input_gemini_content(
     extra_body: Final = extra_body_fields(optional_params)
 
     input_list: Final = _top_level_elements(input)
+    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
     requests: Final[list[EmbedContentRequest]] = []
 
     for element in input_list:
@@ -526,10 +621,23 @@ def transform_openai_input_gemini_content(
             if not element:
                 raise ValueError("Nested input list must not be empty")
             parts = [
-                _build_part_for_input(sub, resolved_files=resolved_files, drop_params=drop_params) for sub in element
+                _build_part_for_input(
+                    sub,
+                    resolved_files=resolved_files,
+                    drop_params=drop_params,
+                    audio_track_extraction=audio_track_extraction,
+                )
+                for sub in element
             ]
         else:
-            parts = [_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params)]
+            parts = [
+                _build_part_for_input(
+                    element,
+                    resolved_files=resolved_files,
+                    drop_params=drop_params,
+                    audio_track_extraction=audio_track_extraction,
+                )
+            ]
         request = EmbedContentRequest(
             model=gemini_model_name,
             content=ContentType(parts=parts),
@@ -547,10 +655,11 @@ def transform_openai_input_gemini_content(
 def transform_openai_input_gemini_embed_content(
     input: GeminiEmbeddingInput,
     model: str,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     resolved_files: dict[str, dict[str, str]] | None = None,
     drop_params: bool = False,
-) -> dict:
+    audio_track_extraction: bool | None = None,
+) -> dict[str, object]:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
 
@@ -559,6 +668,8 @@ def transform_openai_input_gemini_embed_content(
         model: Model name
         optional_params: Additional parameters (taskType, outputDimensionality, etc.)
         resolved_files: Dict mapping file names (files/abc) to {mime_type, uri}
+        audio_track_extraction: Whether the request Google gets turns on audio track extraction,
+            read from optional_params when None
 
     Returns:
         dict: Gemini embedContent request body with content.parts
@@ -568,6 +679,9 @@ def transform_openai_input_gemini_embed_content(
     gemini_params: Final = _filter_embed_params(optional_params)
 
     input_list: Final = _top_level_elements(input)
+    extracts_audio_track: Final = (
+        audio_track_extraction_enabled(optional_params) if audio_track_extraction is None else audio_track_extraction
+    )
     parts: Final[list[PartType]] = []
 
     for element in input_list:
@@ -576,9 +690,16 @@ def transform_openai_input_gemini_embed_content(
                 "Nested (combined) embeddings are not supported on the embedContent path. "
                 "Use the batchEmbedContents path or pass a flat list instead."
             )
-        parts.append(_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params))
+        parts.append(
+            _build_part_for_input(
+                element,
+                resolved_files=resolved_files,
+                drop_params=drop_params,
+                audio_track_extraction=extracts_audio_track,
+            )
+        )
 
-    request_body: Final[dict] = {
+    request_body: Final[dict[str, object]] = {
         **extra_body_fields(optional_params),
         "content": ContentType(parts=parts),
         **gemini_params,
@@ -587,33 +708,57 @@ def transform_openai_input_gemini_embed_content(
     return request_body
 
 
-_IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
+_Modality: TypeAlias = Literal["text", "image", "audio", "video", "other"]
+_SOUND_MODALITIES: Final[frozenset[_Modality]] = frozenset(("audio", "video"))
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
+_detail_entries_adapter: Final = TypeAdapter(tuple[object, ...])
+_detail_adapter: Final = TypeAdapter(PromptTokensDetails)
+
+
+def _validated_usage_metadata(fields: Mapping[str, object]) -> UsageMetadata | None:
+    try:
+        return _usage_metadata_adapter.validate_python(fields)
+    except ValidationError:
+        return None
+
+
+def _valid_detail(entry: object) -> PromptTokensDetails | None:
+    try:
+        return _detail_adapter.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _valid_details(raw_details: object) -> tuple[PromptTokensDetails, ...]:
+    try:
+        entries: Final = _detail_entries_adapter.validate_python(raw_details)
+    except ValidationError:
+        return ()
+    return tuple(detail for detail in map(_valid_detail, entries) if detail is not None)
 
 
 def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
-    if not isinstance(raw_usage_metadata, dict):
+    fields: Final = _as_mapping(raw_usage_metadata)
+    if fields is None or "promptTokenCount" not in fields:
         return None
-    try:
-        return _usage_metadata_adapter.validate_python(raw_usage_metadata)
-    except ValidationError:
-        return None
+    details: Final = _valid_details(fields.get("promptTokensDetails", fields.get("promptTokenDetails")))
+    return _validated_usage_metadata({**fields, "promptTokensDetails": details})
 
 
 def _flatten_input(input: GeminiEmbeddingInput) -> tuple[GeminiEmbeddingElement, ...]:
     return tuple(_elements(input))
 
 
-def _is_image_element(
+def _element_mime_type(
     element: GeminiEmbeddingElement,
     resolved_files: Mapping[str, Mapping[str, str]],
-) -> bool:
+) -> str | None:
     if isinstance(element, str):
-        return _source_mime_type(element, None, resolved_files) in _IMAGE_MIME_TYPES
+        return _source_mime_type(element, None, resolved_files)
     if _is_text_block(element):
-        return False
+        return None
     block: Final = _parse_file_block(element, drop_params=True)
-    return _source_mime_type(_file_block_source(block), block.file.format, resolved_files) in _IMAGE_MIME_TYPES
+    return _source_mime_type(_file_block_source(block), block.file.format, resolved_files)
 
 
 def _is_image_only_input(
@@ -621,7 +766,7 @@ def _is_image_only_input(
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> bool:
     elements: Final = _flatten_input(input)
-    return bool(elements) and all(_is_image_element(element, resolved_files) for element in elements)
+    return bool(elements) and all(_modality(element, resolved_files) == "image" for element in elements)
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
@@ -644,7 +789,14 @@ def _usage_from_embed_content_response(
     usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
     if usage_metadata is None:
         return _fallback_usage(input, model)
+    return _usage_from_usage_metadata(input, usage_metadata, resolved_files)
 
+
+def _usage_from_usage_metadata(
+    input: GeminiEmbeddingInput,
+    usage_metadata: UsageMetadata,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> Usage:
     prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
     total_tokens: Final = usage_metadata.get("totalTokenCount") or prompt_tokens
 
@@ -721,28 +873,211 @@ def process_embed_content_response(
     return model_response
 
 
+def _locally_counted_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
+    texts: Final = _element_texts(input)
+    prompt_tokens: Final = token_counter(model=model, text="".join(texts)) if texts else 0
+    return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
+
+
+def _batch_embed_usage(
+    input: GeminiEmbeddingInput,
+    model: str,
+    raw_usage_metadata: object,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> Usage:
+    usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
+    if usage_metadata is None:
+        return _locally_counted_usage(input, model)
+    return _usage_from_usage_metadata(input, usage_metadata, resolved_files)
+
+
+def _modality(
+    element: GeminiEmbeddingElement,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> _Modality:
+    if not _is_multimodal_element(element):
+        return "text"
+    mime_type: Final = _element_mime_type(element, resolved_files) or ""
+    if mime_type.startswith("image/") or mime_type == "application/pdf":
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+    return "other"
+
+
+def _parts(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> Sequence[GeminiEmbeddingElement]:
+    return (item,) if isinstance(item, str | Mapping) else item
+
+
+def _item_modalities(
+    item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement],
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> frozenset[_Modality]:
+    return frozenset(_modality(part, resolved_files) for part in _parts(item))
+
+
+def _sound_holders(item_modalities: Sequence[frozenset[_Modality]]) -> tuple[int, ...]:
+    return tuple(index for index, modalities in enumerate(item_modalities) if modalities & _SOUND_MODALITIES)
+
+
+def _holders(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
+    holders: Final = tuple(index for index, modalities in enumerate(item_modalities) if modality in modalities)
+    sound_fallback: Final = _sound_holders(item_modalities) if modality == "audio" else ()
+    return holders or sound_fallback or tuple(range(len(item_modalities)))
+
+
+def _audio_holders(item_modalities: Sequence[frozenset[_Modality]], audio_track_extraction: bool) -> tuple[int, ...]:
+    return (_sound_holders(item_modalities) if audio_track_extraction else ()) or _holders(item_modalities, "audio")
+
+
+def _indicator(holders: tuple[int, ...], size: int) -> tuple[int, ...]:
+    return tuple(1 if index in holders else 0 for index in range(size))
+
+
+def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
+    return _indicator(_holders(item_modalities, modality), len(item_modalities))
+
+
+def _item_texts(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> tuple[str, ...]:
+    return tuple(text for part in _parts(item) if (text := _element_text(part)) is not None)
+
+
+def _text_length(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> int:
+    return sum(len(text.encode(errors="surrogatepass")) for text in _item_texts(item))
+
+
+def _text_weights(
+    items: Sequence[GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]],
+    item_modalities: Sequence[frozenset[_Modality]],
+) -> tuple[int, ...]:
+    lengths: Final = tuple(_text_length(item) for item in items)
+    return lengths if any(lengths) else _even_weights(item_modalities, "text")
+
+
+def _local_text_tokens(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement], model: str) -> int:
+    texts: Final = _item_texts(item)
+    return token_counter(model=model, text=" ".join(texts)) if texts else 0
+
+
+def _text_shares(
+    total: int,
+    items: Sequence[GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]],
+    item_modalities: Sequence[frozenset[_Modality]],
+    model: str,
+) -> tuple[int, ...]:
+    sound_holders: Final = _sound_holders(item_modalities)
+    if not sound_holders:
+        return _weighted_shares(total, _text_weights(items, item_modalities))
+    local_tokens: Final = tuple(_local_text_tokens(item, model) for item in items)
+    claimed: Final = min(total, sum(local_tokens))
+    return tuple(
+        own + spill
+        for own, spill in zip(
+            _weighted_shares(claimed, local_tokens),
+            _weighted_shares(total - claimed, _indicator(sound_holders, len(items))),
+            strict=True,
+        )
+    )
+
+
+def _weighted_shares(total: int, weights: tuple[int, ...]) -> tuple[int, ...]:
+    if total == 0:
+        return tuple(0 for _ in weights)
+    weight_sum: Final = sum(weights)
+    floors: Final = tuple(total * weight // weight_sum for weight in weights)
+    by_remainder: Final = tuple(
+        sorted(range(len(weights)), key=lambda index: (-(total * weights[index] % weight_sum), index))
+    )
+    rounded_up: Final = frozenset(by_remainder[: total - sum(floors)])
+    return tuple(floor + (1 if index in rounded_up else 0) for index, floor in enumerate(floors))
+
+
+def _item_usage(text: int, image: int, audio: int, video: int, unattributed: int) -> Usage:
+    prompt_tokens: Final = text + image + audio + video + unattributed
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text,
+            image_tokens=image,
+            audio_tokens=audio,
+            video_tokens=video,
+        ),
+    )
+
+
+def _text_only_item_usage(
+    items: Sequence[GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]],
+    item_modalities: Sequence[frozenset[_Modality]],
+    prompt_tokens: int,
+) -> tuple[Usage, ...]:
+    if any(modalities - {"text"} for modalities in item_modalities):
+        return ()
+    return tuple(
+        Usage(prompt_tokens=share, total_tokens=share)
+        for share in _weighted_shares(prompt_tokens, _text_weights(items, item_modalities))
+    )
+
+
+def _per_item_usage(
+    input: GeminiEmbeddingInput,
+    usage: Usage,
+    resolved_files: Mapping[str, Mapping[str, str]],
+    model: str,
+    audio_track_extraction: bool,
+) -> tuple[Usage, ...]:
+    items: Final = _top_level_elements(input)
+    if len(items) < 2:
+        return ()
+    modalities: Final = tuple(_item_modalities(item, resolved_files) for item in items)
+    details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
+    text: Final = details.text_tokens or 0
+    image: Final = details.image_tokens or 0
+    audio: Final = details.audio_tokens or 0
+    video: Final = details.video_tokens or 0
+    if text + image + audio + video == 0:
+        return _text_only_item_usage(items, modalities, usage.prompt_tokens)
+    text_shares: Final = _text_shares(text, items, modalities, model)
+    image_shares: Final = _weighted_shares(image, _even_weights(modalities, "image"))
+    audio_shares: Final = _weighted_shares(
+        audio, _indicator(_audio_holders(modalities, audio_track_extraction), len(items))
+    )
+    video_shares: Final = _weighted_shares(video, _even_weights(modalities, "video"))
+    unattributed_shares: Final = _weighted_shares(
+        max(0, usage.prompt_tokens - text - image - audio - video), tuple(1 for _ in items)
+    )
+    return tuple(
+        _item_usage(
+            text=text_shares[index],
+            image=image_shares[index],
+            audio=audio_shares[index],
+            video=video_shares[index],
+            unattributed=unattributed_shares[index],
+        )
+        for index in range(len(items))
+    )
+
+
 def process_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
     _predictions: object,
+    resolved_files: Mapping[str, Mapping[str, str]] | None = None,
+    audio_track_extraction: bool = False,
 ) -> EmbeddingResponse:
-    openai_embeddings: Final[list[Embedding]] = []
-    for idx, embedding in enumerate(iter_items(subscript(_predictions, "embeddings"))):
-        openai_embedding = Embedding.model_validate(
-            {
-                "embedding": subscript(embedding, "values"),
-                "index": idx,
-                "object": "embedding",
-            }
-        )
-        openai_embeddings.append(openai_embedding)
-
-    model_response.data = openai_embeddings
-    model_response.model = model
-
-    texts: Final = _element_texts(input)
-    prompt_tokens: Final = token_counter(model=model, text="".join(texts)) if texts else 0
-    model_response.usage = Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
-
-    return model_response
+    usage: Final = _batch_embed_usage(
+        input, model, require_get(_predictions).get("usageMetadata"), resolved_files or {}
+    )
+    return EmbeddingResponse(
+        model=model,
+        data=[
+            Embedding.model_validate({"embedding": subscript(embedding, "values"), "index": idx, "object": "embedding"})
+            for idx, embedding in enumerate(iter_items(subscript(_predictions, "embeddings")))
+        ],
+        usage=usage,
+        hidden_params={**(get_hidden_params(model_response) or {})},
+        item_usage=_per_item_usage(input, usage, resolved_files or {}, model, audio_track_extraction),
+    )

@@ -60,7 +60,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -73,11 +73,11 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, str],
+    ) -> dict[str, object]:
         model_id: Final = model.replace("mantle/", "", 1)
         request: Final = _MANTLE_REQUEST.validate_python(
             super().transform_anthropic_messages_request(

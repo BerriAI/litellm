@@ -325,7 +325,7 @@ describe("Sidebar (leftnav)", () => {
       "Home",
       "Virtual Keys",
       "Playground",
-      "Models + Endpoints",
+      "Model Management",
       "Agentic",
       "MCP Servers",
       "Guardrails",
@@ -427,10 +427,10 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.queryByText("Playground")).not.toBeInTheDocument();
     });
 
-    it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
+    it("shows Model Management to Admin Viewer (read-only)", () => {
       mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
-      expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+      expect(screen.getByText("Model Management")).toBeInTheDocument();
     });
 
     it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
@@ -810,7 +810,7 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
     expectHref("Virtual Keys", "/ui/api-keys");
     expectHref("Playground", "/ui/playground");
-    expectHref("Models + Endpoints", "/ui/models-and-endpoints");
+    expectHref("Model Management", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
     expectHref("Alerts", "/ui/alerts");
   });
@@ -905,7 +905,7 @@ describe("getBreadcrumb", () => {
   });
 
   it("resolves routes whose segment differs from the sidebar page id", () => {
-    expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Models + Endpoints" });
+    expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Model Management" });
     expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
   });
 

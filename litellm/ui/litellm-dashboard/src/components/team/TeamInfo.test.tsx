@@ -252,7 +252,6 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
     userIds: [],
   }),
   fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
 import { useAllProxyModels, useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
@@ -2310,6 +2309,7 @@ describe("TeamInfoView - member defaults editor", () => {
     expect(payload.team_member_tpm_limit).toBe(11);
     expect(payload.team_member_rpm_limit).toBe(22);
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
+    expect(payload).not.toHaveProperty("team_member_rollover_max_budget");
   });
 
   it("sends a null team_member_budget_duration when Default Budget Duration is set to never reset", async () => {
@@ -2380,6 +2380,29 @@ describe("TeamInfoView - member defaults editor", () => {
     const payload = await save(user);
 
     expect(payload.team_member_budget).toBe(12.5);
+  });
+
+  it.each([
+    ["90", 90],
+    ["", null],
+  ])("saves an edited rollover cap of %s from Member Defaults", async (input, expected) => {
+    const user = userEvent.setup({ delay: null });
+    const savedBudget = {
+      max_budget: 42,
+      rollover_max_budget: 84,
+      budget_duration: "30d",
+      tpm_limit: 11,
+      rpm_limit: 22,
+    };
+    await openEditor(user, savedBudget);
+
+    const cap = await screen.findByLabelText("Member Rollover Cap (USD)");
+    expect(cap).toHaveValue(84);
+    fireEvent.change(cap, { target: { value: input } });
+    const payload = await save(user);
+
+    expect(payload.team_member_rollover_max_budget).toBe(expected);
+    expect(payload.team_member_budget).toBe(42);
   });
 
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
