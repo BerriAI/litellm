@@ -475,7 +475,7 @@ class OllamaChatConfig(BaseConfig):
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
         )
-        raw_cached: Final = response_json.get("prompt_eval_cached_count")
+        raw_cached: Final = response_fields.get("prompt_eval_cached_count")
         cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
         setattr(
             model_response,

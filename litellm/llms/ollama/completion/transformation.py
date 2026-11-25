@@ -2,7 +2,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -96,7 +97,7 @@ class _OllamaGenerateMessage(TypedDict):
 class _OllamaGenerateResponse(TypedDict):
     message: ReadOnly[NotRequired[_OllamaGenerateMessage]]
     prompt_eval_count: ReadOnly[NotRequired[int]]
-    prompt_eval_cached_count: ReadOnly[NotRequired[int]]
+    prompt_eval_cached_count: ReadOnly[NotRequired[object]]
     eval_count: ReadOnly[NotRequired[int]]
 
 
@@ -593,12 +594,13 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 text = ""
                 is_finished = True
                 finish_reason = "stop"
-                prompt_eval_count: Final[int | None] = chunk.get("prompt_eval_count", None)
-                eval_count: Final[int | None] = chunk.get("eval_count", None)
+                chunk_fields: Final = require_get(chunk)
+                prompt_eval_count: Final = chunk_fields.get("prompt_eval_count")
+                eval_count: Final = chunk_fields.get("eval_count")
 
                 usage: ChatCompletionUsageBlock | None = None
-                if prompt_eval_count is not None and eval_count is not None:
-                    raw_cached: Final = cast(Mapping[str, object], chunk).get("prompt_eval_cached_count")
+                if isinstance(prompt_eval_count, int) and isinstance(eval_count, int):
+                    raw_cached: Final = chunk_fields.get("prompt_eval_cached_count")
                     cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
                     usage = ChatCompletionUsageBlock(
                         prompt_tokens=prompt_eval_count,
