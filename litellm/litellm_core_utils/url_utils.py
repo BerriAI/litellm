@@ -50,6 +50,7 @@ class _UrlFetcher(Protocol):
         *,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response: ...
 
 
@@ -62,6 +63,8 @@ class _AsyncUrlFetcher(Protocol):
         *,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response: ...
 
 

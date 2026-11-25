@@ -77,6 +77,8 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         litellm_completion_request: dict[str, object],
         instructions: str | None = None,
         request_kwargs: Mapping[str, object] | None = None,
+        previous_response_client_ids: tuple[str, ...] = (),
+        request_input: str | None = None,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -94,6 +96,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
                 litellm_completion_request={"model": "test"},
                 request_input="hi",
                 responses_api_request={"previous_response_id": "123"},
+                previous_response_id="123",
                 litellm_trace_id="original-trace",
             )
 
@@ -579,6 +582,61 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: []\n\n",
+        b'data: "x"\n\n',
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "array", "string", "deep-object"],
+)
+def test_streamed_responses_over_anthropic_skip_a_data_line_that_is_not_an_object(
+    respx_mock: respx.MockRouter, non_object_frame: bytes
+) -> None:
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_responses_non_object",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            )
+            + non_object_frame
+            + _anthropic_sse(
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Argentina won."}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model="anthropic/claude-sonnet-5-5",
+            input="Who won the World Cup in 2022?",
+            max_output_tokens=100,
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert events[-1].response.output[0].content[0].text == "Argentina won."
 
 
 _ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"

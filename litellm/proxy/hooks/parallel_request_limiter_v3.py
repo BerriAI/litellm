@@ -5582,7 +5582,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
-    @with_service_target("rate_limits")
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5601,6 +5600,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
         """
+        await self.async_release_request_parallel_slot()
+
+    @with_service_target("rate_limits")
+    async def async_release_request_parallel_slot(self) -> None:
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     @with_service_target("rate_limits")

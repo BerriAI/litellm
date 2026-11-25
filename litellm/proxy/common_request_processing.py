@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    is_str_keyed_dict,
     object_mapping,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -128,6 +129,8 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    redacted_provider_specific_fields,
+    relayed_provider_specific_fields,
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
@@ -357,11 +360,22 @@ def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
 _should_return_raw_model_name: Final = should_return_raw_model_name
 
 
-def _apply_client_disconnect_metadata(target_metadata: dict[str, object] | None) -> None:
-    if target_metadata is None:
+def _apply_client_disconnect_metadata(target_metadata: object) -> None:
+    if not is_str_keyed_dict(target_metadata):
         return
     target_metadata["client_disconnected"] = True
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
+
+
+def _apply_client_disconnect_to_logged_metadata(params: dict[str, object]) -> None:
+    if params.get("metadata") is None:
+        params["metadata"] = {}  # rebind-ok: the spend logger reads the marker from this shared request dict
+    metadata: Final = params["metadata"]
+    if is_str_keyed_dict(metadata):
+        _apply_client_disconnect_metadata(metadata)
+    litellm_metadata: Final = params.get("litellm_metadata")
+    if is_str_keyed_dict(litellm_metadata) and litellm_metadata:
+        _apply_client_disconnect_metadata(litellm_metadata)
 
 
 async def _record_streaming_client_disconnect_if_needed(
@@ -381,34 +395,13 @@ async def _record_streaming_client_disconnect_if_needed(
 
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
-        litellm_params: Final = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _lp_metadata = litellm_params.get("metadata")
-        if _lp_metadata is None:
-            _lp_metadata = {}
-            litellm_params["metadata"] = _lp_metadata
-        _apply_client_disconnect_metadata(_lp_metadata)
+        _apply_client_disconnect_to_logged_metadata(logging_obj.model_call_details.setdefault("litellm_params", {}))
+        _apply_client_disconnect_to_logged_metadata(logging_obj.model_call_details)
 
-        _mcd_metadata = logging_obj.model_call_details.get("metadata")
-        if _mcd_metadata is None:
-            _mcd_metadata = {}
-            logging_obj.model_call_details["metadata"] = _mcd_metadata
-        _apply_client_disconnect_metadata(_mcd_metadata)
-
-    _rd_metadata = request_data.get("metadata")
-    if _rd_metadata is None:
-        _rd_metadata = {}
-        request_data["metadata"] = _rd_metadata
-    _apply_client_disconnect_metadata(_rd_metadata)
-
-    _rd_litellm_params = request_data.get("litellm_params")
-    if _rd_litellm_params is None:
-        _rd_litellm_params = {}
-        request_data["litellm_params"] = _rd_litellm_params
-    _rd_lp_metadata = _rd_litellm_params.get("metadata")
-    if _rd_lp_metadata is None:
-        _rd_lp_metadata = {}
-        _rd_litellm_params["metadata"] = _rd_lp_metadata
-    _apply_client_disconnect_metadata(_rd_lp_metadata)
+    _apply_client_disconnect_to_logged_metadata(request_data)
+    if request_data.get("litellm_params") is None:
+        request_data["litellm_params"] = {}
+    _apply_client_disconnect_to_logged_metadata(request_data["litellm_params"])
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
@@ -475,7 +468,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     logging object) would never reach spend tracking. Assemble the partial
     response from the wrapper's collected chunks and dispatch success logging
     for it; dispatch_success_handlers dedups against a natural end-of-stream
-    dispatch via has_dispatched_final_stream_success.
+    dispatch via has_dispatched_final_stream_success. A Responses API partial
+    already carries the usage of every deployment the stream went through, so
+    it replaces the partial usage a failed earlier attempt left on the logging
+    object instead of being overridden by it.
 
     Awaited directly by the shielded cleanup rather than scheduled with
     create_task: the client is already gone so the extra latency is harmless,
@@ -497,12 +493,13 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
-    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
+    partial_responses_event: Final = await asyncio.to_thread(partial_responses_incomplete_event_on_disconnect, response)
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
             sanitize_for_log(logging_obj.litellm_call_id),
         )
+        logging_obj.model_call_details.pop("combined_usage_object", None)
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
     if not isinstance(chunks, list) or not chunks:
@@ -781,7 +778,7 @@ def proxy_exception_from_route_error(exc: Exception) -> ProxyException:
         param=openai_error_param(exc),
         code=error_status,
         openai_code=carried_code if isinstance(carried_code, str) else None,
-        provider_specific_fields=provider_fields if isinstance(provider_fields, dict) else None,
+        provider_specific_fields=redacted_provider_specific_fields(provider_fields),
     )
 
 
@@ -4353,7 +4350,7 @@ class ProxyBaseLLMRequestProcessing:
             param=openai_error_param(e),
             openai_code=getattr(e, "code", None),
             code=_code,
-            provider_specific_fields=getattr(e, "provider_specific_fields", None),
+            provider_specific_fields=relayed_provider_specific_fields(e),
             headers=safe_headers,
         )
 
@@ -4590,6 +4587,7 @@ class ProxyBaseLLMRequestProcessing:
                 type=openai_error_type(e, stream_error_status),
                 param=openai_error_param(e),
                 code=stream_error_status,
+                provider_specific_fields=relayed_provider_specific_fields(e),
             )
             stream_completed = True
             error_frame: Final = serialize_error(proxy_exception)
@@ -4637,6 +4635,7 @@ class ProxyBaseLLMRequestProcessing:
             serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
                 status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
                 raw_message=proxy_exc.message,
+                provider_specific_fields=proxy_exc.provider_specific_fields,
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,

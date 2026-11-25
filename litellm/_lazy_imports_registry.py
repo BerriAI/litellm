@@ -161,6 +161,7 @@ LLM_CONFIG_NAMES: Final = (
     "DeepinfraRerankConfig",
     "HostedVLLMRerankConfig",
     "PerplexityDecisionsConfig",
+    "GeminiDecisionsConfig",
     "TypeSafeDecisionsConfig",
     "OpenRouterDecisionsConfig",
     "FireworksAIDecisionsConfig",
@@ -174,6 +175,7 @@ LLM_CONFIG_NAMES: Final = (
     "AzureDecisionsConfig",
     "AzureAIDecisionsConfig",
     "VercelAIGatewayDecisionsConfig",
+    "LiteLLMProxyDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
     "VertexAIRerankConfig",
@@ -730,6 +732,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.hosted_vllm.rerank.transformation",
         "HostedVLLMRerankConfig",
     ),
+    "GeminiDecisionsConfig": (".llms.gemini.decisions.transformation", "GeminiDecisionsConfig"),
     "PerplexityDecisionsConfig": (".llms.perplexity.decisions.transformation", "PerplexityDecisionsConfig"),
     "TypeSafeDecisionsConfig": (".llms.typesafe.decisions.transformation", "TypeSafeDecisionsConfig"),
     "OpenRouterDecisionsConfig": (".llms.openrouter.decisions.transformation", "OpenRouterDecisionsConfig"),
@@ -752,6 +755,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "VercelAIGatewayDecisionsConfig": (
         ".llms.vercel_ai_gateway.decisions.transformation",
         "VercelAIGatewayDecisionsConfig",
+    ),
+    "LiteLLMProxyDecisionsConfig": (
+        ".llms.litellm_proxy.decisions.transformation",
+        "LiteLLMProxyDecisionsConfig",
     ),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",

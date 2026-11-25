@@ -140,6 +140,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     RejectedRequestError,
     SensitiveDataRouteException,
+    UnresolvablePreviousResponseError,
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -571,6 +572,8 @@ class _StreamIteratorHook(Protocol[_T]):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, UnresolvablePreviousResponseError):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
@@ -5004,10 +5007,23 @@ class ProxyLogging:
         concurrent releases of the same acquisition would otherwise race and
         double-decrement under the limiter's in-memory fallback.
         """
+        await self.arelease_request_parallel_slot()
+
+    async def arelease_request_parallel_slot(self) -> None:
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+        await limiter.async_release_request_parallel_slot()
+
+    async def arelease_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        match limiter:
+            case PROXY_MaxParallelRequestsHandler_v3():
+                await limiter.async_release_request_parallel_slot()
+            case _PROXY_MaxParallelRequestsHandler():
+                await limiter.async_release_slot_before_logging(logging_obj)
+            case _:
+                return
 
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
 

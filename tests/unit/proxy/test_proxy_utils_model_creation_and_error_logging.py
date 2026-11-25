@@ -1853,6 +1853,15 @@ class TestPostCallFailureHookLLMExceptionAlerting:
         alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
         assert alerting_handler.called is False
 
+    @pytest.mark.asyncio
+    async def test_unresolvable_previous_response_does_not_alert(self):
+        from litellm.exceptions import UnresolvablePreviousResponseError
+
+        exc: Final = UnresolvablePreviousResponseError(
+            message="Previous response with id 'resp_unknown' not found.", model="gpt-5.4-mini", llm_provider="openai"
+        )
+        assert (await self._alerted(exc)).called is False
+
 
 class TestPostCallFailureHookProxyExceptionLogging:
     """A guardrail block raises a ProxyException; on an LLM route it must still

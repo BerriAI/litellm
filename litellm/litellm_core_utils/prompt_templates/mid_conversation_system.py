@@ -19,9 +19,10 @@ byte-identical prefix and preserved thinking blocks keep their binding.
 
 Models without the flag reject the role inside ``messages``. Their system messages
 become user turns in place, prefixed with an operator note so the model can tell
-the instruction apart from the user's own words. A run caught between a tool call
-and its result moves to just after the result so the ``tool_result`` block stays
-first in the merged user turn.
+the instruction apart from the user's own words. A run caught among one tool call
+turn's results moves to just after the last of them, so every ``tool_result``
+block stays ahead of it in the merged user turn and Gemini gets all of the turn's
+function responses in one content.
 
 Every transformation here is a pure function of the message sequence: turn N's
 output stays a prefix of turn N+1's output, which is what keeps the provider-side
@@ -60,6 +61,7 @@ CONVERTED_SYSTEM_NOTE: Final = (
 
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
+_TOOL_RESULT_SEGMENT_KINDS: Final = frozenset({"system", "tool"})
 _NO_IDS: Final[frozenset[str]] = frozenset()
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
 _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
@@ -217,28 +219,23 @@ def _converted_user_turns(run: Sequence[object]) -> tuple[ChatCompletionUserMess
     return tuple(system_message_as_user(message) for message in run if _text_parts(message))
 
 
-def _runs(messages: Sequence[AllMessageValues]) -> tuple[tuple[_MessageKind, tuple[AllMessageValues, ...]], ...]:
-    return tuple((kind, tuple(group)) for kind, group in groupby(messages, key=_kind))
+def _in_tool_result_segment(message: object) -> bool:
+    return _kind(message) in _TOOL_RESULT_SEGMENT_KINDS
+
+
+def _tool_results_first(segment: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    reminders: Final = tuple(message for message in segment if is_system_message(message))
+    return (*(message for message in segment if not is_system_message(message)), *_converted_user_turns(reminders))
 
 
 def _converted_for_unflagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     """Convert every system message to a user turn in place.
 
-    A system run whose follower is a tool message is emitted after that tool run:
-    ``tool_result`` blocks have to open the merged user turn.
+    System messages mixed into one tool call turn's results are emitted after the last of those
+    results: every ``tool_result`` block has to open the merged user turn.
     """
-    runs: Final = _runs(messages)
-
-    def emit(index: int) -> tuple[AllMessageValues, ...]:
-        kind, run = runs[index]
-        follower: Final = runs[index + 1][0] if index + 1 < len(runs) else None
-        if kind == "system":
-            return () if follower == "tool" else _converted_user_turns(run)
-        if kind == "tool" and index > 0 and runs[index - 1][0] == "system":
-            return (*run, *_converted_user_turns(runs[index - 1][1]))
-        return run
-
-    return tuple(chain.from_iterable(emit(index) for index in range(len(runs))))
+    segments: Final = (tuple(group) for _, group in groupby(messages, key=_in_tool_result_segment))
+    return tuple(chain.from_iterable(map(_tool_results_first, segments)))
 
 
 def _user_type_blocks(messages: Sequence[AllMessageValues]) -> tuple[tuple[bool, tuple[int, ...]], ...]:

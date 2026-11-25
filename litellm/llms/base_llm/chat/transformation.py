@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -66,6 +67,10 @@ class BaseLLMException(Exception):
             self.response = httpx.Response(status_code=status_code, request=self.request)
         self.body = body
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
+
+
+class RelayOnlyBodyLLMException(BaseLLMException):
+    pass
 
 
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
@@ -505,6 +510,9 @@ class BaseConfig(ABC):
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
         return False
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "forwards"
 
     def post_stream_processing(self, stream: object) -> object:
         """Hook for providers to post-process streaming responses. Default: pass-through."""

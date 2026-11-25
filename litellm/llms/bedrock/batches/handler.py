@@ -315,7 +315,10 @@ class BedrockBatchesHandler:
         # provider uses, so model_list / env / role-assumption configs are
         # honored. We instantiate BedrockBatchesConfig (which extends
         # BaseAWSLLM) lazily to avoid a circular import at module load.
-        from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+        from litellm.llms.bedrock.batches.transformation import (
+            BedrockBatchesConfig,
+            openai_endpoint_for_bedrock_job_model,
+        )
 
         creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region)
 
@@ -404,7 +407,7 @@ class BedrockBatchesHandler:
             request_counts=_record_counts_from_response(response),
             metadata=openai_batch_metadata,
             completion_window="24h",
-            endpoint="/v1/chat/completions",
+            endpoint=openai_endpoint_for_bedrock_job_model(response.get("modelId")),
             input_file_id=input_uri,
             output_file_id=output_file_uri if openai_status == "completed" else None,
         )

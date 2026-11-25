@@ -1744,22 +1744,32 @@ class TestAnthropicThinkingSignatureSelfHeal:
         msgs = ["hi", {"role": "user", "content": "hello"}]
         assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
 
-    def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
+    @pytest.mark.parametrize("text", (None, 123, {"nested": "x"}), ids=("null", "number", "object"))
+    def test_strip_empty_text_blocks_keeps_a_non_string_user_text_for_the_route_to_reject_or_drop(self, text):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": None},
-                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
-                ],
-            }
+            {"role": "user", "content": [{"type": "text", "text": text}]},
+            {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": text}]},
         ]
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+        assert out == [msgs[0], {"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    @pytest.mark.parametrize("text", (None, 123), ids=("null", "number"))
+    def test_strip_empty_text_blocks_still_strips_a_non_string_assistant_text(self, text):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
+        msgs = [
+            {"role": "assistant", "content": [{"type": "text", "text": text}, tu]},
+            {"role": "assistant", "content": [{"type": "text", "text": text}]},
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert out == [{"role": "assistant", "content": [tu]}]
 
     def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1786,23 +1796,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
-
-    def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
-        from litellm.llms.anthropic.common_utils import (
-            strip_empty_content_blocks_from_anthropic_messages,
-        )
-
-        msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": 123},
-                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
-                ],
-            }
-        ]
-        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
         from litellm.llms.anthropic.common_utils import (

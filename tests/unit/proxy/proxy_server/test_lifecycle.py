@@ -972,6 +972,40 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     )
 
 
+@pytest.mark.asyncio
+async def test_sigterm_while_serving_starts_the_shutdown_budget_clock() -> None:
+    import signal
+    from queue import SimpleQueue
+    from types import FrameType
+
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    server_saw_shutdown: Final[SimpleQueue[bool]] = SimpleQueue()
+
+    def server_handler(signum: int, frame: FrameType | None) -> None:
+        server_saw_shutdown.put(GracefulShutdownManager.is_shutting_down())
+
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    original: Final = signal.signal(signal.SIGTERM, server_handler)
+    try:
+        with patch.dict(os.environ, clean_env, clear=True), patch.object(ps, "scheduler", scheduler):
+            async with proxy_startup_event(app=None):
+                signal.raise_signal(signal.SIGTERM)
+                serving_worker_shutting_down: Final = GracefulShutdownManager.is_shutting_down()
+        handler_after_teardown: Final = signal.getsignal(signal.SIGTERM)
+    finally:
+        signal.signal(signal.SIGTERM, original)
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+    assert serving_worker_shutting_down
+    assert server_saw_shutdown.get_nowait() is True
+    assert handler_after_teardown is server_handler
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
