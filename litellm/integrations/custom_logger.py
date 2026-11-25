@@ -6,8 +6,10 @@ from collections.abc import AsyncGenerator, Callable, Mapping, MutableMapping, S
 from datetime import datetime
 from functools import cache
 from itertools import takewhile
+from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+from weakref import ReferenceType, ref
 
 from pydantic import BaseModel
 
@@ -1201,6 +1203,28 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     msg[key] = self._redact_base64(value=val, max_depth=max_depth)
             filtered_messages.append(msg)
         return filtered_messages
+
+
+_callback_metric_names: Final[dict[int, tuple[ReferenceType[CustomLogger], str]]] = {}  # mutable-ok: weak registrations
+_callback_metric_names_lock: Final = RLock()
+
+
+def register_callback_metric_name(callback: CustomLogger, name: str) -> None:
+    key: Final = id(callback)
+
+    def discard(reference: ReferenceType[CustomLogger]) -> None:
+        with _callback_metric_names_lock:
+            entry: Final = _callback_metric_names.get(key)
+            if entry is not None and entry[0] is reference:
+                _callback_metric_names.pop(key, None)
+
+    with _callback_metric_names_lock:
+        _callback_metric_names.setdefault(key, (ref(callback, discard), name))
+
+
+def get_callback_metric_name(callback: CustomLogger) -> str | None:
+    entry: Final = _callback_metric_names.get(id(callback))
+    return entry[1] if entry is not None and entry[0]() is callback else None
 
 
 @cache

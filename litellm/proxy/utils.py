@@ -207,6 +207,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
     deployment_pricing_model_info,
+    time_callback_hook,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -2226,6 +2227,7 @@ class _PreCallRun:
     endpoint_type: EndpointType
     raw_request_snapshot: dict[str, object] | None  # mutable-ok: same request-payload shape as latest
     latest: dict[str, object] | None  # mutable-ok: the request as the callbacks have left it so far
+    measure_callback_latency: bool = False
     pipeline_managed: frozenset[str] = frozenset()
     deferred: SensitiveDataRouteException | None = None
     parallel: list[tuple[CustomGuardrail, list[object]]] = field(  # mutable-ok: parallel results in list order
@@ -3126,12 +3128,19 @@ class ProxyLogging:
         target: Final = unified_guardrail if use_unified else callback
 
         if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=self.hook_cache,
-                data=data,
-                call_type=call_type,
-            )
+            with time_callback_hook(
+                target,
+                "async_pre_call_hook",
+                enabled_for_call=call_type == "acompletion"
+                and not data.get("stream")
+                and _overrides_hook(target, "async_pre_call_hook"),
+            ):
+                return await target.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=self.hook_cache,
+                    data=data,
+                    call_type=call_type,
+                )
         elif hook_type == "during_call":
             return await target.async_moderation_hook(
                 data=data,
@@ -3733,17 +3742,17 @@ class ProxyLogging:
         )
         from litellm.proxy.proxy_server import current_general_settings
 
+        request_data: Final = cast("Mapping[str, object]", data)  # cast-ok: legacy untyped request body
         if not skip_guardrails and reject_unregistered_guardrails_enabled(current_general_settings()):
-            guardrail_data: Final = cast("Mapping[str, object]", data)  # cast-ok: untyped request body, read with .get
             reject_unregistered_request_guardrails(
-                guardrail_data,
-                pipeline_names=_pipeline_step_guardrail_names(_policy_pipelines(guardrail_data)),
+                request_data,
+                pipeline_names=_pipeline_step_guardrail_names(_policy_pipelines(request_data)),
             )
 
         if not guardrails_only:
             seed_request_identity(
                 user_api_key_dict,
-                request_data=cast("Mapping[str, object]", data),  # cast-ok: untyped request body, read with .get
+                request_data=request_data,
             )
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
@@ -3794,6 +3803,9 @@ class ProxyLogging:
                 endpoint_type=endpoint_type,
                 raw_request_snapshot=raw_request_snapshot,
                 latest=data,
+                measure_callback_latency=call_type == "acompletion"
+                and not guardrails_only
+                and not request_data.get("stream"),
             )
         )
 
@@ -3894,12 +3906,13 @@ class ProxyLogging:
             ):
                 if run.call_type in MCP_GUARDRAIL_CALL_TYPES and run.user_api_key_dict is None:
                     return None
-                response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
-                    user_api_key_dict=run.user_api_key_dict,
-                    cache=self.hook_cache,
-                    data=data,
-                    call_type=run.call_type,
-                )
+                with time_callback_hook(callback, "async_pre_call_hook", enabled_for_call=run.measure_callback_latency):
+                    response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
+                        user_api_key_dict=run.user_api_key_dict,
+                        cache=self.hook_cache,
+                        data=data,
+                        call_type=run.call_type,
+                    )
                 if response is not None:
                     updated = await self.process_pre_call_hook_response(  # rebind-ok: see above
                         response=response, data=data, call_type=run.call_type

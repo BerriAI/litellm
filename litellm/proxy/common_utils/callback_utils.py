@@ -23,7 +23,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, register_callback_metric_name
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -146,6 +146,13 @@ def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Call
     if isinstance(resolved, _CallbackResolvedToClass | _CallbackNotDispatchable):
         _raise_callback_load_error(resolved)
     return resolved
+
+
+def load_configured_callback(name: str, config_file_path: str | None) -> object:
+    callback: Final = _LOADED_CALLBACK.validate_python(get_instance_fn(value=name, config_file_path=config_file_path))
+    if isinstance(callback, CustomLogger) and "." in name and "://" not in name:
+        register_callback_metric_name(callback, name)
+    return callback
 
 
 def initialize_callbacks_on_proxy(
@@ -434,12 +441,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(
                     _loaded_callback_or_raise(
                         entry=callback,
-                        loaded=_LOADED_CALLBACK.validate_python(
-                            get_instance_fn(
-                                value=callback,
-                                config_file_path=config_file_path,
-                            )
-                        ),
+                        loaded=load_configured_callback(callback, config_file_path),
                     )
                 )
         if isinstance(litellm.callbacks, list):
@@ -455,11 +457,9 @@ def initialize_callbacks_on_proxy(
         litellm.callbacks = [
             _loaded_callback_or_raise(
                 entry=str(value),
-                loaded=_LOADED_CALLBACK.validate_python(
-                    get_instance_fn(
-                        value=value,  # pyright: ignore[reportArgumentType]  # non-str fails as on main
-                        config_file_path=config_file_path,
-                    )
+                loaded=load_configured_callback(
+                    value,  # pyright: ignore[reportArgumentType]  # non-str fails as on main
+                    config_file_path,
                 ),
             )
         ]
