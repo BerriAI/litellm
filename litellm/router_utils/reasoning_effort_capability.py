@@ -137,6 +137,14 @@ def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -
     return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
 
 
+def reasoning_effort_within_thinking_budget(requested: object, budget_effort: str | None) -> str | None:
+    budget_rank: Final = _STRENGTH_RANK.get(budget_effort) if budget_effort else None
+    if budget_rank is None or not isinstance(requested, str) or not requested:
+        return budget_effort
+    requested_rank: Final = _STRENGTH_RANK.get(requested)
+    return budget_effort if requested_rank is not None and requested_rank > budget_rank else requested
+
+
 def _requested_level(requested: object) -> str | None:
     if isinstance(requested, str):
         return requested

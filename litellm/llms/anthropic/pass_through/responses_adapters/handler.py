@@ -6,6 +6,7 @@ Used when the target model is an OpenAI or Azure model.
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from functools import partial
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -400,17 +401,26 @@ def _build_responses_kwargs(
     provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
     provider: Final = provider_hint if isinstance(provider_hint, str) else None
     bridged_reasoning: Final[object] = responses_kwargs.pop("reasoning", None)
-    target_reasoning: Final = (
-        _reasoning_for_target(
-            bridged_reasoning,
-            model=model,
-            custom_llm_provider=provider,
-            deployment_model_info=forwarded_kwargs.get("model_info"),
-            drop_params=drop_params,
-            off_switch=thinking_off_switch(anthropic_request),
-        )
-        if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
+    for_target: Final = partial(
+        _reasoning_for_target,
+        model=model,
+        custom_llm_provider=provider,
+        deployment_model_info=forwarded_kwargs.get("model_info"),
+        drop_params=drop_params,
+        off_switch=thinking_off_switch(anthropic_request),
+    )
+    requested_reasoning: Final = (
+        for_target(bridged_reasoning) if _maps_reasoning(thinking, model, provider, forwarded_kwargs) else None
+    )
+    budget_reasoning: Final = (
+        _ADAPTER.translate_thinking_to_reasoning(thinking)
+        if requested_reasoning is ClientEffort.DROPPED and thinking is not None and thinking.get("type") == "enabled"
         else None
+    )
+    target_reasoning: Final = (
+        for_target(budget_reasoning)
+        if budget_reasoning is not None and budget_reasoning != bridged_reasoning
+        else requested_reasoning
     )
     client_effort_dropped: Final = target_reasoning is ClientEffort.DROPPED
     if target_reasoning is not None and not client_effort_dropped:

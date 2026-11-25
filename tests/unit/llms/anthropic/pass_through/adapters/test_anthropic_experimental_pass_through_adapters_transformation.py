@@ -12,6 +12,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -2715,6 +2716,32 @@ def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
 
     assert "thinking" not in new_kwargs
     assert new_kwargs["reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    "output_effort, reasoning_effort",
+    [
+        pytest.param("low", "low", id="lower-effort-wins"),
+        pytest.param("high", "medium", id="budget-caps-a-stronger-effort"),
+        pytest.param("turbo", "turbo", id="unknown-effort-goes-to-the-target"),
+    ],
+)
+def test_explicit_output_effort_beside_an_enabled_budget_reaches_a_non_claude_model_up_to_the_budget(
+    output_effort: str, reasoning_effort: str
+) -> None:
+    new_kwargs: Final = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+        cast(
+            Any,
+            {
+                "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                "output_config": {"effort": output_effort},
+            },
+        ),
+        cast(Any, new_kwargs),
+    )
+
+    assert new_kwargs["reasoning_effort"] == reasoning_effort
 
 
 def test_thinking_disabled_translated_to_reasoning_effort_none_for_non_claude_model():

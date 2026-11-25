@@ -134,6 +134,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
     openai_chat_refusal_text,
     refusal_stop_details,
 )
+from litellm.router_utils.reasoning_effort_capability import reasoning_effort_within_thinking_budget
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicPassThroughMessageValues,
@@ -1287,7 +1288,10 @@ class LiteLLMAnthropicMessagesAdapter:
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
-            else self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
+            else reasoning_effort_within_thinking_budget(
+                output_effort,
+                self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking)),
+            )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
             if translate_bare_output_effort
