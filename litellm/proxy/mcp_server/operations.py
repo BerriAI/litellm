@@ -5,7 +5,8 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -326,6 +327,19 @@ def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -
 _mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
     "mcp_server_admission_memo", default=None
 )
+
+
+@contextmanager
+def shared_mcp_server_admission() -> Iterator[None]:
+    """Charge each MCP server's rate limit once across every listing made inside the block."""
+    if _mcp_server_admission_memo.get() is not None:
+        yield
+        return
+    scope: Final = _mcp_server_admission_memo.set({})
+    try:
+        yield
+    finally:
+        _mcp_server_admission_memo.reset(scope)
 
 
 async def _enforce_mcp_server_rate_limit(

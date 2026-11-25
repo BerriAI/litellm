@@ -765,6 +765,25 @@ def test_dashboard_viewer_only_offers_tools_in_the_requested_toolset(gateway: Ga
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
+def test_dashboard_viewer_toolsets_sharing_a_server_spend_one_rate_limit_slot_on_discovery(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        names: Final = tuple("ts" + uuid.uuid4().hex[:8] for _ in range(2))
+        toolset_ids: Final = [
+            create_toolset(rig.scenario, ((rig.server_id, tool),), toolset_name=name)
+            for name, tool in zip(names, ("add", "multiply"), strict=True)
+        ]
+        team_id: Final = rig.scenario.team(
+            mcp_rpm_limit={rig.alias: 2},
+            object_permission={"mcp_servers": [rig.server_id], "mcp_toolsets": toolset_ids},
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{name}"} for name in names])
+
+        assert response.status_code == 200, response.text
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD], response.text
+        assert "Rate limit exceeded" not in response.text, response.text
+
+
 PASSTHROUGH_SERVER: Final[Mapping[str, object]] = {
     "auth_type": "none",
     "oauth_passthrough": True,

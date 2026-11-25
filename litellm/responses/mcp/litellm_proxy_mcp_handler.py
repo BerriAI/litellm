@@ -392,6 +392,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.mcp_server.operations import shared_mcp_server_admission
         from litellm.proxy.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
             _get_tools_from_mcp_servers,
@@ -451,13 +452,16 @@ class LiteLLM_Proxy_MCP_Handler:
 
         if resolved_toolset_ids and is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
             # Rewriting object_permission does not constrain an admitted user's team sources.
-            direct: Final = (await list_scope(user_api_key_auth, resolved_mcp_servers),) if resolved_mcp_servers else ()
-            toolsets: Final = tuple(
-                [
-                    await list_scope(user_api_key_auth.model_copy(update={"mcp_toolset_id": toolset_id}), None)
-                    for toolset_id in dict.fromkeys(resolved_toolset_ids)
-                ]
-            )
+            with shared_mcp_server_admission():
+                direct: Final = (
+                    (await list_scope(user_api_key_auth, resolved_mcp_servers),) if resolved_mcp_servers else ()
+                )
+                toolsets: Final = tuple(
+                    [
+                        await list_scope(user_api_key_auth.model_copy(update={"mcp_toolset_id": toolset_id}), None)
+                        for toolset_id in dict.fromkeys(resolved_toolset_ids)
+                    ]
+                )
             listings: Final = (*direct, *toolsets)
             return list(chain.from_iterable(tools for tools, _ in listings)), list(
                 dict.fromkeys(chain.from_iterable(names for _, names in listings))
