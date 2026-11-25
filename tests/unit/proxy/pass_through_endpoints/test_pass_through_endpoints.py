@@ -93,6 +93,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -10944,6 +10945,39 @@ def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slo
         _parsed_body={"contents": [], metadata_slot: {"model_group": "unbounded-client-choice"}},
     )
     assert kwargs["litellm_params"]["metadata"]["model_group"] == "gemini-2.5-flash"
+
+
+@pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
+def test_a_passthrough_body_cannot_choose_the_least_busy_group_its_call_counts_under(metadata_slot: str) -> None:
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={
+            "contents": [],
+            metadata_slot: {"model_info": {"id": "dep-a"}, "deployment_model_name": "another-team-group"},
+        },
+        litellm_call_id="steering-call",
+    )
+    least_busy: Final = LeastBusyLoggingHandler(router_cache=DualCache())
+    deployment_a: Final = {"model_info": {"id": "dep-a"}}
+
+    least_busy.log_pre_api_call(model="gemini-2.5-flash", messages=[], kwargs=kwargs)
+
+    assert (
+        least_busy.get_available_deployments("another-team-group", [deployment_a, {"model_info": {"id": "dep-b"}}])
+        is deployment_a
+    )
 
 
 @pytest.mark.parametrize(

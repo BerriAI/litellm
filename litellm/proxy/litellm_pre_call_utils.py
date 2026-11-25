@@ -720,6 +720,7 @@ ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "client_seen_attempt",
+        "deployment_model_name",
         "failed_fallback_attempts",
         "original_model_group",
         "previous_models",
