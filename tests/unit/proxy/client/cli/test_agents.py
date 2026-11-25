@@ -737,14 +737,36 @@ class TestOpencodeModelSync:
         assert _default_of(opencode_model_sync_env, "get") is requests.get
 
 
-_OPENCODE_2_HELP = """USAGE
-  opencode [project] [flags]
-
-FLAGS
-  --standalone            Run with a private server instead of the background service
-  --server string         Connect to a server URL instead of the background service
-  --print-logs            Print logs to stderr (server logs require --standalone)
-"""
+_OPENCODE_COMMANDS = frozenset(
+    {
+        ("run",),
+        ("mini",),
+        ("models",),
+        ("debug", "config"),
+        ("debug", "agents"),
+        ("debug", "paths"),
+        ("auth", "login"),
+        ("session", "list"),
+        ("machine", "list"),
+        ("mcp", "list"),
+        ("service", "status"),
+        ("service", "stop"),
+        ("serve",),
+        ("pair",),
+        ("acp",),
+        ("upgrade",),
+    }
+)
+_OPENCODE_2_4_STANDALONE = _OPENCODE_COMMANDS - {
+    ("debug", "paths"),
+    ("service", "status"),
+    ("service", "stop"),
+    ("serve",),
+    ("pair",),
+    ("acp",),
+    ("upgrade",),
+}
+_OPENCODE_2_1_STANDALONE = _OPENCODE_2_4_STANDALONE - {("debug", "config"), ("debug", "agents"), ("machine", "list")}
 
 _OPENCODE_1_HELP = """opencode [project]
 
@@ -754,8 +776,18 @@ Options:
 """
 
 
-class _FakeHelpRun:
-    def __init__(self, stdout=_OPENCODE_2_HELP, returncode=0, error=None):
+def _opencode_2_help(command, standalone):
+    usage = " ".join(("opencode", *command)) if command else "opencode <subcommand>"
+    flag = "  --standalone      Run with a private server instead of the background service\n" if standalone else ""
+    return (
+        f"USAGE\n  {usage} [flags] [<directory>]\n\nFLAGS\n{flag}"
+        "  --print-logs      Print logs to stderr (server logs require --standalone)\n"
+    )
+
+
+class _FakeOpencode:
+    def __init__(self, takes_standalone=_OPENCODE_2_4_STANDALONE, stdout=None, returncode=0, error=None):
+        self.takes_standalone = takes_standalone | {()}
         self.stdout = stdout
         self.returncode = returncode
         self.error = error
@@ -765,48 +797,27 @@ class _FakeHelpRun:
         self.calls.append((command, kwargs))
         if self.error is not None:
             raise self.error
-        return subprocess.CompletedProcess(command, self.returncode, self.stdout, "")
+        words = tuple(command[1:-1])
+        resolved = next((words[:depth] for depth in (2, 1) if words[:depth] in _OPENCODE_COMMANDS), ())
+        stdout = self.stdout if self.stdout is not None else _opencode_2_help(resolved, resolved in self.takes_standalone)
+        return subprocess.CompletedProcess(command, self.returncode, stdout, "")
 
 
-def _private_server(args, run=None):
+def _private_server(args, run=None, warn=None):
     return with_opencode_private_server(
-        "/usr/local/bin/opencode", args, {}, run=run if run is not None else _FakeHelpRun()
+        "/usr/local/bin/opencode",
+        args,
+        {},
+        run=run if run is not None else _FakeOpencode(),
+        warn=warn if warn is not None else _unexpected_warning,
     )
+
+
+def _unexpected_warning(message):
+    raise AssertionError(f"unexpected warning: {message}")
 
 
 class TestOpencodePrivateServer:
-    def test_a_build_whose_help_lists_standalone_gets_a_private_server(self):
-        run = _FakeHelpRun()
-        assert with_opencode_private_server("/usr/local/bin/opencode", [], {}, run=run) == ("--standalone",)
-        assert run.calls[0][0] == ("/usr/local/bin/opencode", "--help")
-
-    @pytest.mark.parametrize(
-        "printed",
-        [_OPENCODE_1_HELP, "  --print-logs  Print logs to stderr (server logs require --standalone)\n", ""],
-    )
-    def test_a_build_without_the_flag_launches_unchanged(self, printed):
-        assert _private_server(["run", "hi"], run=_FakeHelpRun(stdout=printed)) == ("run", "hi")
-
-    def test_a_failing_help_probe_launches_unchanged(self):
-        assert _private_server([], run=_FakeHelpRun(returncode=1)) == ()
-
-    @pytest.mark.parametrize(
-        "error",
-        [
-            FileNotFoundError("opencode"),
-            subprocess.TimeoutExpired("opencode --help", 10),
-            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
-        ],
-    )
-    def test_a_probe_that_cannot_run_launches_unchanged(self, error):
-        assert _private_server(["models"], run=_FakeHelpRun(error=error)) == ("models",)
-
-    def test_the_probe_runs_with_the_launch_env(self):
-        run = _FakeHelpRun()
-        with_opencode_private_server("/usr/local/bin/opencode", [], {"PATH": "/opt/node/bin"}, run=run)
-        assert run.calls[0][1]["env"] == {"PATH": "/opt/node/bin"}
-        assert run.calls[0][1]["stdin"] is subprocess.DEVNULL
-
     @pytest.mark.parametrize(
         ("args", "launched"),
         [
@@ -822,63 +833,118 @@ class TestOpencodePrivateServer:
             ),
             (["models"], ["models", "--standalone"]),
             (["mini"], ["mini", "--standalone"]),
+            (["debug", "config"], ["debug", "config", "--standalone"]),
+            (["debug", "agents", "--print-logs"], ["debug", "agents", "--standalone", "--print-logs"]),
             (["--log-level", "debug", "run", "hi"], ["--log-level", "debug", "run", "--standalone", "hi"]),
             (["--print-logs", "-s", "ses_123", "mini"], ["--print-logs", "-s", "ses_123", "mini", "--standalone"]),
+            (["--log-level", "warn", "debug", "config"], ["--log-level", "warn", "debug", "config", "--standalone"]),
+            (["./my-project"], ["--standalone", "./my-project"]),
+            (["-c", "--session=ses_123", "./my-project"], ["--standalone", "-c", "--session=ses_123", "./my-project"]),
         ],
     )
-    def test_session_launches_get_a_private_server_where_every_2x_takes_it(self, args, launched):
+    def test_launches_that_read_the_provider_config_get_a_private_server(self, args, launched):
         assert _private_server(args) == tuple(launched)
 
-    @pytest.mark.parametrize("leading_flags", [[], ["-c"], ["--log-level", "debug"], ["--session=ses_123"]])
-    def test_a_project_directory_launch_gets_a_private_server(self, tmp_path, leading_flags):
-        args = [*leading_flags, str(tmp_path)]
-        assert _private_server(args) == ("--standalone", *args)
+    @pytest.mark.parametrize(
+        ("args", "probed"),
+        [
+            ([], ()),
+            (["-s", "ses_123", "--log-level", "debug"], ()),
+            (["run", "fix the tests", "-m", "x"], ("run", "fix the tests")),
+            (["run", "-m", "x", "hi"], ("run",)),
+            (["--log-level", "warn", "debug", "config"], ("debug", "config")),
+        ],
+    )
+    def test_the_probe_asks_for_the_help_of_the_command_being_launched(self, args, probed):
+        run = _FakeOpencode()
+        _private_server(args, run=run)
+        assert run.calls[0][0] == ("/usr/local/bin/opencode", *probed, "--help")
+
+    def test_a_command_whose_own_help_lacks_the_flag_launches_unchanged(self):
+        older = _FakeOpencode(takes_standalone=_OPENCODE_2_1_STANDALONE)
+        assert _private_server(["debug", "config"], run=older) == ("debug", "config")
+        assert _private_server(["run", "hi"], run=older) == ("run", "--standalone", "hi")
 
     @pytest.mark.parametrize(
         "args",
-        [["service", "status"], ["auth", "list"], ["debug", "paths"], ["--print-logs", "debug", "paths"]],
+        [
+            ["auth", "login"],
+            ["session", "list"],
+            ["machine", "list"],
+            ["mcp", "list"],
+            ["service", "status"],
+            ["--log-level", "warn", "service", "stop"],
+            ["serve", "--port", "4096"],
+            ["-s", "ses_123", "pair"],
+            ["acp"],
+            ["upgrade"],
+            ["debug", "paths"],
+        ],
     )
-    def test_a_subcommand_wins_over_a_directory_with_its_name(self, tmp_path, monkeypatch, args):
-        for name in ("service", "auth", "debug"):
-            (tmp_path / name).mkdir()
-        monkeypatch.chdir(tmp_path)
+    def test_commands_that_start_no_session_keep_the_shared_service(self, args):
         assert _private_server(args) == tuple(args)
 
     @pytest.mark.parametrize(
         "args",
         [
-            ["service", "stop"],
-            ["serve", "--port", "4096"],
-            ["acp"],
-            ["pair"],
-            ["upgrade"],
-            ["mcp", "list"],
-            ["--log-level", "warn", "service", "status"],
-            ["--print-logs", "serve"],
-            ["-s", "ses_123", "pair"],
-            ["no-such-directory-or-subcommand"],
             ["--server", "http://127.0.0.1:4096"],
             ["--server=http://127.0.0.1:4096"],
             ["-c", "--server", "http://127.0.0.1:4096"],
             ["--standalone"],
             ["run", "--standalone", "hi"],
+            ["--no-standalone"],
+            ["run", "--no-standalone", "hi"],
+            ["--no-standalone=true", "models"],
         ],
     )
-    def test_commands_that_refuse_the_flag_or_pick_their_own_server_launch_unchanged(self, args):
-        assert _private_server(args) == tuple(args)
+    def test_a_server_choice_the_user_typed_wins_without_a_probe(self, args):
+        run = _FakeOpencode()
+        assert _private_server(args, run=run) == tuple(args)
+        assert run.calls == []
+
+    @pytest.mark.parametrize("printed", [_OPENCODE_1_HELP, ""])
+    def test_opencode_1_launches_unchanged_without_a_warning(self, printed):
+        assert _private_server(["run", "hi"], run=_FakeOpencode(stdout=printed)) == ("run", "hi")
+
+    @pytest.mark.parametrize(
+        ("run", "reason"),
+        [
+            (_FakeOpencode(returncode=1), "exit code 1"),
+            (_FakeOpencode(error=FileNotFoundError("opencode")), "opencode"),
+            (_FakeOpencode(error=subprocess.TimeoutExpired("opencode --help", 10)), "timed out after 10 seconds"),
+            (_FakeOpencode(error=UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")), "utf-8"),
+        ],
+    )
+    def test_a_probe_that_fails_warns_and_launches_unchanged(self, run, reason):
+        warnings = []
+        assert _private_server(["models"], run=run, warn=warnings.append) == ("models",)
+        assert len(warnings) == 1
+        assert "--standalone" in warnings[0]
+        assert reason in warnings[0]
+
+    def test_the_probe_runs_with_the_launch_env(self):
+        run = _FakeOpencode()
+        with_opencode_private_server("/usr/local/bin/opencode", [], {"PATH": "/opt/node/bin"}, run=run)
+        assert run.calls[0][1]["env"] == {"PATH": "/opt/node/bin"}
+        assert run.calls[0][1]["stdin"] is subprocess.DEVNULL
 
     def test_other_agents_are_never_probed(self):
-        run = _FakeHelpRun()
+        run = _FakeOpencode()
         assert with_opencode_private_server("/usr/local/bin/codex", ["exec", "hi"], {}, run=run) == ("exec", "hi")
         assert run.calls == []
 
     def test_a_windows_npm_shim_is_probed_through_cmd(self):
-        run = _FakeHelpRun()
-        assert with_opencode_private_server("C:/npm/opencode.cmd", [], {}, run=run) == ("--standalone",)
-        command = run.calls[0][0]
-        assert isinstance(command, str)
-        assert command.startswith("cmd.exe /d /e:on /v:off /s /c ")
-        assert "--help" in command
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, _opencode_2_help(("models",), True), "")
+
+        assert with_opencode_private_server("C:/npm/opencode.cmd", ["models"], {}, run=run) == ("models", "--standalone")
+        assert isinstance(calls[0], str)
+        assert calls[0].startswith("cmd.exe /d /e:on /v:off /s /c ")
+        assert "models" in calls[0]
+        assert "--help" in calls[0]
 
 
 class TestCodexModelSync:
@@ -1495,7 +1561,7 @@ class TestRunAgent:
 
     def test_opencode_2_launches_a_session_on_a_private_server(self):
         calls = {}
-        run = _FakeHelpRun()
+        run = _FakeOpencode()
         run_agent(
             "http://localhost:4000",
             "sk-key",
@@ -1508,7 +1574,7 @@ class TestRunAgent:
             launcher=lambda p, a, e: calls.update(path=p, args=tuple(a), env=dict(e)),
         )
         assert calls["args"] == ("opencode", "run", "--standalone", "fix the tests")
-        assert run.calls[0][0] == ("/opt/node/bin/opencode", "--help")
+        assert run.calls[0][0] == ("/opt/node/bin/opencode", "run", "fix the tests", "--help")
         assert run.calls[0][1]["env"] == {"PATH": "/opt/node/bin"}
         assert calls["env"]["OPENCODE_CONFIG_CONTENT"] == '{"provider":{}}'
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"

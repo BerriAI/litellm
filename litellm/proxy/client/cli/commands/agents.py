@@ -65,29 +65,12 @@ OPENCODE_PROVIDER_ID: Final = "litellm"
 OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
 OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 OPENCODE_STANDALONE_FLAG: Final = "--standalone"
-_OPENCODE_SERVER_FLAGS: Final = frozenset({OPENCODE_STANDALONE_FLAG, "--server"})
-_OPENCODE_SESSION_SUBCOMMANDS: Final = frozenset({"run", "mini", "models"})
-_OPENCODE_OTHER_SUBCOMMANDS: Final = frozenset(
-    {
-        "acp",
-        "api",
-        "auth",
-        "debug",
-        "machine",
-        "mcp",
-        "pair",
-        "plugin",
-        "reload",
-        "serve",
-        "service",
-        "session",
-        "stats",
-        "uninstall",
-        "update",
-        "upgrade",
-    }
+_OPENCODE_SERVER_FLAGS: Final = frozenset({OPENCODE_STANDALONE_FLAG, "--no-standalone", "--server"})
+_OPENCODE_CONFIG_COMMANDS: Final = frozenset(
+    {(), ("run",), ("mini",), ("models",), ("debug", "config"), ("debug", "agents")}
 )
 _OPENCODE_VALUE_FLAGS: Final = frozenset({"--session", "-s", "--prompt", "--log-level", "--completions"})
+_OPENCODE_HELP_USAGE: Final = re.compile(r"^USAGE\n\s+opencode((?: [^\s<\[]+)*)", re.MULTILINE)
 _OPENCODE_HELP_LISTS_STANDALONE: Final = re.compile(rf"^\s+{OPENCODE_STANDALONE_FLAG}\b", re.MULTILINE)
 _OPENCODE_HELP_TIMEOUT_SECONDS: Final = 10.0
 
@@ -761,25 +744,32 @@ def opencode_model_sync_env(
     return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
 
 
-def _opencode_has_standalone(
-    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
-) -> bool:
+@dataclass(frozen=True, slots=True)
+class _OpencodeHelpFailed:
+    reason: str
+
+
+def _opencode_help(
+    binary: str, words: Sequence[str], env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> str | _OpencodeHelpFailed:
     try:
         completed: Final = run(
-            _windows_command(binary, (binary, "--help")),
+            _windows_command(binary, (binary, *words, "--help")),
             env=dict(env),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             encoding="utf-8",
             timeout=_OPENCODE_HELP_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired, UnicodeError):
-        return False
-    return completed.returncode == 0 and _OPENCODE_HELP_LISTS_STANDALONE.search(completed.stdout) is not None
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+        return _OpencodeHelpFailed(str(error) or type(error).__name__)
+    if completed.returncode != 0:
+        return _OpencodeHelpFailed(f"exit code {completed.returncode}")
+    return completed.stdout
 
 
-def _opencode_first_positional(args: Sequence[str]) -> int | None:
-    return next(
+def _opencode_command_words(args: Sequence[str]) -> tuple[int, tuple[str, ...]]:
+    index: Final = next(
         (
             index
             for index, (previous, arg) in enumerate(zip(("", *args), args))
@@ -787,19 +777,20 @@ def _opencode_first_positional(args: Sequence[str]) -> int | None:
         ),
         None,
     )
-
-
-def _opencode_standalone_index(args: Sequence[str]) -> int | None:
-    if any(arg.partition("=")[0] in _OPENCODE_SERVER_FLAGS for arg in args):
-        return None
-    index: Final = _opencode_first_positional(args)
     if index is None:
-        return 0
-    if args[index] in _OPENCODE_SESSION_SUBCOMMANDS:
-        return index + 1
-    if args[index] not in _OPENCODE_OTHER_SUBCOMMANDS and os.path.isdir(args[index]):
-        return 0
-    return None
+        return 0, ()
+    following: Final = args[index + 1 : index + 2]
+    return index, (args[index], *(word for word in following if not word.startswith("-")))
+
+
+def _opencode_standalone_index(help_text: str, index: int) -> int | None:
+    usage: Final = _OPENCODE_HELP_USAGE.search(help_text)
+    if usage is None or _OPENCODE_HELP_LISTS_STANDALONE.search(help_text) is None:
+        return None
+    command: Final = tuple(usage.group(1).split())
+    if command not in _OPENCODE_CONFIG_COMMANDS:
+        return None
+    return index + len(command) if command else 0
 
 
 def with_opencode_private_server(
@@ -808,23 +799,35 @@ def with_opencode_private_server(
     base_env: Mapping[str, str],
     *,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    warn: Callable[[str], None] = _warn,
 ) -> tuple[str, ...]:
-    """The launch args with `--standalone` added where an OpenCode 2+ launch would attach to its background service.
+    """The launch args with `--standalone` added where an OpenCode 2+ launch would read its config from a shared service.
 
     OpenCode 2 keeps a background service running after the TUI exits, and later
     launches reuse it, so the provider config and key exported here never reach
     the server that lists and calls models. A standalone server is a private
-    child of this launch with this env. OpenCode 1 and the subcommands that
-    start no session refuse the flag, OpenCode before 2.2 takes it only after a
-    subcommand, and a `--server` or `--standalone` the user passed wins.
+    child of this launch with this env. Only the commands that start a session
+    or print the config get it, and only when that command's own --help lists
+    it, since OpenCode 1 has no such flag and 2.x adds it command by command.
+    A `--server`, `--standalone` or `--no-standalone` the user passed wins.
     """
     unchanged: Final = tuple(args)
     if os.path.splitext(os.path.basename(binary))[0] != "opencode":
         return unchanged
-    index: Final = _opencode_standalone_index(args)
-    if index is None or not _opencode_has_standalone(binary, base_env, run=run):
+    if any(arg.partition("=")[0] in _OPENCODE_SERVER_FLAGS for arg in args):
         return unchanged
-    return (*args[:index], OPENCODE_STANDALONE_FLAG, *args[index:])
+    index, words = _opencode_command_words(args)
+    help_text: Final = _opencode_help(binary, words, base_env, run=run)
+    if isinstance(help_text, _OpencodeHelpFailed):
+        warn(
+            f"litellm: could not check whether OpenCode takes {OPENCODE_STANDALONE_FLAG} ({help_text.reason}), "
+            "so a running OpenCode service may not see the LiteLLM models"
+        )
+        return unchanged
+    insert_at: Final = _opencode_standalone_index(help_text, index)
+    if insert_at is None:
+        return unchanged
+    return (*args[:insert_at], OPENCODE_STANDALONE_FLAG, *args[insert_at:])
 
 
 def _codex_row(
