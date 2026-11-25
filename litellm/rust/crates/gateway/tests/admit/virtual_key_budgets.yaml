@@ -1,8 +1,9 @@
 # With the budget reservation disabled, a key's own budget is checked natively at read time
 # (`callbacks/budget_check.rs`), so a key that holds `max_budget`, `budget_duration` or
 # `budget_reset_at` is served. `admit` lets a key over its budget through, since the native app
-# refuses it with Python's error. Every other budget a key can hold still goes to Python, and so
-# does a call the gateway cannot price, which includes a model group the cost map does not name.
+# refuses it with Python's error. Every other budget a key can hold still goes to Python. Nothing is
+# priced while the reservation is disabled, so a model group the cost map does not name is served
+# too, and the budget check treats it as paid.
 config:
   model_list:
     - model_name: claude-haiku-5-5
@@ -103,9 +104,12 @@ requests:
   - name: a key with a max budget calling a model the gateway cannot price
     headers: {authorization: Bearer sk-budget}
     body: {model: unpriced, max_tokens: 16, messages: []}
-    expect: python
-    reason: body
-    over: budget_hold
+    expect: rust
+
+  - name: a key over its max budget calling a model the gateway cannot price
+    headers: {authorization: Bearer sk-spent}
+    body: {model: unpriced, max_tokens: 16, messages: []}
+    expect: rust
 
   - name: a key without a budget calling a model the gateway cannot price
     headers: {authorization: Bearer sk-plain}
