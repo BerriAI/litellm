@@ -18,10 +18,12 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_OAUTH_REFRESH_TIMEOUT_SECONDS
 from litellm.proxy.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
     refusal_body,
+    refusal_summary,
     refused_refresh_error,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
@@ -113,16 +115,19 @@ async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str
     # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
         client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
-        response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
+        response: Final = await asyncio.wait_for(
+            client.post(url, headers=request_headers, data=form),  # pyright: ignore[reportUnknownMemberType]  # untyped
+            MCP_OAUTH_REFRESH_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()  # pyright: ignore
         body: Final[dict[str, object]] = response.json()  # pyright: ignore
     except httpx.HTTPStatusError as exc:
-        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
         refusal: Final = refusal_body(exc.response)
+        verbose_logger.warning("MCP OAuth refresh request failed (%s): %s", refusal_summary(refusal), exc)
         refused: Final = None if refusal is None else refused_refresh_error(refusal)
         return None if refused is None else {"error": refused}
     except Exception as exc:  # noqa: BLE001
-        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
+        verbose_logger.warning("MCP OAuth refresh request failed: %s: %s", type(exc).__name__, exc)
         return None
     else:
         return body  # pyright: ignore

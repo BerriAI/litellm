@@ -2609,7 +2609,7 @@ async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCreden
     if prisma_client is None:
         return "unavailable"
     try:
-        credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
     except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
         return "unavailable"
     if oauth_grant_state(credential) == "absent" or credential is None or credential.get("needs_scopes"):

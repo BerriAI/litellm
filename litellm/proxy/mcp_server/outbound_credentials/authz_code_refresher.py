@@ -18,7 +18,7 @@ import httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import loads_json_object, single_log_line
+from litellm.litellm_core_utils.core_helpers import loads_json_object
 from litellm.proxy.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
 )
@@ -52,6 +52,13 @@ def refusal_body(response: httpx.Response) -> Mapping[str, object] | None:
 
 async def _ignore_refusal(user_id: str, server_id: str, refused_refresh_token: str) -> None:
     return None
+
+
+def refusal_summary(body: Mapping[str, object] | None) -> str:
+    fields: Final = ("error", "error_description")
+    if body is None:
+        return "no error body"
+    return ", ".join(f"{name}={str(body.get(name))!r}" for name in fields)
 
 
 def refused_refresh_error(body: Mapping[str, object]) -> str | None:
@@ -172,11 +179,14 @@ class AuthorizationCodeRefresher:
             return None
         refused: Final = refused_refresh_error(body)
         if refused is not None:
-            verbose_logger.warning("MCP OAuth refresh refused for server %s: %s", server_id, single_log_line(refused))
+            verbose_logger.warning("MCP OAuth refresh refused for server %s (%s)", server_id, refusal_summary(body))
             await self._record_refusal(user_id, server_id, token.refresh_token)
             return None
         access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
+            verbose_logger.warning(
+                "MCP OAuth refresh for server %s returned no access token (%s)", server_id, refusal_summary(body)
+            )
             return None
 
         binding_proof: Final = await self._identity_validator(

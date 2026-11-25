@@ -188,6 +188,69 @@ async def test_a_refusal_that_cannot_be_recorded_still_asks_for_sign_in(
     assert token is None, "a refusal must still end in the sign-in challenge, never a 500"
 
 
+@pytest.mark.asyncio
+async def test_a_token_request_that_never_answers_gives_up_at_the_refresh_deadline(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    import logging
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm._logging import verbose_logger
+    from litellm.constants import MCP_OAUTH_REFRESH_TIMEOUT_SECONDS
+    from litellm.proxy.mcp_server.outbound_credentials import per_user_oauth_store
+    from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator import RedisRefreshCoordinator
+
+    async def never_answers(_request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+        return httpx.Response(200, json={"access_token": "too-late"})
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(per_user_oauth_store, "MCP_OAUTH_REFRESH_TIMEOUT_SECONDS", 0.05)
+    respx_mock.post("https://idp.example/token").mock(side_effect=never_answers)
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_logger.addHandler(capture)
+    try:
+        refreshed: Final = await asyncio.wait_for(
+            per_user_oauth_store._post_token_endpoint("https://idp.example/token", {"grant_type": "refresh_token"}, {}),
+            5,
+        )
+    finally:
+        verbose_logger.removeHandler(capture)
+
+    assert refreshed is None, "a hung token endpoint is a miss once the deadline passes"
+    logged: Final = " ".join(handled.args[0].getMessage() for handled in capture.handle.call_args_list)
+    assert "TimeoutError" in logged, "the log must say the refresh timed out"
+    budget: Final = RedisRefreshCoordinator(SimpleNamespace()).refresh_budget_seconds
+    assert MCP_OAUTH_REFRESH_TIMEOUT_SECONDS < budget, "the deadline must end before the lock stops renewing"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_refresh_logs_the_providers_error_code(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    import logging
+    from unittest.mock import MagicMock
+
+    from litellm._logging import verbose_logger
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _post_token_endpoint
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.post("https://idp.example/token").respond(
+        400, json={"error": "invalid_client", "error_description": "Client authentication failed"}
+    )
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_logger.addHandler(capture)
+    try:
+        assert await _post_token_endpoint("https://idp.example/token", {"grant_type": "refresh_token"}, {}) is None
+    finally:
+        verbose_logger.removeHandler(capture)
+
+    logged: Final = " ".join(handled.args[0].getMessage() for handled in capture.handle.call_args_list)
+    assert "error='invalid_client'" in logged and "Client authentication failed" in logged
+
+
 class _BlockingStore:
     def __init__(self, access_token: str) -> None:
         self._access_token = access_token
