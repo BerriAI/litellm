@@ -558,10 +558,15 @@ def test_responses_bridge_index_point_marks_the_message_it_counts_to(
     gateway: Gateway, index: JsonValue, marked: str | None
 ) -> None:
     marker: Final = new_marker()
-    points: Final[list[JsonValue]] = [{"location": "message", "role": "system"}, {"location": "message", "index": index}]
+    points: Final[list[JsonValue]] = [
+        {"location": "message", "role": "system"},
+        {"location": "message", "index": index},
+    ]
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=points)
-        response: Final = gateway.request("POST", "/v1/responses", _responses_turn_ending_in_tool_results(model, marker))
+        response: Final = gateway.request(
+            "POST", "/v1/responses", _responses_turn_ending_in_tool_results(model, marker)
+        )
         assert response.status_code == 200, response.text
         assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, marked or final_label(marker)]
 

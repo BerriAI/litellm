@@ -88,6 +88,7 @@ from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     CostPerToken,
     CustomPricingLiteLLMParams,
+    DynamicPromptManagementParamLiteral,
     all_litellm_params,
 )
 from litellm.utils import (
@@ -557,6 +558,7 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
             *allowed_openai_param_names(allowed_openai_params),
+            DynamicPromptManagementParamLiteral.CACHE_CONTROL_INJECTION_POINTS.value,
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
 
