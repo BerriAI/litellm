@@ -184,8 +184,11 @@ def _with_original_numbers(original: object, guardrailed: object, depth: int) ->
         }
     original_items: Final = _as_list_or_tuple(original)
     guardrailed_items: Final = _as_list_or_tuple(guardrailed)
-    if original_items is None or guardrailed_items is None or len(original_items) != len(guardrailed_items):
+    if original_items is None or guardrailed_items is None:
         return guardrailed
+    if len(original_items) != len(guardrailed_items):
+        originals_by_text: Final = {_json_scan_text(item): item for item in original_items}
+        return [originals_by_text.get(_json_scan_text(value), value) for value in guardrailed_items]
     return [
         _with_original_numbers(item, value, depth + 1)
         for item, value in zip(original_items, guardrailed_items, strict=True)
@@ -425,8 +428,20 @@ def _write_group_args(group: Sequence[object], args: Mapping[str, object], guard
         _write_partial_path(partial_args, args.get(path), _partial_text(partial_args), guardrail_name)
 
 
+def _returned_function_field(returned_tool_call: object, name: str) -> object:
+    return stream_item_field(stream_item_field(returned_tool_call, "function"), name)
+
+
+def _write_group_name(group: Sequence[object], returned_tool_call: object) -> None:
+    name: Final = _returned_function_field(returned_tool_call, "name")
+    if not isinstance(name, str) or not name or name == _group_field(group, "name"):
+        return
+    holder: Final = next((function_call for function_call in group if _field(function_call, "name")), group[0])
+    _set_field(holder, "name", name)
+
+
 def _guardrailed_args(returned_tool_call: object, guardrail_name: str | None) -> Mapping[str, object]:
-    arguments: Final = stream_item_field(stream_item_field(returned_tool_call, "function"), "arguments")
+    arguments: Final = _returned_function_field(returned_tool_call, "arguments")
     parsed: Final = _parse_json_dict_or_none(arguments) if isinstance(arguments, str) else None
     if parsed is None:
         raise unappliable_request_rewrite(guardrail_name)
@@ -446,15 +461,12 @@ def _text_count_differs(text_slots: Sequence[_TextSlot], returned_texts: Sequenc
 def _write_back_function_calls(
     groups: Sequence[Sequence[object]], returned_tool_calls: Sequence[object] | None, guardrail_name: str | None
 ) -> None:
-    if returned_tool_calls is None or len(returned_tool_calls) != len(groups):
+    if returned_tool_calls is None:
         return
-    changed: Final = tuple(
-        (group, returned)
-        for group, returned in zip(groups, returned_tool_calls, strict=True)
-        if stream_item_field(stream_item_field(returned, "function"), "arguments") != _group_arguments_text(group)
-    )
-    for group, returned in changed:
-        _write_group_args(group, _guardrailed_args(returned, guardrail_name), guardrail_name)
+    for group, returned in zip(groups, returned_tool_calls, strict=False):
+        if _returned_function_field(returned, "arguments") != _group_arguments_text(group):
+            _write_group_args(group, _guardrailed_args(returned, guardrail_name), guardrail_name)
+        _write_group_name(group, returned)
 
 
 def _texts_payload(

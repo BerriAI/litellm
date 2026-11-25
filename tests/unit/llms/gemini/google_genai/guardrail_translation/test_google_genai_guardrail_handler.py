@@ -297,8 +297,9 @@ def _without_note_in_reverse_key_order(text: str) -> str:
 
 
 class _RestructuringGuardrail(CustomGuardrail):
-    def __init__(self) -> None:
+    def __init__(self, rewrite: Callable[[str], str] = _without_note_in_reverse_key_order) -> None:
         super().__init__(guardrail_name="restructurer")
+        self.rewrite: Final = rewrite
 
     async def apply_guardrail(
         self,
@@ -307,7 +308,7 @@ class _RestructuringGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        return GenericGuardrailAPIInputs(texts=[_without_note_in_reverse_key_order(text) for text in inputs["texts"]])
+        return GenericGuardrailAPIInputs(texts=[self.rewrite(text) for text in inputs["texts"]])
 
 
 @pytest.mark.asyncio
@@ -328,6 +329,21 @@ async def test_numbers_keep_their_type_when_a_guardrail_reorders_and_drops_tool_
     sent_response: Final = guardrailed["contents"][0]["parts"][0]["functionResponse"]["response"]
     assert sent_response == {"rows": [1, {"n": 2}], "id": "7", "rate": 2.5, "count": 3}
     assert type(sent_response["count"]) is int
+
+
+def _without_zebrafruit_rows(text: str) -> str:
+    fields: Final = json.loads(text)
+    return json.dumps({**fields, "rows": [row for row in fields["rows"] if row != "zebrafruit"]})
+
+
+@pytest.mark.asyncio
+async def test_numbers_keep_their_type_when_a_guardrail_drops_a_tool_result_list_item() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_response_with_rows([1, "zebrafruit", 2.5, {"n": 3}]),
+        guardrail_to_apply=_RestructuringGuardrail(rewrite=_without_zebrafruit_rows),
+    )
+
+    assert _sent_request(guardrailed) == _function_response_with_rows([1, 2.5, {"n": 3}])
 
 
 @pytest.mark.asyncio
@@ -1037,6 +1053,77 @@ async def test_a_reply_tool_call_the_guardrail_drops_still_reaches_the_client_as
 
     assert guardrailed == _model_reply(FUNCTION_CALL_PART)
 
+
+SECOND_FUNCTION_CALL_PART: Final = {"functionCall": {"name": "search", "args": {"query": "invoices"}}}
+MASKED_FUNCTION_CALL_PART: Final = {"functionCall": {"name": "send_payment", "args": {"card": "[MASKED]", "amount": 12.5}}}
+
+
+def _first_call_masked_second_dropped(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> list[object]:
+    first: Final = tool_calls[0]
+    return [{**first, "function": {**first["function"], "arguments": json.dumps({"card": "[MASKED]", "amount": 12.5})}}]
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_returning_fewer_request_tool_calls_applies_them_by_position_as_on_chat() -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [
+            {"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART), copy.deepcopy(SECOND_FUNCTION_CALL_PART)]}
+        ],
+    }
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_first_call_masked_second_dropped)
+    )
+
+    assert data["contents"][0]["parts"] == [MASKED_FUNCTION_CALL_PART, SECOND_FUNCTION_CALL_PART]
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_returning_fewer_reply_tool_calls_applies_them_by_position_as_on_chat() -> None:
+    reply: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [copy.deepcopy(FUNCTION_CALL_PART), copy.deepcopy(SECOND_FUNCTION_CALL_PART)],
+                },
+                "finishReason": "STOP",
+            }
+        ]
+    }
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
+        response=reply, guardrail_to_apply=_ToolCallGuardrail(rewrite=_first_call_masked_second_dropped)
+    )
+
+    assert guardrailed["candidates"][0]["content"]["parts"] == [MASKED_FUNCTION_CALL_PART, SECOND_FUNCTION_CALL_PART]
+
+
+
+RENAMED_FUNCTION_CALL_PART: Final = {
+    "functionCall": {"name": "review_payment", "args": {"card": "4111 1111", "amount": 12.5}}
+}
+
+
+def _renamed_to_review_payment(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> list[object]:
+    return [{**tool_call, "function": {**tool_call["function"], "name": "review_payment"}} for tool_call in tool_calls]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_the_guardrail_renames_goes_out_under_the_new_name_as_on_chat() -> None:
+    data: Final = {"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART)]}]}
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_renamed_to_review_payment)
+    )
+    guardrailed_reply: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
+        response=_model_reply(copy.deepcopy(FUNCTION_CALL_PART)),
+        guardrail_to_apply=_ToolCallGuardrail(rewrite=_renamed_to_review_payment),
+    )
+
+    assert data["contents"][0]["parts"] == [RENAMED_FUNCTION_CALL_PART]
+    assert guardrailed_reply == _model_reply(RENAMED_FUNCTION_CALL_PART)
 
 STREAMED_FUNCTION_CALL_PARTS: Final = (
     {"functionCall": {"name": "send_payment", "willContinue": True}},
