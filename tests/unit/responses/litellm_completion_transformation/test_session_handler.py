@@ -1090,11 +1090,18 @@ async def test_previous_response_replays_a_stored_input_call_under_the_name_the_
     assert called == answered == [sent_name, sent_name]
 
 
-def _kept_in_cold_storage(stored_turn: Mapping[str, object]) -> dict[str, object]:
+TRUNCATED_ROW: Final = json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True})
+STORED_ROWS: Final = (
+    pytest.param(TRUNCATED_ROW, id="truncated_row"),
+    pytest.param("{}", id="prompts_not_stored"),
+)
+
+
+def _kept_in_cold_storage(stored_turn: Mapping[str, object], stored_request: str = TRUNCATED_ROW) -> dict[str, object]:
     return {
         **stored_turn,
         "metadata": json.dumps({"cold_storage_object_key": "cold/long-member-turn.json"}),
-        "proxy_server_request": json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True}),
+        "proxy_server_request": stored_request,
     }
 
 
@@ -1109,8 +1116,9 @@ def _cold_storage_object(
     }
 
 
+@pytest.mark.parametrize("stored_request", STORED_ROWS)
 async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_cold_storage(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stored_request: str
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
@@ -1121,14 +1129,15 @@ async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_
             return_value=_cold_storage_object(truncate_tool_name(LONG_MEMBER_FULL_NAME))
         )
         await _answer_the_long_member_call(
-            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools)),
+            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools), stored_request),
             response_id,
             _sent_as_tools,
         )
 
 
+@pytest.mark.parametrize("stored_request", STORED_ROWS)
 async def test_previous_response_replays_a_stored_input_call_from_a_turn_kept_in_cold_storage(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stored_request: str
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
@@ -1140,7 +1149,7 @@ async def test_previous_response_replays_a_stored_input_call_from_a_turn_kept_in
             return_value=_cold_storage_object(sent_name, JOINED_MEMBER_CALL_REPLAY)
         )
         declared, called, answered = await _sent_tool_names(
-            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools)),
+            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools), stored_request),
             response_id,
             _sent_as_tools,
         )

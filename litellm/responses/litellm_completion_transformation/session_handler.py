@@ -75,8 +75,9 @@ def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> 
 
 
 def _rebuilt_from_cold_storage(spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object]) -> bool:
-    return "input" not in proxy_server_request and LITELLM_TRUNCATED_PAYLOAD_FIELD in str(
-        spend_log.get("proxy_server_request")
+    stored_request: Final = str(spend_log.get("proxy_server_request") or "{}")
+    return "input" not in proxy_server_request and (
+        stored_request == "{}" or LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_request
     )
 
 
