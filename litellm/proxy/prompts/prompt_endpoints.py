@@ -275,7 +275,7 @@ async def list_prompts(
             all_prompts = get_latest_prompt_versions(prompts=allowed_prompts)
             if environment:
                 all_prompts = [p for p in all_prompts if p.environment == environment]
-            prompt_list: Final = []
+            prompt_list: Final[list[PromptSpec]] = []
             for original_prompt in all_prompts:
                 # Create a copy with base prompt_id (without version suffix)
                 prompt_copy = PromptSpec(
@@ -297,7 +297,7 @@ async def list_prompts(
             all_prompts = [p for p in all_prompts if p.environment == environment]
         latest_prompts: Final = get_latest_prompt_versions(prompts=all_prompts)
         # Create copies with base prompt_id (without version suffix) for display
-        prompts_for_display: Final = []
+        prompts_for_display: Final[list[PromptSpec]] = []
         for original_prompt in latest_prompts:
             prompt_copy = PromptSpec(
                 prompt_id=get_base_prompt_id(prompt_id=original_prompt.prompt_id),
@@ -368,7 +368,7 @@ async def get_prompt_versions(
     base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
 
     # Query DB for versions
-    versioned_prompts: Final = []
+    versioned_prompts: Final[list[PromptSpec]] = []
     if prisma_client is not None:
         where_clause: Final[dict[str, str]] = {"prompt_id": base_prompt_id}
         if environment:
@@ -1111,6 +1111,7 @@ async def test_prompt(
             general_settings=general_settings,
             llm_router=llm_router,
             model=data.get("model", ""),
+            team_id=user_api_key_dict.team_id,
         )
 
         # Use ProxyBaseLLMRequestProcessing to go through all proxy logic

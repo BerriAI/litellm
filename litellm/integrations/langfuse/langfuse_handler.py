@@ -19,6 +19,12 @@ else:
     DynamicLoggingCache = Any
 
 
+def _tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_sdk_tenant_host_refused_by_otel_v2
+
+    return langfuse_sdk_tenant_host_refused_by_otel_v2(params)
+
+
 class LangFuseHandler:
     @staticmethod
     def get_langfuse_logger_for_request(
@@ -37,7 +43,9 @@ class LangFuseHandler:
 
         """
         temp_langfuse_logger: LangFuseLogger | None = globalLangfuseLogger
-        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params) is False:
+        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(
+            standard_callback_dynamic_params
+        ) is False or _tenant_host_refused_by_otel_v2(standard_callback_dynamic_params):
             return LangFuseHandler._return_global_langfuse_logger(
                 globalLangfuseLogger=globalLangfuseLogger,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
@@ -96,7 +104,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _create_langfuse_logger_from_credentials(
-        credentials: dict,
+        credentials: dict[str, object],
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
@@ -105,11 +113,12 @@ class LangFuseHandler:
         2. cache the LangFuseLogger to prevent re-creating it for the same credentials
         """
 
+        environment: Final = credentials.get("langfuse_environment")
         langfuse_logger: Final = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
-            langfuse_environment=credentials.get("langfuse_environment"),
+            langfuse_environment=None if environment is None else str(environment),
             allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(

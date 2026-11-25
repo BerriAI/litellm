@@ -1,9 +1,10 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -30,12 +31,14 @@ class TextToSpeechRequestData(TypedDict, total=False):
     Providers should set ONE of: dict_body, ssml_body, or text_body.
     """
 
-    dict_body: dict[str, Any]  # JSON request body (e.g., OpenAI TTS)
+    dict_body: ReadOnly[dict[str, object]]  # JSON request body (e.g., OpenAI TTS)
     ssml_body: str  # SSML/XML string body (e.g., Azure AVA TTS)
     headers: dict[str, str]  # Provider-specific headers to merge with base headers
 
 
 class BaseTextToSpeechConfig(ABC):
+    supports_streaming: ClassVar[bool] = False
+
     def __init__(self):
         pass
 
@@ -45,8 +48,7 @@ class BaseTextToSpeechConfig(ABC):
         return {
             k: v
             for k, v in class_attributes.items()
-            if not k.startswith("__")
-            and not k.startswith("_abc")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (
@@ -60,7 +62,7 @@ class BaseTextToSpeechConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get list of OpenAI TTS parameters supported by this provider
         """
@@ -69,7 +71,7 @@ class BaseTextToSpeechConfig(ABC):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         voice: str | dict | None = None,
         drop_params: bool = False,
         kwargs: dict = {},
@@ -96,7 +98,7 @@ class BaseTextToSpeechConfig(ABC):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete url for the request
@@ -111,8 +113,8 @@ class BaseTextToSpeechConfig(ABC):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> TextToSpeechRequestData:
         """

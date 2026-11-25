@@ -35,6 +35,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
+from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -46,7 +47,7 @@ else:
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
 _PROVIDER_FIELDS_ATTRIBUTE: Final = "provider_specific_fields"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
-_FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
+_FAILURE_MODE_ADAPTER: Final[TypeAdapter[VectorStoreSearchFailureMode]] = TypeAdapter(VectorStoreSearchFailureMode)
 _OBJECT_ADAPTER: Final = TypeAdapter(object)
 _STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ITERABLE_ADAPTER: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
@@ -132,18 +133,18 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Perform vector store search and append results as context to messages.
 
@@ -244,8 +245,8 @@ class VectorStorePreCallHook(CustomLogger):
     async def _augment_messages(
         self,
         messages: Sequence[AllMessageValues],
-        non_default_params: dict,
-        tools: list[dict] | None,
+        non_default_params: dict[str, object],
+        tools: list[dict[str, object]] | None,
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> VectorStoreAugmentation | None:
         if litellm.vector_store_registry is None:
@@ -327,7 +328,7 @@ class VectorStorePreCallHook(CustomLogger):
                     "query": query,
                     "custom_llm_provider": custom_llm_provider,
                     "metadata": request_metadata,
-                    **litellm_params_for_vector_store,
+                    **store_search_params(litellm_params_for_vector_store),
                 },
             )
         except Exception as search_error:

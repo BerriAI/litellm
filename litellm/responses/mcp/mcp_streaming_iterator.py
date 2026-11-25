@@ -7,6 +7,11 @@ from typing_extensions import TypedDict as ExtraItemsTypedDict
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    NO_GATEWAY_TOOLS,
+    GatewayTools,
+    allowed_tools_tool_choice_kept_on_follow_up,
+)
 from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
@@ -52,16 +57,17 @@ def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
     return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
 
 
+def _item_field(item: object, name: str) -> object:
+    """One field of a response item, which is either a dict or a model."""
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
 def _function_call_id(item: object) -> str | None:
     """The call id of a function_call item, None for every other item kind."""
-    item_type: Final[object] = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+    item_type: Final = _item_field(item, "type")
     if item_type != "function_call":
         return None
-    call_id: Final[object] = (
-        item.get("call_id") or item.get("id")
-        if isinstance(item, dict)
-        else getattr(item, "call_id", None) or getattr(item, "id", None)
-    )
+    call_id: Final = _item_field(item, "call_id") or _item_field(item, "id")
     return call_id if isinstance(call_id, str) else None
 
 
@@ -294,6 +300,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
+        tool_choice: object = None,
+        gateway: GatewayTools = NO_GATEWAY_TOOLS,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
@@ -318,6 +326,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
+        self.tool_choice: Final = tool_choice
+        self.gateway: Final = gateway
         self.served_tools = tuple(served_tools) if served_tools is not None else None
 
         # Iterator references
@@ -851,10 +861,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         try:
             # Extract tool calls from the response
-            if self.collected_response is not None:
-                tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response)
-            else:
-                tool_calls = []
+            tool_calls: Final = (
+                LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                    LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response),
+                    self.tool_choice,
+                    self.gateway,
+                )
+                if self.collected_response is not None
+                else ()
+            )
             if not tool_calls:
                 return
             self.tool_call_round += 1
@@ -1038,7 +1053,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 )
             else:
                 return
-            # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
             if self.tool_call_round >= self.max_tool_call_rounds:
@@ -1049,6 +1063,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 verbose_logger.warning(
                     "MCP auto-execute hit max_agentic_loops=%s; forcing a text-only follow-up.",
                     self.max_tool_call_rounds,
+                )
+            else:
+                follow_up_params.update(
+                    allowed_tools_tool_choice_kept_on_follow_up(self.original_request_params.get("tool_choice"))
                 )
 
             follow_up_response: Final = await aresponses(**_FollowUpRequest(**follow_up_params))

@@ -25,6 +25,7 @@ from datetime import datetime
 from importlib import import_module
 from collections.abc import Mapping
 from typing import Final, cast
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import httpx
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, relayed_provider_specific_fields
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
@@ -197,6 +199,59 @@ def test_stream_error_preserves_provider_request_id(provider: str, header: str |
         assert str(raised.value.response.request.url) == f"https://{provider}.com/v1/"
         assert raised.value.generated_content == ""
         assert raised.value.is_pre_first_chunk is True
+
+
+@pytest.mark.parametrize(
+    ("chunk", "relayed"),
+    [
+        (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=1,
+                code="upstream_boom",
+                message="upstream broke",
+                param="temperature",
+            ),
+            {"code": "upstream_boom"},
+        ),
+        (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=1,
+                error=ErrorEventError(
+                    type="server_error",
+                    code="upstream_boom",
+                    message="upstream broke",
+                    param="temperature",
+                    trace_ref="trace_mid",
+                ),
+            ),
+            {"code": "upstream_boom", "trace_ref": "trace_mid"},
+        ),
+        (
+            SimpleNamespace(
+                type="response.failed",
+                response=SimpleNamespace(
+                    error={
+                        "type": "server_error",
+                        "code": "upstream_boom",
+                        "message": "upstream broke",
+                        "param": "temperature",
+                        "trace_ref": "trace_mid",
+                    }
+                ),
+            ),
+            {"code": "upstream_boom", "trace_ref": "trace_mid"},
+        ),
+    ],
+)
+def test_error_event_relays_the_provider_param_and_extra_fields(chunk: object, relayed: dict[str, str]) -> None:
+    with pytest.raises(MidStreamFallbackError) as caught:
+        _make_iterator()._maybe_raise_for_error_event(chunk)
+
+    mapped: Final = caught.value.original_exception
+    assert openai_error_param(mapped) == "temperature"
+    assert dict(relayed_provider_specific_fields(mapped) or {}) == relayed
 
 
 def test_maybe_raise_for_error_event_wraps_unknown_error_in_mid_stream_fallback():
@@ -959,3 +1014,73 @@ async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_se
 
     assert failure is not None
     _assert_names_the_azure_deployment(failure, reported_api_base)
+
+
+_BEDROCK_SERVICE_UNAVAILABLE_CHUNK: Final = {
+    "error": {
+        "message": "The server had an error while processing your request. Sorry about that!",
+        "type": "server_error",
+        "code": "service_unavailable",
+    }
+}
+
+
+def _real_config_iterator(provider: str, model: str, events: tuple[Mapping[str, object], ...]):
+    payload: Final = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+
+    async def aiter_bytes():
+        yield payload
+
+    response: Final = Mock()
+    response.headers = {}
+    response.aiter_bytes = aiter_bytes
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.completion_start_time = None
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders(provider), model=model
+    )
+    assert config is not None
+    return ResponsesAPIStreamingIterator(
+        response=response,
+        model=model,
+        responses_api_provider_config=config,
+        logging_obj=logging_obj,
+        custom_llm_provider=provider,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("bedrock", "us.openai.gpt-5.6-sol"),
+        ("openai", "gpt-5.5"),
+        ("volcengine", "doubao-seed-1-6"),
+        ("bigmodel", "glm-5"),
+    ],
+)
+async def test_untyped_mid_stream_error_chunk_raises_the_upstream_error(provider: str, model: str):
+    iterator: Final = _real_config_iterator(
+        provider,
+        model,
+        (
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial ",
+                "sequence_number": 1,
+            },
+            _BEDROCK_SERVICE_UNAVAILABLE_CHUNK,
+        ),
+    )
+    stream: Final = aiter(iterator)
+    assert (await anext(stream)).type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await anext(stream)
+    assert "The server had an error while processing your request" in str(exc_info.value.original_exception)
+    assert exc_info.value.status_code >= 500
+    assert exc_info.value.generated_content == "partial "

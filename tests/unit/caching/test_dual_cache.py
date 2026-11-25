@@ -137,35 +137,6 @@ def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
     assert "shared_a" not in dual_cache.last_redis_batch_access_time
 
 
-def test_reserve_redis_batch_reads_reserves_memory_misses_and_can_be_rolled_back():
-    mock_redis: Final = MagicMock(spec=RedisCache)
-    dual_cache: Final = DualCache(
-        in_memory_cache=InMemoryCache(),
-        redis_cache=mock_redis,
-        default_redis_batch_cache_expiry=10,
-    )
-    dual_cache.in_memory_cache.set_cache("memory_key", "memory_value")
-
-    reserved, previous_access_times = dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"])
-
-    assert reserved == ["missing_key"]
-    assert previous_access_times == {"missing_key": None}
-    assert dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"]) == ([], {})
-
-    dual_cache._rollback_redis_batch_key_reservations(previous_access_times)
-
-    assert dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"]) == (
-        ["missing_key"],
-        {"missing_key": None},
-    )
-
-
-def test_reserve_redis_batch_reads_returns_empty_without_redis():
-    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=None)
-
-    assert dual_cache.reserve_redis_batch_reads(["missing_key"]) == ([], {})
-
-
 def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
     mock_redis = _redis_mock_for_sync_batch({"throttled_key": "redis_value"})
     dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10)
@@ -938,3 +909,51 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+
+class _FormatCountingValue:
+    def __init__(self) -> None:
+        self.format_calls = 0
+
+    def __repr__(self) -> str:
+        self.format_calls += 1
+        return "formatted-cached-value"
+
+    __str__ = __repr__
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_does_not_format_cached_values_when_verbose_is_off(monkeypatch, capsys):
+    from litellm import _logging
+
+    monkeypatch.setattr(_logging, "set_verbose", False)
+    value: Final = _FormatCountingValue()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+
+    await cache.async_set_cache("k", value)
+    assert await cache.async_get_cache("k") is value
+    assert cache.get_cache("k") is value
+
+    assert value.format_calls == 0
+    assert "formatted-cached-value" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_debug_output_still_includes_cached_values_when_verbose_is_on(monkeypatch, capsys):
+    from litellm import _logging
+
+    monkeypatch.setattr(_logging, "set_verbose", True)
+    value: Final = _FormatCountingValue()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+
+    await cache.async_set_cache("k", value)
+    await cache.async_set_cache_pipeline([("k2", value)])
+    await cache.async_get_cache("k")
+    cache.get_cache("k")
+
+    out: Final = capsys.readouterr().out
+    assert "async set cache: cache key: k; local_only: False; value: formatted-cached-value" in out
+    assert "async batch set cache: cache keys: [('k2', formatted-cached-value)]; local_only: False" in out
+    assert "async get cache: cache key: k; local_only: False" in out
+    assert "in_memory_result: formatted-cached-value" in out
+    assert out.count("get cache: cache result: formatted-cached-value") == 2

@@ -274,10 +274,10 @@ def _coerce_redis_kwargs_types(
     return result
 
 
-def _redis_kwargs_from_environment():
+def _redis_kwargs_from_environment() -> dict[str, object]:
     mapping: Final = _get_redis_env_kwarg_mapping()
 
-    return_dict: Final = {}
+    return_dict: Final[dict[str, object]] = {}
     for k, v in mapping.items():
         value = get_secret(k, default_value=None)
         if value is not None:
@@ -322,7 +322,7 @@ def _build_elasticache_iam_provider(redis_kwargs: Mapping[str, object]) -> Elast
 def create_gcp_iam_redis_connect_func(
     service_account: str,
     ssl_ca_certs: str | None = None,
-) -> Callable:
+) -> Callable[..., None]:
     """
     Creates a custom Redis connection function for GCP IAM authentication.
 
@@ -427,7 +427,7 @@ def create_azure_ad_redis_connect_func(
     azure_client_id: str | None = None,
     azure_tenant_id: str | None = None,
     azure_client_secret: str | None = None,
-) -> Callable:
+) -> Callable[..., None]:
     """
     Creates a custom Redis connection function for Azure AD authentication.
 
@@ -576,7 +576,7 @@ def merge_redis_kwargs(
     return {**layered, **{k: v for k, v in filled if v is not None}}
 
 
-def _get_redis_client_logic(**env_overrides):
+def _get_redis_client_logic(**env_overrides: object) -> dict[str, object]:
     """
     Common functionality across sync + async redis client implementations
     """
@@ -737,8 +737,8 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
 
 
-def _get_redis_sentinel_connection_kwargs(redis_kwargs: dict) -> dict:
-    connection_kwargs: Final = {}
+def _get_redis_sentinel_connection_kwargs(redis_kwargs: Mapping[str, object]) -> dict:
+    connection_kwargs: Final[dict[str, object]] = {}
     args: Final = _get_redis_kwargs()
     for arg in redis_kwargs:
         if arg in args:
@@ -770,7 +770,7 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     return sentinel.master_for(service_name, **connection_kwargs)
 
 
-def _sentinel_auth_kwargs(connection_kwargs: dict, sentinel_password: str | None) -> dict:
+def _sentinel_auth_kwargs(connection_kwargs: Mapping[str, object], sentinel_password: str | None) -> dict[str, object]:
     """The Sentinel monitors are separate servers that authenticate with their own password, so the
     data node's credential provider never belongs on them: leaving it there makes redis-py send the
     data node's token to a monitor, which fails whether the monitor is unauthenticated or has its
@@ -820,7 +820,7 @@ def _credential_provider_from_connect_func(redis_connect_func: object | None) ->
     return None
 
 
-def _credential_provider_auth_kwargs(redis_kwargs: dict) -> dict:
+def _credential_provider_auth_kwargs(redis_kwargs: dict[str, object]) -> dict:
     """Use a credential provider instead of an IAM callback and conflicting static credentials."""
     explicit_provider: Final = redis_kwargs.get("credential_provider")
     credential_provider: Final = (
@@ -836,7 +836,7 @@ def _credential_provider_auth_kwargs(redis_kwargs: dict) -> dict:
     return dict(kept, credential_provider=credential_provider)
 
 
-def get_redis_client(**env_overrides):
+def get_redis_client(**env_overrides: object):
     redis_kwargs: Final = _get_redis_client_logic(**env_overrides)
 
     if "startup_nodes" in redis_kwargs:
@@ -862,7 +862,7 @@ def get_redis_client(**env_overrides):
 
 def get_redis_async_client(
     connection_pool: async_redis.BlockingConnectionPool | None = None,
-    **env_overrides,
+    **env_overrides: object,
 ) -> async_redis.Redis | async_redis.RedisCluster:
     redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
 
@@ -933,8 +933,12 @@ def get_redis_async_client(
     )
 
 
+def _tls_only_settings(redis_kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(name for name in redis_kwargs if name.startswith("ssl_"))
+
+
 def get_redis_connection_pool(
-    **env_overrides,
+    **env_overrides: object,
 ) -> async_redis.BlockingConnectionPool | None:
     redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
@@ -959,6 +963,9 @@ def get_redis_connection_pool(
 
     if redis_kwargs.pop("ssl", None):
         redis_kwargs["connection_class"] = async_redis.SSLConnection
+    else:
+        for tls_only_setting in _tls_only_settings(redis_kwargs):
+            del redis_kwargs[tls_only_setting]
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 
@@ -977,7 +984,7 @@ def _redis_kwargs_for_logging(redis_kwargs: Mapping[str, object]) -> Mapping[str
     }
 
 
-def _pretty_print_redis_config(redis_kwargs: dict) -> None:
+def _pretty_print_redis_config(redis_kwargs: Mapping[str, object]) -> None:
     """Pretty print the Redis configuration using rich with sensitive data masking"""
     redis_kwargs_for_logging: Final = _redis_kwargs_for_logging(redis_kwargs)
     try:

@@ -375,7 +375,7 @@ class TinyFishPassthroughLoggingHandler:
         kwargs: Mapping[str, object],
     ) -> _TinyfishLoggingPayload:
         response_cost: Final = _run_cost(run)
-        updated_kwargs: Final = {
+        updated_kwargs: Final[dict[str, object]] = {
             **kwargs,
             "model": TINYFISH_MODEL_NAME,
             "custom_llm_provider": "tinyfish",

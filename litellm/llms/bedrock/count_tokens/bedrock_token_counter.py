@@ -5,23 +5,40 @@ Bedrock Token Counter implementation using the CountTokens API.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
-from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.anthropic.common_utils import (
+    context_management_betas,
+    context_management_with_edits,
+    without_unrendered_blocks,
+)
+from litellm.llms.anthropic.count_tokens.transformation import (
+    ChatCountTranslationError,
+    anthropic_count_fields,
+    messages_count_options,
+)
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_litellm_params
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
+    bedrock_capability_model,
     get_bedrock_base_model,
+    strip_bedrock_routing_prefix,
 )
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.llms.bedrock.count_tokens.handler import (
+    BedrockCountTokensCredentialsError,
+    BedrockCountTokensHandler,
+    BedrockCountTokensRequestError,
+    is_caller_refusal,
+)
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -33,9 +50,15 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
 _RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
+_MODEL_INFO: Final = TypeAdapter(dict[str, object])
+_NO_OPTIONS: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+_COUNTED_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -54,26 +77,82 @@ class CountTokensFailure:
     status_code: int
     message: str
     tokenizer_type: str
+    rejected_before_provider_call: bool = False
+    invalid_request: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
 
 
-def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
+def _deployment_route(litellm_params: Mapping[str, object]) -> tuple[str, LlmProviders] | None:
     deployment_model: Final = litellm_params.get("model")
     if not isinstance(deployment_model, str):
-        return AnthropicConfig()
+        return None
     provider_hint: Final = litellm_params.get("custom_llm_provider")
     model, provider, _, _ = litellm.get_llm_provider(
         model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
     )
-    chat_config: Final = litellm.ProviderConfigManager.get_provider_chat_config(model, LlmProviders(provider))
-    return chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig()
+    return model, LlmProviders(provider)
+
+
+def _deployment_chat_config(litellm_params: Mapping[str, object]) -> BaseConfig | None:
+    route: Final = _deployment_route(litellm_params)
+    return None if route is None else litellm.ProviderConfigManager.get_provider_chat_config(*route)
+
+
+def _claude_messages_translator(litellm_params: Mapping[str, object]) -> "AnthropicMessagesConfig":
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    route: Final = _deployment_route(litellm_params)
+    messages_config: Final = (
+        None if route is None else litellm.ProviderConfigManager.get_provider_anthropic_messages_config(*route)
+    )
+    return (
+        messages_config
+        if isinstance(messages_config, AnthropicMessagesConfig)
+        else AmazonAnthropicClaudeMessagesConfig()
+    )
+
+
+def _inference_capability_model(litellm_params: Mapping[str, object], counted_model: str) -> str:
+    deployment_model: Final = litellm_params.get("model")
+    return bedrock_capability_model(
+        strip_bedrock_routing_prefix(deployment_model) if isinstance(deployment_model, str) else counted_model,
+        litellm_params.get("base_model"),
+    )
+
+
+def _has_role(message: Mapping[str, object]) -> bool:
+    return isinstance(message.get("role"), str)
+
+
+def _deployment_model_info(deployment: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    model_info: Final = (deployment or {}).get("model_info")
+    return _MODEL_INFO.validate_python(model_info) if isinstance(model_info, dict) else None
+
+
+def _converse_messages_as_sent(
+    converse_config: "litellm.AmazonConverseConfig",
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    chat_params: Mapping[str, JsonValue],
+    model: str,
+    model_info: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...] | ChatCountTranslationError:
+    try:
+        return converse_config.chat_messages_as_sent(messages, tools, chat_params, model, model_info, litellm_params)
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
 
 
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
     return (
         isinstance(outcome, CountTokensFailure)
+        and not outcome.rejected_before_provider_call
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
@@ -162,6 +241,14 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
+        except (BedrockCountTokensRequestError, BedrockCountTokensCredentialsError) as e:
+            return CountTokensFailure(
+                status_code=e.status_code,
+                message=e.message,
+                tokenizer_type=tokenizer_type,
+                rejected_before_provider_call=True,
+                invalid_request=isinstance(e, BedrockCountTokensRequestError),
+            )
         except BedrockError as e:
             verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
@@ -177,7 +264,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: Sequence[Mapping[str, object]] | None,
         contents: Sequence[Mapping[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
@@ -185,34 +272,76 @@ class BedrockTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         if not messages:
             return None
+        rendered_messages: Final = without_unrendered_blocks(messages)
 
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
-        litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        litellm_params: Final = dict(deployment_litellm_params(deployment))
+        claude: Final = is_mantle_claude_model(resolved_model)
+        deployment_config: Final = _deployment_chat_config(litellm_params) if claude else None
+        chat_config: Final = deployment_config if isinstance(deployment_config, AnthropicConfig) else None
+        converse_config: Final = (
+            deployment_config
+            if messages_format == "openai"
+            and isinstance(deployment_config, litellm.AmazonConverseConfig)
+            and all(map(_has_role, rendered_messages))
+            else None
+        )
+        counted_input: Final = (
+            rendered_messages
+            if converse_config is None
+            else _converse_messages_as_sent(
+                converse_config,
+                rendered_messages,
+                tools,
+                chat_params,
+                _inference_capability_model(litellm_params, counted_model),
+                _deployment_model_info(deployment),
+                litellm_params,
+            )
+        )
+        if isinstance(counted_input, ChatCountTranslationError):
+            return counted_input.response(request_model, model_to_use, primary_tokenizer)
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
-                messages,
+                counted_input,
                 system,
                 tools,
                 messages_format,
-                _claude_count_translator(litellm_params),
+                chat_config or AnthropicConfig(),
                 chat_params,
+                messages_are_converse_turns=converse_config is not None,
+                translate_contentless_turns=chat_config is not None,
             )
-            if is_mantle_claude_model(resolved_model)
+            if claude
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
-        native_context_management: Final = _invoke_context_management(
-            context_management if is_mantle_claude_model(resolved_model) else None
+        options: Final[Mapping[str, JsonValue] | ChatCountTranslationError] = (
+            translated.options
+            if translated is not None
+            else await asyncify(messages_count_options)(
+                _claude_messages_translator(litellm_params),
+                counted_model,
+                _COUNTED_MESSAGES.validate_python(rendered_messages),
+                count_options,
+                litellm_params,
+            )
+            if claude
+            else _NO_OPTIONS
         )
-        counted_messages: Final = messages if translated is None else translated.messages
+        if isinstance(options, ChatCountTranslationError):
+            return options.response(request_model, model_to_use, primary_tokenizer)
+        native_context_management: Final = _invoke_context_management(context_management if claude else None)
+        counted_messages: Final = counted_input if translated is None else translated.messages
         runtime_request: Final = {
             **_request_data(
                 model_to_use,
@@ -222,7 +351,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             ),
             **native_context_management,
         }
-        mantle_request: Final = runtime_request if translated is None else {**runtime_request, **translated.options}
+        mantle_request: Final = {**runtime_request, **options}
 
         primary: Final = (
             await self._count_with(
@@ -254,11 +383,15 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=dict(outcome.original_response),
                 )
             case CountTokensFailure():
+                refused_for_caller: Final = is_caller_refusal(
+                    outcome.status_code, outcome.message, outcome.invalid_request
+                )
                 verbose_logger.warning(
                     "%s CountTokens API error: status=%s, message=%s",
                     outcome.tokenizer_type,
                     outcome.status_code,
                     outcome.message,
+                    extra=CALLER_ERROR_LOG_EXTRA if refused_for_caller else None,
                 )
                 return TokenCountResponse(
                     total_tokens=0,
@@ -268,6 +401,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=outcome.message,
                     status_code=outcome.status_code,
+                    rejected_before_provider_call=outcome.rejected_before_provider_call,
                 )
             case _:
                 assert_never(outcome)

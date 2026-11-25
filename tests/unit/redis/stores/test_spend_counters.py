@@ -6,10 +6,12 @@ import pytest
 from litellm._internal_context import current_service_target
 from litellm.caching.redis_batch import Batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
+from litellm.redis.store_settings import RedisStoreSettings
 from litellm.redis.stores.connection import RedisStores, connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
+    committed_counter,
     end_user_counter,
     is_unavailable,
     key_counter,
@@ -24,9 +26,8 @@ from litellm.redis.stores.spend_counters import (
     team_window_counter,
     user_counter,
 )
-from litellm.redis.store_settings import RedisStoreSettings
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
 from .spend_counters_double import FakeSpendCounters
 
@@ -46,6 +47,17 @@ _KEYS: Final = (
     (project_counter("proj-1"), "spend:project:proj-1"),
     (model_access_group_counter("gpt-group"), "spend:model_access_group:gpt-group"),
     (shadow_eval_counter("job-7"), "spend:shadow_eval:job-7"),
+    ("spend:customer_org:tenant:lifetime", "spend:customer_org:tenant:lifetime"),
+    (
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+    ),
+    ("spend:customer_member:user@example.com:lifetime", "spend:customer_member:user@example.com:lifetime"),
+    (committed_counter(key_counter("88dc28d0")), "spend:committed:key:88dc28d0"),
+    (committed_counter(team_counter("team-a")), "spend:committed:team:team-a"),
+    (committed_counter(user_counter("user@example.com")), "spend:committed:user:user@example.com"),
+    (committed_counter(org_counter("org-1")), "spend:committed:org:org-1"),
+    (committed_counter(end_user_counter("customer é 1")), "spend:committed:end_user:customer é 1"),
 )
 
 
@@ -81,7 +93,17 @@ def test_a_read_decodes_what_redis_cache_decodes(wire: str, spend: float) -> Non
     assert type(decoded) is type(spend)
 
 
-@pytest.mark.parametrize("key", ["spend_db_floor:spend:key:k", "virtual_key_spend:k:gpt:1d", "spend:unknown:k"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "spend_db_floor:spend:key:k",
+        "virtual_key_spend:k:gpt:1d",
+        "spend:unknown:k",
+        "spend:committed:key:k:window:1d",
+        "spend:committed:tag:prod",
+        "spend:committed:committed:key:k",
+    ],
+)
 def test_the_native_store_refuses_keys_outside_the_spend_counter_keyspace(key: str) -> None:
     with pytest.raises(ValueError, match="a spend counter is a spend:\* key"):
         NativeSpendCounters(None).get_local(key)
@@ -101,19 +123,6 @@ async def test_without_redis_the_native_store_counts_and_answers_from_memory() -
     assert await store.read_many(("spend:key:k",), batch=Batch.NONE) is None
     assert not store.has_redis
     assert not store.increment_many_post_call((("spend:key:k", 1.0),))
-
-
-def test_a_broadcast_writes_and_drops_only_spend_counter_copies() -> None:
-    store: Final = SpendCounterStore(connect(None).spend_counters())
-    store.set_local("spend:key:k", 5.0)
-    store.set_local("spend:team:t", 5.0)
-
-    store.apply_broadcast("spend:key:k", 0.0, 60)
-    store.apply_broadcast("spend:team:t", None, None)
-    store.apply_broadcast("spend_db_floor:spend:key:k", 1.0, 5)
-    store.apply_broadcast("spend:unknown:x", 1.0, None)
-
-    assert store.snapshot() == {"spend:key:k": 0.0}
 
 
 @pytest.mark.parametrize(
@@ -190,3 +199,21 @@ async def test_an_unreachable_redis_fails_writes_as_transport_and_serves_reads_f
     assert failure.value.args[0] == "transport"
     assert not is_unavailable(failure.value)
     assert await store.read("spend:key:k") == SpendRead(None, from_redis=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    (
+        "spend:app_group:group:lifetime",
+        "spend:app_group_customer_org:group:org:lifetime",
+        "spend:app_group:group:window:1mo@2026-11-01T00:00:00+00:00",
+        "spend:app_group_customer_org:group%3Aorg:window:1mo@2026-11-01T00:00:00+00:00",
+    ),
+)
+async def test_group_counters_accumulate_and_reseed_through_the_rust_store(key: str) -> None:
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    assert await store.seed(key, 2, increment_if_lost=False) == 2
+    assert await store.increment(key, 0.5) == 2.5
+    assert await store.read(key) == (2.5, False)
+    assert store.snapshot() == {key: 2.5}

@@ -13,9 +13,9 @@ import pytest
 from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
 
-from litellm.tracing.generated.responses import TraceSQLResponse
-from litellm.tracing.types import SpendLogRecord
-from scripts.seed_tracing_fixtures import (
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
+from litellm.integrations.lens.generated.responses import TraceSQLResponse
+from litellm.scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
     fixture_capture,
@@ -165,7 +165,7 @@ async def test_seed_copy_uses_lens_authenticated_tenant_for_both_spend_stores(mo
 
     import httpx
 
-    from litellm.tracing.remote import RemoteTraceStore
+    from litellm.integrations.lens.remote import RemoteTraceStore
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", "fixture-admin")
     fixture: Final = next(item for item in spend_fixtures() if item[0] == "deepagents_swarm")
@@ -217,8 +217,8 @@ async def test_seed_copy_uses_lens_authenticated_tenant_for_both_spend_stores(mo
 @pytest.mark.asyncio
 async def test_seed_copy_ids_come_from_lens_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
 
-    from litellm.tracing.remote import RemoteTraceStore
-    from scripts.seed_tracing_fixtures import seeded_trace_ids
+    from litellm.integrations.lens.remote import RemoteTraceStore
+    from litellm.scripts.seed_tracing_fixtures import seeded_trace_ids
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", "fixture-admin")
 
