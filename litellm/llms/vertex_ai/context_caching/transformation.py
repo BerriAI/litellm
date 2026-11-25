@@ -150,40 +150,30 @@ def _marked_block(messages: Sequence[AllMessageValues]) -> _MarkedBlock | None:
     return _MarkedBlock(len(leading_system_run), range(filtered_messages[0][0], marked_end))
 
 
-def cached_block_ttl(messages: Sequence[AllMessageValues], cached_messages: Sequence[AllMessageValues]) -> str | None:
+def cached_block_ttl(messages: Sequence[AllMessageValues]) -> str | None:
     """
     The TTL the caller marked on the leading system run or the first continuous cached block, read before
     separate_cached_messages trims a later system run off either end of that block, so a reminder that carries
-    the only TTL still sets how long the cache lives. A marked system run cached alone keeps its own TTL, the
-    one the next turn reads once its mark moves past the system run, so both turns share one cache.
+    the only TTL still sets how long the cache lives.
     """
     marked: Final = _marked_block(messages)
     if marked is None:
         return None
-    leading_system_run: Final = messages[: marked.leading_run_end]
-    if len(cached_messages) <= marked.leading_run_end and any(map(is_cached_message, leading_system_run)):
-        return extract_ttl_from_cached_messages(leading_system_run)
-    return extract_ttl_from_cached_messages([*leading_system_run, *(messages[idx] for idx in marked.block)])
+    return extract_ttl_from_cached_messages(
+        [*messages[: marked.leading_run_end], *(messages[idx] for idx in marked.block)]
+    )
 
 
 def _the_next_turn_reads_only_the_system_run(
-    messages: Sequence[AllMessageValues],
-    marked: _MarkedBlock,
-    block_start: int,
-    block_cached_end: int,
-    system_run_holds_a_cache: Callable[[Sequence[AllMessageValues]], bool],
+    messages: Sequence[AllMessageValues], marked: _MarkedBlock, block_start: int, block_cached_end: int
 ) -> bool:
-    if not all(is_system_message(message) for message in messages[block_cached_end:]):
-        return False
-    leading_system_run: Final = messages[: marked.leading_run_end]
-    return any(not is_system_message(message) for message in messages[marked.leading_run_end : block_start]) or (
-        any(map(is_cached_message, leading_system_run)) and system_run_holds_a_cache(leading_system_run)
+    return all(is_system_message(message) for message in messages[block_cached_end:]) and any(
+        not is_system_message(message) for message in messages[marked.leading_run_end : block_start]
     )
 
 
 def separate_cached_messages(
     messages: list[AllMessageValues],
-    system_run_holds_a_cache: Callable[[Sequence[AllMessageValues]], bool],
     cache_accepts: Callable[[Sequence[AllMessageValues]], bool],
     supports_system_message: bool = True,
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
@@ -198,13 +188,12 @@ def separate_cached_messages(
     only because a reminder follows it, and a block made only of such a run caches the leading system run
     alone, so a reminder added each turn changes neither the cached set nor its cache key. A block that would
     leave only system messages uncached caches the leading system run alone too when an unmarked turn comes
-    before the block, or when the system run carries its own mark and holds a cache by itself, since a client
-    that marks each newest turn never reads a cache of the whole conversation again, while it reads the system
-    run every turn. Otherwise the whole marked prefix is cached, so a repeat of the same request reads it. A
-    prefix the cache does not accept caches the leading system run alone, and its turns go out uncached. The
-    remaining messages come back with their system messages already converted to user turns in place. A model without
-    system message support gets its later system messages back as they are, so the request renders them the
-    way it does without a cache.
+    before the block, since a client that marks each newest turn never reads a cache of the whole conversation
+    again, while it reads the system run every turn. Otherwise the whole marked prefix is cached, so a repeat
+    of the same request reads it. A prefix the cache does not accept caches the leading system run alone, and
+    its turns go out uncached. The remaining messages come back with their system messages already converted
+    to user turns in place. A model without system message support gets its later system messages back as they
+    are, so the request renders them the way it does without a cache.
     """
     marked: Final = _marked_block(messages)
     if marked is None:
@@ -217,9 +206,7 @@ def separate_cached_messages(
     )
     caches_the_system_run_alone: Final = not cache_accepts(
         messages[:block_cached_end]
-    ) or _the_next_turn_reads_only_the_system_run(
-        messages, marked, block_start, block_cached_end, system_run_holds_a_cache
-    )
+    ) or _the_next_turn_reads_only_the_system_run(messages, marked, block_start, block_cached_end)
     cached_end: Final = marked.leading_run_end if caches_the_system_run_alone else block_cached_end
     remaining_messages: Final = messages[cached_end:]
     return (

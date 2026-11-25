@@ -564,13 +564,6 @@ class ContextCachingEndpoints(VertexBase):
         tool_choice: Final = optional_params.get("tool_choice")
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages,
-            system_run_holds_a_cache=partial(
-                _clears_the_cache_floor,
-                tools=tools,
-                deployment_model=model,
-                cache_model=target.model,
-                custom_llm_provider=custom_llm_provider,
-            ),
             cache_accepts=partial(
                 _cached_contents_accepts, model=target.model, custom_llm_provider=custom_llm_provider
             ),
@@ -615,7 +608,7 @@ class ContextCachingEndpoints(VertexBase):
         http_client: Final = client if isinstance(client, HTTPHandler) else _sync_cache_client(timeout)
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages, cached_messages)
+        ttl: Final = cached_block_ttl(messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, target.model)
         try:
             google_cache_name: Final = self.check_cache(
@@ -737,13 +730,6 @@ class ContextCachingEndpoints(VertexBase):
         tool_choice: Final = optional_params.get("tool_choice")
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages,
-            system_run_holds_a_cache=partial(
-                _clears_the_cache_floor,
-                tools=tools,
-                deployment_model=model,
-                cache_model=target.model,
-                custom_llm_provider=custom_llm_provider,
-            ),
             cache_accepts=partial(
                 _cached_contents_accepts, model=target.model, custom_llm_provider=custom_llm_provider
             ),
@@ -791,7 +777,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages, cached_messages)
+        ttl: Final = cached_block_ttl(messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, target.model)
         scope: Final = KnownCachedContents.scope(
             url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location
