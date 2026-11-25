@@ -127,7 +127,9 @@ class TestTTLExtraction:
         messages = [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": "Regular message without cache control"}],
+                "content": [
+                    {"type": "text", "text": "Regular message without cache control"}
+                ],
             }
         ]
 
@@ -209,7 +211,9 @@ class TestTTLExtraction:
 class TestTransformationWithTTL:
     """Test the complete transformation with TTL support"""
 
-    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
     def test_transform_with_valid_ttl(self, custom_llm_provider):
         """Test transformation includes TTL when provided"""
         messages = [
@@ -251,7 +255,9 @@ class TestTransformationWithTTL:
 
         assert result["displayName"] == "test-cache-key"
 
-    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
     def test_transform_without_ttl(self, custom_llm_provider):
         """Test transformation without TTL"""
         messages = [
@@ -292,7 +298,9 @@ class TestTransformationWithTTL:
 
         assert result["displayName"] == "test-cache-key"
 
-    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
     def test_transform_with_invalid_ttl(self, custom_llm_provider):
         """Test transformation with invalid TTL (should be ignored)"""
         messages = [
@@ -332,7 +340,9 @@ class TestTransformationWithTTL:
 
         assert result["displayName"] == "test-cache-key"
 
-    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
     def test_transform_with_system_message_and_ttl(self, custom_llm_provider):
         """Test transformation with system message and TTL"""
         messages = [
