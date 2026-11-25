@@ -253,14 +253,28 @@ async def test_a_native_plain_messages_call_logs_only_the_rate_limit_from_the_pr
 async def test_a_native_plain_messages_call_is_logged_without_usable_provider_headers(recorded: object) -> None:
     recorder: Final = _SuccessPayloadRecorder()
     logger: Final = _native_plain_messages_logger(recorder)
-    logger.model_call_details["response_headers"] = recorded
 
     legacy.post_call(logger, "{}", None, {"complete_input_dict": {}, "headers": {}}, (("request-id", "req_native"),))
+    logger.model_call_details["response_headers"] = recorded
     await _finish_native_plain_messages_call(logger)
     logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
 
     assert logged["response_cost"] > 0
-    assert logger.model_call_details["response_headers"] == recorded
+
+
+@pytest.mark.asyncio
+async def test_a_native_plain_messages_fallback_never_logs_the_rate_limit_of_the_attempt_it_replaced() -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = _native_plain_messages_logger(recorder)
+    request: Final = MappingProxyType({"complete_input_dict": {}, "headers": {}})
+
+    legacy.post_call(logger, "undecodable", None, dict(request), (("anthropic-ratelimit-tokens-remaining", "7777"),))
+    legacy.post_call(logger, "{}", None, dict(request), (("request-id", "req_fallback"),))
+    await _finish_native_plain_messages_call(logger)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert "7777" not in json.dumps(dict(logged["hidden_params"]["additional_headers"] or {}))
+    assert logged["response_cost"] > 0
 
 
 def test_setup_reuses_a_supplied_logger() -> None:

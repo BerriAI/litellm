@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     bind_budget_reservation_to_callbacks,
     proxy_request_headers,
+    rate_limit_headers,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -312,7 +313,7 @@ class PassThroughStreamingHandler:
         response_headers: Final = as_str_mapping(attribute_or_none(response, "headers"))
         details: Final = logging_obj.model_call_details
         if endpoint_type == EndpointType.ANTHROPIC and response_headers is not None:
-            details["response_headers"] = dict(response_headers)
+            details["response_headers"] = dict(rate_limit_headers(response_headers))
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:

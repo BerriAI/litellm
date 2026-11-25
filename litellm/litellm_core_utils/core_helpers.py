@@ -942,12 +942,12 @@ def get_provider_response_headers_from_hidden_params(response: object) -> Mappin
         return None
 
 
-def rate_limit_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+def rate_limit_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
     return MappingProxyType(
         {
             name.lower(): value
             for name, value in headers.items()
-            if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES) and value.isascii()
+            if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES) and isinstance(value, str) and value.isascii()
         }
     )
 

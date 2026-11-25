@@ -305,6 +305,9 @@ async def test_a_streamed_anthropic_passthrough_call_logs_the_rate_limit_the_pro
             "content-type": "text/event-stream",
             "anthropic-ratelimit-tokens-remaining": "11999000",
             "anthropic-ratelimit-requests-remaining": "12999",
+            "anthropic-organization-id": "org-secret",
+            "request-id": "req_passthrough",
+            "set-cookie": "session=secret",
         },
         content=_RATE_LIMITED_ANTHROPIC_STREAM.encode(),
     )
@@ -352,6 +355,10 @@ async def test_a_streamed_anthropic_passthrough_call_logs_the_rate_limit_the_pro
     logged_headers: Final = logged_result._hidden_params["additional_headers"]
     assert logged_headers["x-ratelimit-remaining-tokens"] == "11999000"
     assert logged_headers["x-ratelimit-remaining-requests"] == "12999"
+    assert logging_obj.model_call_details["response_headers"] == {
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "anthropic-ratelimit-requests-remaining": "12999",
+    }
 
 
 @pytest.mark.asyncio

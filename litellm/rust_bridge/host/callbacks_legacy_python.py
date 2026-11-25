@@ -235,6 +235,8 @@ def post_call(
     provider_limits: Final = dict(rate_limit_headers(httpx.Headers(list(response_headers))))
     if provider_limits:
         logger.model_call_details["response_headers"] = provider_limits  # rebind-ok: the call's logger records them
+    else:
+        logger.model_call_details.pop("response_headers", None)
     logger.post_call(original_response=original_response, api_key=api_key, additional_args=additional_args)
 
 
