@@ -295,6 +295,16 @@ class DeferredToolEmulation:
             return part
         return {"type": "text", "text": _loaded_tool_text(name, self.deferred.get(name), self.dispatcher)}
 
+    def strict_input_refusal(self) -> str | None:
+        strict: Final = tuple(name for name, tool in self.deferred.items() if tool.get("strict") is True)
+        if not strict:
+            return None
+        return (
+            f"model_info.deferred_tools emulate sends deferred tools through one {self.dispatcher} tool, which cannot "
+            f"enforce strict input for {', '.join(strict)}. Remove strict from those tools, pick another mode for "
+            "this deployment, or set drop_params to send them without strict"
+        )
+
     def restored(self, result: _Result) -> _Result:
         return cast(_Result, self._restored(result))  # cast-ok: each branch hands back the shape it was given
 

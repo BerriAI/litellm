@@ -3457,7 +3457,12 @@ def _dispatcher_chat_stream() -> bytes:
 
 
 async def _fireworks_kimi_messages(
-    model_info: Mapping[str, object], upstream_response: httpx.Response, *, stream: bool, **extra: object
+    model_info: Mapping[str, object],
+    upstream_response: httpx.Response,
+    *,
+    stream: bool,
+    forecast_tool: Mapping[str, object] = _FORECAST_TOOL,
+    **extra: object,
 ) -> tuple[dict[str, object], object]:
     litellm.in_memory_llm_clients_cache.flush_cache()
     with respx.mock(assert_all_called=True) as respx_mock:
@@ -3467,7 +3472,7 @@ async def _fireworks_kimi_messages(
             messages=copy.deepcopy(_TOOL_LOADED_CONVERSATION),
             model="fireworks_ai/accounts/fireworks/models/kimi-k3",
             api_key="fireworks-key",
-            tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL],
+            tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, forecast_tool],
             model_info=model_info,
             stream=stream,
             **extra,
@@ -3502,6 +3507,53 @@ async def test_emulated_deferred_tools_keep_one_tool_list_and_hand_claude_code_t
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "call_lyon", "name": "mcp__weather__get_forecast", "input": {"city": "Lyon"}}
     ]
+
+
+_STRICT_FORECAST_TOOL: Final = {**_FORECAST_TOOL, "strict": True}
+
+
+@pytest.mark.asyncio
+async def test_emulate_answers_400_for_a_strict_deferred_tool_before_any_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.BadRequestError, match="strict input for mcp__weather__get_forecast"):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=copy.deepcopy(_TOOL_LOADED_CONVERSATION),
+                model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+                api_key="fireworks-key",
+                tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _STRICT_FORECAST_TOOL],
+                model_info={"deferred_tools": "emulate"},
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_emulate_sends_a_strict_deferred_tool_without_strict_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        body, response = await _fireworks_kimi_messages(
+            {"deferred_tools": "emulate"},
+            httpx.Response(200, json=_dispatcher_chat_completion()),
+            stream=False,
+            forecast_tool=_STRICT_FORECAST_TOOL,
+            drop_params=True,
+        )
+
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["Read", "ToolSearch", "CallLoadedTool"]
+    assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
+        "mcp__weather__get_forecast"
+    ]
+    assert any("strict" in warning for warning in _deferred_tools_fallback_warnings(caplog))
 
 
 @pytest.mark.asyncio
