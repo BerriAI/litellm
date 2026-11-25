@@ -1716,6 +1716,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
+            output_item: object = item
             if isinstance(item, ResponseReasoningItem):
                 pending_reasoning_items = (
                     *(pending_reasoning_items if replay_openai_history or keeps_every_reasoning_item else ()),
@@ -1810,7 +1811,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
                     if choice is None and enable_raw_refusal_fallback and not structured_output:
-                        choice = _raw_refusal_choice(raw_item, index)
+                        choice = _raw_refusal_choice(output_item, index)
                     if choice is not None:
                         choices.append(choice)
             else:
