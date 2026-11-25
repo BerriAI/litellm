@@ -264,12 +264,11 @@ async def test_reading_stops_at_the_lookahead_cap(monkeypatch):
         return pulled[-1]
 
     scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    named, replay = await named_trace.read_named_trace(scope, receive)
-
-    assert named is None
-    assert len(pulled) == 2
-    assert await replay() == {"type": "http.request", "body": b"x" * 16, "more_body": True}
-    assert [await replay() for _ in sent[2:]] == sent[2:]
+    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
+        assert named is None
+        assert len(pulled) == 2
+        assert await replay() == {"type": "http.request", "body": b"x" * 16, "more_body": True}
+        assert [await replay() for _ in sent[2:]] == sent[2:]
 
 
 @pytest.mark.parametrize("coding", ["gzip", "x-gzip", "zstd"])
@@ -343,11 +342,10 @@ async def test_a_body_sent_in_many_tiny_pieces_is_held_as_one_message():
         return next(left)
 
     scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    named, replay = await named_trace.read_named_trace(scope, receive)
-
-    assert named == int(UUID_HEX, 16)
-    assert await replay() == {"type": "http.request", "body": body, "more_body": False}
-    assert await replay() == {"type": "http.disconnect"}
+    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
+        assert named == int(UUID_HEX, 16)
+        assert await replay() == {"type": "http.request", "body": body, "more_body": False}
+        assert await replay() == {"type": "http.disconnect"}
 
 
 @pytest.mark.asyncio
@@ -360,11 +358,10 @@ async def test_a_client_that_leaves_mid_body_is_still_seen_leaving():
         return next(left)
 
     scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    named, replay = await named_trace.read_named_trace(scope, receive)
-
-    assert named is None
-    assert await replay() == {"type": "http.request", "body": b"{", "more_body": True}
-    assert await replay() == {"type": "http.disconnect"}
+    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
+        assert named is None
+        assert await replay() == {"type": "http.request", "body": b"{", "more_body": True}
+        assert await replay() == {"type": "http.disconnect"}
 
 
 def test_a_plain_body_labelled_gzip_names_its_trace(proxy):
@@ -397,43 +394,155 @@ def test_a_compressed_body_expanding_past_the_proxy_ratio_names_no_trace(proxy, 
     assert UUID_HEX not in _trace_ids(exporter)
 
 
+JSON_POST: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
+GZIP_JSON_POST: Final = {**JSON_POST, "headers": [*JSON_POST["headers"], (b"content-encoding", b"gzip")]}
+
+
+def _named_body(trace_id: str = UUID) -> bytes:
+    return b'{"metadata": {"trace_id": "%s"}}' % trace_id.encode()
+
+
+def _sends(*messages):
+    left: Final = iter(messages)
+
+    async def receive():
+        return next(left)
+
+    return receive
+
+
 @pytest.mark.asyncio
-async def test_compressed_bodies_are_decoded_one_at_a_time():
+async def test_partial_uploads_together_hold_no_more_than_the_budget():
     import asyncio
-    import gzip
-    import threading
 
     from litellm.integrations.otel.plumbing import named_trace
 
-    decoding: Final = []
-    most_at_once: Final = []
-    lock: Final = threading.Lock()
+    budget: Final = named_trace.LookaheadBudget(max_bytes=100)
+    rest_sent: Final = asyncio.Event()
+    first_body: Final = _named_body(OTHER_HEX)
+
+    async def stalled_upload():
+        if not rest_sent.is_set():
+            await rest_sent.wait()
+            return {"type": "http.request", "body": first_body[60:], "more_body": False}
+        raise AssertionError("read past the end of the body")
+
+    first_pieces: Final = iter([{"type": "http.request", "body": first_body[:60], "more_body": True}])
+
+    async def first_receive():
+        piece = next(first_pieces, None)
+        return piece if piece is not None else await stalled_upload()
+
+    async def first_request():
+        async with named_trace.read_named_trace(JSON_POST, first_receive, budget) as (named, _):
+            return named
+
+    first: Final = asyncio.create_task(first_request())
+    await asyncio.sleep(0)
+    second_body: Final = _named_body()
+    second_pieces: Final = [
+        {"type": "http.request", "body": second_body[:60], "more_body": True},
+        {"type": "http.request", "body": second_body[60:], "more_body": False},
+    ]
+    second_pulled: Final = []
+
+    async def second_receive():
+        second_pulled.append(second_pieces[len(second_pulled)])
+        return second_pulled[-1]
+
+    async with named_trace.read_named_trace(JSON_POST, second_receive, budget) as (named, replay):
+        assert named is None
+        assert len(second_pulled) == 1
+        assert await replay() == second_pieces[0]
+        assert await replay() == second_pieces[1]
+
+    rest_sent.set()
+    assert await first == int(OTHER_HEX, 16)
+    async with named_trace.read_named_trace(
+        JSON_POST, _sends({"type": "http.request", "body": _named_body(), "more_body": False}), budget
+    ) as (named, _):
+        assert named == int(UUID_HEX, 16)
+
+
+@pytest.mark.asyncio
+async def test_a_body_the_app_never_read_gives_its_budget_back_when_the_request_ends():
+    from litellm.integrations.otel.plumbing import named_trace
+
+    body: Final = _named_body()
+    budget: Final = named_trace.LookaheadBudget(max_bytes=len(body))
+
+    for _ in range(3):
+        async with named_trace.read_named_trace(
+            JSON_POST, _sends({"type": "http.request", "body": body, "more_body": False}), budget
+        ) as (named, _):
+            assert named == int(UUID_HEX, 16)
+
+
+@pytest.mark.asyncio
+async def test_a_body_the_app_has_read_gives_its_budget_back_while_the_request_runs():
+    from litellm.integrations.otel.plumbing import named_trace
+
+    sent: Final = {"type": "http.request", "body": _named_body(), "more_body": False}
+    budget: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]))
+
+    async with named_trace.read_named_trace(JSON_POST, _sends(sent), budget) as (named, replay):
+        assert await replay() == sent
+        async with named_trace.read_named_trace(JSON_POST, _sends(sent), budget) as (later, _):
+            assert (named, later) == (int(UUID_HEX, 16), int(UUID_HEX, 16))
+
+
+@pytest.mark.asyncio
+async def test_a_compressed_body_names_no_trace_when_the_budget_cannot_cover_its_decoding():
+    import gzip
+
+    from litellm import constants
+    from litellm.integrations.otel.plumbing import named_trace
+
+    sent: Final = {"type": "http.request", "body": gzip.compress(_named_body()), "more_body": False}
+    decoded_limit: Final = len(sent["body"]) * constants.MAX_REQUEST_BODY_DECOMPRESSION_RATIO
+    short: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]) + decoded_limit - 1)
+    enough: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]) + decoded_limit)
+
+    async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), short) as (named, replay):
+        assert named is None
+        assert await replay() == sent
+    for _ in range(2):
+        async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), enough) as (named, _):
+            assert named == int(UUID_HEX, 16)
+
+
+@pytest.mark.asyncio
+async def test_a_compressed_body_is_not_held_up_by_another_requests_decoding(monkeypatch):
+    import gzip
+    import threading
+
+    import anyio
+
+    from litellm.integrations.otel.plumbing import named_trace
+
+    slow_body: Final = _named_body(OTHER_HEX)
+    slow_decoding: Final = threading.Event()
     read_json: Final = named_trace._json_object
 
-    def counted(body):
-        with lock:
-            decoding.append(body)
-            most_at_once.append(len(decoding))
-        threading.Event().wait(0.02)
-        with lock:
-            decoding.pop()
+    def json_object(body):
+        if body == slow_body:
+            slow_decoding.wait(10)
         return read_json(body)
 
-    named_trace._json_object = counted
+    monkeypatch.setattr(named_trace, "_json_object", json_object)
+    budget: Final = named_trace.LookaheadBudget()
+
+    async def decode(body):
+        sent: Final = {"type": "http.request", "body": gzip.compress(body), "more_body": False}
+        async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), budget) as (named, _):
+            return named
+
     try:
-        body: Final = gzip.compress(b'{"metadata": {"trace_id": "%s"}}' % UUID.encode())
-        scope: Final = {
-            "type": "http",
-            "method": "POST",
-            "headers": [(b"content-type", b"application/json"), (b"content-encoding", b"gzip")],
-        }
-
-        async def receive():
-            return {"type": "http.request", "body": body, "more_body": False}
-
-        named: Final = await asyncio.gather(*(named_trace.read_named_trace(scope, receive) for _ in range(8)))
+        async with anyio.create_task_group() as group:
+            group.start_soon(decode, slow_body)
+            await anyio.sleep(0.05)
+            with anyio.fail_after(5):
+                assert await decode(_named_body()) == int(UUID_HEX, 16)
+            slow_decoding.set()
     finally:
-        named_trace._json_object = read_json
-
-    assert {trace_id for trace_id, _ in named} == {int(UUID_HEX, 16)}
-    assert max(most_at_once) == 1
+        slow_decoding.set()

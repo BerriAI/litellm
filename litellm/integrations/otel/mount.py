@@ -50,8 +50,11 @@ class _RequestTraceExclusionMiddleware:
     def __init__(self, app: "ASGIApp", excluded_urls: str) -> None:
         from opentelemetry.util.http import parse_excluded_urls
 
+        from litellm.integrations.otel.plumbing.named_trace import LookaheadBudget
+
         self.app = app
         self.excluded_urls = parse_excluded_urls(excluded_urls)
+        self.lookahead_budget: Final = LookaheadBudget()
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] not in ("http", "websocket"):
@@ -73,9 +76,9 @@ class _RequestTraceExclusionMiddleware:
             with request_trace_scope(excluded):
                 await self.app(scope, receive, send)
             return
-        named, request_receive = await read_named_trace(scope, receive)
-        with request_trace_scope(excluded), named_trace_scope(named):
-            await self.app(scope, request_receive, send)
+        async with read_named_trace(scope, receive, self.lookahead_budget) as (named, request_receive):
+            with request_trace_scope(excluded), named_trace_scope(named):
+                await self.app(scope, request_receive, send)
 
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
