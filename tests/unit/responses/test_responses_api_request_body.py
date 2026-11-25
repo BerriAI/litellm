@@ -1194,7 +1194,7 @@ async def test_out_of_bounds_positional_points_are_not_revived_by_a_longer_list(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("index", [-1, "-1"])
+@pytest.mark.parametrize("index", [-1, "-1"], ids=["int", "numeric-string"])
 async def test_a_point_counted_from_the_end_marks_the_trailing_tool_result(index):
     """An agent loop's turn ends in function_call_output items, which have no role and so are
     missing from the Responses layer's list. Counted from the end there, the point landed on
@@ -1216,6 +1216,44 @@ async def test_a_point_counted_from_the_end_marks_the_trailing_tool_result(index
     assert [i for i, msg in enumerate(body["messages"]) if "cache_control" in json.dumps(msg)] == [
         len(body["messages"]) - 1
     ]
+
+
+_OPENROUTER_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-forced-bridge",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "anthropic/claude-sonnet-4.5",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_a_point_counted_from_the_end_survives_a_forced_chat_completions_bridge(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_OPENROUTER_CHAT_COMPLETION)
+    )
+
+    await litellm.aresponses(
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        api_key="fake-api-key",
+        use_chat_completions_api=True,
+        instructions="You are a documentation assistant.",
+        input=[
+            {"role": "user", "content": "Read a.txt"},
+            {"type": "function_call", "call_id": "call_a", "name": "read_file", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_a", "output": "contents of a.txt"},
+        ],
+        cache_control_injection_points=[{"location": "message", "index": -1}],
+    )
+
+    messages: Final = json.loads(upstream.calls[0].request.read())["messages"]
+    assert messages[-1]["role"] == "tool"
+    assert [i for i, msg in enumerate(messages) if "cache_control" in json.dumps(msg)] == [len(messages) - 1]
 
 
 def _four_user_turns() -> list:

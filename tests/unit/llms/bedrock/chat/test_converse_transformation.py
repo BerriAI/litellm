@@ -9051,6 +9051,49 @@ def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypat
     )
 
 
+@pytest.mark.parametrize(
+    "tool_message",
+    [
+        pytest.param(
+            {"role": "tool", "tool_call_id": "c1", "content": "lookup result", "cache_control": {"type": "ephemeral"}},
+            id="string-content",
+        ),
+        pytest.param(
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": [{"type": "text", "text": "lookup result", "cache_control": {"type": "ephemeral"}}],
+            },
+            id="list-content",
+        ),
+    ],
+)
+def test_transform_request_neutralized_tool_result_keeps_its_cache_point(monkeypatch, tool_message):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    result = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": "look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            tool_message,
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+    last_blocks = result["messages"][-1]["content"]
+    assert "lookup result" in json.dumps(last_blocks)
+    assert last_blocks[-1] == {"cachePoint": {"type": "default"}}
+    assert sum("cachePoint" in block for message in result["messages"] for block in message["content"]) == 1
+
+
 @pytest.mark.asyncio
 async def test_async_transform_request_no_tools_with_tool_history(monkeypatch):
     """Async is a separate request assembler; it must neutralize identically."""

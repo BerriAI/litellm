@@ -413,6 +413,15 @@ def _cache_mark_kept(block: Mapping[str, object], keeps_cache_marks: bool) -> Ma
     return {"cache_control": cache_control} if keeps_cache_marks and cache_control is not None else {}
 
 
+def _cache_mark_of(message: object) -> Mapping[str, object]:
+    holders: Final = (*reversed(parts_of(message_field(message, "content"))), message)
+    mark: Final = next(
+        (cache_control for holder in holders if (cache_control := message_field(holder, "cache_control")) is not None),
+        None,
+    )
+    return {} if mark is None else {"cache_control": mark}
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -581,7 +590,10 @@ class AmazonConverseConfig(BaseConfig):
                 label = f"tool result for {tool_call_id or name or 'unknown'}"
                 result_text: Final = f"[{label}: {_result_text(message)}]"
                 content: Final = [{"type": "guarded_text", "text": result_text}] if guards_tool_results else result_text
-                return ChatCompletionUserMessage(role="user", content=content)
+                cache_mark: Final[Mapping[str, object]] = {} if guards_tool_results else _cache_mark_of(message)
+                return cast(  # cast-ok: the user message keeps the tool result's cache mark, read off a loose dict
+                    AllMessageValues, {"role": "user", "content": content, **cache_mark}
+                )
             return message
 
         return tuple(map(_rewrite, messages))
