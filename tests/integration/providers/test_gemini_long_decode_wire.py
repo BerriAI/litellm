@@ -1239,6 +1239,45 @@ def test_count_or_cap_that_is_not_a_number_makes_one_request_and_is_never_contin
         assert "continuationToken" not in only, only
 
 
+_GOOGLE_REFUSES: Final[tuple[tuple[str, str, JsonValue], ...]] = (
+    ("n-list", "n", [1]),
+    ("n-5kb", "n", "1" * 5120),
+    ("n-true", "n", True),
+    ("max_tokens-list", "max_tokens", [300]),
+    ("max_tokens-empty", "max_tokens", ""),
+    ("max_tokens-5kb", "max_tokens", "3" * 5120),
+)
+_GOOGLE_REFUSES_CELLS: Final[tuple[ParameterSet, ...]] = tuple(
+    pytest.param(provider, param, value, stream, id=f"{provider}-{name}-{_mode(stream)}")
+    for provider, (name, param, value), stream in itertools.product(PROVIDERS, _GOOGLE_REFUSES, (False, True))
+)
+_GOOGLE_FIELD: Final[Mapping[str, str]] = MappingProxyType({"n": "candidate_count", "max_tokens": "max_output_tokens"})
+
+
+def _google_refuses(field: str, value: JsonValue) -> Answer:
+    message: Final = (
+        f"Invalid JSON payload received. Unknown name \"{field}\" at 'generation_config': "
+        "Proto field is not repeating, cannot start list."
+        if isinstance(value, list)
+        else f"Invalid value at 'generation_config.{field}' (TYPE_INT32)"
+    )
+    error: Final = {"error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT"}}
+    return lambda _stream: Reply(status=400, body=json.dumps(error).encode())
+
+
+@pytest.mark.parametrize(("provider", "param", "value", "stream"), _GOOGLE_REFUSES_CELLS)
+def test_count_or_cap_google_refuses_returns_its_400_from_one_request_and_is_never_continued(
+    gateway: Gateway, provider: Provider, param: str, value: JsonValue, stream: bool
+) -> None:
+    field: Final = _GOOGLE_FIELD[param]
+    with wire_server(upstream(_google_refuses(field, value))) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        refused: Final = post(gateway, "chat", request_body("chat", model, stream, {**NO_CACHE, param: value}))
+        assert refused.status_code == 400, refused.text
+        assert field in refused.text, refused.text
+        received(wire, provider, stream, (False,))
+
+
 def _twice_cells() -> tuple[ParameterSet, ...]:
     pairs: Final = (
         ("max_tokens-number-last", f'"max_tokens": "300", "max_tokens": {CAP}', True),
