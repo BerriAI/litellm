@@ -11,11 +11,13 @@ use litellm_gateway_auth_core::{
     authz::ModelList,
     record::Budget,
 };
+use litellm_python_compat::datetime::IsoDateTime;
 use litellm_redis_store::auth_cache::KeyEntry;
+use serde_json::Map;
 
 use super::{
     carried::{Carried, carried, newer},
-    metadata::Metadata,
+    metadata::{self, Metadata},
 };
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
 
@@ -50,6 +52,11 @@ pub struct Key {
     pub(super) checked_budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
     pub(super) aliased: bool,
+    /// The key's `budget_reset_at`, which the proxy logs as `user_api_key_budget_reset_at`.
+    budget_reset_at: Option<IsoDateTime>,
+    /// The key's `metadata`, which the proxy logs as `user_api_key_auth_metadata`. It holds only
+    /// what [`Metadata`] reads, so no callback settings and no credential.
+    metadata: Arc<Map<String, serde_json::Value>>,
 }
 
 impl StoredKey for Key {
@@ -82,6 +89,14 @@ impl Key {
     pub(crate) fn budget(&self) -> Budget {
         self.own_budget
     }
+
+    pub(crate) fn budget_reset_at(&self) -> Option<IsoDateTime> {
+        self.budget_reset_at
+    }
+
+    pub(crate) fn metadata(&self) -> &Map<String, serde_json::Value> {
+        &self.metadata
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +116,8 @@ impl Key {
             budget: None,
             checked_budget: None,
             aliased: false,
+            budget_reset_at: None,
+            metadata: Arc::default(),
         }
     }
 
@@ -337,6 +354,9 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
     if let Some(field) = unasked.or(unread).filter(|_| !blocked) {
         return Err(field);
     }
+    let logged_metadata = metadata
+        .as_ref()
+        .map_or_else(Map::new, |_| metadata::logged(&key.metadata));
     let metadata = metadata.unwrap_or_default();
     let expires = key.expires.as_deref().map(expiry).transpose()?;
     let record = KeyRecord {
@@ -372,6 +392,8 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
             budget,
             checked_budget,
             aliased,
+            budget_reset_at: key.budget_reset_at,
+            metadata: Arc::new(logged_metadata),
         },
     })
 }
@@ -461,6 +483,42 @@ mod tests {
                 false,
             )
         );
+    }
+
+    #[rstest]
+    #[case::as_generated(json!({}), 0.0, json!({}))]
+    #[case::with_spend_and_limits(
+        json!({"spend": 1.25, "metadata": {"priority": "prod", "model_rpm_limit": {"claude": 2}}}),
+        1.25,
+        json!({"priority": "prod", "model_rpm_limit": {"claude": 2}})
+    )]
+    fn what_the_proxy_logs_of_a_key_is_read_in_the_order_it_was_written(
+        #[case] change: Fields,
+        #[case] spend: f64,
+        #[case] metadata: Fields,
+    ) {
+        let key = read(&cached(change)).unwrap();
+
+        assert_eq!(
+            (
+                key.row.budget().spend,
+                key.row.budget().max,
+                key.row.budget_reset_at(),
+                serde_json::to_string(key.row.metadata()).unwrap(),
+            ),
+            (spend, None, None, metadata.to_string())
+        );
+    }
+
+    #[rstest]
+    fn a_blocked_key_keeps_none_of_the_metadata_it_was_not_read_through() {
+        let key = read(&cached(json!({
+            "blocked": true,
+            "metadata": {"logging": [{"callback_vars": {"secret": "sk-1"}}]}
+        })))
+        .unwrap();
+
+        assert!(key.row.metadata().is_empty());
     }
 
     #[rstest]
