@@ -4,6 +4,7 @@ Handler for transforming responses api requests to litellm.completion requests
 
 import sys
 from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -13,6 +14,7 @@ from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviou
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.error_param import error_param_named_as_a_responses_field
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -33,6 +35,16 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset(
+    {"model", "input", "responses_api_request", "custom_llm_provider", "stream", "extra_headers"}
+)
+_NO_REQUEST_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _without_bridge_transform_keywords(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in request_kwargs.items() if key not in _BRIDGE_TRANSFORM_KEYWORDS}
+    )
 
 
 def _with_the_tool_choice_sent(
@@ -127,7 +139,7 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        **kwargs,
+        request_kwargs: Mapping[str, object] = _NO_REQUEST_KWARGS,
     ) -> (
         ResponsesAPIResponse
         | BaseResponsesAPIStreamingIterator
@@ -152,12 +164,10 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
-                **kwargs,
+                **_without_bridge_transform_keywords(request_kwargs),
             )
         )
-        echoed_request: Final = _with_the_tool_choice_sent(
-            bridged_request, custom_llm_provider, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
-        )
+        echoed_request: Final = _with_the_tool_choice_sent(bridged_request, custom_llm_provider, request_kwargs)
 
         if _is_async:
             return self.async_response_api_handler(
@@ -166,7 +176,7 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=bridged_input,
                 responses_api_request=echoed_request,
                 previous_response_id=previous_response_id,
-                **kwargs,
+                request_kwargs=request_kwargs,
             )
 
         if previous_response_id and not holds_an_earlier_reply(bridged_input):
@@ -174,12 +184,12 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids or (previous_response_id,), model, custom_llm_provider
             )
         completion_args: Final = {}
-        completion_args.update(kwargs)
+        completion_args.update(request_kwargs)
         completion_args.update(litellm_completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
-        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
-        with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
+        _log_full_tool_names(request_kwargs, echoed_request)
+        with error_param_named_as_a_responses_field(request_kwargs, bridged_request):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
                 **completion_args,
             )
@@ -196,13 +206,14 @@ class LiteLLMCompletionTransformationHandler:
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
+            litellm_metadata: Final = request_kwargs.get("litellm_metadata")
             return LiteLLMCompletionStreamingIterator(
                 model=model,
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=bridged_input,
                 responses_api_request=echoed_request,
                 custom_llm_provider=custom_llm_provider,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=litellm_metadata if is_str_keyed_dict(litellm_metadata) else None,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -215,7 +226,7 @@ class LiteLLMCompletionTransformationHandler:
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         previous_response_id: str | None,
-        **kwargs,
+        request_kwargs: Mapping[str, object] = _NO_REQUEST_KWARGS,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         request_fields: Final = _REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request)
         completion_request: Final[Mapping[str, object]] = (
@@ -224,7 +235,7 @@ class LiteLLMCompletionTransformationHandler:
                     previous_response_id=previous_response_id,
                     litellm_completion_request=dict(request_fields),
                     instructions=responses_api_request.get("instructions"),
-                    request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                    request_kwargs=request_kwargs,
                     previous_response_client_ids=previous_response_client_ids,
                     request_input=request_input,
                 )
@@ -234,14 +245,12 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         acompletion_args: Final = {}
-        acompletion_args.update(kwargs)
+        acompletion_args.update(request_kwargs)
         acompletion_args.update(completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
-        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request)
-        with error_param_named_as_a_responses_field(
-            _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request
-        ):
+        _log_full_tool_names(request_kwargs, responses_api_request)
+        with error_param_named_as_a_responses_field(request_kwargs, responses_api_request):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
                 **acompletion_args,
             )
@@ -257,12 +266,13 @@ class LiteLLMCompletionTransformationHandler:
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
+            litellm_metadata: Final = request_kwargs.get("litellm_metadata")
             return LiteLLMCompletionStreamingIterator(
                 model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=litellm_metadata if is_str_keyed_dict(litellm_metadata) else None,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")

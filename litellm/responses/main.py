@@ -1690,10 +1690,12 @@ def responses(
                 _is_async=_is_async,
                 stream=stream,
                 extra_headers=effective_extra_headers,
-                extra_body=extra_body,
-                timeout=timeout if timeout is not None else request_timeout,
-                allowed_openai_params=allowed_openai_params,
-                **chat_kwargs,
+                request_kwargs={
+                    **chat_kwargs,
+                    "extra_body": extra_body,
+                    "timeout": timeout if timeout is not None else request_timeout,
+                    "allowed_openai_params": allowed_openai_params,
+                },
             )
 
         # Get optional parameters for the responses API

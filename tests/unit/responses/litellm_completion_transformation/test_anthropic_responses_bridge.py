@@ -35,8 +35,7 @@ def test_response_api_handler_merges_metadata_and_service_tier_without_error():
             model="test",
             input="hi",
             responses_api_request={},
-            metadata={"trace": "abc"},
-            service_tier="auto",
+            request_kwargs={"metadata": {"trace": "abc"}, "service_tier": "auto"},
         )
         assert mock_completion.call_count == 1
         assert mock_completion.call_args.kwargs["metadata"] == {"trace": "abc"}
@@ -72,7 +71,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
                 request_input="hi",
                 responses_api_request={"previous_response_id": "123"},
                 previous_response_id="123",
-                litellm_trace_id="original-trace",
+                request_kwargs={"litellm_trace_id": "original-trace"},
             )
 
             assert mock_acompletion.call_count == 1

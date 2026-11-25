@@ -158,7 +158,7 @@ class TestUseResponsesApiBridgeFlag:
         )
 
         call_kwargs = mock_bridge_handler.call_args
-        all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
+        all_kwargs = call_kwargs.kwargs["request_kwargs"]
         assert "use_chat_completions_api" not in all_kwargs
 
     @patch.object(
@@ -737,8 +737,7 @@ class TestUseResponsesApiBridgeFlag:
             "and follow-up with tool results"
         )
         for call in mock_bridge_handler.call_args_list:
-            all_kwargs = call.kwargs if call.kwargs else {}
-            assert "use_chat_completions_api" not in all_kwargs
+            assert "use_chat_completions_api" not in call.kwargs["request_kwargs"]
         assert result is not None
         assert result.id is not None
 
