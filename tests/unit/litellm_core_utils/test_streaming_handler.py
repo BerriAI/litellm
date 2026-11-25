@@ -7,7 +7,7 @@ from collections import OrderedDict, defaultdict
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Callable, Final, Iterator, Literal, NoReturn, Optional, cast
+from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.llms.openrouter.chat.transformation import OpenRouterChatCompletionStreamingHandler
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
@@ -2342,6 +2343,84 @@ def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
     streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in response))
 
     assert [read_payload(choice) for choice in streamed_choices if read_payload(choice)] == [expected_payload]
+
+
+_OPENROUTER_REASONING_TEXT: Final = MappingProxyType(
+    {"type": "reasoning.text", "text": "17 times 23", "format": "anthropic-claude-v1", "index": 0}
+)
+_OPENROUTER_REASONING_SIGNATURE: Final = MappingProxyType(
+    {"type": "reasoning.text", "signature": "sig-abc", "format": "anthropic-claude-v1", "index": 0}
+)
+_OPENROUTER_REASONING_ENCRYPTED: Final = MappingProxyType(
+    {"type": "reasoning.encrypted", "data": "blob-xyz", "id": "tool_1", "format": "google-gemini-v1", "index": 0}
+)
+
+
+def _openrouter_sse_line(delta: Mapping[str, object], finish_reason: str | None = None) -> str:
+    chunk: Final = {
+        "id": "gen-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "anthropic/claude-haiku-4.5",
+        "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk)}"
+
+
+_OPENROUTER_REASONING_STREAM: Final = (
+    _openrouter_sse_line(
+        {
+            "content": "",
+            "role": "assistant",
+            "reasoning": _OPENROUTER_REASONING_TEXT["text"],
+            "reasoning_details": [dict(_OPENROUTER_REASONING_TEXT)],
+        }
+    ),
+    _openrouter_sse_line(
+        {"content": "", "role": "assistant", "reasoning_details": [dict(_OPENROUTER_REASONING_SIGNATURE)]}
+    ),
+    _openrouter_sse_line({"content": "", "reasoning": None, "reasoning_details": [dict(_OPENROUTER_REASONING_ENCRYPTED)]}),
+    _openrouter_sse_line({"content": "391", "role": "assistant"}),
+    _openrouter_sse_line({"content": "", "role": "assistant"}, finish_reason="stop"),
+    "data: [DONE]",
+)
+
+
+async def _async_lines(lines: Sequence[str]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iteration", ["sync", "async"])
+async def test_openrouter_stream_keeps_chunks_that_carry_only_reasoning_details(
+    logging_obj: Logging, iteration: Literal["sync", "async"]
+):
+    response: Final = CustomStreamWrapper(
+        completion_stream=OpenRouterChatCompletionStreamingHandler(
+            streaming_response=(
+                iter(_OPENROUTER_REASONING_STREAM) if iteration == "sync" else _async_lines(_OPENROUTER_REASONING_STREAM)
+            ),
+            sync_stream=iteration == "sync",
+        ),
+        model="anthropic/claude-haiku-4.5",
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+    )
+
+    streamed_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    streamed_reasoning_details: Final = [
+        piece
+        for chunk in streamed_chunks
+        for piece in (getattr(chunk.choices[0].delta, "reasoning_details", None) or [])
+    ]
+    assert streamed_reasoning_details == [
+        dict(_OPENROUTER_REASONING_TEXT),
+        dict(_OPENROUTER_REASONING_SIGNATURE),
+        dict(_OPENROUTER_REASONING_ENCRYPTED),
+    ]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in streamed_chunks) == "391"
 
 
 @pytest.mark.asyncio
