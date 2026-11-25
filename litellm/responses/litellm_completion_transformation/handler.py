@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allo
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
+from litellm.litellm_core_utils.prompt_templates.common_utils import invalid_type_message, is_present_non_string
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -93,6 +94,23 @@ def _sync_follow_up_refusal(
         _stored_turns_need_aresponses(client_response_ids, model, provider)
         if _proxy_database_connected()
         else previous_response_not_found(client_response_ids, model, provider)
+    )
+
+
+def _invalid_previous_response_id(
+    previous_response_id: object, model: str, provider: str | None
+) -> litellm.BadRequestError:
+    message: Final = invalid_type_message("previous_response_id", previous_response_id)
+    return litellm.BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "invalid_type",
+        },
     )
 
 
@@ -211,6 +229,8 @@ class LiteLLMCompletionTransformationHandler:
             drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
         )
         previous_response_id: Final = request.get("previous_response_id")
+        if is_present_non_string(previous_response_id):
+            raise _invalid_previous_response_id(previous_response_id, model, custom_llm_provider)
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
             return self._async_response_api_handler_after_earlier_searches(
                 previous_response_client_ids,
