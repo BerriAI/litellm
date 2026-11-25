@@ -66,6 +66,8 @@ _PARAMS_LIST_ADAPTER: Final = TypeAdapter(list[str])
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
     {
         "openai.gpt-oss": frozenset(("logit_bias",)),
+        "qwen.": frozenset(("logit_bias",)),
+        "mistral.": frozenset(("logit_bias",)),
         "xai.": frozenset(("frequency_penalty", "presence_penalty")),
     }
 )
@@ -510,7 +512,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
-    ) -> dict:  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
         optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return super().transform_request(
             model=split_bedrock_region_path(model)[1],
@@ -527,7 +529,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
-    ) -> dict:  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
         optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return await super().async_transform_request(
             model=split_bedrock_region_path(model)[1],

@@ -1152,6 +1152,16 @@ def test_supported_params_include_reasoning_effort_for_gpt56(local_cost_map):
             ("logit_bias", "n"),
             ("frequency_penalty", "presence_penalty", "stop", "logprobs", "reasoning_effort"),
         ),
+        (
+            "qwen.qwen3-32b-v1:0",
+            ("logit_bias", "n"),
+            ("frequency_penalty", "presence_penalty", "stop", "tools", "response_format"),
+        ),
+        (
+            "mistral.mistral-large-3-675b-instruct",
+            ("logit_bias", "n"),
+            ("frequency_penalty", "presence_penalty", "stop", "tools", "response_format"),
+        ),
     ],
 )
 def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, model, refused, kept):
@@ -1165,6 +1175,8 @@ def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, mod
     [
         ("bedrock/chat_completions/us.xai.grok-4.6", {"presence_penalty": 0.5}),
         ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {"logit_bias": {"1": 1}}),
+        ("bedrock/chat_completions/qwen.qwen3-32b-v1:0", {"logit_bias": {"1": 1}}),
+        ("bedrock/chat_completions/mistral.mistral-large-3-675b-instruct", {"logit_bias": {"1": 1}}),
     ],
     ids=lambda value: value if isinstance(value, str) else next(iter(value)),
 )

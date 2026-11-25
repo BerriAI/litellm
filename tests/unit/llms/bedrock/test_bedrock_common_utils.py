@@ -1551,7 +1551,14 @@ def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
         (
             "bedrock/mistral.mistral-99-unmapped-v1:0",
             b"/model/mistral.mistral-99-unmapped-v1:0/invoke",
-            {"outputs": [{"text": "ok", "stop_reason": "stop"}]},
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "mistral.mistral-99-unmapped-v1:0",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
         ),
     ],
 )
