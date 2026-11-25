@@ -5218,12 +5218,31 @@ def test_an_openai_deployment_keeps_a_later_system_item_in_place_unless_a_compat
     assert _input_sent_for_a_later_system_item(api_base, model_info) == list(_LATER_SYSTEM_INPUT)
 
 
-def test_a_system_first_openai_compatible_deployment_moves_a_continued_turns_leading_system_item_out_of_input() -> None:
+@pytest.mark.parametrize("role", ["system", "developer"])
+def test_a_system_first_openai_compatible_deployment_sends_a_continued_turns_instruction_item_as_a_user_turn(
+    role: str,
+) -> None:
     request: Final = _responses_request_sent(
-        _FIREWORKS_API_BASE, _SYSTEM_FIRST_DEPLOYMENT, _CONTINUED_TURN_INPUT, previous_response_id="resp_turn_1"
+        _FIREWORKS_API_BASE,
+        _SYSTEM_FIRST_DEPLOYMENT,
+        ({"role": role, "content": "Reply in French."}, _CONTINUED_TURN_INPUT[1]),
+        previous_response_id="resp_turn_1",
     )
 
-    assert (request["instructions"], request["input"]) == ("Reply in French.", [_CONTINUED_TURN_INPUT[1]])
+    assert ("instructions" in request, request["input"]) == (
+        False,
+        [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": CONVERTED_SYSTEM_NOTE},
+                    {"type": "input_text", "text": "Reply in French."},
+                ],
+            },
+            _CONTINUED_TURN_INPUT[1],
+        ],
+    )
 
 
 def test_a_system_first_openai_compatible_deployment_keeps_a_first_turns_leading_system_item_in_input() -> None:

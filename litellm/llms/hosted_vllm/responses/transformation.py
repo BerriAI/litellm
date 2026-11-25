@@ -9,6 +9,7 @@ the chat completions → responses conversion pipeline.
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.openai.responses.instruction_items import SystemItemPlacement
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam
@@ -71,14 +72,17 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return join_api_base(api_base, "v1/responses")
 
-    def _places_system_items_first(
+    def _system_item_placement(
         self,
         model: str,
         input: str | ResponseInputParam,
         continues_conversation: bool,
         litellm_params: GenericLiteLLMParams,
-    ) -> bool:
-        return declares_system_first(model, self.custom_llm_provider.value, deployment_model_info(litellm_params))
+    ) -> SystemItemPlacement | None:
+        declared_system_first: Final = declares_system_first(
+            model, self.custom_llm_provider.value, deployment_model_info(litellm_params)
+        )
+        return "leading_block_into_instructions" if declared_system_first else None
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""

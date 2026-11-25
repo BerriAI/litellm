@@ -46,7 +46,11 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
-from litellm.llms.openai.responses.instruction_items import has_later_instruction_items, system_first_input_and_params
+from litellm.llms.openai.responses.instruction_items import (
+    SystemItemPlacement,
+    has_later_instruction_items,
+    system_first_input_and_params,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -647,12 +651,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params
         )
+        placement: Final = self._system_item_placement(
+            model, input, request_params.get("previous_response_id") is not None, litellm_params
+        )
         placed: Final = (
-            system_first_input_and_params(self._validate_input_param(input), request_params)
-            if self._places_system_items_first(
-                model, input, request_params.get("previous_response_id") is not None, litellm_params
-            )
-            else None
+            None
+            if placement is None
+            else system_first_input_and_params(self._validate_input_param(input), request_params, placement)
         )
         placed_input: Final = input if placed is None else placed[0]
         placed_params: Final = request_params if placed is None else placed[1]
@@ -679,19 +684,22 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         return final_request_params
 
-    def _places_system_items_first(
+    def _system_item_placement(
         self,
         model: str,
         input: str | ResponseInputParam,
         continues_conversation: bool,
         litellm_params: GenericLiteLLMParams,
-    ) -> bool:
-        return (
+    ) -> SystemItemPlacement | None:
+        places_system_items_first: Final = (
             self.custom_llm_provider is LlmProviders.OPENAI
             and not self._targets_openai_api(litellm_params)
             and has_later_instruction_items(self._validate_input_param(input), continues_conversation)
             and declares_system_first(model, LlmProviders.OPENAI.value, deployment_model_info(litellm_params))
         )
+        if not places_system_items_first:
+            return None
+        return "every_item_in_place" if continues_conversation else "leading_block_into_instructions"
 
     def transform_extra_body(
         self,
