@@ -43,6 +43,7 @@ INPUT_TOKEN_LIMIT: Final = 120
 MAX_TOKENS: Final = 60
 HEALTHY_OUTPUT_TOKENS: Final = 3
 METERED_USAGE: Final = MappingProxyType({"prompt_tokens": 900, "completion_tokens": 100, "total_tokens": 1000})
+OUTPUT_LIMIT_UNDER_METERED_USAGE: Final = METERED_USAGE["completion_tokens"] - 10
 MALFORMED_VALUES: Final[tuple[tuple[str, JsonValue], ...]] = (
     ("word", "sometimes"),
     ("empty", ""),
@@ -153,6 +154,12 @@ def metered_reply(request: Request) -> Reply:
     return Reply(body=json.dumps(body).encode())
 
 
+def provider_outage_reply(request: Request) -> Reply:
+    if is_model_info_probe(request):
+        return model_list_reply()
+    return Reply(status=500, body=b'{"error": {"message": "scripted provider outage", "type": "server_error"}}')
+
+
 def model_entry(group: str, wire: Wire, **extra: JsonValue) -> dict[str, JsonValue]:
     return {
         "model_name": group,
@@ -233,6 +240,32 @@ def enforcing(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 rig_gateway, directory, {}, config=enforcing_config(directory, groups, wires), workers=2
             )
         )
+        yield Rig(owned.gateway, owned, groups, wires)
+
+
+@pytest.fixture(scope="module")
+def unset(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    directory: Final = tmp_path_factory.mktemp("per-model-limits-unset")
+    groups: Final = new_groups()
+    with ExitStack() as stack:
+        rig_gateway: Final = stack.enter_context(gateway_from_environment())
+        outage: Final = stack.enter_context(wire_server(provider_outage_reply))
+        wires: Final = MappingProxyType(
+            {
+                groups.metered: stack.enter_context(wire_server(metered_reply)),
+                groups.last: stack.enter_context(wire_server(healthy_reply)),
+            }
+        )
+        config: Final = proxy_config(
+            directory,
+            model_list=(
+                model_entry(groups.primary, outage),
+                *(model_entry(group, wire) for group, wire in wires.items()),
+            ),
+            fallbacks=({groups.primary: [groups.metered, groups.last]},),
+            general_settings={},
+        )
+        owned: Final = stack.enter_context(owned_proxy_process(rig_gateway, directory, {}, config=config, workers=2))
         yield Rig(owned.gateway, owned, groups, wires)
 
 
@@ -553,6 +586,19 @@ def test_a_fallback_over_the_key_model_otpm_answers_429_and_leaves_no_reservatio
             f"chatcmpl-{after}",
         )
     assert enforcing.traffic() == enforcing.expected({groups.gated_output: (warm,), groups.capped: (spend, after)})
+
+
+def test_a_provider_error_skips_a_fallback_over_the_key_model_otpm_and_is_served_by_the_next_one(unset: Rig) -> None:
+    unset.traffic()
+    groups: Final = unset.groups
+    spend, moved = new_marker(), new_marker()
+    with unset.gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"model_otpm_limit": {groups.metered: OUTPUT_LIMIT_UNDER_METERED_USAGE}})
+        assert_served(
+            chat(unset.gateway, key, groups.metered, spend, max_tokens=MAX_TOKENS), groups.metered, f"chatcmpl-{spend}"
+        )
+        assert_served(chat(unset.gateway, key, groups.primary, moved), groups.last, f"chatcmpl-{moved}")
+    assert unset.traffic() == unset.expected({groups.metered: (spend,), groups.last: (moved,)})
 
 
 def test_key_router_settings_fallbacks_are_skipped_on_a_per_model_429(enforcing: Rig) -> None:
