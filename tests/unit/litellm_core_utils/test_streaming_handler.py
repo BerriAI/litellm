@@ -2410,16 +2410,16 @@ async def test_openrouter_stream_keeps_chunks_that_carry_only_reasoning_details(
 
     streamed_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
 
-    streamed_reasoning_details: Final = [
-        piece
-        for chunk in streamed_chunks
-        for piece in (getattr(chunk.choices[0].delta, "reasoning_details", None) or [])
-    ]
-    assert streamed_reasoning_details == [
+    streamed_reasoning_details: Final = tuple(
+        chain.from_iterable(
+            getattr(chunk.choices[0].delta, "reasoning_details", None) or () for chunk in streamed_chunks
+        )
+    )
+    assert streamed_reasoning_details == (
         dict(_OPENROUTER_REASONING_TEXT),
         dict(_OPENROUTER_REASONING_SIGNATURE),
         dict(_OPENROUTER_REASONING_ENCRYPTED),
-    ]
+    )
     assert "".join(chunk.choices[0].delta.content or "" for chunk in streamed_chunks) == "391"
 
 
