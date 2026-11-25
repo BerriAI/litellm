@@ -7,7 +7,7 @@ from pydantic import JsonValue
 from litellm.exceptions import BadRequestError
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     flatten_unencrypted_web_search_results_in_anthropic_messages,
@@ -164,18 +164,23 @@ def provider_messages_config(model: str, custom_llm_provider: str | None) -> Bas
     )
 
 
+_HOSTS_SERVING_CLAUDE_UNDER_ANY_DEPLOYMENT_NAME: Final = frozenset(
+    {LlmProviders.BEDROCK.value, LlmProviders.AZURE_AI.value}
+)
+
+
 def _rewrites_tool_use_ids(model: str, custom_llm_provider: str | None, api_base: str | None) -> bool:
     if "claude" in model.lower():
         return True
     try:
-        resolved_model, provider, _, _ = get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
-        )
+        resolved_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider, api_base)
     except BadRequestError:
         return True
     if provider == LlmProviders.ANTHROPIC.value:
         return serves_anthropic_api_versions(AnthropicModelInfo.get_api_base(api_base))
-    return provider_messages_config(resolved_model, provider) is not None
+    return provider in _HOSTS_SERVING_CLAUDE_UNDER_ANY_DEPLOYMENT_NAME or (
+        provider_messages_config(resolved_model, provider) is not None
+    )
 
 
 def native_messages_to_send(

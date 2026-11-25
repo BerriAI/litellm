@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Final, List
 
 import httpx
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import litellm
 from litellm.anthropic_interface import messages
@@ -2362,7 +2363,7 @@ _KIMI_TOOL_ROUND: Final = (
 )
 
 
-def _body_recording_client(bodies: list[dict[str, Any]]) -> AsyncHTTPHandler:
+def _body_recording_client(bodies: list[dict[str, object]]) -> AsyncHTTPHandler:
     def record_and_answer(request: httpx.Request) -> httpx.Response:
         bodies.append(json.loads(request.content))
         return httpx.Response(
@@ -2448,7 +2449,7 @@ async def test_native_messages_rewrite_tool_use_ids_only_for_an_upstream_that_en
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    bodies: list[dict[str, Any]] = []
+    bodies: list[dict[str, object]] = []
 
     await handler.anthropic_messages(
         max_tokens=16,
@@ -2464,6 +2465,40 @@ async def test_native_messages_rewrite_tool_use_ids_only_for_an_upstream_that_en
     assert (body["messages"][1]["content"][0]["id"], body["messages"][2]["content"][0]["tool_use_id"]) == (
         expected_id,
         expected_id,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "token_dir_env"),
+    [("github_copilot/gpt-5.4", "GITHUB_COPILOT_TOKEN_DIR"), ("chatgpt/gpt-5.4", "CHATGPT_TOKEN_DIR")],
+    ids=["github_copilot", "chatgpt"],
+)
+async def test_deciding_tool_use_ids_never_logs_in_to_a_provider_that_authenticates_on_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str, token_dir_env: str
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.utils import prepare_native_messages
+
+    monkeypatch.setenv(token_dir_env, str(tmp_path))
+
+    messages, _ = prepare_native_messages(copy.deepcopy(list(_KIMI_TOOL_ROUND)), None, {}, model=model)
+
+    assert messages == list(_KIMI_TOOL_ROUND)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", "azure_ai/my-deployment"],
+    ids=["bedrock_application_inference_profile", "azure_ai_deployment"],
+)
+def test_native_messages_rewrite_tool_use_ids_for_a_host_that_can_serve_claude_under_any_name(model: str):
+    from litellm.llms.anthropic.pass_through.messages.utils import prepare_native_messages
+
+    messages, _ = prepare_native_messages(copy.deepcopy(list(_KIMI_TOOL_ROUND)), None, {}, model=model)
+
+    assert (messages[1]["content"][0]["id"], messages[2]["content"][0]["tool_use_id"]) == (
+        _SANITIZED_KIMI_TOOL_USE_ID,
+        _SANITIZED_KIMI_TOOL_USE_ID,
     )
 
 
@@ -2501,8 +2536,9 @@ def _kimi_tool_call_response() -> ModelResponse:
     )
 
 
-def _chat_tool_call_ids(chat_messages: list[dict[str, Any]]) -> tuple[object, object]:
-    return chat_messages[1]["tool_calls"][0]["id"], chat_messages[2]["tool_call_id"]
+def _chat_tool_call_ids(completion: Mock) -> tuple[object, object]:
+    sent: Final = completion.call_args.kwargs["messages"]
+    return sent[1]["tool_calls"][0]["id"], sent[2]["tool_call_id"]
 
 
 @pytest.mark.asyncio
@@ -2517,7 +2553,7 @@ async def test_bridged_messages_keep_the_backend_tool_ids_both_ways():
             api_base="http://vllm.example.com/v1",
         )
 
-    assert _chat_tool_call_ids(completion.call_args.kwargs["messages"]) == (_KIMI_TOOL_USE_ID, _KIMI_TOOL_USE_ID)
+    assert _chat_tool_call_ids(completion) == (_KIMI_TOOL_USE_ID, _KIMI_TOOL_USE_ID)
     assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["functions.Bash:1"]
 
 
@@ -2532,5 +2568,5 @@ def test_sync_bridged_messages_keep_the_backend_tool_ids_both_ways():
             api_base="http://vllm.example.com/v1",
         )
 
-    assert _chat_tool_call_ids(completion.call_args.kwargs["messages"]) == (_KIMI_TOOL_USE_ID, _KIMI_TOOL_USE_ID)
+    assert _chat_tool_call_ids(completion) == (_KIMI_TOOL_USE_ID, _KIMI_TOOL_USE_ID)
     assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["functions.Bash:1"]
