@@ -9,6 +9,7 @@ mod fields;
 pub mod hosted;
 pub mod model_capacity;
 pub mod parallel_request_limiter;
+pub mod spend_log;
 mod spend_log_input;
 
 use std::sync::Arc;
