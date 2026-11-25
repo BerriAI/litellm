@@ -343,6 +343,7 @@ mod fips_build_tests {
     use base64::{Engine as _, prelude::BASE64_STANDARD};
     use hmac::{Hmac, Mac};
     use litellm_secret_value::SecretValue;
+    use rstest::rstest;
     use sha2::{Digest, Sha256};
     use sqlx::{Connection, PgConnection};
     use tokio::{
@@ -423,7 +424,10 @@ mod fips_build_tests {
         mac.finalize().into_bytes().to_vec()
     }
 
-    async fn scram_server(listener: TcpListener) -> TestResult<(String, bool)> {
+    async fn scram_server(
+        listener: TcpListener,
+        signing_key: &'static str,
+    ) -> TestResult<(String, bool)> {
         let mut socket = accept_startup(&listener).await?;
         send_authentication(&mut socket, 10, b"SCRAM-SHA-256\0\0").await?;
 
@@ -449,14 +453,16 @@ mod fips_build_tests {
             .collect();
         let proof_is_right = Sha256::digest(&client_key).as_slice() == stored_key.as_slice();
 
-        let server_signature = hmac_sha256(&BASE64_STANDARD.decode(SERVER_KEY)?, &auth_message);
+        let server_signature = hmac_sha256(&BASE64_STANDARD.decode(signing_key)?, &auth_message);
         let server_final = format!("v={}", BASE64_STANDARD.encode(server_signature));
         send_authentication(&mut socket, 12, server_final.as_bytes()).await?;
-        finish_login(&mut socket).await?;
-        let _terminate = read_message(&mut socket).await;
+        if finish_login(&mut socket).await.is_ok() {
+            let _terminate = read_message(&mut socket).await;
+        }
         Ok((client_nonce.to_owned(), proof_is_right))
     }
 
+    #[rstest]
     #[tokio::test]
     async fn refuses_an_md5_challenge() -> TestResult {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -484,11 +490,12 @@ mod fips_build_tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
     async fn logs_in_with_scram_sha_256_through_the_module() -> TestResult {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let options = endpoint(listener.local_addr()?.port()).connect_options();
-        let server = tokio::spawn(scram_server(listener));
+        let server = tokio::spawn(scram_server(listener, SERVER_KEY));
 
         PgConnection::connect_with(&options).await?.close().await?;
         let (client_nonce, proof_is_right) = server.await??;
@@ -502,6 +509,22 @@ mod fips_build_tests {
             Some(18),
             "{client_nonce}"
         );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn refuses_a_server_signature_made_without_the_server_key() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let options = endpoint(listener.local_addr()?.port()).connect_options();
+        let server = tokio::spawn(scram_server(listener, STORED_KEY));
+
+        let error = PgConnection::connect_with(&options)
+            .await
+            .expect_err("a server that does not hold the server key must fail the login");
+
+        assert!(error.to_string().contains("MAC tag mismatch"), "{error}");
+        server.await??;
         Ok(())
     }
 }
