@@ -3346,6 +3346,19 @@ class ProxyBaseLLMRequestProcessing:
                 )
             )
 
+        if route_type == "aimage_edit":
+            from litellm.proxy.image_endpoints.svg_author_model import svg_author_model_updates
+
+            request_body: Final[dict[str, object]] = self.data  # mutable-ok: pre-call steps update it in place
+            request_body.update(
+                await svg_author_model_updates(
+                    body=request_body,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                    metadata_variable_name=metadata_variable_name,
+                )
+            )
+
         aliased_model: Final = self.data.get("model")
         if llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES and isinstance(aliased_model, str):
             self.data.update(

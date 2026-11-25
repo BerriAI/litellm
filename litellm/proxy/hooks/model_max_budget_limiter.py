@@ -16,11 +16,14 @@ from typing import (
     cast,  # noqa: TID251  # untyped callback payload requires explicit narrowing
 )
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.cost_calculator import live_delegated_model_costs
+from litellm.constants import SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY
+from litellm.cost_calculator import live_delegated_model_costs, svg_authoring_model_cost
 from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.batch_utils import (
     ChargeOnceJob,
@@ -908,6 +911,66 @@ def _live_delegated_costs(kwargs: Mapping[str, object], response_obj: object) ->
     )
 
 
+_SVG_BUDGET_MODELS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _svg_budget_models(value: object) -> tuple[str, ...]:
+    try:
+        return _SVG_BUDGET_MODELS.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def _svg_authoring_charges(
+    kwargs: Mapping[str, object], response_obj: object, metadata: Mapping[str, object]
+) -> tuple[tuple[tuple[str, ...], float], ...]:
+    """What the model OpenAI ran to write an SVG cost, charged to the svg.model names the request was admitted under,
+    not the image model's budget."""
+    admitted_as: Final = _svg_budget_models(metadata.get(SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY))
+    return tuple(
+        (admitted_as or budget_names_of(author_model), cost)
+        for author_model, cost in svg_authoring_model_cost(
+            response_obj, kwargs.get("custom_llm_provider"), kwargs.get("litellm_params")
+        )
+    )
+
+
+def budgeted_names_for(model: str, team_id: str | None) -> tuple[str, ...]:
+    """`model` and every other name its delegated spend is charged under, so admission reads the budgets it draws down."""
+    router: Final = _proxy_router()
+    deployments: Final = () if router is None else router.registry().deployments(model, team_id=team_id) or ()
+    provider_models: Final = sorted(
+        {
+            provider_model.rsplit("/", 1)[-1]
+            for deployment in deployments
+            if isinstance(provider_model := (as_str_mapping(deployment["litellm_params"]) or {}).get("model"), str)
+        }
+    )
+    return tuple(
+        dict.fromkeys((model, *itertools.chain.from_iterable(map(budget_names_of, provider_models or (model,)))))
+    )
+
+
+async def delegated_model_over_budget(model: str, caller: UserAPIKeyAuth) -> str | None:
+    """The first name `model`'s delegated spend is charged under whose per-model budget `caller` has used up."""
+    return await model_over_budget(budgeted_names_for(model, caller.team_id), caller)
+
+
+async def model_over_budget(models: Iterable[str], caller: UserAPIKeyAuth) -> str | None:
+    """The first of `models` whose per-model budget `caller` has used up."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # the same per-model budget walk a request's own model gets
+    )
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    for model in models:
+        if not await _is_within_every_model_budget(
+            valid_token=caller, model_max_budget_limiter=model_max_budget_limiter, model=model
+        ):
+            return model
+    return None
+
+
 _DATED_SNAPSHOT: Final = re.compile(r"-\d{4}-\d{2}-\d{2}")
 
 
@@ -1371,13 +1434,23 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 key_model_max_budget,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
             )
 
-        delegated_costs: Final = _live_delegated_costs(
-            kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback kwargs
-            response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
+        delegated_charges: Final = (
+            *(
+                (budget_names_of(delegated_model), cost)
+                for delegated_model, cost in _live_delegated_costs(
+                    kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback kwargs
+                    response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
+                )
+            ),
+            *_svg_authoring_charges(
+                kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback kwargs
+                response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
+                _metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            ),
         )
         charges: Final = (
-            ((model,), max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
-            *((budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
+            ((model,), max(response_cost - sum(cost for _, cost in delegated_charges), 0.0)),
+            *delegated_charges,
         )
 
         def _counters(budget_names: tuple[str, ...]) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:

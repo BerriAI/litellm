@@ -119,39 +119,17 @@ def _proxy_model_list() -> Sequence[object] | None:
     return proxy_server.llm_model_list  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # proxy_server declares a bare list
 
 
-def _budgeted_names(model: str, team_id: str | None) -> tuple[str, ...]:
-    """`model` and every other name its delegated spend is charged under, so admission reads the budgets it draws down."""
-    from litellm.proxy import proxy_server
-    from litellm.proxy.hooks.model_max_budget_limiter import budget_names_of
-
-    router: Final = proxy_server.llm_router
-    deployments: Final = () if router is None else router.registry().deployments(model, team_id=team_id) or ()
-    provider_models: Final = sorted(
-        {
-            provider_model.rsplit("/", 1)[-1]
-            for deployment in deployments
-            if isinstance(provider_model := (as_str_mapping(deployment["litellm_params"]) or {}).get("model"), str)
-        }
-    )
-    return tuple(dict.fromkeys((model, *chain.from_iterable(map(budget_names_of, provider_models or (model,))))))
-
-
 async def _refuse_a_model_over_its_budget(model: str, caller: UserAPIKeyAuth) -> None:
-    from litellm.proxy.auth.user_api_key_auth import (
-        _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # the same per-model budget walk a request's own model gets
-    )
-    from litellm.proxy.proxy_server import model_max_budget_limiter
+    from litellm.proxy.hooks.model_max_budget_limiter import delegated_model_over_budget
 
-    for budgeted in _budgeted_names(model, caller.team_id):
-        if not await _is_within_every_model_budget(
-            valid_token=caller, model_max_budget_limiter=model_max_budget_limiter, model=budgeted
-        ):
-            raise ProxyException(
-                message=f"Budget exceeded for model={budgeted}, so this session cannot delegate to {model}",
-                type=ProxyErrorTypes.budget_exceeded,
-                param="model",
-                code=400,
-            )
+    budgeted: Final = await delegated_model_over_budget(model, caller)
+    if budgeted is not None:
+        raise ProxyException(
+            message=f"Budget exceeded for model={budgeted}, so this session cannot delegate to {model}",
+            type=ProxyErrorTypes.budget_exceeded,
+            param="model",
+            code=400,
+        )
 
 
 async def authorize_live_delegation(session: object, caller: UserAPIKeyAuth) -> None:

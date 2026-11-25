@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
 from litellm.types.utils import FileTypes
@@ -43,3 +44,11 @@ IMAGE_CONFIG_FIELDS: Final = ("imageConfig", "image_config")
 class UnsupportedImageParam:
     param: str
     reason: str
+
+
+class ImageSVGAuthorDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    deployment_id: str
+    provider_model: str
+    image_deployment_ids: tuple[str, ...] = ()

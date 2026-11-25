@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.image_endpoints.svg_author_model import svg_author_model_updates
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
@@ -181,7 +182,7 @@ async def image_generation(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: str | None = None,
 ):
-    from litellm.proxy.litellm_pre_call_utils import reject_url_valued_destination
+    from litellm.proxy.litellm_pre_call_utils import get_metadata_variable_name, reject_url_valued_destination
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -193,7 +194,9 @@ async def image_generation(
     )
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
-    data = {"litellm_call_id": litellm_call_id}
+    data: dict[str, object] = {  # mutable-ok: the pre-call steps update this request body in place
+        "litellm_call_id": litellm_call_id
+    }
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -222,8 +225,9 @@ async def image_generation(
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
+        aliased_image_model: Final = data["model"]
+        if isinstance(aliased_image_model, str) and aliased_image_model in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[aliased_image_model]
 
         if llm_router is not None:
             requested_model: Final = _IMAGE_GENERATION_MODEL_ADAPTER.validate_python(data.get("model"))
@@ -238,11 +242,20 @@ async def image_generation(
                 )
             )
 
+        data.update(
+            await svg_author_model_updates(
+                body=data,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+                metadata_variable_name=get_metadata_variable_name(request, data),
+            )
+        )
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
             # Reformat the image prompt as a chat message so guardrails can process it.
-            user_message: Final[ChatCompletionUserMessage] = {
+            user_message: Final[Mapping[str, object]] = {
                 "role": "user",
                 "content": prompt_value,
             }

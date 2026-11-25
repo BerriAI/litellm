@@ -23,6 +23,7 @@ from litellm.constants import (
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
+    SVG_AUTHOR_DEPLOYMENT_METADATA_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
@@ -149,6 +150,7 @@ from litellm.types.decisions import (
     OpenAIDecisionUsage,
 )
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
+from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -2378,6 +2380,7 @@ def completion_cost(
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
                         service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
+                        svg_author=_svg_author_deployment(litellm_logging_obj),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -2913,6 +2916,7 @@ def _video_input_image_cost(
 
 
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_SVG_AUTHOR_DEPLOYMENT: Final = TypeAdapter(ImageSVGAuthorDeployment)
 
 
 def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
@@ -2921,6 +2925,53 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
         return None
     cost_per_query: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("input_cost_per_query")
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
+
+
+def _svg_author_deployment(litellm_logging_obj: LitellmLoggingObject | None) -> ImageSVGAuthorDeployment | None:
+    logged_params: Final[object] = getattr(litellm_logging_obj, "litellm_params", None)
+    return None if logged_params is None else svg_author_deployment_in(logged_params)
+
+
+def svg_authoring_model_cost(
+    response: object, custom_llm_provider: object, logged_params: object
+) -> tuple[tuple[str, float], ...]:
+    """The model OpenAI ran to write an image response's SVG, with what it cost, priced the way the request was."""
+    from litellm.llms.openai.image_generation.cost_calculator import svg_authoring_cost
+
+    svg_usage: Final = response.svg_usage if isinstance(response, ImageResponse) else None
+    if svg_usage is None:
+        return ()
+    cost: Final = svg_authoring_cost(
+        svg_usage,
+        custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        svg_author_deployment_in(logged_params),
+    )
+    return ((svg_usage.model, cost),) if cost > 0 else ()
+
+
+def svg_author_deployment_in(logged_params: object) -> ImageSVGAuthorDeployment | None:
+    """The svg author deployment stamped on a request, when the image deployment that served it bills like it."""
+    params: Final = _metadata_bucket(logged_params)
+    buckets: Final = tuple(_metadata_bucket(params.get(key)) for key in ("metadata", "litellm_metadata"))
+    stamp: Final = next(
+        (
+            _SVG_AUTHOR_DEPLOYMENT.validate_python(bucket[SVG_AUTHOR_DEPLOYMENT_METADATA_KEY])
+            for bucket in buckets
+            if bucket.get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY) is not None
+        ),
+        None,
+    )
+    served_by: Final = next(
+        (served for bucket in buckets if (served := _metadata_bucket(bucket.get("model_info"))).get("id")), None
+    )
+    served_ids: Final[tuple[object, ...]] = (
+        () if served_by is None else (served_by.get("id"), served_by.get("original_model_id"))
+    )
+    return stamp if stamp is not None and any(i in stamp.image_deployment_ids for i in served_ids) else None
+
+
+def _metadata_bucket(value: object) -> Mapping[str, object]:
+    return _LOGGED_LITELLM_PARAMS.validate_python(value) if isinstance(value, Mapping) else {}
 
 
 def _response_api_base(completion_response: object) -> str | None:

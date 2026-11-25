@@ -17,6 +17,7 @@ from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeQuote, NativeTokenUsage
+from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -1559,6 +1560,7 @@ class CostCalculatorUtils:
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
         service_tier: str | None = None,
+        svg_author: ImageSVGAuthorDeployment | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -1685,6 +1687,7 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
                     model_info=pricing,
+                    svg_author=svg_author,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(

@@ -4,6 +4,7 @@ Cost calculator for OpenAI image generation models (gpt-image family)
 These models use token-based pricing instead of pixel-based pricing like DALL-E.
 """
 
+import re
 from typing import Final
 
 from litellm import verbose_logger
@@ -13,7 +14,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     resolve_image_model_info,
 )
-from litellm.types.utils import ImageResponse, ModelInfo, Usage
+from litellm.types.images.main import ImageSVGAuthorDeployment
+from litellm.types.utils import ImageResponse, ImageSVGUsage, ModelInfo, Usage
 
 
 def cost_calculator(
@@ -21,26 +23,48 @@ def cost_calculator(
     image_response: ImageResponse,
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
+    svg_author: ImageSVGAuthorDeployment | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
     rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info)
     svg_usage: Final = image_response.svg_usage
     if svg_usage is None:
         return rendering_cost
+    return rendering_cost + svg_authoring_cost(svg_usage, custom_llm_provider, svg_author)
+
+
+def svg_authoring_cost(
+    svg_usage: ImageSVGUsage, custom_llm_provider: str | None, svg_author: ImageSVGAuthorDeployment | None
+) -> float:
+    """What the model OpenAI ran to write the SVG cost, at its deployment's price when ``svg_author`` vouches for it."""
+    author_model: Final[str] = svg_usage.model
     try:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=svg_usage.model,
+            model=author_model,
             usage=Usage(
                 prompt_tokens=svg_usage.input_tokens,
                 completion_tokens=svg_usage.output_tokens,
                 total_tokens=svg_usage.total_tokens,
             ),
             custom_llm_provider=custom_llm_provider or "openai",
+            model_info=_author_deployment_pricing(svg_author, author_model),
         )
     except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
-        verbose_logger.debug("Unable to price SVG authoring usage for model=%s: %s", svg_usage.model, exc)
-        return rendering_cost
-    return rendering_cost + prompt_cost + completion_cost
+        verbose_logger.debug("Unable to price SVG authoring usage for model=%s: %s", author_model, exc)
+        return 0.0
+    return prompt_cost + completion_cost
+
+
+def _author_deployment_pricing(svg_author: ImageSVGAuthorDeployment | None, author_model: str) -> ModelInfo | None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    if svg_author is None or not _is_snapshot_of(author_model, svg_author.provider_model):
+        return None
+    return deployment_pricing_model_info(svg_author.deployment_id, author_model)
+
+
+def _is_snapshot_of(reported_model: str, provider_model: str) -> bool:
+    return re.fullmatch(rf"{re.escape(provider_model)}(-\d{{4}}-\d{{2}}-\d{{2}})?", reported_model) is not None
 
 
 def _rendering_cost(
