@@ -8,8 +8,7 @@ import copy
 import json
 import os
 import re
-import time
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -37,6 +36,7 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
+    _classify_completed_frames,
 )
 from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
 from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
@@ -4345,8 +4345,8 @@ async def test_apply_to_output_streaming_named_error_frame_holding_a_text_delta_
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_many_leading_non_object_reads_stay_cheap():
-    guardrail = OPTIONAL_PresidioPIIMasking(
+async def test_apply_to_output_streaming_many_leading_non_object_reads_still_mask():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<CREDIT_CARD>"},
@@ -4374,7 +4374,6 @@ async def test_apply_to_output_streaming_many_leading_non_object_reads_stay_chea
         for b in byte_chunks:
             yield b
 
-    started: Final = time.process_time()
     collected: Final = [
         chunk
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
@@ -4383,11 +4382,41 @@ async def test_apply_to_output_streaming_many_leading_non_object_reads_stay_chea
             request_data={},
         )
     ]
-    cpu_seconds: Final = time.process_time() - started
 
     assert b"4111" not in b"".join(collected)
     assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
-    assert cpu_seconds < 3.0, f"{leading_reads} leading non-object reads took {cpu_seconds:.2f}s of CPU"
+
+
+def _frames_classified_per_read(reads: Iterable[bytes]) -> Iterator[tuple[bytes, bytes]]:
+    pending: Final = bytearray()
+    classified = 0  # rebind-ok: each read advances the offset the classifier returns, as the stream wait does
+    for chunk in reads:
+        pending.extend(chunk)
+        preface, classifiable, classified = _classify_completed_frames(pending, classified, len(chunk))
+        del pending[: len(preface)]
+        yield preface, classifiable
+
+
+def test_classify_completed_frames_hands_each_read_only_the_frames_it_completed():
+    reads: Final = (
+        b": keepalive\n\n",
+        b"data: 5\n",
+        b"\ndata: 6\r\n\r",
+        b"\ndata: 7\n\nda",
+        b"ta: 8\r\r",
+        b'data: {"type": "ping"}\n\n',
+    )
+
+    per_read: Final = tuple(_frames_classified_per_read(reads))
+
+    assert per_read == (
+        (b": keepalive\n\n", b""),
+        (b"", b""),
+        (b"", b"data: 5\n\n"),
+        (b"", b"data: 6\r\n\r\ndata: 7\n\n"),
+        (b"", b"data: 8\r\r"),
+        (b"", b'data: {"type": "ping"}\n\n'),
+    )
 
 
 @pytest.mark.asyncio
