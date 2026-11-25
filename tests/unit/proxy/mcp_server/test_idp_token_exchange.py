@@ -51,8 +51,6 @@ def _authorized(user_id="u1", team_id="team-b"):
         "is_proxy_admin": False,
         "team_object": None,
         "user_object": None,
-        "end_user_object": None,
-        "org_object": None,
         "token": IDP_JWT,
         "team_id": team_id,
         "user_id": user_id,

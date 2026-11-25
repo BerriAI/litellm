@@ -1,7 +1,6 @@
 use crate::{
-    AuthHost, Error, KeyDenial, KeyHash, MasterKey, Token,
-    host::{EndUserRow, KeyRow},
-    outcome::Refused,
+    AuthHost, Error, KeyDenial, KeyHash, MasterKey, Token, host::KeyRow,
+    identity::key::EndUserRecord, outcome::Refused,
 };
 
 use super::{KeySettings, Keyed, UI_TEAM_ID};
@@ -9,7 +8,7 @@ use super::{KeySettings, Keyed, UI_TEAM_ID};
 /// The end user, and the key the credential names, with its team values current.
 pub(super) struct Lookup<H: AuthHost> {
     pub(super) hash: KeyHash,
-    pub(super) end_user: EndUserRow<H>,
+    pub(super) end_user: EndUserRecord,
     pub(super) key: Option<Keyed<KeyRow<H>>>,
 }
 
@@ -58,7 +57,7 @@ async fn request_end_user<H: AuthHost>(
     unread: Option<&Token>,
     named: Option<&str>,
     settings: &KeySettings,
-) -> Result<EndUserRow<H>, Error> {
+) -> Result<EndUserRecord, Error> {
     let end_user_id = match named {
         None => None,
         Some(end_user_id) => host.validated_end_user_id(end_user_id).await?,

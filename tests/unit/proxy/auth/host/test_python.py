@@ -18,6 +18,8 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj, Member
 from litellm.models.user import LiteLLM_UserTable
@@ -273,6 +275,67 @@ async def test_the_permission_a_ui_team_key_names_reaches_the_identity_with_ever
     assert (grant.object_permission, list(grant.object_permission["mcp_tool_permissions"] or {})) == (
         permission.model_dump(),
         ["server-b", "server-a"],
+    )
+
+
+@pytest.mark.parametrize("region", ["eu", None])
+@pytest.mark.asyncio
+async def test_the_requests_end_user_reaches_the_identity_with_every_value_it_sets(region: str | None) -> None:
+    key: Final = "sk-end-user-key-0123456789abcdef"
+    hashed: Final = hashlib.sha256(key.encode()).hexdigest()
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", vector_stores=["store"])
+    budget: Final = LiteLLM_BudgetTable(
+        tpm_limit=7,
+        rpm_limit=3,
+        tpd_limit=11,
+        max_budget=1.5,
+        model_max_budget={"model-a": {"budget_limit": 2.0}},
+        model_tpm_limit={"model-b": 9, "model-a": 5},
+        model_rpm_limit={"model-a": 2},
+    )
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(AuthObject.virtual_key(hashed), UserAPIKeyAuth(token=hashed, models=[]), model_type=UserAPIKeyAuth)
+    cache.set_cache(
+        AuthObject.end_user("eu"),
+        LiteLLM_EndUserTable(
+            user_id="eu",
+            blocked=False,
+            allowed_model_region=region,
+            object_permission=permission,
+            litellm_budget_table=budget,
+        ),
+        model_type=LiteLLM_EndUserTable,
+    )
+    settings: Final = RustAuthSettings(
+        {}, JWT_AUTH, core.HostFacts(master_key="sk-master-key-0123456789abcdef", premium=True, has_db=True)
+    )
+
+    outcome: Final = await core.drive(
+        RustAuth.authenticate_key(core.request(key, "/chat/completions", "POST", end_user_id="eu"), key, settings),
+        _host(cache=cache, api_key=key, prisma_client=MagicMock()),
+    )
+
+    identity: Final = outcome.identity
+    assert isinstance(identity, RustIdentity.VirtualKey), outcome.denial
+    end_user: Final = identity.context.end_user
+    assert (end_user.end_user_id, end_user.found, end_user.object_permission) == (
+        "eu",
+        True,
+        permission.model_dump(),
+    )
+    assert (end_user.params, list(end_user.params.get("end_user_model_tpm_limit", {}))) == (
+        {
+            "end_user_id": "eu",
+            "allowed_model_region": region,
+            "end_user_tpm_limit": 7,
+            "end_user_rpm_limit": 3,
+            "end_user_tpd_limit": 11,
+            "end_user_max_budget": 1.5,
+            "end_user_model_max_budget": {"model-a": {"budget_limit": 2.0}},
+            "end_user_model_tpm_limit": {"model-b": 9, "model-a": 5},
+            "end_user_model_rpm_limit": {"model-a": 2},
+        },
+        ["model-b", "model-a"],
     )
 
 

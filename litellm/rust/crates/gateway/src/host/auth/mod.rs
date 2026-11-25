@@ -28,7 +28,7 @@ use litellm_gateway_auth_core::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, TeamRead, UserLookup, UserRead,
         },
-        key::{ObjectPermissionRecord, Owner, ProjectRecord},
+        key::{EndUserRecord, ObjectPermissionRecord, Owner, ProjectRecord},
     },
 };
 use litellm_redis_store::auth_cache::CachedKey;
@@ -49,7 +49,6 @@ impl Rows for NativeRows {
     type Key = Key;
     type User = Infallible;
     type Team = Infallible;
-    type EndUser = ();
     type Membership = Infallible;
 }
 
@@ -146,7 +145,7 @@ impl AuthHost for NativeAuthHost {
 
     /// The core asks here only after `cached_key` missed, so the cache is not read again. The
     /// store caches the key it found, whoever answers the request.
-    async fn db_key(&self, hash: &KeyHash, _: &()) -> Result<Option<Keyed<Key>>, Error> {
+    async fn db_key(&self, hash: &KeyHash, _: &EndUserRecord) -> Result<Option<Keyed<Key>>, Error> {
         let Some(store) = &self.keys else {
             return declined("db_key");
         };
@@ -286,14 +285,14 @@ impl AuthHost for NativeAuthHost {
         declined("org_by_alias")
     }
 
-    async fn jwt_end_user(&self, _: &str) -> Result<(), Error> {
+    async fn jwt_end_user(&self, _: &str) -> Result<EndUserRecord, Error> {
         declined("jwt_end_user")
     }
 
     /// A request that names no end user reads none.
-    async fn end_user(&self, end_user_id: Option<&str>) -> Result<(), Error> {
+    async fn end_user(&self, end_user_id: Option<&str>) -> Result<EndUserRecord, Error> {
         match end_user_id {
-            None => Ok(()),
+            None => Ok(EndUserRecord::default()),
             Some(_) => declined("end_user"),
         }
     }
@@ -315,7 +314,7 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
-    async fn prefetch_auth_objects(&self, _: &Key, _: &()) -> Result<(), Error> {
+    async fn prefetch_auth_objects(&self, _: &Key, _: &EndUserRecord) -> Result<(), Error> {
         Ok(())
     }
 

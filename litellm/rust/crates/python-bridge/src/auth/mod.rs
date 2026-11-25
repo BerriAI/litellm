@@ -8,8 +8,8 @@ mod settings;
 mod stepper;
 
 pub(crate) use call::{
-    AuthCall, AuthOutcome, AuthStep, ClaimIdentityView, DenialView, IdentityView, KeyContextView,
-    ManagedAgentView, MappingView, PlanView, ProjectView, TeamGrantView,
+    AuthCall, AuthOutcome, AuthStep, ClaimIdentityView, DenialView, EndUserView, IdentityView,
+    KeyContextView, ManagedAgentView, MappingView, PlanView, ProjectView, TeamGrantView,
 };
 pub(crate) use jwt::{
     MappedClaimsView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims,

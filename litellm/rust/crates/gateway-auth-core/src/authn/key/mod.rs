@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use jiff::Timestamp;
 
-use crate::{AuthHost, KeyHash, MasterKey, Token, host::Rows, outcome::Refused, token::Shown};
+use crate::{
+    AuthHost, KeyHash, MasterKey, Token, host::Rows, identity::key::EndUserRecord,
+    outcome::Refused, token::Shown,
+};
 
 mod expiry;
 mod lookup;
@@ -96,16 +99,16 @@ pub enum Verified<R: Rows> {
     /// `hash` is the master key's hash, which the host caches the admin identity under.
     MasterKey {
         hash: KeyHash,
-        end_user: R::EndUser,
+        end_user: EndUserRecord,
     },
     CachedAdmin {
         key: R::Key,
-        end_user: R::EndUser,
+        end_user: EndUserRecord,
     },
     /// A virtual key that is not blocked, expired or missing its token.
     VirtualKey {
         key: Keyed<R::Key>,
-        end_user: R::EndUser,
+        end_user: EndUserRecord,
     },
 }
 

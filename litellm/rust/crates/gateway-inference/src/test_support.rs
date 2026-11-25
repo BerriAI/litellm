@@ -11,7 +11,6 @@ impl Rows for Held {
     type Key = KeyRecord;
     type User = ();
     type Team = ();
-    type EndUser = ();
     type Membership = ();
 }
 

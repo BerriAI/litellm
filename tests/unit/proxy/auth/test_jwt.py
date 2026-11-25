@@ -22,7 +22,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from litellm.caching.caching import DualCache
-from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy._types import (
     JWTLiteLLMRoleMap,
@@ -33,9 +32,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth import core
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.rust_bridge._native import RustAuthSettings, RustIdentity, RustManagedAgent
+from litellm.rust_bridge._native import RustAuthSettings, RustEndUser, RustIdentity, RustManagedAgent
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -271,8 +269,6 @@ def test_jwt_result_carries_every_row_the_identity_names(
 ) -> None:
     team: Final = LiteLLM_TeamTable(team_id="t2", models=["gpt-b"], tpm_limit=9)
     membership: Final = LiteLLM_TeamMembership(user_id="u", team_id="t2")
-    end_user: Final = LiteLLM_EndUserTable(user_id="eu", blocked=False)
-
     result: Final = proxy_jwt.jwt_result(
         jwt_identity(
             team_id="t2",
@@ -280,7 +276,7 @@ def test_jwt_result_carries_every_row_the_identity_names(
             end_user_id="eu",
             team=team,
             membership=membership,
-            end_user=EndUserRow(end_user_id="eu", end_user=end_user, params={}),
+            end_user=RustEndUser(end_user_id="eu", found=True),
         ),
         "jwt",
     )
@@ -290,8 +286,8 @@ def test_jwt_result_carries_every_row_the_identity_names(
         result["team_object"],
         result.get("team_membership"),
         result["org_id"],
-        result["end_user_object"],
-    ) == ("jwt", team, membership, "o1", end_user)
+        result["end_user_id"],
+    ) == ("jwt", team, membership, "o1", "eu")
     assert proxy_jwt.auth_from_result(result).team_tpm_limit == 9
 
 

@@ -14,7 +14,7 @@ use crate::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
-        key::{ObjectPermissionRecord, Owner, ProjectRecord},
+        key::{EndUserRecord, ObjectPermissionRecord, Owner, ProjectRecord},
     },
 };
 
@@ -28,14 +28,12 @@ pub trait Rows: Row {
     type Key: Row;
     type User: Row;
     type Team: Row;
-    type EndUser: Row;
     type Membership: Row;
 }
 
 pub type KeyRow<H> = <<H as AuthHost>::Rows as Rows>::Key;
 pub type UserRow<H> = <<H as AuthHost>::Rows as Rows>::User;
 pub type TeamRow<H> = <<H as AuthHost>::Rows as Rows>::Team;
-pub type EndUserRow<H> = <<H as AuthHost>::Rows as Rows>::EndUser;
 pub type MembershipRow<H> = <<H as AuthHost>::Rows as Rows>::Membership;
 
 /// Code the operator wrote, which only a host that embeds their Python can run.
@@ -71,7 +69,7 @@ pub trait AuthHost: Send + Sync {
     fn db_key(
         &self,
         hash: &KeyHash,
-        end_user: &EndUserRow<Self>,
+        end_user: &EndUserRecord,
     ) -> impl Future<Output = Result<Option<Keyed<KeyRow<Self>>>, Error>> + Send;
 
     /// `IdentityStore.resolve(hashed_token)`
@@ -262,7 +260,7 @@ pub trait AuthHost: Send + Sync {
     fn jwt_end_user(
         &self,
         end_user_id: &str,
-    ) -> impl Future<Output = Result<EndUserRow<Self>, Error>> + Send;
+    ) -> impl Future<Output = Result<EndUserRecord, Error>> + Send;
 
     // TODO: decided by the host until end-user budgets move to Rust. It also reads the default
     // end-user budget and merges the budget's limits into the row, which become a read of their
@@ -272,7 +270,7 @@ pub trait AuthHost: Send + Sync {
     fn end_user(
         &self,
         end_user_id: Option<&str>,
-    ) -> impl Future<Output = Result<EndUserRow<Self>, Error>> + Send;
+    ) -> impl Future<Output = Result<EndUserRecord, Error>> + Send;
 
     // TODO: decided by the host until `validate_end_user_id_in_db` and the default end-user budget
     // are settings the core reads, which leaves a read of whether the id is known
@@ -305,7 +303,7 @@ pub trait AuthHost: Send + Sync {
     fn prefetch_auth_objects(
         &self,
         key: &KeyRow<Self>,
-        end_user: &EndUserRow<Self>,
+        end_user: &EndUserRecord,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     // Provisioning: writes identity makes while it resolves the user, besides the `upsert` flag on

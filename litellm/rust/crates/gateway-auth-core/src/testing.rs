@@ -18,9 +18,21 @@ use crate::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
-        key::{ObjectPermissionRecord, Owner, ProjectRecord},
+        key::{EndUserRecord, ObjectPermissionRecord, Owner, ProjectRecord},
     },
 };
+
+/// An end user the scripted host or a test names by a label.
+pub(crate) fn end_user(label: &str) -> EndUserRecord {
+    EndUserRecord {
+        end_user_id: Some(label.to_owned()),
+        ..EndUserRecord::default()
+    }
+}
+
+fn label(end_user: &EndUserRecord) -> &str {
+    end_user.end_user_id.as_deref().unwrap_or("-")
+}
 
 /// Rows the scripted host labels by where they came from, so a test can tell which row an
 /// identity carries.
@@ -31,7 +43,6 @@ impl Rows for Labels {
     type Key = String;
     type User = String;
     type Team = String;
-    type EndUser = String;
     type Membership = String;
 }
 
@@ -170,11 +181,11 @@ impl AuthHost for ScriptedHost {
             format!("prefetch_identity {} {key}", or_dash(end_user_id)),
         )
     }
-    async fn end_user(&self, end_user_id: Option<&str>) -> Result<String, Error> {
+    async fn end_user(&self, end_user_id: Option<&str>) -> Result<EndUserRecord, Error> {
         self.step("end_user", format!("end_user {}", or_dash(end_user_id)))?;
         self.end_user_over_budget
             .clone()
-            .map_or_else(|| Ok("end-user".to_owned()), |denial| Err(denial.into()))
+            .map_or_else(|| Ok(end_user("end-user")), |denial| Err(denial.into()))
     }
     async fn cached_key(&self, _: &KeyHash) -> Result<Option<Keyed<String>>, Error> {
         self.step("cached_key", "cached_key")?;
@@ -198,8 +209,12 @@ impl AuthHost for ScriptedHost {
         self.step("with_team", format!("with_team {key} {team}"))?;
         Ok(format!("{key}+team"))
     }
-    async fn db_key(&self, _: &KeyHash, end_user: &String) -> Result<Option<Keyed<String>>, Error> {
-        self.step("db_key", format!("db_key {end_user}"))?;
+    async fn db_key(
+        &self,
+        _: &KeyHash,
+        end_user: &EndUserRecord,
+    ) -> Result<Option<Keyed<String>>, Error> {
+        self.step("db_key", format!("db_key {}", label(end_user)))?;
         Ok(self.db.as_ref().map(|key| keyed(key, "db")))
     }
     async fn with_temp_budget(&self, key: Keyed<String>) -> Result<Keyed<String>, Error> {
@@ -212,8 +227,12 @@ impl AuthHost for ScriptedHost {
     async fn normalize_model(&self, key: &String) -> Result<(), Error> {
         self.step("normalize", format!("normalize {key}"))
     }
-    async fn prefetch_auth_objects(&self, key: &String, end_user: &String) -> Result<(), Error> {
-        self.step("prefetch", format!("prefetch {key} {end_user}"))
+    async fn prefetch_auth_objects(
+        &self,
+        key: &String,
+        end_user: &EndUserRecord,
+    ) -> Result<(), Error> {
+        self.step("prefetch", format!("prefetch {key} {}", label(end_user)))
     }
     async fn key_owner(&self, user_id: &str) -> Result<Option<Owner<String>>, Error> {
         self.step("key_owner", format!("key_owner {user_id}"))?;
@@ -431,9 +450,9 @@ impl AuthHost for ScriptedHost {
         self.record(format!("org_alias {alias}"));
         Ok(self.orgs.get(alias).cloned())
     }
-    async fn jwt_end_user(&self, end_user_id: &str) -> Result<String, Error> {
+    async fn jwt_end_user(&self, end_user_id: &str) -> Result<EndUserRecord, Error> {
         self.record(format!("end_user {end_user_id}"));
-        Ok(format!("end-user {end_user_id}"))
+        Ok(end_user(&format!("end-user {end_user_id}")))
     }
     async fn finish_jwt(&self, finished: FinishedJwt<'_, Labels>) -> Result<String, Error> {
         let token = match finished {

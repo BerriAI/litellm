@@ -50,10 +50,10 @@ mod _native {
 
     #[pymodule_export]
     use crate::auth::{
-        AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
-        KeyContextView, ManagedAgentView, MappedClaimsView, MappingView, PlanView, ProjectView,
-        TeamGrantView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims,
-        jwt_unverified_claims,
+        AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, EndUserView,
+        IdentityView, KeyContextView, ManagedAgentView, MappedClaimsView, MappingView, PlanView,
+        ProjectView, TeamGrantView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt,
+        jwt_presents_claims, jwt_unverified_claims,
     };
     #[pymodule_export]
     use crate::auth::{
@@ -354,6 +354,7 @@ mod tests {
                 "RustAuthStep",
                 "RustClaimIdentity",
                 "RustDenial",
+                "RustEndUser",
                 "RustIdentity",
                 "RustJwtMapping",
                 "RustKeyContext",

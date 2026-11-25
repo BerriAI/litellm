@@ -4,14 +4,20 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.host import identity as auth_identity
-from litellm.proxy.auth.host.facts import EndUserRow, ObjectPermissionFields
+from litellm.proxy.auth.host.facts import ObjectPermissionFields
 from litellm.proxy.auth.host.python import PythonAuthHost
-from litellm.rust_bridge._native import RustDenial, RustIdentity, RustKeyContext, RustProject, RustTeamGrant
+from litellm.rust_bridge._native import (
+    RustDenial,
+    RustEndUser,
+    RustIdentity,
+    RustKeyContext,
+    RustProject,
+    RustTeamGrant,
+)
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -32,13 +38,13 @@ def project_outcome(
     return run
 
 
-NO_END_USER: Final = EndUserRow(end_user_id=None, end_user=None, params={})
+NO_END_USER: Final = RustEndUser()
 
 
 def _context(
     key: UserAPIKeyAuth,
     *,
-    end_user: EndUserRow = NO_END_USER,
+    end_user: RustEndUser = NO_END_USER,
     owner: LiteLLM_UserTable | None = None,
     team: RustTeamGrant | None = None,
     project: RustProject | None = None,
@@ -135,9 +141,10 @@ async def test_known_end_user_limits_and_permission_reach_the_virtual_key(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
 ) -> None:
     permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu")
-    end_user: Final = EndUserRow(
+    end_user: Final = RustEndUser(
         end_user_id="eu",
-        end_user=LiteLLM_EndUserTable(user_id="eu", blocked=False, object_permission=permission),
+        found=True,
+        object_permission=ObjectPermissionFields(**permission.model_dump()),
         params={"end_user_id": "eu", "end_user_tpm_limit": 7},
     )
     context: Final = _context(UserAPIKeyAuth(token="hashed"), end_user=end_user)
@@ -154,9 +161,10 @@ async def test_cached_admin_takes_the_end_users_limits_without_touching_the_cach
 ) -> None:
     permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu")
     cached: Final = UserAPIKeyAuth(token="hashed", user_role=LitellmUserRoles.PROXY_ADMIN, end_user_rpm_limit=3)
-    end_user: Final = EndUserRow(
+    end_user: Final = RustEndUser(
         end_user_id="eu",
-        end_user=LiteLLM_EndUserTable(user_id="eu", blocked=False, object_permission=permission),
+        found=True,
+        object_permission=ObjectPermissionFields(**permission.model_dump()),
         params={"end_user_id": "eu", "end_user_tpm_limit": 7, "end_user_max_budget": 1.5},
     )
 
@@ -178,7 +186,7 @@ async def test_unknown_end_user_limits_are_dropped_without_a_default_budget(
     monkeypatch: pytest.MonkeyPatch, project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]]
 ) -> None:
     monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
-    end_user: Final = EndUserRow(end_user_id="eu", end_user=None, params={"end_user_id": "eu", "end_user_tpm_limit": 7})
+    end_user: Final = RustEndUser(end_user_id="eu", params={"end_user_id": "eu", "end_user_tpm_limit": 7})
     context: Final = _context(UserAPIKeyAuth(token="hashed"), end_user=end_user)
 
     token: Final = await project_outcome(RustIdentity.VirtualKey(context=context))
@@ -207,7 +215,7 @@ async def test_mapped_jwt_keeps_its_claims_and_fills_a_missing_email(
 async def test_master_key_is_named_by_its_alias_never_the_key(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
 ) -> None:
-    end_user: Final = EndUserRow(end_user_id="eu", end_user=None, params={"end_user_id": "eu"})
+    end_user: Final = RustEndUser(end_user_id="eu", params={"end_user_id": "eu"})
 
     token: Final = await project_outcome(RustIdentity.MasterKey(hash="master-hash", end_user=end_user))
 

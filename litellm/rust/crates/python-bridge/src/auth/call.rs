@@ -15,7 +15,10 @@ use litellm_gateway_auth_core::{
             ManagedAgent, ModelAccess, Org, Provisioning, RegisteredAgent, Team, TeamRead, User,
             UserRead,
         },
-        key::{KeyContext, KeyOutcome, ObjectPermissionRecord, Owner, ProjectRecord},
+        key::{
+            EndUserParams, EndUserRecord, KeyContext, KeyOutcome, ObjectPermissionRecord, Owner,
+            ProjectRecord,
+        },
     },
     plan::Plan,
     routes::passthrough::{ForwardedRoutes, PassthroughGrants},
@@ -333,6 +336,155 @@ fn object_permission_fields(
     fields.set_item("skills", &permission.skills)?;
     fields.set_item("apps", &permission.apps)?;
     Ok(fields.into_any().unbind())
+}
+
+/// `facts.EndUserRow`, read as is: the id, whether the end user has a row, the permission that row
+/// points at, and the values `EndUserParams` sets.
+fn end_user_record(row: &Bound<'_, PyAny>) -> PyResult<EndUserRecord> {
+    let end_user = row.getattr("end_user")?;
+    let object_permission = if end_user.is_none() {
+        None
+    } else {
+        end_user
+            .getattr("object_permission")?
+            .extract::<Option<ObjectPermissionFacts>>()?
+            .map(|facts| Box::new(ObjectPermissionRecord::from(facts)))
+    };
+    let params: Bound<'_, PyDict> = row.getattr("params")?.extract()?;
+    let limit = |name: &str| -> PyResult<Option<i64>> {
+        Ok(params
+            .get_item(name)?
+            .map(|value| value.extract::<Option<i64>>())
+            .transpose()?
+            .flatten())
+    };
+    let model_limits = |name: &str| -> PyResult<Option<Vec<(String, i64)>>> {
+        Ok(params
+            .get_item(name)?
+            .map(|value| value.extract::<Option<IndexMap<String, i64>>>())
+            .transpose()?
+            .flatten()
+            .map(|limits| limits.into_iter().collect()))
+    };
+    Ok(EndUserRecord {
+        end_user_id: row.getattr("end_user_id")?.extract()?,
+        found: !end_user.is_none(),
+        object_permission,
+        params: Box::new(EndUserParams {
+            end_user_id: params
+                .get_item("end_user_id")?
+                .map(|value| value.extract::<Option<String>>())
+                .transpose()?
+                .flatten(),
+            allowed_model_region: params
+                .get_item("allowed_model_region")?
+                .map(|value| value.extract::<Option<String>>())
+                .transpose()?,
+            end_user_tpm_limit: limit("end_user_tpm_limit")?,
+            end_user_rpm_limit: limit("end_user_rpm_limit")?,
+            end_user_tpd_limit: limit("end_user_tpd_limit")?,
+            end_user_max_budget: params
+                .get_item("end_user_max_budget")?
+                .map(|value| value.extract::<Option<f64>>())
+                .transpose()?
+                .flatten(),
+            end_user_model_max_budget: params
+                .get_item("end_user_model_max_budget")?
+                .filter(|value| !value.is_none())
+                .map(|value| from_py(&value))
+                .transpose()?,
+            end_user_model_tpm_limit: model_limits("end_user_model_tpm_limit")?,
+            end_user_model_rpm_limit: model_limits("end_user_model_rpm_limit")?,
+        }),
+    })
+}
+
+/// The values an end user sets, under the `UserAPIKeyAuth` field each one replaces. A value the
+/// end user does not set has no entry.
+fn end_user_params(py: Python<'_>, params: &EndUserParams) -> PyResult<Py<PyAny>> {
+    let ordered =
+        |limits: &Vec<(String, i64)>| -> IndexMap<String, i64> { limits.iter().cloned().collect() };
+    let fields = PyDict::new(py);
+    if let Some(end_user_id) = &params.end_user_id {
+        fields.set_item("end_user_id", end_user_id)?;
+    }
+    if let Some(region) = &params.allowed_model_region {
+        fields.set_item("allowed_model_region", region)?;
+    }
+    if let Some(limit) = params.end_user_tpm_limit {
+        fields.set_item("end_user_tpm_limit", limit)?;
+    }
+    if let Some(limit) = params.end_user_rpm_limit {
+        fields.set_item("end_user_rpm_limit", limit)?;
+    }
+    if let Some(limit) = params.end_user_tpd_limit {
+        fields.set_item("end_user_tpd_limit", limit)?;
+    }
+    if let Some(budget) = params.end_user_max_budget {
+        fields.set_item("end_user_max_budget", budget)?;
+    }
+    if let Some(budgets) = &params.end_user_model_max_budget {
+        fields.set_item("end_user_model_max_budget", to_py(py, budgets)?)?;
+    }
+    if let Some(limits) = &params.end_user_model_tpm_limit {
+        fields.set_item("end_user_model_tpm_limit", ordered(limits))?;
+    }
+    if let Some(limits) = &params.end_user_model_rpm_limit {
+        fields.set_item("end_user_model_rpm_limit", ordered(limits))?;
+    }
+    Ok(fields.into_any().unbind())
+}
+
+/// The request's end user as the core holds it, for the host steps and `core.project` that read
+/// it.
+#[pyclass(
+    frozen,
+    get_all,
+    name = "RustEndUser",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct EndUserView {
+    end_user_id: Option<String>,
+    found: bool,
+    object_permission: Option<Py<PyAny>>,
+    params: Py<PyAny>,
+}
+
+#[pymethods]
+impl EndUserView {
+    #[new]
+    #[pyo3(signature = (*, end_user_id = None, found = false, object_permission = None, params = None))]
+    fn py_new(
+        py: Python<'_>,
+        end_user_id: Option<String>,
+        found: bool,
+        object_permission: Option<Py<PyAny>>,
+        params: Option<Py<PyAny>>,
+    ) -> Self {
+        Self {
+            end_user_id,
+            found,
+            object_permission,
+            params: params.unwrap_or_else(|| PyDict::new(py).into_any().unbind()),
+        }
+    }
+}
+
+impl EndUserView {
+    fn of(py: Python<'_>, end_user: &EndUserRecord) -> PyResult<Py<PyAny>> {
+        let object_permission = end_user
+            .object_permission
+            .as_ref()
+            .map(|permission| object_permission_fields(py, permission))
+            .transpose()?;
+        let view = Self {
+            end_user_id: end_user.end_user_id.clone(),
+            found: end_user.found,
+            object_permission,
+            params: end_user_params(py, &end_user.params)?,
+        };
+        Ok(Py::new(py, view)?.into_any())
+    }
 }
 
 /// `LiteLLM_ProjectTable`, read as is.
@@ -819,7 +971,7 @@ impl KeyContextView {
             py,
             Self {
                 key: row(py, &context.key),
-                end_user: row(py, end_user),
+                end_user: EndUserView::of(py, end_user)?,
                 owner: rows(py, belongs.user.as_ref()),
                 team: team.into_pyobject(py)?.into_any().unbind(),
                 project: belongs
@@ -926,7 +1078,11 @@ impl IdentityView {
             user: rows(py, belongs.user.as_ref()),
             team,
             membership: rows(py, belongs.membership.as_ref()),
-            end_user: rows(py, belongs.end_user.as_ref()),
+            end_user: belongs
+                .end_user
+                .as_ref()
+                .map(|end_user| EndUserView::of(py, end_user))
+                .transpose()?,
         })
     }
 
@@ -965,11 +1121,11 @@ impl IdentityView {
             Identity::Key(KeyOutcome::UserAuthRoute) => Self::UserAuthRoute(),
             Identity::Key(KeyOutcome::CachedAdmin { key, end_user }) => Self::CachedAdmin {
                 key: row(py, key),
-                end_user: row(py, end_user),
+                end_user: EndUserView::of(py, end_user)?,
             },
             Identity::Key(KeyOutcome::MasterKey { hash, end_user }) => Self::MasterKey {
                 hash: hash.as_str().to_owned(),
-                end_user: row(py, end_user),
+                end_user: EndUserView::of(py, end_user)?,
             },
             Identity::Key(KeyOutcome::VirtualKey(context)) => Self::VirtualKey {
                 context: KeyContextView::new(py, context)?,
@@ -1245,13 +1401,13 @@ impl AuthStep {
             },
             Ask::DbKey { hash, end_user, .. } => Self::DbKey {
                 hash: hash.as_str().to_owned(),
-                end_user: row(py, end_user),
+                end_user: EndUserView::of(py, end_user)?,
             },
             Ask::WithTempBudget { key, .. } => Self::WithTempBudget { key: row(py, key) },
             Ask::NormalizeModel { key, .. } => Self::NormalizeModel { key: row(py, key) },
             Ask::PrefetchAuthObjects { key, end_user, .. } => Self::PrefetchAuthObjects {
                 key: row(py, key),
-                end_user: row(py, end_user),
+                end_user: EndUserView::of(py, end_user)?,
             },
             Ask::KeyOwner { user_id, .. } => Self::KeyOwner {
                 user_id: user_id.clone(),
@@ -1721,7 +1877,11 @@ impl AuthCall {
                 reply.send(Err(exceeded));
                 Ok(())
             }
-            Ask::EndUser { reply, .. } | Ask::FinishJwt { reply, .. } => {
+            Ask::EndUser { reply, .. } => {
+                reply.send(Err(exceeded));
+                Ok(())
+            }
+            Ask::FinishJwt { reply, .. } => {
                 reply.send(Err(exceeded));
                 Ok(())
             }
@@ -1744,15 +1904,30 @@ impl AuthCall {
     fn row(&self, row: Py<PyAny>) -> PyResult<()> {
         let row = PyRow::new(row);
         self.stepper.answer("a row", |ask| match ask {
-            Ask::EndUser { reply, .. } | Ask::FinishJwt { reply, .. } => {
+            Ask::FinishJwt { reply, .. } => {
                 reply.send(Ok(row));
                 Ok(())
             }
             Ask::WithTeam { reply, .. }
             | Ask::SetUserRole { reply, .. }
-            | Ask::PatchTeamMembership { reply, .. }
-            | Ask::JwtEndUser { reply, .. } => {
+            | Ask::PatchTeamMembership { reply, .. } => {
                 reply.send(row);
+                Ok(())
+            }
+            other => Err(other),
+        })
+    }
+
+    /// The request's end user, as `facts.EndUserRow`.
+    fn end_user(&self, row: &Bound<'_, PyAny>) -> PyResult<()> {
+        let end_user = end_user_record(row)?;
+        self.stepper.answer("an end user", |ask| match ask {
+            Ask::EndUser { reply, .. } => {
+                reply.send(Ok(end_user));
+                Ok(())
+            }
+            Ask::JwtEndUser { reply, .. } => {
+                reply.send(end_user);
                 Ok(())
             }
             other => Err(other),

@@ -194,7 +194,7 @@ async def _jwt_reads(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -
         case RustAuthStep.OrgByAlias(alias=alias):
             _org(call, await host.org_by_alias(alias))
         case RustAuthStep.JwtEndUser(end_user_id=end_user_id):
-            call.row(await host.jwt_end_user(end_user_id))
+            call.end_user(await host.jwt_end_user(end_user_id))
         case _:
             return False
     return True
@@ -260,7 +260,7 @@ async def _budgets(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -> 
     match step:
         case RustAuthStep.EndUser(end_user_id=end_user_id):
             try:
-                call.row(await host.end_user(end_user_id))
+                call.end_user(await host.end_user(end_user_id))
             except litellm.BudgetExceededError as exceeded:
                 call.budget_exceeded(exceeded)
         case RustAuthStep.KeySkipsBudgetChecks(key=budget_key):

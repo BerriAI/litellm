@@ -58,7 +58,7 @@ mod tests {
             key::{KeyRecord, Keyed},
         },
         identity::key::{ObjectPermissionRecord, ProjectRecord},
-        testing::{Labels, ScriptedHost},
+        testing::{Labels, ScriptedHost, end_user},
     };
 
     /// The key path with no JWT route rules, which it never reads.
@@ -265,7 +265,7 @@ mod tests {
             run(&host, MASTER, "/chat/completions", &settings).await,
             Ok(KeyOutcome::MasterKey {
                 hash: Token::new(MASTER).hash(),
-                end_user: "end-user".to_owned()
+                end_user: end_user("end-user")
             })
         );
         assert_eq!(
@@ -378,7 +378,7 @@ mod tests {
             run(&host, "sk-admin", "/chat/completions", &settings).await,
             Ok(KeyOutcome::CachedAdmin {
                 key: "cached".to_owned(),
-                end_user: "end-user".to_owned()
+                end_user: end_user("end-user")
             })
         );
     }
@@ -568,7 +568,7 @@ mod tests {
                         project_alias: Some("project p".to_owned()),
                         metadata: None,
                     }),
-                    end_user: Some("end-user".to_owned()),
+                    end_user: Some(end_user("end-user")),
                     ..Belongs::default()
                 },
             }

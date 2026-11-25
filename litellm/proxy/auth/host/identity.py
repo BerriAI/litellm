@@ -14,7 +14,6 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_key_object
 from litellm.proxy.auth.host.facts import (
     EndUserParams,
-    EndUserRow,
     object_permission_table,
     with_end_user,
     with_owner,
@@ -24,6 +23,7 @@ from litellm.proxy.auth.host.facts import (
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
 from litellm.rust_bridge._native import (
     RustAuthOutcome,
+    RustEndUser,
     RustIdentity,
     RustKeyContext,
     RustTeamGrant,
@@ -123,17 +123,17 @@ async def project(outcome: RustAuthOutcome, host: PythonAuthHost) -> UserAPIKeyA
             assert_never(unreachable)
 
 
-def _cached_admin(host: PythonAuthHost, cached: UserAPIKeyAuth, end_user: EndUserRow) -> UserAPIKeyAuth:
-    row: Final = end_user.end_user
+def _cached_admin(host: PythonAuthHost, cached: UserAPIKeyAuth, end_user: RustEndUser) -> UserAPIKeyAuth:
+    permission: Final = object_permission_table(end_user.object_permission)
     return with_end_user(cached, end_user.params).model_copy(
         update={
             "parent_otel_span": host.parent_otel_span,
-            **({} if row is None else {"end_user_object_permission": row.object_permission}),
+            **({"end_user_object_permission": permission} if end_user.found else {}),
         }
     )
 
 
-async def _master_key(host: PythonAuthHost, master_hash: str, end_user: EndUserRow) -> UserAPIKeyAuth:
+async def _master_key(host: PythonAuthHost, master_hash: str, end_user: RustEndUser) -> UserAPIKeyAuth:
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # user_api_key_auth imports this module
         return_user_api_key_auth_obj,
     )
@@ -166,18 +166,22 @@ async def _virtual_key(host: PythonAuthHost, token: UserAPIKeyAuth, context: Rus
 
     if token.token is None:
         raise RuntimeError("rust auth accepted a key with no token")
-    end_user: Final = context.end_user.end_user
+    end_user: Final = context.end_user
     dumped: Final[Mapping[str, object]] = token.model_dump(
         exclude_none=True, exclude={"token"} if token.team_id is not None else {"token", "team_object_permission"}
     )
     end_user_params: Final[EndUserParams] = (
-        context.end_user.params if end_user is not None or litellm.max_end_user_budget_id is not None else {}
+        end_user.params if end_user.found or litellm.max_end_user_budget_id is not None else {}
     )
     valid_token_dict: Final = {
         **dumped,
         **({} if token.budget_throttle_pct is None else {"budget_throttle_pct": token.budget_throttle_pct}),
         **end_user_params,
-        **({} if end_user is None else {"end_user_object_permission": end_user.object_permission}),
+        **(
+            {"end_user_object_permission": object_permission_table(end_user.object_permission)}
+            if end_user.found
+            else {}
+        ),
     }
     authenticated: Final = await return_user_api_key_auth_obj(
         user_obj=context.owner,
