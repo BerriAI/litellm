@@ -548,6 +548,20 @@ async def test_update_request_status_still_records_non_string_ids(proxy_logging,
     assert recorded == "fail"
 
 
+class UnhashableCallId(str):
+    __hash__ = None
+
+
+@pytest.mark.asyncio
+async def test_update_request_status_records_an_unhashable_str_subclass_id_without_raising(proxy_logging):
+    proxy_logging.alerting = ["slack"]
+    await proxy_logging.update_request_status(litellm_call_id=UnhashableCallId("call-1"), status="fail")
+    recorded: Final = await proxy_logging.internal_usage_cache.async_get_cache(
+        key="request_status:call-1", litellm_parent_otel_span=None, local_only=True
+    )
+    assert recorded == "fail"
+
+
 @pytest.mark.asyncio
 async def test_update_request_status_cache_error_raises(proxy_logging):
     proxy_logging.alerting = ["slack"]
