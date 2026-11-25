@@ -158,12 +158,16 @@ class ZAIChatConfig(OpenAIGPTConfig):
         )
         max_tokens: Final = sent.get("max_tokens") if falls_back_to_max_tokens else max_completion_tokens
         requested_effort: Final = sent.get("reasoning_effort")
-        turns_thinking_off: Final = _requested_level(requested_effort) == REASONING_OFF and "thinking" not in sent
         rounding: Final = reasoning_effort_rounding or configured_reasoning_effort_rounding()
         declared: Final = (
             declared_reasoning_efforts
             if declared_reasoning_efforts is not None
             else catalog_reasoning_efforts_for_model(model, "zai")
+        )
+        turns_thinking_off: Final = (
+            _requested_level(requested_effort) == REASONING_OFF
+            and "thinking" not in sent
+            and (declared is None or REASONING_OFF in declared)
         )
         reasoning_effort: Final = (
             None
