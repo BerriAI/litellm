@@ -8926,7 +8926,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_with_ttl,
         cache_key="test-ttl-cache-key",
-        ttl=cached_block_ttl(messages_with_ttl),
+        ttl=cached_block_ttl(messages_with_ttl, messages_with_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -8954,7 +8954,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_invalid_ttl,
         cache_key="test-invalid-ttl",
-        ttl=cached_block_ttl(messages_invalid_ttl),
+        ttl=cached_block_ttl(messages_invalid_ttl, messages_invalid_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -8981,7 +8981,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_no_ttl,
         cache_key="test-no-ttl",
-        ttl=cached_block_ttl(messages_no_ttl),
+        ttl=cached_block_ttl(messages_no_ttl, messages_no_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -9025,7 +9025,7 @@ def test_gemini_context_caching_with_ttl():
         },
     ]
 
-    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed)
+    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed, lambda _: True)
     assert len(cached_messages) > 0
     assert len(non_cached_messages) > 0
 
@@ -9033,7 +9033,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_mixed,
         cache_key="test-mixed-ttl",
-        ttl=cached_block_ttl(messages_mixed),
+        ttl=cached_block_ttl(messages_mixed, cached_messages),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -9082,7 +9082,7 @@ def test_gemini_context_caching_separate_messages():
             ],
         },
     ]
-    cached_messages, non_cached_messages = separate_cached_messages(messages)
+    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: True)
     print(cached_messages)
     print(non_cached_messages)
     assert len(cached_messages) > 0, "Cached messages should be present"

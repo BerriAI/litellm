@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.openai.openai import AllMessageValues
+from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import (
@@ -99,14 +100,18 @@ def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedC
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
-def _cached_prefix_covers_whole_request(uncached_messages: Sequence[AllMessageValues]) -> bool:
-    if uncached_messages:
-        return False
-    verbose_logger.debug(
-        "Vertex AI context caching: the cached prefix covers the whole request, and an explicit cache only "
-        "serves that exact prefix, so implicit caching serves it without a storage fee. Skipping context caching."
+def _clears_the_cache_floor(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    tools: Sequence[ChatCompletionToolParam] | None,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> bool:
+    return is_prompt_caching_valid_prompt(
+        model=model,
+        messages=list(messages),
+        tools=None if tools is None else list(tools),
+        custom_llm_provider=custom_llm_provider,
     )
-    return True
 
 
 def _conversation_turns_start(
@@ -441,15 +446,19 @@ class ContextCachingEndpoints(VertexBase):
         supports_system_message: Final = get_supports_system_message(
             model=model, custom_llm_provider=custom_llm_provider
         )
+        clears_the_cache_floor: Final = partial(
+            _clears_the_cache_floor,
+            model=model,
+            tools=optional_params.get("tools"),
+            custom_llm_provider=custom_llm_provider,
+        )
         cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages, supports_system_message=supports_system_message
+            messages=messages,
+            system_run_holds_a_cache=clears_the_cache_floor,
+            supports_system_message=supports_system_message,
         )
 
-        if (
-            len(cached_messages) == 0
-            or _cached_prefix_covers_whole_request(messages[len(cached_messages) :])
-            or _cached_turns_link_web_media(cached_messages, model, custom_llm_provider)
-        ):
+        if len(cached_messages) == 0 or _cached_turns_link_web_media(cached_messages, model, custom_llm_provider):
             return messages, optional_params, None
 
         if not cached_messages_end_on_supported_turn(cached_messages):
@@ -462,12 +471,7 @@ class ContextCachingEndpoints(VertexBase):
 
         # Gemini requires a minimum of 1024 tokens for context caching.
         # Skip caching if the cached content is too small to avoid API errors.
-        if not is_prompt_caching_valid_prompt(
-            model=model,
-            messages=cached_messages,
-            tools=optional_params.get("tools"),
-            custom_llm_provider=custom_llm_provider,
-        ):
+        if not clears_the_cache_floor(cached_messages):
             verbose_logger.debug(
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
@@ -514,7 +518,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages)
+        ttl: Final = cached_block_ttl(messages, cached_messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
@@ -616,15 +620,19 @@ class ContextCachingEndpoints(VertexBase):
         supports_system_message: Final = get_supports_system_message(
             model=model, custom_llm_provider=custom_llm_provider
         )
+        clears_the_cache_floor: Final = partial(
+            _clears_the_cache_floor,
+            model=model,
+            tools=optional_params.get("tools"),
+            custom_llm_provider=custom_llm_provider,
+        )
         cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages, supports_system_message=supports_system_message
+            messages=messages,
+            system_run_holds_a_cache=clears_the_cache_floor,
+            supports_system_message=supports_system_message,
         )
 
-        if (
-            len(cached_messages) == 0
-            or _cached_prefix_covers_whole_request(messages[len(cached_messages) :])
-            or _cached_turns_link_web_media(cached_messages, model, custom_llm_provider)
-        ):
+        if len(cached_messages) == 0 or _cached_turns_link_web_media(cached_messages, model, custom_llm_provider):
             return messages, optional_params, None
 
         if not cached_messages_end_on_supported_turn(cached_messages):
@@ -637,12 +645,7 @@ class ContextCachingEndpoints(VertexBase):
 
         # Gemini requires a minimum of 1024 tokens for context caching.
         # Skip caching if the cached content is too small to avoid API errors.
-        if not is_prompt_caching_valid_prompt(
-            model=model,
-            messages=cached_messages,
-            tools=optional_params.get("tools"),
-            custom_llm_provider=custom_llm_provider,
-        ):
+        if not clears_the_cache_floor(cached_messages):
             verbose_logger.debug(
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
@@ -684,7 +687,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages)
+        ttl: Final = cached_block_ttl(messages, cached_messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
