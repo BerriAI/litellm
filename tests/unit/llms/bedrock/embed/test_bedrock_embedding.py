@@ -2336,7 +2336,9 @@ def _nova_usage_and_cost(
     return response.usage, response._hidden_params["response_cost"]
 
 
-def _nova_deployment_clip_cost(respx_mock: respx.MockRouter, region: str = "us-east-1", **prices: float) -> float:
+def _nova_deployment_clip_cost(
+    respx_mock: respx.MockRouter, region: str = "us-east-1", model: str = f"bedrock/{_NOVA_MODEL_ID}", **params: object
+) -> float:
     respx_mock.post(f"https://bedrock-runtime.{region}.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
         side_effect=[
             httpx.Response(
@@ -2352,10 +2354,10 @@ def _nova_deployment_clip_cost(respx_mock: respx.MockRouter, region: str = "us-e
             {
                 "model_name": "nova",
                 "litellm_params": {
-                    "model": f"bedrock/{_NOVA_MODEL_ID}",
+                    "model": model,
                     "api_key": "test-bearer-token",
                     "aws_region_name": region,
-                    **prices,
+                    **params,
                 },
             }
         ]
@@ -2400,8 +2402,13 @@ def test_bedrock_nova_deployment_with_only_a_token_price_bills_clips_at_its_regi
         },
     )
 
-    assert _nova_deployment_clip_cost(respx_mock, "eu-test-1", input_cost_per_token=0.001) == pytest.approx(
-        2.5 * 3.0 + 6.5 * 7.0
+    expected: Final = pytest.approx(2.5 * 3.0 + 6.5 * 7.0)
+    assert _nova_deployment_clip_cost(respx_mock, "eu-test-1", input_cost_per_token=0.001) == expected
+    assert (
+        _nova_deployment_clip_cost(
+            respx_mock, "eu-test-1", _NOVA_MODEL_ID, custom_llm_provider="bedrock", input_cost_per_token=0.001
+        )
+        == expected
     )
 
 

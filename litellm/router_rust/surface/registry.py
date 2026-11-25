@@ -328,8 +328,13 @@ def _inherited_clip_rates(
     missing_fields: Final = tuple(field for field in _CLIP_RATE_FIELDS if model_info.get(field) is None)
     if not missing_fields:
         return {}
-    backend_provider, _, bare_model = backend_model.partition("/")
-    regional_entry: Final[object] = host.dynamic().model_cost.get(f"{backend_provider}/{region}/{bare_model}")
+    prefix, _, unprefixed_model = backend_model.partition("/")
+    regional_key: Final = (
+        f"{provider}/{region}/{backend_model.removeprefix(f'{provider}/')}"
+        if provider
+        else f"{prefix}/{region}/{unprefixed_model}"
+    )
+    regional_entry: Final[object] = host.dynamic().model_cost.get(regional_key)
     try:
         backend_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(regional_entry)
