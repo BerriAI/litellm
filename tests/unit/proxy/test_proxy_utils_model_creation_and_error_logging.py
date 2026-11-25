@@ -2942,13 +2942,19 @@ def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monk
 PER_QUERY_RERANK_MODEL: Final = "cohere/rerank-v3.5"
 
 
-def _rerank_router_deployment(monkeypatch, deployment_id: str, extra_litellm_params: Mapping[str, object]) -> None:
+def _rerank_router_deployment(
+    monkeypatch,
+    deployment_id: str,
+    extra_litellm_params: Mapping[str, object],
+    registered_provider: str | None = None,
+) -> None:
+    provider_info: Final = {"litellm_provider": registered_provider} if registered_provider else {}
     router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "team-rerank",
                 "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", **extra_litellm_params},
-                "model_info": {"id": deployment_id},
+                "model_info": {"id": deployment_id, **provider_info},
             }
         ]
     )
@@ -2991,16 +2997,7 @@ def test_a_failed_rerank_bills_its_deployments_per_query_rate_when_the_id_is_ano
 
     monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, "pinned-anthropic-rerank"})
     assert get_llm_provider("pinned-anthropic-rerank")[1] == "anthropic", "the id alone must read as an anthropic model"
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "team-rerank",
-                "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", "input_cost_per_query": 0.5},
-                "model_info": {"id": "pinned-anthropic-rerank", "litellm_provider": "cohere"},
-            }
-        ]
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    _rerank_router_deployment(monkeypatch, "pinned-anthropic-rerank", {"input_cost_per_query": 0.5}, "cohere")
 
     assert _rerank_failure_input_cost("pinned-anthropic-rerank") == pytest.approx(0.5)
 

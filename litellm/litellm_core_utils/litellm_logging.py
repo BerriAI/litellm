@@ -599,8 +599,8 @@ def _published_direction(
 
 
 def registered_model_info(model_id: str) -> ModelInfo:
-    """``get_model_info`` for a key the router registered, under the provider it was registered with, since a
-    deployment id can also be another provider's built-in model name that the lookup would otherwise infer."""
+    """``get_model_info`` for a cost-map key, under the provider its own cost-map row names. A deployment id can also
+    read as another provider's model name, and the lookup would otherwise infer that provider and miss the row."""
     registered: Final = litellm.model_cost.get(model_id)
     provider: Final = registered.get("litellm_provider") if isinstance(registered, dict) else None
     return litellm.get_model_info(model=model_id, custom_llm_provider=provider if isinstance(provider, str) else None)
