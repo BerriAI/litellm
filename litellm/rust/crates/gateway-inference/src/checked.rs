@@ -101,10 +101,11 @@ async fn check<H: Host>(
 ) -> Result<(), Error> {
     let gateway = &call.gateway;
     let BodyCheck { names, policy } = &gateway.body_check;
-    let params = Params::read(fields, names);
+    let surface = Surface::of(Some(route));
+    let params = Params::read(fields, names, &surface);
     let request = body::Request {
         body: &params,
-        surface: Surface::of(Some(route)),
+        surface,
         model: fields
             .get("model")
             .and_then(Value::as_str)

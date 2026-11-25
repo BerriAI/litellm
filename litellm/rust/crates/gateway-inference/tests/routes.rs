@@ -126,3 +126,26 @@ async fn a_deployment_that_opts_in_lets_a_caller_set_its_endpoint() {
     assert_ne!(response.status(), 401);
     assert_eq!(upstream.received_requests().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn a_secret_reference_in_a_parameter_no_list_names_is_refused_before_any_call() {
+    let upstream = MockServer::start().await;
+    let app = support::app("anthropic/test-model", &upstream.uri());
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        json!({"model": "public/model", "some_provider_param": "os.environ/LITELLM_MASTER_KEY", "max_tokens": 8, "messages": []}),
+    )
+    .await;
+
+    assert_eq!(response.status(), 401);
+    let message = support::json(response).await["error"]["message"].clone();
+    assert!(
+        message.as_str().is_some_and(|message| message.starts_with(
+            "Authentication Error, Rejected Request: some_provider_param holds a secret reference"
+        )),
+        "{message}"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
