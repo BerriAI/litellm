@@ -14,9 +14,9 @@ blocking guardrail raises) without rewriting the frames.
 """
 
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain, pairwise
+from itertools import chain, groupby, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
@@ -179,14 +179,23 @@ def _partial_arg_text(partial_arg: object) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
 
 
-def _partial_texts_at(partial_args: Sequence[object], path: str) -> Iterator[str]:
-    return (_partial_arg_text(partial_arg) for partial_arg in partial_args if _partial_arg_path(partial_arg) == path)
+def _partial_args_by_path(group: Sequence[object]) -> Mapping[str, tuple[object, ...]]:
+    partial_args: Final = tuple(chain.from_iterable(_partial_args(function_call) for function_call in group))
+    paths: Final = tuple(_partial_arg_path(partial_arg) for partial_arg in partial_args)
+    rank: Final = {path: position for position, path in enumerate(dict.fromkeys(paths))}
+    order: Final = tuple(sorted(range(len(paths)), key=lambda index: rank[paths[index]]))
+    return {
+        path: tuple(partial_args[index] for index in indices)
+        for path, indices in groupby(order, key=lambda index: paths[index])
+    }
+
+
+def _partial_text(partial_args: Iterable[object]) -> str:
+    return "".join(_partial_arg_text(partial_arg) for partial_arg in partial_args)
 
 
 def _partial_values_by_path(group: Sequence[object]) -> Mapping[str, str]:
-    partial_args: Final = tuple(chain.from_iterable(_partial_args(function_call) for function_call in group))
-    paths: Final = tuple(dict.fromkeys(_partial_arg_path(partial_arg) for partial_arg in partial_args))
-    return {path: "".join(_partial_texts_at(partial_args, path)) for path in paths}
+    return {path: _partial_text(partial_args) for path, partial_args in _partial_args_by_path(group).items()}
 
 
 def _group_field(group: Sequence[object], name: str) -> str | None:
@@ -253,18 +262,12 @@ def _write_partial_path(
 
 
 def _write_group_args(group: Sequence[object], args: Mapping[str, object], guardrail_name: str | None) -> None:
-    partial_args: Final = tuple(chain.from_iterable(_partial_args(function_call) for function_call in group))
-    sent_partial_values: Final = _partial_values_by_path(group)
-    head_args: Final = {key: value for key, value in args.items() if key not in sent_partial_values}
+    partial_args_by_path: Final = _partial_args_by_path(group)
+    head_args: Final = {key: value for key, value in args.items() if key not in partial_args_by_path}
     if head_args != (as_str_mapping(_field(group[0], "args")) or {}):
         _set_field(group[0], "args", head_args)
-    for path, sent_text in sent_partial_values.items():
-        _write_partial_path(
-            tuple(partial_arg for partial_arg in partial_args if _partial_arg_path(partial_arg) == path),
-            args.get(path),
-            sent_text,
-            guardrail_name,
-        )
+    for path, partial_args in partial_args_by_path.items():
+        _write_partial_path(partial_args, args.get(path), _partial_text(partial_args), guardrail_name)
 
 
 def _guardrailed_args(returned_tool_call: object, guardrail_name: str | None) -> Mapping[str, object]:
