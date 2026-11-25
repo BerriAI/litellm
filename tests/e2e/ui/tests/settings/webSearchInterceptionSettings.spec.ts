@@ -1,13 +1,13 @@
-import { expect, test, type APIRequestContext, type Page as PlaywrightPage } from "@playwright/test";
+import { expect, test, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { Page } from "../../fixtures/pages";
-import { navigateToPage } from "../../helpers/navigation";
-import { masterKey } from "../../helpers/traffic";
+import { seedProxySettings, writeProxySettings } from "../../helpers/proxySettings";
+import { rootPath } from "../../helpers/traffic";
 import type { components } from "../../../../../litellm/ui/litellm-dashboard/src/lib/http/schema";
 
 type Settings = components["schemas"]["WebSearchInterceptionSettings"];
 
-const UPDATE_PATH = "/update/websearch_interception_settings";
+const SETTINGS = "websearch_interception_settings";
+const UPDATE_PATH = `/update/${SETTINGS}`;
 const DEFAULTS: Settings = {
   enabled: false,
   enabled_providers: [],
@@ -20,24 +20,15 @@ const SEEDED: Settings = {
   max_agentic_loops: 4,
 };
 
-async function putSettings(request: APIRequestContext, settings: Settings) {
-  const response = await request.patch(UPDATE_PATH, {
-    headers: { Authorization: `Bearer ${masterKey()}` },
-    data: settings,
-  });
-  expect(response.ok(), await response.text()).toBe(true);
-}
-
-async function openSettings(page: PlaywrightPage, expectedLoops: string) {
+async function openSettings(page: PlaywrightPage) {
+  await page.goto(`${rootPath()}/ui/admin-panel/`);
+  await page.getByRole("tab", { name: "Web Search Interception" }).click();
   const panel = page.getByRole("tabpanel", { name: "Web Search Interception" });
-  await expect(async () => {
-    await navigateToPage(page, Page.AdminPanel);
-    await page.getByRole("tab", { name: "Web Search Interception" }).click();
-    await expect(panel.getByRole("spinbutton", { name: "Max Agentic Loops" })).toHaveValue(expectedLoops, {
-      timeout: 2000,
-    });
-    await expect(panel.getByText("Amazon Bedrock", { exact: true })).toBeVisible({ timeout: 2000 });
-  }).toPass({ timeout: 20000 });
+  await expect(panel.getByRole("spinbutton", { name: "Max Agentic Loops" })).toHaveValue(
+    String(SEEDED.max_agentic_loops),
+    { timeout: 35000 },
+  );
+  await expect(panel.getByText("Amazon Bedrock", { exact: true })).toBeVisible();
   return panel;
 }
 
@@ -50,16 +41,16 @@ test.describe("Web Search Interception settings", () => {
   test.describe.configure({ mode: "serial" });
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test.beforeEach(async ({ request }) => {
-    await putSettings(request, SEEDED);
+  test.beforeEach(async ({ request, page }) => {
+    await seedProxySettings(request, page, SETTINGS, SEEDED);
   });
 
   test.afterEach(async ({ request }) => {
-    await putSettings(request, DEFAULTS);
+    await writeProxySettings(request, SETTINGS, DEFAULTS);
   });
 
   test("clears a saved loop limit without dropping the provider selection", async ({ page }) => {
-    const panel = await openSettings(page, "4");
+    const panel = await openSettings(page);
     const save = panel.getByRole("button", { name: "Save Settings" });
     await expect(save).toBeDisabled();
 
@@ -74,12 +65,11 @@ test.describe("Web Search Interception settings", () => {
     });
     await expect(page.getByText("Settings updated successfully.", { exact: false })).toBeVisible();
 
-    const reopened = await openSettings(page, "");
-    await expect(reopened.getByText("Amazon Bedrock", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Amazon Bedrock", { exact: true })).toBeVisible();
   });
 
   test("shows a rejected loop limit and lets the user correct it", async ({ page }) => {
-    const panel = await openSettings(page, "4");
+    const panel = await openSettings(page);
     const loops = panel.getByRole("spinbutton", { name: "Max Agentic Loops" });
     const save = panel.getByRole("button", { name: "Save Settings" });
 

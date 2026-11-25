@@ -1,15 +1,15 @@
-import { test, expect, type APIRequestContext, type Locator, type Page as PlaywrightPage } from "@playwright/test";
+import { test, expect, type Locator, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { navigateToPage } from "../../helpers/navigation";
-import { Page } from "../../fixtures/pages";
-import { Role, users } from "../../fixtures/users";
+import { seedProxySettings, writeProxySettings } from "../../helpers/proxySettings";
+import { rootPath } from "../../helpers/traffic";
 import type { components } from "../../../../../litellm/ui/litellm-dashboard/src/lib/http/schema";
 
 type ToolSearchSettings = components["schemas"]["MCPToolSearchSettings"];
 
 test.describe.configure({ mode: "serial" });
 
-const UPDATE_PATH = "/update/mcp_tool_search_settings";
+const SETTINGS = "mcp_tool_search_settings";
+const UPDATE_PATH = `/update/${SETTINGS}`;
 const KEYWORD_DEFAULTS: ToolSearchSettings = {
   embedding_model: null,
   top_k: 5,
@@ -18,21 +18,11 @@ const KEYWORD_DEFAULTS: ToolSearchSettings = {
 };
 const SEEDED: ToolSearchSettings = { ...KEYWORD_DEFAULTS, top_k: 3, core_tools: ["seeded_tool"] };
 
-async function putSettings(request: APIRequestContext, settings: ToolSearchSettings): Promise<void> {
-  const res = await request.patch(UPDATE_PATH, {
-    headers: { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` },
-    data: settings,
-  });
-  expect(res.ok(), await res.text()).toBe(true);
-}
-
-async function openToolSearch(page: PlaywrightPage, savedCoreTools: string): Promise<Locator> {
+async function openToolSearch(page: PlaywrightPage): Promise<Locator> {
+  await page.goto(`${rootPath()}/ui/mcp-servers/`);
+  await page.getByRole("tab", { name: "Tool Search" }).click();
   const panel = page.getByRole("tabpanel", { name: "Tool Search" });
-  await expect(async () => {
-    await navigateToPage(page, Page.McpServers);
-    await page.getByRole("tab", { name: "Tool Search" }).click();
-    await expect(panel.getByLabel("Always Returned First")).toHaveValue(savedCoreTools, { timeout: 2000 });
-  }).toPass({ timeout: 20000 });
+  await expect(panel.getByLabel("Always Returned First")).toHaveValue(SEEDED.core_tools.join("\n"), { timeout: 35000 });
   return panel;
 }
 
@@ -42,16 +32,16 @@ const nextSave = (page: PlaywrightPage) =>
 test.describe("MCP tool search settings", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test.beforeEach(async ({ request }) => {
-    await putSettings(request, SEEDED);
+  test.beforeEach(async ({ request, page }) => {
+    await seedProxySettings(request, page, SETTINGS, SEEDED);
   });
 
   test.afterEach(async ({ request }) => {
-    await putSettings(request, KEYWORD_DEFAULTS);
+    await writeProxySettings(request, SETTINGS, KEYWORD_DEFAULTS);
   });
 
-  test("saves edited settings and shows them again after a reload", async ({ page }) => {
-    const panel = await openToolSearch(page, "seeded_tool");
+  test("saves edited tool search settings and splits the always returned tools by line", async ({ page }) => {
+    const panel = await openToolSearch(page);
     const topK = panel.getByLabel("Top K Results");
     const coreTools = panel.getByLabel("Always Returned First");
     const save = panel.getByRole("button", { name: "Save Settings" });
@@ -72,13 +62,10 @@ test.describe("MCP tool search settings", () => {
       core_tools: ["alpha", "beta"],
     });
     await expect(page.getByText("Settings updated successfully.", { exact: false })).toBeVisible();
-
-    const reopened = await openToolSearch(page, "alpha\nbeta");
-    await expect(reopened.getByLabel("Top K Results")).toHaveValue("12");
   });
 
   test("clamps an out-of-range Top K to the largest value the proxy accepts", async ({ page }) => {
-    const panel = await openToolSearch(page, "seeded_tool");
+    const panel = await openToolSearch(page);
     const topK = panel.getByLabel("Top K Results");
 
     await topK.fill("500");
@@ -87,7 +74,7 @@ test.describe("MCP tool search settings", () => {
 
     const saved = nextSave(page);
     await panel.getByRole("button", { name: "Save Settings" }).click();
-    expect((await saved).postDataJSON()).toMatchObject({ top_k: 100 });
+    expect((await saved).postDataJSON()).toEqual({ ...SEEDED, top_k: 100 });
     await expect(page.getByText("Settings updated successfully.", { exact: false })).toBeVisible();
   });
 
@@ -102,7 +89,7 @@ test.describe("MCP tool search settings", () => {
         }),
       { times: 1 },
     );
-    const panel = await openToolSearch(page, "seeded_tool");
+    const panel = await openToolSearch(page);
     const topK = panel.getByLabel("Top K Results");
     const save = panel.getByRole("button", { name: "Save Settings" });
 

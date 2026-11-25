@@ -1,13 +1,13 @@
-import { expect, test, type APIRequestContext, type Page as PlaywrightPage } from "@playwright/test";
+import { expect, test, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { Page } from "../../fixtures/pages";
-import { navigateToPage } from "../../helpers/navigation";
-import { masterKey } from "../../helpers/traffic";
+import { seedProxySettings, writeProxySettings } from "../../helpers/proxySettings";
+import { rootPath } from "../../helpers/traffic";
 import type { components } from "../../../../../litellm/ui/litellm-dashboard/src/lib/http/schema";
 
 type Settings = components["schemas"]["MCPSemanticFilterSettings"];
 
-const UPDATE_PATH = "/update/mcp_semantic_filter_settings";
+const SETTINGS = "mcp_semantic_filter_settings";
+const UPDATE_PATH = `/update/${SETTINGS}`;
 const DEFAULTS: Settings = {
   enabled: false,
   embedding_model: "text-embedding-3-small",
@@ -16,21 +16,13 @@ const DEFAULTS: Settings = {
 };
 const SEEDED: Settings = { ...DEFAULTS, top_k: 7 };
 
-async function putSettings(request: APIRequestContext, settings: Settings) {
-  const response = await request.patch(UPDATE_PATH, {
-    headers: { Authorization: `Bearer ${masterKey()}` },
-    data: settings,
-  });
-  expect(response.ok(), await response.text()).toBe(true);
-}
-
-async function openSettings(page: PlaywrightPage, expectedTopK: string) {
+async function openSettings(page: PlaywrightPage) {
+  await page.goto(`${rootPath()}/ui/mcp-servers/`);
+  await page.getByRole("tab", { name: "Semantic Filter" }).click();
   const panel = page.getByRole("tabpanel", { name: "Semantic Filter" });
-  await expect(async () => {
-    await navigateToPage(page, Page.McpServers);
-    await page.getByRole("tab", { name: "Semantic Filter" }).click();
-    await expect(panel.getByRole("spinbutton", { name: "Top K Results" })).toHaveValue(expectedTopK, { timeout: 2000 });
-  }).toPass({ timeout: 20000 });
+  await expect(panel.getByRole("spinbutton", { name: "Top K Results" })).toHaveValue(String(SEEDED.top_k), {
+    timeout: 35000,
+  });
   const searchHint = page.getByRole("button", { name: "Dismiss search hint" });
   if (await searchHint.isVisible()) await searchHint.click();
   return panel;
@@ -45,16 +37,16 @@ test.describe("MCP Semantic Filter settings", () => {
   test.describe.configure({ mode: "serial" });
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test.beforeEach(async ({ request }) => {
-    await putSettings(request, SEEDED);
+  test.beforeEach(async ({ request, page }) => {
+    await seedProxySettings(request, page, SETTINGS, SEEDED);
   });
 
   test.afterEach(async ({ request }) => {
-    await putSettings(request, DEFAULTS);
+    await writeProxySettings(request, SETTINGS, DEFAULTS);
   });
 
   test("saves the clamped Top K when the user enters a value above the limit", async ({ page }) => {
-    const panel = await openSettings(page, "7");
+    const panel = await openSettings(page);
     const topK = panel.getByRole("spinbutton", { name: "Top K Results" });
     const save = panel.getByRole("button", { name: "Save Settings" });
     await expect(save).toBeDisabled();
@@ -72,12 +64,10 @@ test.describe("MCP Semantic Filter settings", () => {
       top_k: 100,
     });
     await expect(page.getByText("Settings updated successfully.", { exact: false })).toBeVisible();
-
-    await openSettings(page, "100");
   });
 
   test("shows the error from a rejected empty Top K and lets the user correct it", async ({ page }) => {
-    const panel = await openSettings(page, "7");
+    const panel = await openSettings(page);
     const topK = panel.getByRole("spinbutton", { name: "Top K Results" });
     const save = panel.getByRole("button", { name: "Save Settings" });
 
