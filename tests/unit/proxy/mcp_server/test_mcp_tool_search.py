@@ -27,11 +27,14 @@ from pydantic import JsonValue
 import litellm
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.rerank_shortlist import RERANK_SHORTLIST_SIZE, RerankScore
 from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector
 from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy.mcp_server.tool_search import (
     AGENT_SEARCH_TOOL_NAME,
+    MCP_PROXY_SEARCH_TOOL_NAME,
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
     SKILL_SEARCH_TOOL_NAME,
@@ -39,13 +42,16 @@ from litellm.proxy.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    handle_mcp_proxy_tool,
     handle_mcp_tool_search,
     rank_mcp_tools,
     search_mcp_tools,
     search_tools,
+    with_mcp_proxy_identity,
 )
 from litellm.types.mcp import MCPToolSearchSettings, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.rerank import RerankResponse
 
 
 def _make_tools(specs: list[tuple[str, str]]) -> tuple[Tool, ...]:
@@ -221,6 +227,42 @@ def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
     return [tool["name"] for tool in results]
 
 
+def _scored(tool: Tool, score: float) -> ToolSearchResult:
+    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.input_schema, "score": score}
+
+
+RERANK_SCORES: Final = {FX_TOOL.name: 0.2, WEATHER_TOOL.name: 0.9, CALENDAR_TOOL.name: 0.95}
+
+
+def _rerank_score(document: str, scores: Mapping[str, float] = RERANK_SCORES) -> float:
+    return scores[document.split("\n")[0]]
+
+
+class ScriptedReranker:
+    def __init__(
+        self,
+        answer: Sequence[RerankScore] | None = None,
+        error: Exception | None = None,
+        scores: Mapping[str, float] = RERANK_SCORES,
+    ) -> None:
+        self.answer: Final = answer
+        self.error: Final = error
+        self.scores: Final = scores
+        self.calls: list[tuple[str, tuple[str, ...]]] = []  # mutable-ok: test spy recording rerank inputs
+
+    async def __call__(self, query: str, documents: Sequence[str]) -> Sequence[RerankScore]:
+        self.calls.append((query, tuple(documents)))
+        if self.error is not None:
+            raise self.error
+        if self.answer is not None:
+            return self.answer
+        return tuple(RerankScore(index, _rerank_score(text, self.scores)) for index, text in enumerate(documents))
+
+
+def _text(tool: Tool) -> str:
+    return f"{tool.name}\n{tool.description}"
+
+
 class TestSearchMcpTools:
     @pytest.mark.asyncio
     async def test_rank_mcp_tools_omits_oversized_description(self) -> None:
@@ -329,6 +371,73 @@ class TestSearchMcpTools:
         assert "embedding model is down" in result.reason
 
 
+class TestRerankedMcpToolSearch:
+    @pytest.mark.asyncio
+    async def test_rerank_reorders_the_keyword_shortlist_and_reports_its_scores(self) -> None:
+        reranker = ScriptedReranker()
+        results = await search_mcp_tools("get", CATALOG, 5, MCPToolSearchSettings(), None, reranker)
+        assert results == (_scored(WEATHER_TOOL, 0.9), _scored(FX_TOOL, 0.2))
+        assert reranker.calls == [("get", (_text(FX_TOOL), _text(WEATHER_TOOL)))]
+
+    @pytest.mark.asyncio
+    async def test_rerank_promotes_a_tool_the_embedding_order_ranked_below_top_k(self) -> None:
+        reranker = ScriptedReranker()
+        settings = MCPToolSearchSettings(embedding_model="emb")
+        results = await search_mcp_tools("FX", CATALOG, 1, settings, _ranker(), reranker)
+        assert results == (_scored(CALENDAR_TOOL, 0.95),)
+        assert reranker.calls == [("FX", (_text(FX_TOOL), _text(WEATHER_TOOL), _text(CALENDAR_TOOL)))]
+
+    @pytest.mark.asyncio
+    async def test_rerank_sees_at_most_the_shortlist_size_best_base_matches(self) -> None:
+        tools = _make_tools([(f"tool-{index}", "matches the query") for index in range(RERANK_SHORTLIST_SIZE + 10)])
+        reranker = ScriptedReranker(scores={tool.name: float(index) for index, tool in enumerate(tools)})
+        results = await search_mcp_tools("query", tools, 3, MCPToolSearchSettings(), None, reranker)
+        assert reranker.calls == [("query", tuple(_text(tool) for tool in tools[:RERANK_SHORTLIST_SIZE]))]
+        assert _names(results) == [f"tool-{RERANK_SHORTLIST_SIZE - 1 - offset}" for offset in range(3)]
+
+    @pytest.mark.asyncio
+    async def test_core_tools_lead_and_are_never_reranked(self) -> None:
+        reranker = ScriptedReranker()
+        settings = MCPToolSearchSettings(embedding_model="emb", core_tools=(CALENDAR_TOOL.name,))
+        results = await search_mcp_tools("FX", CATALOG, 5, settings, _ranker(), reranker)
+        assert _names(results) == [CALENDAR_TOOL.name, WEATHER_TOOL.name, FX_TOOL.name]
+        assert reranker.calls == [("FX", (_text(FX_TOOL), _text(WEATHER_TOOL)))]
+
+    @pytest.mark.asyncio
+    async def test_an_empty_query_or_a_single_match_makes_no_rerank_call(self) -> None:
+        reranker = ScriptedReranker()
+        assert await search_mcp_tools("", CATALOG, 5, MCPToolSearchSettings(), None, reranker) == ()
+        assert _names(await search_mcp_tools("foreign", CATALOG, 5, MCPToolSearchSettings(), None, reranker)) == [
+            FX_TOOL.name
+        ]
+        assert reranker.calls == []
+
+    @pytest.mark.parametrize(
+        "reranker",
+        (
+            ScriptedReranker(error=litellm.APIConnectionError(message="down", model="rr", llm_provider="voyage")),
+            ScriptedReranker(error=litellm.Timeout(message="slow", model="rr", llm_provider="voyage")),
+            ScriptedReranker(error=ValueError("unparseable body")),
+            ScriptedReranker(answer=(RerankScore(0, 0.9), RerankScore(0, 0.8), RerankScore(2, 0.1))),
+            ScriptedReranker(answer=(RerankScore(0, 0.9), RerankScore(1, float("nan")), RerankScore(2, 0.1))),
+            ScriptedReranker(answer=(RerankScore(2, 0.9),)),
+        ),
+        ids=("provider-error", "timeout", "unparseable", "duplicate-index", "nan-score", "partial-answer"),
+    )
+    @pytest.mark.asyncio
+    async def test_a_failed_rerank_keeps_the_base_result(self, reranker: ScriptedReranker) -> None:
+        settings = MCPToolSearchSettings(embedding_model="emb")
+        base = await search_mcp_tools("FX", CATALOG, 2, settings, _ranker())
+        assert await search_mcp_tools("FX", CATALOG, 2, settings, _ranker(), reranker) == base
+        assert len(reranker.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_rate_limited_rerank_call_reaches_the_caller(self) -> None:
+        reranker = ScriptedReranker(error=ProxyRateLimitError(detail="rpm exceeded"))
+        with pytest.raises(ProxyRateLimitError):
+            await search_mcp_tools("get", CATALOG, 5, MCPToolSearchSettings(), None, reranker)
+
+
 class TestMcpToolSearchSettings:
     def test_rejects_out_of_range_values(self) -> None:
         from pydantic import ValidationError
@@ -340,11 +449,18 @@ class TestMcpToolSearchSettings:
 
     def test_yaml_shape_round_trips(self) -> None:
         settings = MCPToolSearchSettings.model_validate(
-            {"embedding_model": "emb", "top_k": 3, "similarity_threshold": 0.2, "core_tools": ["a", "b"]}
+            {
+                "embedding_model": "emb",
+                "rerank_model": "rr",
+                "top_k": 3,
+                "similarity_threshold": 0.2,
+                "core_tools": ["a", "b"],
+            }
         )
         assert settings.core_tools == ("a", "b")
         assert settings.model_dump() == {
             "embedding_model": "emb",
+            "rerank_model": "rr",
             "top_k": 3,
             "similarity_threshold": 0.2,
             "core_tools": ("a", "b"),
@@ -986,6 +1102,125 @@ class TestCallToolRestApiVirtualTools:
             result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
         assert result.is_error is True
         assert "mcp_tool_search.embedding_model" in result.content[0].text
+
+    @staticmethod
+    def _rerank_router() -> MagicMock:
+        router = MagicMock()
+        router.arerank = AsyncMock(
+            side_effect=lambda model, query, documents, top_n, metadata, **_: RerankResponse(
+                results=[
+                    {"index": index, "relevance_score": _rerank_score(text)} for index, text in enumerate(documents)
+                ]
+            )
+        )
+        return router
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_reranks_with_the_configured_rerank_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"rerank_model": "rr"})
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="k", team_id="team-1", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        router = self._rerank_router()
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        with (
+            patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the proxy's key-limit hooks are a module global; the rerank call runs them like /rerank does
+                "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
+            ),
+            patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
+                "litellm.proxy.mcp_server.operations._list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=AggregateToolListing(tools=list(CATALOG), outcomes={}),
+            ),
+        ):
+            result = await self._get_call_fn()(
+                request=self._semantic_request("get"), user_api_key_dict=user_api_key_dict
+            )
+
+        assert result.is_error is False
+        assert json.loads(result.content[0].text) == [_scored(WEATHER_TOOL, 0.9), _scored(FX_TOOL, 0.2)]
+        assert key_limits.pre_call_hook.await_args.kwargs["call_type"] == "arerank"
+        assert router.arerank.await_args.kwargs["model"] == "rr"
+        assert router.arerank.await_args.kwargs["metadata"]["user_api_key_team_id"] == "team-1"
+
+    @pytest.mark.asyncio
+    async def test_rerank_model_without_a_router_is_a_tool_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"rerank_model": "rr"})
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        with patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+            "litellm.proxy.proxy_server.llm_router", None
+        ):
+            result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
+        assert result.is_error is True
+        assert (
+            result.content[0].text
+            == "litellm_settings.mcp_tool_search.rerank_model needs a model_list so it can be called"
+        )
+
+    @pytest.mark.asyncio
+    async def test_proxy_search_tools_reranks_with_the_configured_rerank_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"rerank_model": "rr"})
+        listed = tuple(with_mcp_proxy_identity(tool, "srv") for tool in CATALOG)
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        with (
+            patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+                "litellm.proxy.proxy_server.llm_router", self._rerank_router()
+            ),
+            patch(  # test-quality-ok: the proxy's key-limit hooks are a module global; the rerank call runs them like /rerank does
+                "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
+            ),
+            patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
+                "litellm.proxy.mcp_server.operations._list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=AggregateToolListing(tools=list(listed), outcomes={}),
+            ),
+        ):
+            result = await handle_mcp_proxy_tool(
+                name=MCP_PROXY_SEARCH_TOOL_NAME,
+                arguments={"query": "get"},
+                user_api_key_dict=UserAPIKeyAuth(api_key="k"),
+            )
+
+        assert result.is_error is False
+        assert [(hit["name"], hit["score"]) for hit in json.loads(result.content[0].text)] == [
+            (WEATHER_TOOL.name, 0.9),
+            (FX_TOOL.name, 0.2),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_proxy_search_tools_reports_rerank_model_without_a_router(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"rerank_model": "rr"})
+        with (
+            patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+                "litellm.proxy.proxy_server.llm_router", None
+            ),
+            patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
+                "litellm.proxy.mcp_server.operations._list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=AggregateToolListing(tools=list(CATALOG), outcomes={}),
+            ),
+        ):
+            result = await handle_mcp_proxy_tool(
+                name=MCP_PROXY_SEARCH_TOOL_NAME,
+                arguments={"query": "get"},
+                user_api_key_dict=UserAPIKeyAuth(api_key="k"),
+            )
+        assert result.is_error is True
+        assert (
+            result.content[0].text
+            == "litellm_settings.mcp_tool_search.rerank_model needs a model_list so it can be called"
+        )
 
     @pytest.mark.asyncio
     async def test_mcp_tool_search_reports_invalid_settings_as_tool_error(

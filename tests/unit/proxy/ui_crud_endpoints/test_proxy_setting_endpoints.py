@@ -3636,6 +3636,7 @@ class TestMcpToolSearchSettingsEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] = {
             "embedding_model": "text-embedding-3-small",
+            "rerank_model": "rerank-2.5",
             "core_tools": ["treasury-get_rates"],
         }
 
@@ -3644,6 +3645,7 @@ class TestMcpToolSearchSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         assert resp.json()["values"] == {
             "embedding_model": "text-embedding-3-small",
+            "rerank_model": "rerank-2.5",
             "top_k": 5,
             "similarity_threshold": 0.0,
             "core_tools": ["treasury-get_rates"],
@@ -3667,6 +3669,7 @@ class TestMcpToolSearchSettingsEndpoints:
         self._override_auth(LitellmUserRoles.PROXY_ADMIN)
         payload = {
             "embedding_model": "text-embedding-3-small",
+            "rerank_model": "rerank-2.5",
             "top_k": 3,
             "similarity_threshold": 0.25,
             "core_tools": ["treasury-get_rates"],

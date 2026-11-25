@@ -41881,6 +41881,11 @@ export interface components {
              */
             embedding_model?: string | null;
             /**
+             * Rerank Model
+             * @description Rerank model from model_list that re-orders the best matches before top_k is applied. Unset keeps the keyword or embedding order, which is also kept if the rerank call fails.
+             */
+            rerank_model?: string | null;
+            /**
              * Similarity Threshold
              * @description Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).
              * @default 0
