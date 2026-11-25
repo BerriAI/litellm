@@ -4454,6 +4454,30 @@ async def test_an_allowlisted_host_answers_the_gateways_403_to_a_key_kept_from_s
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_an_allowlisted_host_answers_the_gateways_403_to_a_managed_agent(monkeypatch: pytest.MonkeyPatch):
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.types.agents import AgentResponse
+
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (), _BEDROCK_URL)
+    server: Final = _ScriptedMCPServer()
+    agent: Final = UserAPIKeyAuth(api_key="sk-agent", user_role=LitellmUserRoles.INTERNAL_USER, agent_id="agent-1")
+    agent.managed_agent_policy = AgentResponse(agent_id="agent-1", agent_name="Agent", agent_card_params={})
+
+    with pytest.raises(HTTPException) as refused:
+        await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server, caller=agent)
+
+    assert (refused.value.status_code, refused.value.detail) == (
+        403,
+        {"error": "The key is not allowed to access the requested MCP servers: deepwiki"},
+    )
+    assert (server.opened, provider.call_count) == ((), 0)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_an_allowlisted_tool_whose_description_a_guardrail_blocks_never_reaches_the_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -4614,6 +4638,35 @@ async def test_a_claimed_url_that_needs_approval_is_dropped_beside_a_gateway_ref
     assert [call.name for call in server.calls] == ["ask_question"]
     assert mcp_client.call_tool.await_count == 0
     assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question", "gitmcp-ask_question")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "beside",
+    [
+        {"type": "function", "name": "deepwiki-ask_question", "parameters": {"type": "object", "properties": {}}},
+        {
+            "type": "mcp",
+            "server_label": "deepwiki",
+            "server_url": "https://mcp.example.com/mcp",
+            "require_approval": "never",
+        },
+    ],
+    ids=["client_function", "second_direct_server"],
+)
+@respx.mock
+async def test_a_direct_mcp_tool_whose_name_clashes_with_another_tool_answers_400_before_the_model_runs(
+    monkeypatch: pytest.MonkeyPatch, beside: Mapping[str, object]
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com", "mcp.example.com"))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (), _BEDROCK_URL)
+    server: Final = _ScriptedMCPServer()
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server, beside=(beside,))
+
+    assert "`deepwiki-ask_question`" in str(refused.value)
+    assert (server.calls, provider.call_count) == ((), 0)
 
 
 @pytest.mark.asyncio

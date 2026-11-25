@@ -3844,8 +3844,9 @@ class MCPServerManager:
         self, user_api_key_auth: UserAPIKeyAuth | None, general_settings: Mapping[str, object] | None = None
     ) -> bool:
         """Whether the caller may reach a host gateway_hosted_mcp_allowed_hosts opens to every key. The rules that keep
-        an allow_all_keys server from a caller apply: its MCP opt-out, a toolset or explicit-grants scope, a session's
-        resource scope, and mcp_allow_all_keys_respects_mcp_scope for a key any MCP server list restricts."""
+        an allow_all_keys server from a caller apply: its MCP opt-out, a managed agent's policy, a toolset or
+        explicit-grants scope, a session's resource scope, and mcp_allow_all_keys_respects_mcp_scope for a key any MCP
+        server list restricts."""
         if user_api_key_auth is None:
             return True
         if MCPServerManager._kept_from_mcp_servers_open_to_every_key(user_api_key_auth):
@@ -3864,6 +3865,7 @@ class MCPServerManager:
         )
         return (
             opted_out
+            or managed_agent_policy(user_api_key_auth) is not None
             or user_api_key_auth.mcp_toolset_id is not None
             or user_api_key_auth.mcp_explicit_grants_only
             or MCPServerManager._admitted_session_resource_scope(user_api_key_auth) is not None

@@ -246,8 +246,9 @@ _LISTED_TOOLS: Final = (
         ({"tool_names": ["search", "delete"], "read_only": True}, ("search",)),
         ({"read_only": False}, ("search", "delete", "fetch")),
         ("search", ()),
+        ({"read_ony": True}, ()),
     ],
-    ids=["absent", "list", "names", "read_only", "names_and_read_only", "read_only_off", "malformed"],
+    ids=["absent", "list", "names", "read_only", "names_and_read_only", "read_only_off", "malformed", "unknown_field"],
 )
 def test_allowed_tools_admits_named_and_read_only_tools_and_fails_closed_on_a_filter_it_cannot_read(
     allowed_tools: object, admitted: tuple[str, ...]

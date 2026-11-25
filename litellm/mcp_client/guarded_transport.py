@@ -47,8 +47,16 @@ class GuardedNetworkBackend(httpcore2.AsyncNetworkBackend):
                 f"LiteLLM refused to connect to {host}, which resolves to a private, loopback, link-local or "
                 "metadata address"
             )
+        options: Final = None if socket_options is None else tuple(socket_options)
+        for address in addresses[:-1]:
+            try:
+                return await self._connect.connect_tcp(
+                    address, port, timeout=timeout, local_address=local_address, socket_options=options
+                )
+            except httpcore2.ConnectError:
+                continue
         return await self._connect.connect_tcp(
-            addresses[0], port, timeout=timeout, local_address=local_address, socket_options=socket_options
+            addresses[-1], port, timeout=timeout, local_address=local_address, socket_options=options
         )
 
     async def connect_unix_socket(

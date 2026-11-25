@@ -10,7 +10,7 @@ from mcp.types import CallToolRequestParams, CallToolResult, InputRequiredResult
 from mcp.types import Tool as MCPTool
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.exceptions import APIError
+from litellm.exceptions import APIError, BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import GatewayTool, GatewayTools
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.tool_fields import hosted_mcp_approval_error
@@ -41,7 +41,7 @@ _GATEWAY_OWNED_HEADERS: Final = frozenset(
 
 
 class _ToolFilter(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
     tool_names: tuple[str, ...] | None = None
     read_only: bool | None = None
 
@@ -402,6 +402,23 @@ def _named_tools(
 ) -> tuple[tuple[str, MCPTool, DirectTool], ...]:
     return tuple(
         (direct_tool_name(server.server_label, tool.name), tool, DirectTool(server, tool, client)) for tool in tools
+    )
+
+
+def raise_if_direct_tool_names_clash(listing: DirectListing, other_names: Collection[str], model: str) -> None:
+    names: Final = tuple(tool.name for tool in listing.tools)
+    clashing_name: Final = next(
+        (name for index, name in enumerate(names) if name in other_names or name in names[:index]), None
+    )
+    if clashing_name is None:
+        return
+    raise BadRequestError(
+        message=(
+            f"Two tools in this request are both named `{clashing_name}` once each hosted MCP tool gets its "
+            "server_label prefix. Rename a server_label or function so every tool name is unique."
+        ),
+        model=model,
+        llm_provider="mcp",
     )
 
 

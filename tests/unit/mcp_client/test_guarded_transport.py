@@ -81,6 +81,33 @@ async def test_a_public_host_is_connected_at_the_address_that_was_checked():
     assert connector.hosts == (PUBLIC_ADDRESS,)
 
 
+class _UnreachableFirstBackend(_RecordingBackend):
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SocketOption] | None = None,
+    ) -> httpcore2.AsyncNetworkStream:
+        if not self.hosts:
+            self.hosts = (host,)
+            raise httpcore2.ConnectError("network is unreachable")
+        return await super().connect_tcp(host, port, timeout, local_address, socket_options)
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_first_address_falls_back_to_the_next_checked_address():
+    connector: Final = _UnreachableFirstBackend(_http_response(200, {}))
+    backend: Final = GuardedNetworkBackend(
+        _resolver({"mcp.example.com": ("2606:2800:21f:cb07:6820:80da:af6b:8b2c", PUBLIC_ADDRESS)}), connect=connector
+    )
+
+    await backend.connect_tcp("mcp.example.com", 443)
+
+    assert connector.hosts == ("2606:2800:21f:cb07:6820:80da:af6b:8b2c", PUBLIC_ADDRESS)
+
+
 def _guarded_client(
     allowed_hosts: tuple[str, ...],
     table: Mapping[str, tuple[str, ...]],

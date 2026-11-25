@@ -375,7 +375,11 @@ async def _aresponses_api_with_mcp(
     3. Call the standard responses API
     4. If require_approval="never" and tool calls are returned, automatically execute them
     """
-    from litellm.responses.mcp.direct_url_claims import gateway_tools_with_direct
+    from litellm.litellm_core_utils.tool_fields import declared_function_names
+    from litellm.responses.mcp.direct_url_claims import (
+        gateway_tools_with_direct,
+        raise_if_direct_tool_names_clash,
+    )
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -437,6 +441,11 @@ async def _aresponses_api_with_mcp(
     )
     direct_listing: Final = await _direct_listing(
         hosted_mcp_claims, dependencies.direct_client_factory, user_api_key_auth, discovery_raw_headers
+    )
+    raise_if_direct_tool_names_clash(
+        direct_listing,
+        frozenset(tool.name for tool in original_mcp_tools) | declared_function_names(other_tools),
+        model,
     )
     client_ids: Final = previous_response_client_ids(previous_response_id, request_kwargs)
     turns_source: Final = (
