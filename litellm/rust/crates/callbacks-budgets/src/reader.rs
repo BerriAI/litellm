@@ -1,10 +1,12 @@
-//! `get_current_spend` for a lifetime counter: what a budget is checked against before a call.
+//! `get_current_spend` and `ensure_spend_counter_initialized` for a lifetime counter: what a
+//! budget is checked against before a call, and the warm a reservation runs before it charges.
 //!
 //! The counter is read from Redis first, since every pod charges it there, and from this process's
 //! memory only when Redis cannot answer, as memory holds only this pod's charges. A clean Redis miss
 //! is a cold counter, seeded once from its row under the counter's seed lock (`SET NX`, so one pod
-//! wins). A cold counter with no row answers the spend the caller's plan read and writes nothing,
-//! as `get_current_spend` writes nothing there and only `ensure_spend_counter_initialized` seeds it.
+//! wins). For a cold counter with no row, a read answers the spend the caller's plan read and
+//! writes nothing, as `get_current_spend` does. A warm raises it to that spend with `set_max`
+//! instead, as `ensure_spend_counter_initialized` does, so the charges that follow start from it.
 //!
 //! A counter Redis reloaded from an older snapshot reads below the spend its caller already knows
 //! of, so a read under the budget that is below that spend is held to its row's spend as a floor,
@@ -21,9 +23,11 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use litellm_redis_store::{
-    Number,
-    spend_counters::{FLOOR_TTL, LostSeed, SpendCounter, SpendCounters},
+    Error, Number,
+    spend_counters::{FLOOR_TTL, LostSeed, Reading, SpendCounter, SpendCounters},
 };
+
+use crate::charge::{Failure, raise_to_cached_spend, store_failure};
 
 /// The spend a counter's row holds, `None` when it has no row or the read failed.
 pub trait RowSpend: Send + Sync {
@@ -36,6 +40,17 @@ pub trait RowSpend: Send + Sync {
 pub struct SpendReader {
     store: Arc<SpendCounters>,
     rows: Arc<dyn RowSpend>,
+}
+
+/// What a cold counter's seed under its lock found.
+enum Seed {
+    /// Another task in this process seeded it while this one waited for the lock.
+    Warm(f64),
+    FromRow {
+        spend: f64,
+        seeded: Result<Number, Error>,
+    },
+    NoRow,
 }
 
 impl SpendReader {
@@ -53,7 +68,11 @@ impl SpendReader {
     ) -> f64 {
         let current = match self.cached(counter).await {
             Some(current) => current,
-            None => self.seeded(counter, fallback_spend).await,
+            None => match self.seed(counter).await {
+                Seed::Warm(current) => current,
+                Seed::FromRow { spend, seeded } => seeded.map_or(spend, Number::as_f64),
+                Seed::NoRow => fallback_spend,
+            },
         };
         if max_budget.is_none_or(|max_budget| current >= max_budget) || fallback_spend <= current {
             return current;
@@ -73,24 +92,60 @@ impl SpendReader {
         read.value().map(Number::as_f64)
     }
 
-    async fn seeded(&self, counter: &SpendCounter, fallback_spend: f64) -> f64 {
+    /// `ensure_spend_counter_initialized`: makes sure a cold counter holds the spend already made
+    /// before a reservation charges it. One with a row is seeded from it, and one without, or whose
+    /// row read failed, is raised to `fallback_spend` when that is above zero, after the seed lock
+    /// is released. A failure leaves the counter for the caller to drop.
+    pub async fn warm(&self, counter: &SpendCounter, fallback_spend: f64) -> Result<(), Failure> {
+        if self.is_warm(counter).await? {
+            return Ok(());
+        }
+        match self.seed(counter).await {
+            Seed::Warm(_) => Ok(()),
+            Seed::FromRow { seeded, .. } => seeded.map(drop).map_err(store_failure),
+            Seed::NoRow if fallback_spend > 0.0 => {
+                raise_to_cached_spend(&self.store, counter, fallback_spend).await
+            }
+            Seed::NoRow => Ok(()),
+        }
+    }
+
+    /// `_is_spend_counter_cache_warm`: whether the counter holds a value, keeping what Redis holds
+    /// in memory for when Redis cannot answer.
+    async fn is_warm(&self, counter: &SpendCounter) -> Result<bool, Failure> {
+        match self.store.read(counter).await.map_err(store_failure)? {
+            Reading::Redis(Some(spend)) => {
+                self.store
+                    .set_local(counter, spend, None)
+                    .map_err(store_failure)?;
+                Ok(true)
+            }
+            reading => Ok(reading.value().is_some()),
+        }
+    }
+
+    /// `SpendCounterReseed.coalesced`: seeds a cold counter from its row under the counter's seed
+    /// lock, so concurrent seeds in this process read the row once.
+    async fn seed(&self, counter: &SpendCounter) -> Seed {
         let locks = self.store.lock_seeds(std::slice::from_ref(counter)).await;
         if locks.waited()
             && let Some(current) = self.cached(counter).await
         {
-            return current;
+            return Seed::Warm(current);
         }
         let stored = match counter {
             SpendCounter::EndUser(_) => None,
             _ => self.rows.stored(counter).await,
         };
         match stored {
-            Some(spend) => self
-                .store
-                .seed(counter, Number::Float(spend), LostSeed::Answer)
-                .await
-                .map_or(spend, Number::as_f64),
-            None => fallback_spend,
+            Some(spend) => Seed::FromRow {
+                spend,
+                seeded: self
+                    .store
+                    .seed(counter, Number::Float(spend), LostSeed::Answer)
+                    .await,
+            },
+            None => Seed::NoRow,
         }
     }
 
@@ -412,6 +467,60 @@ mod tests {
             (before, after, in_redis(&server, &team()).await),
             (5.0, 0.0, Some(0.0))
         );
+    }
+
+    /// `ensure_spend_counter_initialized` seeds a cold counter from its row, raises one without a
+    /// row to the plan's spend when that is above zero, and leaves a warm one as it is.
+    #[rstest]
+    #[case::cold_with_a_row(team(), None, Some(4.0), 1.0, Some(4.0))]
+    #[case::cold_with_a_row_that_holds_nothing(team(), None, Some(0.0), 3.0, Some(0.0))]
+    #[case::cold_without_a_row(team(), None, None, 3.0, Some(3.0))]
+    #[case::cold_without_a_row_or_spend(team(), None, None, 0.0, None)]
+    #[case::cold_end_user_whatever_its_row_holds(end_user(), None, Some(4.0), 1.0, Some(1.0))]
+    #[case::warm_below_the_plans_spend(team(), Some(2.0), Some(9.0), 5.0, Some(2.0))]
+    #[tokio::test]
+    async fn a_warm_leaves_the_counter_holding_the_spend_already_made(
+        #[future] server: RedisServer,
+        #[case] counter: SpendCounter,
+        #[case] holding: Option<f64>,
+        #[case] row: Option<f64>,
+        #[case] fallback_spend: f64,
+        #[case] warmed: Option<f64>,
+    ) {
+        let server = server.await;
+        let store = store(&server);
+        if let Some(spend) = holding {
+            held(&store, &counter, spend).await;
+        }
+        let reader = SpendReader::new(store, Rows::holding(&counter, row));
+
+        reader.warm(&counter, fallback_spend).await.unwrap();
+
+        assert_eq!(in_redis(&server, &counter).await, warmed);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_warm_counter_is_kept_in_memory_for_when_redis_cannot_answer(
+        #[future] server: RedisServer,
+    ) {
+        let server = server.await;
+        held(&store(&server), &team(), 2.0).await;
+        let reader = SpendReader::new(store(&server), Rows::holding(&team(), None));
+        reader.warm(&team(), 0.0).await.unwrap();
+        server.stop().await.unwrap();
+
+        assert_eq!(reader.current(&team(), 0.0, None).await, 2.0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_warm_redis_cannot_take_fails(#[future] server: RedisServer) {
+        let server = server.await;
+        let reader = SpendReader::new(store(&server), Rows::holding(&team(), None));
+        server.stop().await.unwrap();
+
+        assert!(reader.warm(&team(), 3.0).await.is_err());
     }
 
     #[rstest]

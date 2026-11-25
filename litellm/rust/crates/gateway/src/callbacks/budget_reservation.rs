@@ -10,11 +10,15 @@
 //! did, as Python's failure hook and `release_budget_reservation_on_cancel` do. Accepted
 //! difference: the provider counts as reached once the pre-call hook ends, before routing.
 //!
-//! Each counter is read through `SpendReader`, as `get_current_spend` reads it: a cold one starts
-//! from the spend its row holds, and one that reads below its row is raised to it. What the call
-//! holds is what `admit` priced from the body the client sent, as Python prices it when it
-//! authenticates, and `admit` hands any call it cannot price to Python, so one reaching here
-//! unpriced is refused, never let through unbudgeted.
+//! Each counter is first warmed through `SpendReader`, as `_initialize_reservation_counters` runs
+//! `ensure_spend_counter_initialized`: a cold one is seeded from the spend its row holds, or raised
+//! to the spend its caller was authenticated with when it has no row, so concurrent calls charge it
+//! from the spend already made. A counter that cannot be warmed is dropped everywhere and not held.
+//! It is then read as `get_current_spend` reads it, raised to its row when it reads below.
+//!
+//! What the call holds is what `admit` priced from the body the client sent, as Python prices it
+//! when it authenticates, and `admit` hands any call it cannot price to Python, so one reaching
+//! here unpriced is refused, never let through unbudgeted.
 
 use std::sync::Arc;
 
@@ -219,6 +223,41 @@ impl Reserver {
         }
     }
 
+    /// The counters that warmed, in order. One that did not is dropped everywhere and skipped, as
+    /// `_reservation_counter_loaded` skips it when budget enforcement is not fail closed.
+    async fn warmed(&self, counters: &[PlannedCounter]) -> Vec<PlannedCounter> {
+        let warmed = join_all(
+            counters
+                .iter()
+                .map(async |planned| self.warm(planned).await),
+        )
+        .await;
+        counters
+            .iter()
+            .zip(warmed)
+            .filter_map(|(planned, warmed)| warmed.then(|| planned.clone()))
+            .collect()
+    }
+
+    async fn warm(&self, planned: &PlannedCounter) -> bool {
+        let Ok(counter) = SpendCounter::parse(&planned.counter_key) else {
+            return true;
+        };
+        let Err(error) = self.spend.warm(&counter, planned.fallback_spend).await else {
+            return true;
+        };
+        tracing::warn!(
+            counter = planned.counter_key,
+            %error,
+            "Skipping budget reservation because spend counter reservation failed"
+        );
+        self.budgets
+            .store()
+            .invalidate(std::slice::from_ref(&counter))
+            .await;
+        false
+    }
+
     /// What each counter holds, checked against its budget as the proxy's authentication checks
     /// it before the reservation.
     async fn observed(&self, counters: &[PlannedCounter]) -> Vec<BudgetCounterSpend> {
@@ -247,8 +286,12 @@ impl Reserver {
             Ok(None) => return Ok(None),
             Err(Unheld) => return Ok(Some(Verdict::Abort(Abort::new(500, UNHELD)))),
         };
+        let counters = self.warmed(&holding.counters).await;
+        if counters.is_empty() {
+            return Ok(None);
+        }
         let plan = BudgetPlan {
-            counters: Some(holding.counters.iter().map(plan_counter).collect()),
+            counters: Some(counters.iter().map(plan_counter).collect()),
             reservation_cost: Some(hold.reservation_cost),
             input_cost: Some(hold.input_cost),
             input_tokens: Some(hold.input_tokens),
@@ -256,7 +299,7 @@ impl Reserver {
             status_code: Some(BUDGET_EXCEEDED_STATUS),
             ..BudgetPlan::default()
         };
-        let observed = self.observed(&holding.counters).await;
+        let observed = self.observed(&counters).await;
         match self.budgets.admit(plan, &observed).await {
             Ok(Admission::Skipped) => Ok(None),
             Ok(Admission::Held { reservation }) => {
@@ -342,11 +385,16 @@ mod tests {
     }
 
     fn key(max_budget: f64) -> Authenticated<NativeRows> {
+        spent_key(max_budget, 0.0)
+    }
+
+    /// A key authenticated with `spend` already made against `max_budget`.
+    fn spent_key(max_budget: f64, spend: f64) -> Authenticated<NativeRows> {
         Authenticated::from(Caller {
             credential: Credential::Key {
                 key: Key::stored("hash", None).with_budget(Budget {
                     max: Some(max_budget),
-                    spend: 0.0,
+                    spend,
                 }),
             },
             belongs: Belongs::nobody(),
@@ -515,6 +563,49 @@ mod tests {
                 reserved.counter
             ),
             (Some(HELD), Some(2.0 + HELD))
+        );
+    }
+
+    /// `ensure_spend_counter_initialized` raises a cold counter whose key has no row to the spend
+    /// the key was authenticated with before any call is held on it, so two calls racing on it
+    /// cannot both fit a budget only one of them fits.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_calls_on_a_cold_counter_without_a_row_start_from_the_keys_spend() {
+        let identity = spent_key(1.0 + HELD, 1.0);
+        let (store, reserver) = reserver(None, None).await;
+        let admitted = admitted("held-model").await;
+        let both_reserved = tokio::sync::Barrier::new(2);
+        let call = || {
+            record::scope(CallRecord::new(), async {
+                let holding = reserver.holding(&identity, admitted.as_ref());
+                let verdict = reserver.pre_call(&holding).await.unwrap();
+                both_reserved.wait().await;
+                let held = counted(&store);
+                let outcome = match verdict {
+                    Some(Verdict::Patch(_)) => "held",
+                    Some(Verdict::Abort(abort)) => match refusal(&abort) {
+                        Some(refused) if refused.kind.as_deref() == Some(BUDGET_EXCEEDED) => {
+                            "refused"
+                        }
+                        _ => "aborted",
+                    },
+                    None => "skipped",
+                };
+                (outcome, held)
+            })
+        };
+
+        let ((first, held), (second, _)) = tokio::join!(call(), call());
+
+        let mut outcomes = [first, second];
+        outcomes.sort_unstable();
+        assert_eq!(
+            (
+                outcomes,
+                held.is_some_and(|spend| (spend - (1.0 + HELD)).abs() < 1e-12),
+            ),
+            (["held", "refused"], true)
         );
     }
 
