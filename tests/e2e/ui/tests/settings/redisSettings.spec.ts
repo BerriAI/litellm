@@ -34,23 +34,27 @@ test.describe("Redis settings", () => {
     }) => {
       const savePath = `${rootPath()}${path}`;
       const testPath = `${savePath}/test`;
-      await page.route(
-        (url) => url.pathname === savePath,
-        (route) =>
-          route.request().method() === "GET"
-            ? route.fulfill({ json: prefill })
-            : route.continue(),
-      );
       const writes: string[] = [];
-      page.on("request", (request) => {
-        const pathname = new URL(request.url()).pathname;
-        if (
-          request.method() === "POST" &&
-          (pathname === savePath || pathname === testPath)
-        ) {
+      let allowTestConnection = false;
+      await page.route(
+        (url) => url.pathname === savePath || url.pathname === testPath,
+        (route) => {
+          const request = route.request();
+          const pathname = new URL(request.url()).pathname;
+          if (request.method() === "GET" && pathname === savePath) {
+            return route.fulfill({ json: prefill });
+          }
+          if (request.method() !== "POST") return route.continue();
+
           writes.push(pathname);
-        }
-      });
+          if (pathname === testPath && allowTestConnection) {
+            return route.fulfill({
+              json: { status: "error", error: "Redis connection refused" },
+            });
+          }
+          return route.abort();
+        },
+      );
 
       await page.goto(`${rootPath()}/ui/caching/`);
       await page.getByRole("tab", { name: tab, exact: true }).click();
@@ -61,9 +65,7 @@ test.describe("Redis settings", () => {
       await page
         .getByRole("option", { name: "Node (Single Instance)", exact: true })
         .click();
-      await panel
-        .getByRole("textbox", { name: "Redis URL", exact: true })
-        .fill("");
+      await panel.getByLabel("Redis URL", { exact: true }).fill("");
       await panel
         .getByRole("textbox", { name: "Host", exact: true })
         .fill("127.0.0.1");
@@ -81,8 +83,10 @@ test.describe("Redis settings", () => {
       await panel
         .getByRole("button", { name: "Save Changes", exact: true })
         .click();
+      expect(writes).toEqual([]);
 
       await port.fill("1");
+      allowTestConnection = true;
       const response = page.waitForResponse(
         (result) =>
           result.request().method() === "POST" &&

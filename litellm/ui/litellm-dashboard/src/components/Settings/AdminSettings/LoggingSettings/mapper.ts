@@ -26,7 +26,7 @@ export const countDisplay = (raw: string): string => {
 export const storedValuesToForm = (
   storedValue: (name: keyof LoggingSettingsFormValues) => unknown,
 ): LoggingSettingsFormValues => ({
-  store_prompts_in_spend_logs: (storedValue("store_prompts_in_spend_logs") ?? false) as boolean,
+  store_prompts_in_spend_logs: storedValue("store_prompts_in_spend_logs") ?? false,
   maximum_spend_logs_retention_period: String(storedValue("maximum_spend_logs_retention_period") ?? ""),
   maximum_spend_logs_cleanup_batch_size: String(storedValue("maximum_spend_logs_cleanup_batch_size") ?? ""),
   maximum_spend_logs_cleanup_max_batches: String(storedValue("maximum_spend_logs_cleanup_max_batches") ?? ""),
@@ -42,7 +42,7 @@ export const formToPayload = (formValues: LoggingSettingsFormValues): StoreReque
   const batchTimeout = duration(formValues.maximum_spend_logs_cleanup_batch_timeout);
 
   return {
-    store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
+    store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs as boolean,
     ...(retentionPeriod !== undefined && { maximum_spend_logs_retention_period: retentionPeriod }),
     ...(batchSize !== undefined && { maximum_spend_logs_cleanup_batch_size: batchSize }),
     ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
