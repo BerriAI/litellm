@@ -121,6 +121,7 @@ export interface KeyResponse {
     user_alias: string | null;
     max_budget?: number | null;
     budget_duration?: string | null;
+    spend?: number | null;
   };
   created_by_user?: {
     user_id: string;

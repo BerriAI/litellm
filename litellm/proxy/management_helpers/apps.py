@@ -1,10 +1,11 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     TypeVar,
     cast,  # noqa: TID251  # Prisma proxies implement the generated client surface
 )
@@ -15,7 +16,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm.constants import AUTH_OBJECTS_TARGET
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -23,6 +24,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchyStore,
     PrismaRecord,
     budget_group_ids,
+    default_budget_group_id,
     effective_member_budget,
     organization_budget_group_ids,
     override_expiry,
@@ -30,10 +32,12 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_datetime,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
+from litellm.types.proxy.management_endpoints.app_groups import AppGroup, AppGroupBudgetPut, AppGroupOrganization
 from litellm.types.proxy.management_endpoints.apps import (
     App,
     AppCreate,
@@ -85,11 +89,24 @@ class _ResourceRecord(BaseModel):
     token: str | None = Field(default=None, repr=False)
 
 
+class _CachedRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    values: Mapping[str, object] | None
+
+
+class _SharedProfiles(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ids: tuple[str, ...]
+
+
 _DEFINITION_PARAM: Final = "customer_app_definition"
-_DEFINITION_CACHE_KEY: Final = "customer_app_definition:global"
+_DEFINITION: Final = AuthObject.customer_app_definition()
 _PARENT_ORG_ID: Final = TypeAdapter(str)
-AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember)
-AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
+AppEntity = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
+AppAssociation = TypeVar("AppAssociation", AppOrganization, AppMember)
+CachedModel = TypeVar("CachedModel", bound=BaseModel)
 
 
 class AppRepository(PrismaTableRepository[PrismaRecord]):
@@ -159,6 +176,20 @@ class _AssociationBudget:
     effective: Budget | None
 
 
+def _dumped_fields(values: Mapping[str, object]) -> Mapping[str, object]:
+    return values
+
+
+def app_budget_selection(
+    data: AppCreate | AppPatch | AppOrganizationPut | AppMemberPut | AppGroupBudgetPut,
+    field: Literal["budget", "default_customer_member_budget", "customer_member_budget"] = "budget",
+) -> MemberPatch:
+    selected: Final = _dumped_fields(data.model_dump(include={field, f"{field}_id"}, exclude_unset=True))
+    return MemberPatch.model_validate(
+        {"budget" if name == field else "budget_id": value for name, value in selected.items()}
+    )
+
+
 def _association_base(current: AppAssociation | None, data: AppOrganizationPut | AppMemberPut) -> AppAssociation | None:
     patch: Final = MemberPatch.model_validate(
         data.model_dump(
@@ -179,10 +210,16 @@ def _association_base(current: AppAssociation | None, data: AppOrganizationPut |
 
 
 def _app_budget_identity(
-    entity: App | AppOrganization | AppMember,
+    entity: App | AppOrganization | AppMember | AppGroup | AppGroupOrganization,
 ) -> _AppBudgetIdentity:
     if isinstance(entity, App):
         return _AppBudgetIdentity("app", entity.app_id, entity.budget)
+    if isinstance(entity, AppGroup):
+        return _AppBudgetIdentity("app_group", entity.app_group_id, entity.budget)
+    if isinstance(entity, AppGroupOrganization):
+        return _AppBudgetIdentity(
+            "app_group_customer_org", app_scope_id(entity.app_group_id, entity.customer_org_id), entity.budget
+        )
     if isinstance(entity, AppOrganization):
         return _AppBudgetIdentity(
             "app_customer_org",
@@ -202,11 +239,15 @@ class AppStore:
         db: object,
         now: datetime | None = None,
         cache: "UserApiKeyCache | None" = None,
+        *,
+        cache_reads: bool = True,
     ) -> None:
         self.db: Final = cast("Prisma", db)  # cast-ok: Prisma wrappers share the generated client API
         self.now: Final = now or datetime.now(timezone.utc)
         self.cache: Final = cache
+        self.cache_reads: Final = cache_reads
         self._definition_cache_dirty = False
+        self._dirty_cache_keys: tuple[str, ...] = ()
         connection: Final = _Connection(db)
         self.apps: Final = AppRepository(connection).table
         self.organizations: Final = AppCustomerOrganizationRepository(connection).table
@@ -216,6 +257,36 @@ class AppStore:
         self.projects: Final = _ProjectRepository(connection).table
         self.keys: Final = _KeyRepository(connection).table
         self.customers: Final = CustomerHierarchyStore(self.db, self.now, premium_user=True)
+
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cached(
+        self, key: AuthObject, model: type[CachedModel], load: Callable[[], Awaitable[CachedModel]]
+    ) -> CachedModel:
+        if self.cache is None or not self.cache_reads:
+            return await load()
+        cached: Final = await self.cache.async_get_cache(key=key, model_type=model)
+        if cached is not None:
+            return cached
+        lease: Final = await self.cache.lease(key)
+        value: Final = await load()
+        if not isinstance(value, _CachedRow) or value.values is not None:
+            _ = await self.cache.async_set_leased(lease, value, get_management_object_ttl(self.cache))
+        return value
+
+    async def cached_row(self, key: AuthObject, load: Callable[[], Awaitable[PrismaRecord | None]]) -> _CachedRow:
+        async def read() -> _CachedRow:
+            row: Final = await load()
+            return _CachedRow(values=row.model_dump() if row is not None else None)
+
+        return await self.cached(key, _CachedRow, read)
+
+    async def invalidate_cache(self) -> None:
+        await self.invalidate_definition_cache()
+        if self.cache is not None:
+            await evict_and_broadcast(
+                tuple(dict.fromkeys((*self._dirty_cache_keys, *self.customers.auth_cache_keys))), self.cache
+            )
+        self._dirty_cache_keys = ()
 
     @staticmethod
     def definition_state(row: PrismaRecord | None) -> _DefinitionState:
@@ -230,11 +301,11 @@ class AppStore:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def definition(self) -> AppDefinition:
-        if self.cache is not None:
-            cached: Final = await self.cache.async_get_cache(key=_DEFINITION_CACHE_KEY, model_type=AppDefinition)
+        if self.cache is not None and self.cache_reads:
+            cached: Final = await self.cache.async_get_cache(key=_DEFINITION, model_type=AppDefinition)
             if cached is not None:
                 return cached
-            lease: Final = await self.cache.lease(_DEFINITION_CACHE_KEY)
+            lease: Final = await self.cache.lease(_DEFINITION)
             definition: Final = await self._read_definition()
             _ = await self.cache.async_set_leased(lease, definition, get_management_object_ttl(self.cache))
             return definition
@@ -254,7 +325,7 @@ class AppStore:
             return
         self._definition_cache_dirty = False
         if self.cache is not None:
-            await evict_and_broadcast((_DEFINITION_CACHE_KEY,), self.cache)
+            await evict_and_broadcast((_DEFINITION.key,), self.cache)
 
     async def lock_definition(self) -> _DefinitionState:
         from prisma import Json
@@ -342,8 +413,16 @@ class AppStore:
     async def key_resource_id(self, token_hash: str | None) -> str | None:
         if token_hash is None:
             return None
-        row: Final = await self.keys.find_unique(where={"token": token_hash})
-        return await self.ensure_key_id(_ResourceRecord.model_validate(row.model_dump())) if row is not None else None
+
+        async def read() -> _CachedRow:
+            row: Final = await self.keys.find_unique(where={"token": token_hash})
+            key_id: Final = (
+                await self.ensure_key_id(_ResourceRecord.model_validate(row.model_dump())) if row is not None else None
+            )
+            return _CachedRow(values={"key_id": key_id} if key_id is not None else None)
+
+        cached: Final = await self.cached(AuthObject.customer_app_key_resource(token_hash), _CachedRow, read)
+        return _ResourceRecord.model_validate(cached.values).key_id if cached.values is not None else None
 
     async def resource(self, resource_type: AppResourceType, resource_id: str) -> AppResource | AppFailure:
         table, identity = self.resource_table(resource_type)
@@ -380,9 +459,12 @@ class AppStore:
     async def association_budget_state(self, budget_id: str | None) -> _AssociationBudget:
         if budget_id is None:
             return _AssociationBudget(None, None)
-        row: Final = await self.customers.budgets.find_unique(where={"budget_id": budget_id})
-        values: Final = row.model_dump() if row is not None else None
-        return _AssociationBudget(related_budget(values), related_budget(values, self.now))
+
+        async def read() -> PrismaRecord | None:
+            return await self.customers.budgets.find_unique(where={"budget_id": budget_id})
+
+        row: Final = await self.cached_row(AuthObject.customer_app_budget(budget_id), read)
+        return _AssociationBudget(related_budget(row.values), related_budget(row.values, self.now))
 
     async def with_budget_usage(self, entity: AppEntity) -> AppEntity:
         identity: Final = _app_budget_identity(entity)
@@ -398,29 +480,47 @@ class AppStore:
         return entity.model_copy(update={"budget_usage": usage})
 
     async def shared_profile_ids(self) -> frozenset[str]:
-        return frozenset(
-            (
-                *await budget_group_ids(self.customers.config, BudgetGroupScope.APP_ORGANIZATION),
-                *await organization_budget_group_ids(self.customers.config),
+        async def read() -> _SharedProfiles:
+            return _SharedProfiles(
+                ids=(
+                    *await budget_group_ids(self.customers.config, BudgetGroupScope.APP_ORGANIZATION),
+                    *await organization_budget_group_ids(self.customers.config),
+                )
             )
-        )
 
-    async def valid_profile(self, budget_id: str | None) -> bool:
+        return frozenset((await self.cached(AuthObject.customer_app_shared_profiles(), _SharedProfiles, read)).ids)
+
+    async def valid_profile(self, budget_id: str | None, scope: BudgetGroupScope | None = None) -> bool:
         if budget_id is None:
             return True
-        return budget_id in await self.shared_profile_ids() and await self.budget(budget_id) is not None
+        groups: Final = (
+            await budget_group_ids(self.customers.config, scope)
+            if scope is not None
+            else await self.shared_profile_ids()
+        )
+        return budget_id in groups and await self.budget(budget_id) is not None
+
+    async def validate_member_profile(self, budget_id: str | None) -> AppFailure | None:
+        if budget_id is None:
+            return None
+        await self.customers.lock_customer_identities()
+        if not await self.valid_profile(budget_id, BudgetGroupScope.APP_MEMBER):
+            return AppFailure(422, "The member budget must be an existing app × customer member budget group.")
+        return None
 
     async def validate_settings(self, data: AppPatch | AppCreate) -> AppFailure | None:
-        if data.budget_id is not None or data.default_tier_budget_id is not None:
+        if data.app_group_id is not None:
+            from litellm.proxy.management_helpers.app_groups import AppGroupRepository
+
+            if await AppGroupRepository(self).table.find_unique(where={"app_group_id": data.app_group_id}) is None:
+                return AppFailure(404, "App group not found.")
+        if isinstance(data, AppCreate) or data.budget_id is not None or data.default_tier_budget_id is not None:
             await self.customers.lock_customer_identities()
         if not await self.valid_profile(data.default_tier_budget_id):
             return AppFailure(422, "The default profile must be an existing customer budget group.")
-        if data.budget_id is not None and (
-            data.budget_id not in await budget_group_ids(self.customers.config, BudgetGroupScope.APP)
-            or await self.budget(data.budget_id) is None
-        ):
+        if not await self.valid_profile(data.budget_id, BudgetGroupScope.APP):
             return AppFailure(422, "The app budget must be an existing overall-app budget group.")
-        return None
+        return await self.validate_member_profile(data.default_customer_member_budget_id)
 
     async def get(self, app_id: str) -> App | AppFailure:
         row: Final = await self.apps.find_unique(where={"app_id": app_id})
@@ -428,9 +528,13 @@ class AppStore:
             return AppFailure(404, "App not found.")
         return await self.response(row)
 
-    async def response(self, row: PrismaRecord) -> App:
+    async def response(self, row: PrismaRecord, resource_alias: str | None = None) -> App:
         app: Final = App.model_validate(row.model_dump())
-        resource: Final = await self.resource(app.resource_type, app.resource_id)
+        resource: Final = (
+            await self.resource(app.resource_type, app.resource_id)
+            if resource_alias is None
+            else AppResource(resource_type=app.resource_type, resource_id=app.resource_id, alias=resource_alias)
+        )
         return app.model_copy(
             update={
                 "alias": (resource.alias if isinstance(resource, AppResource) else app.resource_id),
@@ -439,16 +543,33 @@ class AppStore:
             }
         )
 
-    async def by_resource(self, resource_type: AppResourceType, resource_id: str) -> App | None:
-        row: Final = await self.apps.find_unique(
-            where={
-                "resource_type_resource_id": {
-                    "resource_type": resource_type.value,
-                    "resource_id": resource_id,
+    async def by_resource(
+        self, resource_type: AppResourceType, resource_id: str, resource_alias: str | None = None
+    ) -> App | None:
+        async def read() -> PrismaRecord | None:
+            row: Final = await self.apps.find_unique(
+                where={
+                    "resource_type_resource_id": {
+                        "resource_type": resource_type.value,
+                        "resource_id": resource_id,
+                    }
                 }
-            }
-        )
-        return await self.response(row) if row is not None else None
+            )
+            if row is None:
+                return None
+            app: Final = App.model_validate(row.model_dump())
+            if resource_alias is not None:
+                return app.model_copy(update={"alias": resource_alias})
+            resource: Final = await self.resource(resource_type, resource_id)
+            return app.model_copy(
+                update={"alias": resource.alias if isinstance(resource, AppResource) else resource_id}
+            )
+
+        row: Final = await self.cached_row(AuthObject.customer_app(resource_type.value, resource_id), read)
+        if row.values is None:
+            return None
+        app: Final = App.model_validate(row.values)
+        return await self.response(app, resource_alias if resource_alias is not None else app.alias)
 
     async def list(self, offset: int, limit: int, app_ids: frozenset[str] | None = None) -> tuple[App, ...]:
         definition: Final = await self.definition()
@@ -503,6 +624,7 @@ class AppStore:
                 "update": {},
             },
         )
+        self._dirty_cache_keys += (AuthObject.customer_app(definition.resource_type.value, data.resource_id).key,)
         await self.config.update(
             where={"param_name": _DEFINITION_PARAM},
             data={
@@ -517,31 +639,49 @@ class AppStore:
         )
         return await self.response(row)
 
-    async def overall_budget_id(self, current_id: str | None, data: AppPatch | AppCreate, actor: str) -> str | None:
+    async def linked_budget_id(
+        self,
+        current_id: str | None,
+        data: MemberPatch,
+        actor: str,
+        scope: BudgetGroupScope,
+        inherited_id: str | None = None,
+        *,
+        apply_default: bool = False,
+    ) -> str | None:
         if data.budget_id is not None:
             return data.budget_id
         if "budget" not in data.model_fields_set:
-            return data.budget_id if "budget_id" in data.model_fields_set else current_id
+            if "budget_id" in data.model_fields_set:
+                return data.budget_id
+            return await default_budget_group_id(self.config, scope) if apply_default else current_id
         return await self.customers.private_budget_patch(
             current_id,
-            MemberPatch(budget=data.budget),
+            data,
             actor,
-            shared_ids=await budget_group_ids(self.customers.config, BudgetGroupScope.APP),
+            source_id=inherited_id,
+            shared_ids=(
+                *await budget_group_ids(self.customers.config, scope),
+                *((inherited_id,) if inherited_id is not None else ()),
+            ),
         )
 
     async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
-        budget_id: Final = await self.overall_budget_id(current.budget_id if current else None, data, actor)
-        member_id: Final = (
-            await self.customers.update_budget(
-                current.default_customer_member_budget_id if current else None,
-                data.default_customer_member_budget,
-                actor,
-            )
-            if data.default_customer_member_budget is not None
-            else None
+        budget_id: Final = await self.linked_budget_id(
+            current.budget_id if current else None,
+            app_budget_selection(data),
+            actor,
+            BudgetGroupScope.APP,
+            apply_default=current is None,
+        )
+        member_id: Final = await self.linked_budget_id(
+            current.default_customer_member_budget_id if current else None,
+            app_budget_selection(data, "default_customer_member_budget"),
+            actor,
+            BudgetGroupScope.APP_MEMBER,
         )
         return {
-            **({"budget_id": budget_id} if {"budget", "budget_id"} & data.model_fields_set else {}),
+            **({"budget_id": budget_id} if current is None or {"budget", "budget_id"} & data.model_fields_set else {}),
             **(
                 {"default_tier_budget_id": data.default_tier_budget_id}
                 if "default_tier_budget_id" in data.model_fields_set
@@ -549,9 +689,10 @@ class AppStore:
             ),
             **(
                 {"default_customer_member_budget_id": member_id}
-                if "default_customer_member_budget" in data.model_fields_set
+                if {"default_customer_member_budget", "default_customer_member_budget_id"} & data.model_fields_set
                 else {}
             ),
+            **({"app_group_id": data.app_group_id} if "app_group_id" in data.model_fields_set else {}),
             **({"auto_create_customers": data.auto_create_customers} if data.auto_create_customers is not None else {}),
             **({"customer_margin": data.customer_margin} if "customer_margin" in data.model_fields_set else {}),
             "updated_by": actor,
@@ -582,6 +723,7 @@ class AppStore:
         if row is None:
             return AppFailure(404, "App not found.")
         updated: Final = await self.response(row)
+        self._dirty_cache_keys += (AuthObject.customer_app(app.resource_type.value, app.resource_id).key,)
         await self.customers.delete_released_budget(app.budget_id, updated.budget_id)
         await self.customers.delete_released_budget(
             app.default_customer_member_budget_id,
@@ -597,16 +739,20 @@ class AppStore:
 
     async def organization(self, app: App, customer_org_id: str) -> AppOrganization:
         identity: Final = {"app_id": app.app_id, "customer_org_id": customer_org_id}
-        existing: Final = await self.organizations.find_unique(where={"app_id_customer_org_id": identity})
-        row: Final = (
-            existing
-            if existing is not None
-            else await self.organizations.upsert(
+
+        async def read() -> PrismaRecord:
+            existing: Final = await self.organizations.find_unique(where={"app_id_customer_org_id": identity})
+            if existing is not None:
+                return existing
+            return await self.organizations.upsert(
                 where={"app_id_customer_org_id": identity},
                 data={"create": identity, "update": {"app_id": app.app_id}},
             )
+
+        row: Final = await self.cached_row(
+            AuthObject.customer_app_association("organization", app.app_id, customer_org_id), read
         )
-        return await self.organization_response(app, row)
+        return await self.organization_response(app, AppOrganization.model_validate(row.values))
 
     async def organization_response(self, app: App, row: PrismaRecord) -> AppOrganization:
         org: Final = AppOrganization.model_validate(row.model_dump())
@@ -675,6 +821,9 @@ class AppStore:
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
+        invalid_member: Final = await self.validate_member_profile(data.customer_member_budget_id)
+        if invalid_member is not None:
+            return invalid_member
         selected: Final = data.budget_id or data.tier_budget_id
         if not await self.valid_profile(selected):
             return AppFailure(
@@ -703,16 +852,12 @@ class AppStore:
             else current_id
         )
         override: Final = await self.association_override(current, data, actor)
-        member: Final = (
-            await self.customers.update_budget(
-                current.customer_member_budget_id if current else None,
-                data.customer_member_budget,
-                actor,
-            )
-            if data.customer_member_budget is not None
-            else current.customer_member_budget_id
-            if current and "customer_member_budget" not in data.model_fields_set
-            else None
+        member: Final = await self.linked_budget_id(
+            current.customer_member_budget_id if current else None,
+            app_budget_selection(data, "customer_member_budget"),
+            actor,
+            BudgetGroupScope.APP_MEMBER,
+            app.default_customer_member_budget_id,
         )
         fields: Final = {
             "tier_budget_id": None,
@@ -724,6 +869,7 @@ class AppStore:
             where={"app_id_customer_org_id": identity},
             data={"create": {**identity, **fields}, "update": fields},
         )
+        self._dirty_cache_keys += (AuthObject.customer_app_association("organization", app_id, customer_org_id).key,)
         if original is not None:
             await self.customers.delete_released_budget(original.budget_id or original.tier_budget_id, base_id)
             await self.customers.delete_released_budget(original.budget_override_id, override.budget_override_id)
@@ -735,16 +881,20 @@ class AppStore:
             "app_id": app.app_id,
             "customer_member_id": customer_member_id,
         }
-        existing: Final = await self.members.find_unique(where={"app_id_customer_member_id": identity})
-        row: Final = (
-            existing
-            if existing is not None
-            else await self.members.upsert(
+
+        async def read() -> PrismaRecord:
+            existing: Final = await self.members.find_unique(where={"app_id_customer_member_id": identity})
+            if existing is not None:
+                return existing
+            return await self.members.upsert(
                 where={"app_id_customer_member_id": identity},
                 data={"create": identity, "update": {"app_id": app.app_id}},
             )
+
+        row: Final = await self.cached_row(
+            AuthObject.customer_app_association("member", app.app_id, customer_member_id), read
         )
-        member: Final = AppMember.model_validate(row.model_dump())
+        member: Final = AppMember.model_validate(row.values)
         return await self.member_response(app, member, org)
 
     async def member_response(self, app: App, member: AppMember, organization: AppOrganization | None) -> AppMember:
@@ -818,6 +968,9 @@ class AppStore:
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
+        invalid_member: Final = await self.validate_member_profile(data.budget_id)
+        if invalid_member is not None:
+            return invalid_member
         customer: Final = await self.customers.members.find_unique(where={"customer_member_id": customer_member_id})
         if customer is None:
             return AppFailure(404, "Customer member not found.")
@@ -834,12 +987,12 @@ class AppStore:
         current: Final = _association_base(original, data)
         organization: Final = await self.organization(app, parent)
         inherited_id: Final = organization.customer_member_budget_id or app.default_customer_member_budget_id
-        base_id: Final = (
-            await self.association_budget(current.budget_id if current else None, inherited_id, data.budget, actor)
-            if "budget" in data.model_fields_set
-            else current.budget_id
-            if current
-            else None
+        base_id: Final = await self.linked_budget_id(
+            current.budget_id if current else None,
+            app_budget_selection(data),
+            actor,
+            BudgetGroupScope.APP_MEMBER,
+            inherited_id,
         )
         override: Final = await self.association_override(current, data, actor)
         fields: Final = {"budget_id": base_id, **override.fields()}
@@ -850,6 +1003,7 @@ class AppStore:
                 "update": fields,
             },
         )
+        self._dirty_cache_keys += (AuthObject.customer_app_association("member", app_id, customer_member_id).key,)
         if original is not None:
             await self.customers.delete_released_budget(original.budget_id, base_id)
             await self.customers.delete_released_budget(original.budget_override_id, override.budget_override_id)

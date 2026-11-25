@@ -21,6 +21,7 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     UnrestrictedAgentAccess,
     accessible_agents,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentCaller
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
@@ -858,7 +859,7 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_TeamTable, LiteLLM_UserTable
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import verified_human_agent_grants
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     direct: Final = revoked == "direct-grant"
     grouped: Final = revoked == "access-group"
@@ -880,10 +881,10 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
         access_group_id="group", access_group_name="Group", access_agent_ids=["target"]
     )
     cache: Final = UserApiKeyCache()
-    cache.set_cache("human", human)
-    cache.set_cache("team_id:team", team)
-    cache.set_cache(object_permission_cache_key("grant"), permission)
-    cache.set_cache("access_group_id:group", group)
+    cache.set_cache(AuthObject.user("human"), human)
+    cache.set_cache(AuthObject.team("team"), team)
+    cache.set_cache(AuthObject.object_permission("grant"), permission)
+    cache.set_cache(AuthObject.access_group("group"), group)
     client: Final = MagicMock()
     users.writer = {"human": human.model_dump(mode="json")}
     stores.team.writer = {"team": team}
@@ -1076,7 +1077,7 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
     keys.rows["a" * 64] = _key_row(warm)
     stores.object_permission.writer["grant"] = permission
     cache: Final = UserApiKeyCache()
-    cache.set_cache("a" * 64, warm)
+    cache.set_cache(AuthObject.virtual_key("a" * 64), warm)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await AgentRequestHandler.is_agent_allowed("target", warm) is True
@@ -1198,8 +1199,8 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
     stores.object_permission.writer["caller-grant"] = team.object_permission
     stores.access_group.writer["actor-group"] = group
     cache: Final = UserApiKeyCache()
-    cache.set_cache("access_group_id:actor-group", group.model_copy(update={"access_agent_ids": ["target"]}))
-    cache.set_cache("team_id:caller-team", team.model_copy(update={"object_permission": permission}))
+    cache.set_cache(AuthObject.access_group("actor-group"), group.model_copy(update={"access_agent_ids": ["target"]}))
+    cache.set_cache(AuthObject.team("caller-team"), team.model_copy(update={"object_permission": permission}))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)

@@ -1,10 +1,5 @@
-use crate::cache::{CacheCall, PythonCache, Selection};
+use crate::cache::PythonCache;
 use litellm_host_python::{PythonHostCalls, PythonOwned};
-
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 
 use parking_lot::Mutex;
 
@@ -14,8 +9,8 @@ use litellm_host_python::{
     InvokeError, PythonBinding, effective_py_args, from_py, json_from_py, to_py,
 };
 use litellm_inference_messages::{
-    DecodingError, Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader,
-    UnsendableUrl, VertexShaping, litellm_params, messages_body,
+    DecodingError, Error, MessagesCall, MessagesHostCall, MessagesSettings, MessagesShaping,
+    UnencodableHeader, UnsendableUrl, VertexShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
@@ -25,7 +20,7 @@ use litellm_llms::{
     },
     base_llm::messages::context::MessagesModelCapabilities,
     bedrock::chat::invoke_handler::BedrockStreamRaise,
-    bedrock::claude_platform::messages::transformation::{
+    bedrock::messages::claude_platform::transformation::{
         is_claude_platform_route, is_missing_region, logged_model as claude_platform_logged_model,
     },
     bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},
@@ -43,8 +38,9 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use super::agentic::HookedRequest;
-use super::safeguards::{SafeguardsCall, SafeguardsHost};
-use super::transport::{HostedTransport, Selected, TransportCall, python_failure};
+use super::plan::MessagesPlan;
+use super::safeguards::SafeguardsHost;
+use super::transport::{HostedTransport, python_failure};
 use crate::{
     errors::{RequestMarker, raises_bad_request, route_failure},
     marshal::{
@@ -272,6 +268,55 @@ fn bedrock_litellm_params<'py>(
     Ok(extra)
 }
 
+fn bedrock_session_identity<'py>(
+    params: &mut LitellmParams,
+    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> PyResult<()> {
+    use litellm_llms::bedrock::session_identity::{
+        REQUIRE_SESSION_ATTRIBUTION, SessionIdentity, session_identity,
+    };
+
+    let fields = |name| -> PyResult<Vec<String>> {
+        global(name)?
+            .filter(|value| !value.is_none())
+            .map(|value| value.extract())
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let source = |name| {
+        params
+            .extra
+            .get(name)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_owned())))
+            .collect()
+    };
+    let identity = SessionIdentity {
+        tag_fields: fields("bedrock_session_tag_fields")?,
+        name_fields: fields("bedrock_session_name_fields")?,
+        metadata: source("metadata"),
+        litellm_metadata: source("litellm_metadata"),
+    };
+    let aws = session_identity(&params.aws, &identity, env);
+    let derived_name = params.aws.aws_session_name.is_none()
+        && env("AWS_SESSION_NAME").is_none()
+        && aws.aws_session_name.is_some();
+    params.extra = params
+        .extra
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .chain(std::iter::once((
+            REQUIRE_SESSION_ATTRIBUTION.to_owned(),
+            Value::Bool(derived_name),
+        )))
+        .collect();
+    params.aws = aws;
+    Ok(())
+}
+
 /// Python's `vertex_request_label_fields()`: a non-empty string names one field, a list or tuple
 /// its string members. With fields set, the call's `litellm_metadata` goes along as the labels'
 /// source.
@@ -326,12 +371,12 @@ fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
     Ok(module_global(py, "drop_params")?.is_some_and(|value| value.is(PyBool::new(py, true))))
 }
 
-fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
+fn anthropic_auth_fields(py: Python<'_>) -> PyResult<&'static [String]> {
     static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
     FIELDS
         .get_or_try_init(py, || {
             py.import(ROUTE_HOST_MODULE)?
-                .getattr("WORKLOAD_IDENTITY_FIELDS")?
+                .getattr("ANTHROPIC_AUTH_FIELDS")?
                 .extract()
         })
         .map(Vec::as_slice)
@@ -458,48 +503,6 @@ fn azure_module_settings<'py>(
     })
 }
 
-pub(super) struct MessagesHosted;
-
-impl litellm_host::protocol::Protocol for MessagesHosted {
-    type Request = (MessagesCall, Selection, Selected);
-    type Response = <Messages as litellm_host::protocol::Protocol>::Response;
-    type Error = Error;
-    type HostCall = MessagesHostCall;
-    type Chunk = Bytes;
-    type StreamHead = MessagesStreamHead;
-
-    fn detached_drain(head: &MessagesStreamHead) -> Option<litellm_host::protocol::DetachedDrain> {
-        <Messages as litellm_host::protocol::Protocol>::detached_drain(head)
-    }
-
-    fn unobserved_tail(
-        head: &MessagesStreamHead,
-    ) -> Option<litellm_host::protocol::UnobservedTail> {
-        <Messages as litellm_host::protocol::Protocol>::unobserved_tail(head)
-    }
-}
-
-pub(super) enum MessagesHostCall {
-    Answer { stream: bool, reply: Reply<()> },
-    Intercept { stream: bool, reply: Reply<bool> },
-    Cache(CacheCall),
-    PreRequest(Reply<Result<MessagesCall, Error>>),
-    Safeguards(SafeguardsCall),
-    Transport(TransportCall),
-}
-
-impl From<CacheCall> for MessagesHostCall {
-    fn from(call: CacheCall) -> Self {
-        Self::Cache(call)
-    }
-}
-
-impl From<TransportCall> for MessagesHostCall {
-    fn from(call: TransportCall) -> Self {
-        Self::Transport(call)
-    }
-}
-
 enum Answered {
     Stream,
     Whole { verbatim: bool },
@@ -521,7 +524,6 @@ pub(super) struct MessagesPythonHost {
     cache: PythonCache,
     transport: HostedTransport,
     safeguards: SafeguardsHost,
-    classifies: Arc<AtomicBool>,
     awaiting_safeguards: bool,
     stream_cost_model: Option<String>,
     asynchronous: bool,
@@ -544,14 +546,12 @@ impl MessagesPythonHost {
         view: RequestView,
         asynchronous: bool,
         hooked_request: HookedRequest,
-        classifies: Arc<AtomicBool>,
     ) -> Self {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
             transport: HostedTransport::default(),
             safeguards: SafeguardsHost::default(),
-            classifies,
             awaiting_safeguards: false,
             stream_cost_model: None,
             asynchronous,
@@ -801,6 +801,8 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let base_model: Option<String> =
+            argument("base_model")?.and_then(|value| value.extract().ok());
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(
                 py,
@@ -815,6 +817,7 @@ impl MessagesPythonHost {
                         super::model_catalog::bedrock_capabilities(
                             py,
                             &model,
+                            base_model.as_deref(),
                             argument("model_info")?,
                         )?,
                         &requested,
@@ -835,17 +838,19 @@ impl MessagesPythonHost {
             vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
+                inject_stream_cost: settings.stream_cost_model.is_some()
+                    && settings.settings.pricing.is_some(),
                 presanitized,
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
-                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
+                base_model,
                 ..settings.settings
             },
         };
         let provider_fields: Vec<&str> = match custom_llm_provider.as_deref() {
-            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?
+            Some(FEDERATING_PROVIDER) => anthropic_auth_fields(py)?
                 .iter()
                 .map(String::as_str)
                 .collect(),
@@ -862,9 +867,15 @@ impl MessagesPythonHost {
             }
             (None, false) => Map::new(),
         };
-        let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
-            module_global(py, name)
-        })?;
+        let mut litellm_params =
+            project_litellm_params(provider_fields, settled, argument, |name| {
+                module_global(py, name)
+            })?;
+        if bedrock && let Ok(params) = litellm_params.as_mut() {
+            bedrock_session_identity(params, |name| module_global(py, name), &|name| {
+                std::env::var(name).ok()
+            })?;
+        }
         // Python's Claude Platform config falls back to `litellm.api_base` before its env bases.
         let api_base = match (api_base, claude_platform) {
             (None, true) => module_global(py, "api_base")?
@@ -1156,6 +1167,13 @@ impl MessagesPythonHost {
     }
 }
 
+fn runs_pre_request_hooks(py: Python<'_>) -> PyResult<bool> {
+    py.import(ROUTE_HOST_MODULE)?
+        .getattr("runs_pre_request_hooks")?
+        .call0()?
+        .extract()
+}
+
 /// The models a Mantle route's errors name: the one Python's handler logs the call under before
 /// its config transforms the request, and the model id that transform sends.
 struct MantleModels {
@@ -1186,7 +1204,10 @@ impl MessagesPythonHost {
         let settings = self
             .host_settings(py, arguments)
             .map_err(InvokeError::Python)?;
-        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.stream_cost_model = settings
+            .stream_cost_model
+            .clone()
+            .filter(|_| settings.settings.pricing.is_none());
         self.projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
@@ -1242,14 +1263,15 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = MessagesHosted;
+    type Protocol = Messages;
     type Failure = PyErr;
+    type Decoded = MessagesPlan;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection, Selected), InvokeError<Error>> {
+    ) -> Result<MessagesPlan, InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
@@ -1257,29 +1279,35 @@ impl PythonBinding for MessagesPythonHost {
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.call_method0("cached_function"))
             .map_err(InvokeError::Python)?;
-        let selection = crate::cache::configure(&mut self.cache, py, arguments, &function)
+        let cache = crate::cache::configure(&mut self.cache, py, arguments, &function)
             .map_err(InvokeError::Python)?;
         let effective = self
             .view
             .request(py)
             .and_then(|request| effective_py_args(request, arguments))
             .map_err(InvokeError::Python)?;
-        let classifies = self
+        let safeguards = self
             .safeguards
             .configure(py, &effective)
             .map_err(InvokeError::Python)?;
-        self.classifies.store(classifies, Ordering::Release);
         self.requested_stream = arguments
             .get_item("stream")
             .map_err(InvokeError::Python)?
             .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
         self.arguments = Some(arguments.clone().unbind());
-        let request = self.decode_call(py, arguments)?;
+        let call = self.decode_call(py, arguments)?;
         let transport = self
             .transport
             .select(py, self.view.request(py).map_err(InvokeError::Python)?)
             .map_err(InvokeError::Python)?;
-        Ok((request, selection, transport))
+        let pre_request_hooks = runs_pre_request_hooks(py).map_err(InvokeError::Python)?;
+        Ok(MessagesPlan {
+            call,
+            cache,
+            transport,
+            safeguards,
+            pre_request_hooks,
+        })
     }
 
     fn encode_response(
@@ -1364,7 +1392,7 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
+impl PythonHostCalls<Messages> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,
@@ -1471,6 +1499,51 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::metadata("metadata")]
+    #[case::litellm_metadata("litellm_metadata")]
+    fn bedrock_identity_settings_project_into_aws_credentials(#[case] bucket: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = to_py(
+                py,
+                &json!({
+                    "bedrock_session_tag_fields": ["user_api_key_alias"],
+                    "bedrock_session_name_fields": ["user_api_key_alias"],
+                }),
+            )
+            .unwrap()
+            .into_bound(py)
+            .cast_into::<PyDict>()
+            .unwrap();
+            let mut params = litellm_params(map(json!({
+                "model": "m", "aws_role_name": "arn:aws:iam::123456789012:role/invocation",
+                (bucket): {"user_api_key_alias": "agent"},
+            })))
+            .unwrap();
+            bedrock_session_identity(&mut params, |name| globals.get_item(name), &|_| None)
+                .unwrap();
+            assert_eq!(params.aws.aws_session_name.as_deref(), Some("agent"));
+            assert_eq!(
+                params
+                    .aws
+                    .aws_session_tags
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+                    .collect::<Vec<_>>(),
+                [("user_api_key_alias", "agent")]
+            );
+            assert_eq!(
+                params
+                    .extra
+                    .get(litellm_llms::bedrock::session_identity::REQUIRE_SESSION_ATTRIBUTION),
+                Some(&Value::Bool(true))
+            );
+        });
     }
 
     #[rstest]

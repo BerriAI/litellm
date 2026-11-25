@@ -8,6 +8,16 @@ export interface RelativeTimeOption {
   getValue: () => { from: Date; to: Date };
 }
 
+const monthToDate: RelativeTimeOption = {
+  label: "shared.dateRangePresets.monthToDate",
+  shortLabel: "MTD",
+  settingValue: "month_to_date",
+  getValue: () => ({
+    from: moment().startOf("month").toDate(),
+    to: moment().endOf("day").toDate(),
+  }),
+};
+
 export const relativeTimeOptions: readonly RelativeTimeOption[] = [
   {
     label: "shared.dateRangePresets.today",
@@ -36,15 +46,7 @@ export const relativeTimeOptions: readonly RelativeTimeOption[] = [
       to: moment().endOf("day").toDate(),
     }),
   },
-  {
-    label: "shared.dateRangePresets.monthToDate",
-    shortLabel: "MTD",
-    settingValue: "month_to_date",
-    getValue: () => ({
-      from: moment().startOf("month").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
+  monthToDate,
   {
     label: "shared.dateRangePresets.yearToDate",
     shortLabel: "YTD",
@@ -55,3 +57,6 @@ export const relativeTimeOptions: readonly RelativeTimeOption[] = [
     }),
   },
 ];
+
+export const getUsageTimeRangeOption = (setting: unknown): RelativeTimeOption =>
+  relativeTimeOptions.find((option) => option.settingValue === setting) ?? monthToDate;

@@ -1,18 +1,13 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import {
-  BUDGET_FIELDS,
   type CustomerHierarchyFields,
   type CustomerHierarchyEntity,
   type Organization,
 } from "./customerHierarchyForms";
-import type { Budget, BudgetEditorFields } from "./customerBudgetForm";
-import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
+import { BUDGET_EDITOR_FIELDS, type BudgetEditorFields } from "./customerBudgetForm";
 import CustomerOrganizationBudgetFields from "./CustomerOrganizationBudgetFields";
-import { CustomerBudgetFields } from "./CustomerBudgetFields";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
 
 interface Props {
@@ -22,7 +17,6 @@ interface Props {
   onChange: <K extends keyof CustomerHierarchyFields>(key: K, value: CustomerHierarchyFields[K]) => void;
   idPrefix: string;
   compact?: boolean;
-  original?: Budget | null;
 }
 
 export default function CustomerHierarchyBudgetFields({
@@ -32,7 +26,6 @@ export default function CustomerHierarchyBudgetFields({
   onChange: update,
   idPrefix,
   compact = false,
-  original,
 }: Props) {
   const { t } = useTranslation();
   if (kind === "organization") {
@@ -56,10 +49,8 @@ export default function CustomerHierarchyBudgetFields({
     update("budgetEnabled", false);
   };
   const updateCompact = (next: BudgetEditorFields) => {
-    for (const key of BUDGET_FIELDS) update(key, next[key]);
+    for (const key of BUDGET_EDITOR_FIELDS) update(key, next[key]);
     update("budgetEnabled", true);
-    update("allowedModels", next.allowedModels);
-    update("budgetWindows", next.budgetWindows);
   };
   return (
     <CustomerBudgetEditor
@@ -69,6 +60,7 @@ export default function CustomerHierarchyBudgetFields({
       description={t(
         kind === "member" ? "customerPortal.hierarchy.memberBudgetHint" : "customerPortal.hierarchy.budgetHint",
       )}
+      budget={{ fields, onChange: updateCompact, disabled: false }}
       source={
         kind !== "member"
           ? undefined
@@ -86,31 +78,6 @@ export default function CustomerHierarchyBudgetFields({
               onChange: selectSource,
             }
       }
-    >
-      {kind === "team" && (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id={`${idPrefix}-budget-enabled`}
-              checked={fields.budgetEnabled}
-              onCheckedChange={(checked) => update("budgetEnabled", checked)}
-            />
-            <Label htmlFor={`${idPrefix}-budget-enabled`}>{t("customerPortal.hierarchy.budgetEnabled")}</Label>
-          </div>
-        </div>
-      )}
-      {kind === "member" && (
-        <CustomerBudgetCompactFields
-          fields={fields}
-          original={original}
-          onChange={updateCompact}
-          disabled={false}
-          id={idPrefix}
-        />
-      )}
-      {kind === "team" && fields.budgetEnabled && (
-        <CustomerBudgetFields fields={fields} onChange={update} idPrefix={idPrefix} />
-      )}
-    </CustomerBudgetEditor>
+    />
   );
 }

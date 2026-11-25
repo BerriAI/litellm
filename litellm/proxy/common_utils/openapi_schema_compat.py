@@ -7,6 +7,7 @@ This module provides a compatibility layer to handle these cases gracefully.
 
 import contextvars
 import functools
+from collections.abc import Callable, Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -34,11 +35,11 @@ def _accept_unknown_types_while_building() -> None:
 
 
 def get_openapi_schema_with_compat(
-    get_openapi_func,
+    get_openapi_func: Callable[..., dict[str, object]],
     title: str,
     version: str,
     description: str,
-    routes: list,
+    routes: Sequence[object],
 ) -> dict[str, object]:
     """
     Generate OpenAPI schema with compatibility handling for FastAPI 0.120+.

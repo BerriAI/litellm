@@ -245,7 +245,7 @@ async def _install_model_rows(
         prisma_client: Final = proxy_server.prisma_client
         assert prisma_client is not None
         await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
-    proxy_server.proxy_config._add_deployment(db_models=rows)
+    proxy_server.proxy_config.add_deployments_and_refresh_model_info(db_models=rows)
     proxy_server.llm_model_list = router.registry().deployments()
     return "loaded"
 

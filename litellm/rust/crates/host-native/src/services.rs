@@ -1,4 +1,4 @@
-use std::{convert::Infallible, future::Future};
+use std::future::Future;
 
 use litellm_host::protocol::Protocol;
 
@@ -18,8 +18,11 @@ impl<P: Protocol, T: HostCallHandler<P> + ?Sized> HostCallHandler<P> for &T {
     }
 }
 
-impl<P: Protocol<HostCall = Infallible>> HostCallHandler<P> for () {
-    async fn handle_host_call(&self, call: Infallible) -> Result<(), P::Error> {
-        match call {}
+/// A host that serves no host calls. It drops each one unanswered, which the call sees as
+/// abandoned.
+impl<P: Protocol> HostCallHandler<P> for () {
+    async fn handle_host_call(&self, call: P::HostCall) -> Result<(), P::Error> {
+        drop(call);
+        Ok(())
     }
 }

@@ -3,7 +3,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from litellm.types.utils import (
     ARIZE_OTLP_PROTOCOLS,
@@ -33,7 +33,7 @@ def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
 
 def iter_client_callback_metadata_dicts(
     kwargs: Mapping[str, object],
-) -> Iterator[tuple[str, dict[str, Any]]]:
+) -> Iterator[tuple[str, dict[str, object]]]:
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
         nested: Final = litellm_params.get("metadata")
@@ -166,6 +166,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "newrelic_region",
     "signoz_ingestion_endpoint",
     "signoz_ingestion_key",
+    "mixpanel_project_token",
+    "mixpanel_region",
     "turn_off_message_logging",
 )
 
@@ -181,6 +183,8 @@ _request_blocked_callback_params: Final = frozenset(
         "newrelic_region",
         "signoz_ingestion_endpoint",
         "signoz_ingestion_key",
+        "mixpanel_project_token",
+        "mixpanel_region",
     }
 )
 
@@ -195,6 +199,8 @@ _trusted_overlay_callback_params: Final = frozenset(
         "newrelic_region",
         "signoz_ingestion_endpoint",
         "signoz_ingestion_key",
+        "mixpanel_project_token",
+        "mixpanel_region",
     }
 )
 

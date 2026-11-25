@@ -208,7 +208,7 @@ becomes the global, so server spans export to that backend too.
    can't wait for startup). It binds to the OTel global `ProxyTracerProvider`. Noisy
    non-LLM routes are excluded by default (`mount._DEFAULT_EXCLUDED_ROUTES`): health
    checks (`/health*`), the Prometheus scrape (`/metrics`), and static UI/docs assets
-   (`/litellm-asset-prefix`, `/_next`, `/ui`, `/swagger`, `/docs`, `/redoc`,
+   (`/litellm-asset-prefix`, `/_next`, `/ui`, `/swagger`, `/scalar`, `/docs`,
    `/openapi.json`, favicons, `/.well-known`) — so load-balancer polling, metric
    scrapes, and asset fetches don't flood traces. Entries are substring-matched, so
    `/metrics` also drops the `/model/metrics` admin-analytics spans. Set
@@ -309,7 +309,7 @@ nothing here imports outside it:
   global set with `excluded_services` in their own `callback_vars`; `"none"`
   means no datastore spans are excluded, while an omitted value follows the
   global set. These destination overrides require OTel v2 and are accepted only
-  on `langfuse_otel`, `arize`, `weave_otel` and `newrelic` callbacks.
+  on `langfuse_otel`, `arize`, `weave_otel`, `newrelic` and `mixpanel` callbacks.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys. A team or key destination can list extra `requester_metadata.<key>`
@@ -334,7 +334,7 @@ nothing here imports outside it:
   - `genai` — the canonical OpenTelemetry GenAI vocabulary, always present.
   - `legacy` — an additional vocabulary using the older semconv-ai / Traceloop
     attribute key names, for backends that read those.
-  - `openinference`, `langfuse`, `weave`, `langtrace` — vendor vocabularies.
+  - `openinference`, `langfuse`, `weave`, `langtrace`, `mixpanel` — vendor vocabularies.
   - `resolve_mappers(names)` turns config names into mapper instances.
 
 ### Plumbing (`plumbing/`)
