@@ -319,7 +319,9 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                             <input
                               type="text"
                               value={editingLink.displayName}
-                              onChange={(e) => editForm.setValue("link", { ...editingLink, displayName: e.target.value })}
+                              onChange={(e) =>
+                                editForm.setValue("link", { ...editingLink, displayName: e.target.value })
+                              }
                               className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
                           </TableCell>
