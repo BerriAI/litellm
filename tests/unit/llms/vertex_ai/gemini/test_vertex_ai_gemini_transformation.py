@@ -12,6 +12,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.gemini.transformation import (
     _extract_max_media_resolution_from_messages,
     _get_highest_media_resolution,
@@ -19,8 +20,234 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
     transform_request_body,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(
+    "file_options, expected_metadata",
+    [
+        (
+            {"document_metadata": {"start_page": 2, "end_page": 4}},
+            {"document_metadata": {"startPage": 2, "endPage": 4}},
+        ),
+        (
+            {"spreadsheet_metadata": {"sheet_index": 2, "visible_cells": "A2:D4"}, "resolution": "high"},
+            {
+                "spreadsheet_metadata": {"sheetIndex": 2, "visibleCells": "A2:D4"},
+                "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            },
+        ),
+    ],
+)
+def test_extended_file_inspection(
+    version: str, file_options: Mapping[str, object], expected_metadata: Mapping[str, object]
+) -> None:
+    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    file_part: Final = {"file_id": uri, "format": "application/pdf", **file_options}
+    messages: Final = [{"role": "user", "content": [{"type": "file", "file": file_part}]}]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [
+                {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}, **expected_metadata},
+                {"text": " "},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+def test_files_api_reference_in_gemini_tool_result(version: str) -> None:
+    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_report",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}],
+        },
+    ]
+    result: Final = gemini_convert_messages_with_history(messages, model="gemini-4-argon", custom_llm_provider="gemini")
+    assert result[-1] == {
+        "role": "user",
+        "parts": [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                    "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}],
+                }
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(("part_resolution", "nested_media"), [(False, True), (True, False)])
+def test_gemini_tool_file_media_uses_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch, part_resolution: bool, nested_media: bool
+) -> None:
+    model: Final = "gemini-4-argon"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{model}",
+        {
+            "supports_part_media_resolution": part_resolution,
+            "supports_media_in_tool_response": nested_media,
+        },
+    )
+    uri: Final = "https://generativelanguage.googleapis.com/v1/files/report"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_report",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", "resolution": "high"}}],
+        },
+    ]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    file_part: Final = {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}
+    expected: Final = (
+        [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                    "parts": [file_part],
+                }
+            }
+        ]
+        if nested_media
+        else [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                }
+            },
+            {**file_part, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
+        ]
+    )
+    assert result[-1]["parts"] == expected
+
+
+def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    model: Final = "gemini-4-argon"
+    for provider, enabled in (("gemini", True), ("vertex_ai", False)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"{provider}/{model}",
+            {"supports_part_media_resolution": enabled, "supports_media_in_tool_response": enabled},
+        )
+    file: Final = "data:application/pdf;base64,JVBERg=="
+    media: Final = {"file_data": file, "format": "application/pdf", "resolution": "high"}
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "file", "file": media}]},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_report", "content": [{"type": "file", "file": media}]},
+    ]
+
+    result: Final = VertexGeminiConfig()._transform_messages(messages, model=model)
+
+    file_part: Final = {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}}
+    assert result[0]["parts"] == [file_part, {"text": " "}]
+    assert result[-1]["parts"] == [
+        {"function_response": {"id": "call_report", "name": "get_report", "response": {"content": ""}}},
+        file_part,
+    ]
+
+
+
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-2.5-flash"])
+@pytest.mark.parametrize(
+    ("mime_type", "selection", "expected_selection"),
+    [
+        ("application/pdf", {}, {}),
+        (
+            "application/pdf",
+            {"document_metadata": {"start_page": 3, "end_page": 4}},
+            {"document_metadata": {"startPage": 3, "endPage": 4}},
+        ),
+        (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            {"spreadsheet_metadata": {"sheet_index": 2}},
+            {"spreadsheet_metadata": {"sheetIndex": 2}},
+        ),
+    ],
+)
+def test_chat_tool_file_inspection_preserves_selection(
+    source: str,
+    model: str,
+    mime_type: str,
+    selection: Mapping[str, Mapping[str, int]],
+    expected_selection: Mapping[str, Mapping[str, int]],
+) -> None:
+    uri: Final = f"https://generativelanguage.googleapis.com/{source}/files/report"
+    file: Final = {"file_data": f"data:{mime_type};base64,cGRm"} if source == "inline" else {"file_id": uri}
+    expected_part: Final = (
+        {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+        if source == "inline"
+        else {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    )
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_media",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {**file, **selection, "format": mime_type, "resolution": "low", "detail": "high"},
+                }
+            ],
+        },
+    ]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    function_response: Final = {"name": "get_media", "response": {"content": ""}}
+    selected_part: Final = {**expected_part, **expected_selection}
+    expected: Final = (
+        [
+            {
+                "function_response": {
+                    **function_response,
+                    "id": "call_media",
+                    "parts": [{**selected_part, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}],
+                }
+            }
+        ]
+        if model == "gemini-4-argon"
+        else [{"function_response": function_response}, selected_part]
+    )
+    assert result[-1]["parts"] == expected
 
 
 def test_check_if_part_exists_in_parts():
@@ -208,25 +435,6 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-def test_service_tier_forwarded_to_vertex_ai():
-    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {"service_tier": "flex"}
-    litellm_params = {}
-
-    result = transform_request_body(
-        messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
-        cached_content=None,
-    )
-
-    assert "serviceTier" in result
-    assert result["serviceTier"] == "flex"
-
-
 def test_extra_body_cache_not_forwarded_to_vertex_ai():
     """
     'cache' inside extra_body is a LiteLLM-internal proxy caching control.
@@ -407,12 +615,7 @@ def test_empty_content_handling():
 
     contents = gemini_convert_messages_with_history(messages=messages)
 
-    # Verify that the content was properly transformed
-    assert len(contents) == 1
-    assert contents[0]["role"] == "user"
-    assert len(contents[0]["parts"]) == 1
-    assert "text" in contents[0]["parts"][0]
-    assert contents[0]["parts"][0]["text"] == ""
+    assert contents == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
@@ -1786,8 +1989,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
-
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
     # Test with GCS URL

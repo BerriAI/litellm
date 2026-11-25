@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Sequence
 from typing import Final, Literal
 
 import httpx
@@ -15,6 +15,10 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     has_remote_media,
     inline_remote_media,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_system_message,
+    split_leading_system_run,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -24,10 +28,12 @@ from litellm.llms.openai.openai import AllMessageValues
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import GEMINI_FILES_API_URI_PREFIX, VertexAIError, get_supports_system_message, get_vertex_base_url
-from ..gemini.transformation import should_inline_remote_media
+from ..gemini.transformation import reject_system_message_videos, should_inline_remote_media
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    cached_block_ttl,
     cached_messages_end_on_supported_turn,
+    extract_ttl_from_cached_messages,
     reject_unusable_tool_call_arguments,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
@@ -36,6 +42,15 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+
+def _cache_key(
+    cached_messages: Sequence[AllMessageValues], ttl: str | None, tools: object, tool_choice: object, model: str
+) -> str:
+    key: Final = local_cache_obj.get_cache_key(
+        messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+    )
+    return key if ttl == extract_ttl_from_cached_messages(cached_messages) else f"{key}-{ttl}"
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -74,35 +89,26 @@ def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedC
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
-def _cached_prefix_covers_whole_request(non_cached_messages: Sequence[AllMessageValues]) -> bool:
-    if non_cached_messages:
+def _cached_prefix_covers_whole_request(uncached_messages: Sequence[AllMessageValues]) -> bool:
+    if not all(is_system_message(message) for message in uncached_messages):
         return False
     verbose_logger.debug(
-        "Vertex AI context caching: the cached prefix covers the whole request, and an explicit cache "
-        "only serves that exact prefix, so implicit caching serves it without a storage fee. "
-        "Skipping context caching."
+        "Vertex AI context caching: the cached prefix covers the whole request bar any trailing system "
+        "reminders, and an explicit cache only serves that exact prefix, so implicit caching serves it "
+        "without a storage fee. Skipping context caching."
     )
     return True
 
 
-def _is_conversation_turn(message: AllMessageValues, system_is_instruction: bool) -> bool:
-    return message["role"] != "system" or not system_is_instruction
-
-
-def _conversation_turns(
-    messages: Iterable[AllMessageValues], system_is_instruction: bool
-) -> Iterator[AllMessageValues]:
-    return (message for message in messages if _is_conversation_turn(message, system_is_instruction))
-
-
-def _with_conversation_turns(
-    messages: Sequence[AllMessageValues], turns: Iterable[AllMessageValues], system_is_instruction: bool
-) -> Sequence[AllMessageValues]:
-    remaining_turns: Final = iter(turns)
-    return [
-        next(remaining_turns) if _is_conversation_turn(message, system_is_instruction) else message
-        for message in messages
-    ]
+def _conversation_turns_start(
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> int:
+    if not get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider):
+        return 0
+    leading_system_run, _ = split_leading_system_run(cached_messages)
+    return len(leading_system_run)
 
 
 def _cached_turns_link_web_media(
@@ -111,9 +117,9 @@ def _cached_turns_link_web_media(
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> bool:
     should_inline: Final = should_inline_remote_media(custom_llm_provider)
-    system_is_instruction: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
+    turns_start: Final = _conversation_turns_start(cached_messages, model, custom_llm_provider)
     if not has_remote_media(
-        _conversation_turns(cached_messages, system_is_instruction),
+        cached_messages[turns_start:],
         lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIX),
     ):
         return False
@@ -128,26 +134,35 @@ def _inline_cached_turns(
     cached_messages: Sequence[AllMessageValues],
     model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-) -> Sequence[AllMessageValues]:
-    system_is_instruction: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
+) -> tuple[AllMessageValues, ...]:
+    turns_start: Final = _conversation_turns_start(cached_messages, model, custom_llm_provider)
     turns: Final = inline_remote_media(
-        list(_conversation_turns(cached_messages, system_is_instruction)),
-        should_inline=should_inline_remote_media(custom_llm_provider),
+        list(cached_messages[turns_start:]), should_inline=should_inline_remote_media(custom_llm_provider)
     )
-    return _with_conversation_turns(cached_messages, turns, system_is_instruction)
+    return (*cached_messages[:turns_start], *turns)
 
 
 async def _async_inline_cached_turns(
     cached_messages: Sequence[AllMessageValues],
     model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-) -> Sequence[AllMessageValues]:
-    system_is_instruction: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
+) -> tuple[AllMessageValues, ...]:
+    turns_start: Final = _conversation_turns_start(cached_messages, model, custom_llm_provider)
     turns: Final = await async_inline_remote_media(
-        list(_conversation_turns(cached_messages, system_is_instruction)),
-        should_inline=should_inline_remote_media(custom_llm_provider),
+        list(cached_messages[turns_start:]), should_inline=should_inline_remote_media(custom_llm_provider)
     )
-    return _with_conversation_turns(cached_messages, turns, system_is_instruction)
+    return (*cached_messages[:turns_start], *turns)
+
+
+def _reject_system_message_videos_gemini_would_drop(
+    messages: Sequence[AllMessageValues],
+    supports_system_message: bool,
+    drop_params: bool,
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> None:
+    if supports_system_message:
+        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -413,11 +428,16 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
+        supports_system_message: Final = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages, supports_system_message=supports_system_message
+        )
 
         if (
             len(cached_messages) == 0
-            or _cached_prefix_covers_whole_request(non_cached_messages)
+            or _cached_prefix_covers_whole_request(messages[len(cached_messages) :])
             or _cached_turns_link_web_media(cached_messages, model, custom_llm_provider)
         ):
             return messages, optional_params, None
@@ -445,6 +465,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
+        _reject_system_message_videos_gemini_would_drop(
+            messages, supports_system_message, drop_params, model, custom_llm_provider
+        )
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -481,9 +504,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
+        ttl: Final = cached_block_ttl(messages)
+        generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -505,6 +527,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             messages=list(_inline_cached_turns(cached_messages, model, custom_llm_provider)),
             cache_key=generated_cache_key,
+            ttl=ttl,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -578,11 +601,16 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
+        supports_system_message: Final = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages, supports_system_message=supports_system_message
+        )
 
         if (
             len(cached_messages) == 0
-            or _cached_prefix_covers_whole_request(non_cached_messages)
+            or _cached_prefix_covers_whole_request(messages[len(cached_messages) :])
             or _cached_turns_link_web_media(cached_messages, model, custom_llm_provider)
         ):
             return messages, optional_params, None
@@ -610,6 +638,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
+        _reject_system_message_videos_gemini_would_drop(
+            messages, supports_system_message, drop_params, model, custom_llm_provider
+        )
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -641,9 +672,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
+        ttl: Final = cached_block_ttl(messages)
+        generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -666,6 +696,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             messages=list(await _async_inline_cached_turns(cached_messages, model, custom_llm_provider)),
             cache_key=generated_cache_key,
+            ttl=ttl,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,

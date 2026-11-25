@@ -1,8 +1,8 @@
-import json
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import loads_json_object
 
 if TYPE_CHECKING:
     import httpx
@@ -109,16 +109,9 @@ class BaseModelResponseIterator:
 
     @staticmethod
     def _string_to_dict_parser(str_line: str) -> dict | None:
-        stripped_json_chunk: dict | None = None
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
-        return stripped_json_chunk
+        decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
+        return decoded if isinstance(decoded, dict) else None
 
     @classmethod
     def string_to_dict_parser(

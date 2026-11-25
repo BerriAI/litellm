@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping
@@ -21,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 
@@ -52,6 +53,7 @@ from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     ChoiceLogprobs,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     StandardCallbackDynamicParams,
     StreamingChoices,
@@ -466,6 +468,62 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+_EMPTY_LAST_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+_GEMINI_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_LAST_USER_MESSAGES)
+def test_an_alternating_gemini_deployment_sends_the_continue_message_for_an_empty_last_user_message(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+    ).mock(return_value=httpx.Response(status_code=200, json=_GEMINI_REPLY))
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+        api_key="fake_gemini_api_key",
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
+    ]
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_LAST_USER_MESSAGES)
+def test_an_alternating_deployment_that_accepts_a_model_turn_end_keeps_an_empty_last_user_message(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], empty_user_message: dict[str, object]
+):
+    route: Final = respx_mock.post(url__regex=r"http://localhost:12346/v1/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+        api_base="http://localhost:12346/v1",
+        api_key="fake_openai_api_key",
+    )
+
+    assert json.loads(route.calls.last.request.read())["messages"][-1] == empty_user_message
+
+
 _ALLOWED_TOOLS_TOOL_CHOICE: Final = {
     "type": "allowed_tools",
     "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
@@ -652,6 +710,208 @@ def test_drop_params_drops_the_choice_beside_a_tool_the_provider_runs(respx_mock
     )
 
     assert "tool_choice" not in json.loads(route.calls[0].request.content)
+
+
+_DEEPWIKI_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_FORCE_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+
+
+def test_drop_params_drops_an_mcp_tool_choice_together_with_the_hosted_mcp_tool_it_names(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*"
+    ).respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == [
+        "get_time",
+        "get_weather",
+    ]
+
+
+_CAPTURED_CHAT_REPLY: Final = {
+    "id": "chatcmpl-mcp",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "captured",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sunny."}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11},
+}
+
+
+def _capturing_transport(requests: queue.SimpleQueue[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json=_CAPTURED_CHAT_REPLY)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], id="beside-function-tools"),
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL], id="alone"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "route"),
+    [
+        ("openrouter/openai/gpt-6.2-sol", "openrouter"),
+        ("groq/openai/gpt-oss-120b", "groq"),
+        ("xai/grok-4.20-reasoning-gv2", "xai"),
+        ("mistral/mistral-medium-3.5", "mistral"),
+    ],
+)
+def test_drop_params_keeps_the_400_for_a_forced_hosted_mcp_server_on_a_route_that_forwards_hosted_mcp_tools(
+    model: str, route: str, tools: list[dict[str, object]]
+):
+    requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'.*only supported for") as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=tools,
+            tool_choice=_FORCE_DEEPWIKI,
+            parallel_tool_calls=True,
+            drop_params=True,
+            api_key="fake_api_key",
+            client=HTTPHandler(client=httpx.Client(transport=_capturing_transport(requests))),
+        )
+
+    assert exc.value.status_code == 400
+    assert f"LiteLLM cannot force a hosted MCP tool on {route}." in exc.value.message
+    assert requests.empty()
+
+
+def test_drop_params_drops_a_forced_hosted_mcp_server_and_its_choice_on_bedrock_converse(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    converse: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-5-5/converse"
+    ).respond(
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "Sunny."}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11},
+            "metrics": {"latencyMs": 12},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/converse/anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
+    )
+
+    sent: Final = json.loads(converse.calls.last.request.content)
+    assert [tool["toolSpec"]["name"] for tool in sent["toolConfig"]["tools"]] == ["get_time", "get_weather"]
+    assert "toolChoice" not in sent["toolConfig"]
+    assert "deepwiki" not in json.dumps(sent)
+    assert response.choices[0].message.content == "Sunny."
+
+
+def test_drop_params_still_sends_a_forced_hosted_mcp_server_and_its_choice_to_openai():
+    requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    litellm.completion(
+        model="openai/gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        client=OpenAI(api_key="fake_api_key", http_client=httpx.Client(transport=_capturing_transport(requests))),
+    )
+
+    sent: Final = json.loads(requests.get_nowait().content)
+    assert sent["tool_choice"] == _FORCE_DEEPWIKI
+    assert sent["tools"] == [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS]
+
+
+@pytest.mark.parametrize(
+    ("model", "tools", "drop_params", "cause"),
+    [
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            False,
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `deepwiki`",
+            id="drop-params-off",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            _TWO_TOOLS,
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`.",
+            id="server-not-sent",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            [{**_DEEPWIKI_HOSTED_MCP_TOOL, "server_label": "docs"}, *_TWO_TOOLS],
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`.",
+            id="another-server-sent",
+        ),
+        pytest.param(
+            "anthropic/claude-haiku-5-5",
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            True,
+            "anthropic runs hosted MCP tools itself",
+            id="provider-runs-the-server",
+        ),
+    ],
+)
+def test_an_mcp_tool_choice_stays_a_400_when_drop_params_does_not_drop_its_server(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    tools: list[dict[str, object]],
+    drop_params: bool,
+    cause: str,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'.*only supported for") as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=tools,
+            tool_choice=_FORCE_DEEPWIKI,
+            drop_params=drop_params,
+            api_key="fake_api_key",
+        )
+
+    assert exc.value.status_code == 400
+    assert cause in exc.value.message
+    assert not respx_mock.calls
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
@@ -2091,6 +2351,185 @@ def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_sta
 
     assert model == model_name
     assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize(
+    "model_name, base_model, reasoning_effort, bridges",
+    [
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.6-sol", "high", True, id="custom-name-gpt-5.6-base"),
+        pytest.param("qa-prod-reasoner", "gpt-5.6-sol", "high", True, id="custom-name-unprefixed-base"),
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.6-sol", None, False, id="custom-name-unset-effort"),
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.5", "high", False, id="custom-name-gpt-5.5-base"),
+        pytest.param("qa-prod-reasoner", None, "high", False, id="custom-name-no-base"),
+        pytest.param("Phi-4", "azure_ai/gpt-5.6-sol", "high", False, id="known-name-keeps-own"),
+        pytest.param("gpt-5.6-qa-name", "azure_ai/gpt-5.5", "high", True, id="gpt-5.6-name-keeps-own-with-older-base"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_custom_name_routes_by_gpt_5_base_model(
+    model_name, base_model, reasoning_effort, bridges
+):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=_FOUNDRY_API_BASE,
+        base_model=base_model,
+    )
+
+    assert model == model_name
+    assert (model_info.get("mode") == "responses") is bridges
+
+
+def test_completion_bridges_azure_ai_custom_name_with_gpt_5_6_base_model_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        max_tokens=200,
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"},
+    )
+
+    assert [str(call.request.url) for call in respx_mock.calls] == [f"{_FOUNDRY_API_BASE}/openai/v1/responses"]
+    request_body: Final = json.loads(responses_route.calls[0].request.content)
+    assert request_body["model"] == "qa-prod-reasoner"
+    assert request_body["reasoning"]["effort"] == "high"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def _bridged_foundry_completion(**request_params: object) -> ModelResponse:
+    response: Final = litellm.completion(
+        model="azure_ai/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        **request_params,
+    )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [{"model_info": {"base_model": "azure_ai/gpt-5.6-sol"}}, {"base_model": "azure_ai/gpt-5.6-sol"}],
+    ids=["model_info", "litellm_params"],
+)
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7), ("seed", 0)])
+def test_completion_refuses_a_param_responses_lacks_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    base_model_source: Mapping[str, object],
+    param: str,
+    value: int,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`") as refusal:
+        _bridged_foundry_completion(**base_model_source, **{param: value})
+
+    assert "litellm_settings: drop_params: true" in str(refusal.value)
+    assert responses_route.call_count == 0
+
+
+def test_completion_sends_n_of_1_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = _bridged_foundry_completion(model_info={"base_model": "azure_ai/gpt-5.6-sol"}, n=1)
+
+    assert responses_route.call_count == 1
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def _responses_prefixed_foundry_request_body(respx_mock: respx.MockRouter, **request_params: object) -> object:
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+    litellm.completion(
+        model="azure_ai/responses/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        **request_params,
+    )
+    return json.loads(responses_route.calls[-1].request.content)
+
+
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_a_gpt_5_base_model_leaves_n_and_seed_alone_on_a_foundry_name_already_routed_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str, value: int
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with_base_model: Final = _responses_prefixed_foundry_request_body(
+        respx_mock, model_info={"base_model": "azure_ai/gpt-5.6-sol"}, **{param: value}
+    )
+
+    assert with_base_model == _responses_prefixed_foundry_request_body(respx_mock, **{param: value})
+
+
+def test_completion_drops_n_and_seed_under_drop_params_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = _bridged_foundry_completion(
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"}, n=2, seed=7, drop_params=True
+    )
+
+    request_body: Final = json.loads(responses_route.calls[0].request.content)
+    assert "n" not in request_body
+    assert "seed" not in request_body
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_completion_keeps_main_handling_when_the_route_not_the_gpt_5_base_model_chose_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str, value: int
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/responses/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"},
+        **{param: value},
+    )
+
+    assert responses_route.call_count == 1
+    assert json.loads(responses_route.calls[0].request.content)["model"] == "qa-prod-reasoner"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():

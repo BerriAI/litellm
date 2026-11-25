@@ -1,15 +1,20 @@
 import traceback
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    bind_budget_reservation_to_callbacks,
+    proxy_request_headers,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
@@ -24,6 +29,10 @@ from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.openai_agents_turn_billing import (
+    agents_turn_start_from_stream,
+    openai_agents_sessions_call,
+)
 from .llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
 )
@@ -36,6 +45,8 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
 from .success_handler import PassThroughEndpointLogging
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 class RouteStreamingLogging(Protocol):
@@ -393,6 +404,38 @@ class PassThroughStreamingHandler:
                 end_time=end_time,
                 model=model,
             )
+            agents_call: Final = (
+                openai_agents_sessions_call(
+                    url_route, litellm_logging_obj.model_call_details.get("custom_llm_provider")
+                )
+                if endpoint_type == EndpointType.OPENAI
+                else None
+            )
+            agents_turn_start: Final = (
+                None
+                if agents_call is None
+                else agents_turn_start_from_stream(
+                    call=agents_call,
+                    request_body=_JSON_OBJECT.validate_python(request_body),
+                    request_headers=proxy_request_headers(
+                        as_str_mapping(litellm_logging_obj.model_call_details.get("litellm_params"))
+                    ),
+                    raw_bytes=raw_bytes,
+                    start_time=start_time,
+                )
+            )
+            if agents_turn_start is not None:
+                passthrough_success_handler_obj.defer_agents_turn_logging(
+                    turn_start=agents_turn_start,
+                    logging_obj=litellm_logging_obj,
+                    standard_logging_response_object=standard_logging_response_object,
+                    result="",
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
+                    kwargs=_JSON_OBJECT.validate_python(kwargs),
+                )
+                return
             # Always reached from an async context (anthropic_messages,
             # google_genai, and proxy pass-through stream tasks). prefer_async_handlers
             # keeps async-only loggers running even when call_type isn't pass_through

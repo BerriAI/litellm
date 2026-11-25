@@ -8,7 +8,8 @@ import traceback
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final
+from itertools import chain
+from typing import Final, cast
 from unittest.mock import Mock
 
 import httpx
@@ -17,14 +18,15 @@ import respx
 
 import litellm
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms import openai
 from litellm.types import completion
-from litellm.types.llms.vertex_ai import RequestBody
+from litellm.types.llms import openai
+from litellm.types.llms.vertex_ai import ContentType, RequestBody
 from tests.unit.conftest import AsyncOnlyImageFetch
 
 
@@ -482,6 +484,104 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
 
 
+_EMPTY_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+            empty_user_message,
+        ]
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello! How can I help?"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.parametrize("malformed_content", [pytest.param(0, id="int"), pytest.param({}, id="object")])
+def test_a_trailing_user_message_with_malformed_content_gets_no_blank_user_turn(malformed_content: object) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        cast(
+            list[openai.AllMessageValues],
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": malformed_content},
+            ],
+        )
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+    ]
+
+
+_WEATHER_TOOL_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ],
+}
+_WEATHER_TOOL_RESULT: Final = {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}
+
+
+def _all_parts(contents: list[ContentType]) -> list[object]:
+    return list(chain.from_iterable(content["parts"] for content in contents))
+
+
+@pytest.mark.parametrize(
+    "later_turns",
+    [
+        pytest.param(
+            [{"role": "assistant", "content": "Still there?"}, {"role": "user", "content": "Yes"}],
+            id="assistant_reply",
+        ),
+        pytest.param([_WEATHER_TOOL_CALL, _WEATHER_TOOL_RESULT], id="function_call"),
+    ],
+)
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_before_later_turns_gets_no_blank_user_turn(
+    empty_user_message: openai.AllMessageValues, later_turns: list[openai.AllMessageValues]
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message, *later_turns]
+    )
+
+    assert {"text": " "} not in _all_parts(contents)
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_after_tool_results_gets_no_blank_user_turn(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [{"role": "user", "content": "Weather in Paris?"}, _WEATHER_TOOL_CALL, _WEATHER_TOOL_RESULT, empty_user_message]
+    )
+
+    assert [tuple(part) for part in contents[2]["parts"]] == [("function_response",)]
+    assert {"text": " "} not in _all_parts(contents)
+
+
 def _echo_request_parts(request: httpx.Request) -> httpx.Response:
     parts: Final = json.loads(request.content)["contents"][0]["parts"]
     return httpx.Response(
@@ -722,19 +822,34 @@ def test_a_message_video_that_fails_to_download_is_a_bad_request_without_its_lin
     assert dropped[0]["parts"] == [{"text": "Describe the clip"}]
 
 
-def test_a_linked_video_in_a_system_message_is_a_bad_request_naming_the_model_and_provider() -> None:
+_SYSTEM_MESSAGE_WITH_VIDEO: Final[openai.ChatCompletionSystemMessage] = {
+    "role": "system",
+    "content": [
+        {"type": "text", "text": "Be brief"},
+        {"type": "video_url", "video_url": {"url": "https://videos.example/clip.mp4"}},
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [_SYSTEM_MESSAGE_WITH_VIDEO, {"role": "user", "content": "Describe the clip"}],
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello"},
+            _SYSTEM_MESSAGE_WITH_VIDEO,
+            {"role": "user", "content": "Describe the clip"},
+        ],
+    ],
+    ids=["leading", "mid_conversation"],
+)
+def test_a_linked_video_in_a_system_message_is_a_bad_request_naming_the_model_and_provider(
+    messages: list[openai.AllMessageValues],
+) -> None:
     with pytest.raises(litellm.BadRequestError, match="system instructions take text only") as excinfo:
         transformation.transform_request_body(
-            messages=[
-                {
-                    "role": "system",
-                    "content": [
-                        {"type": "text", "text": "Be brief"},
-                        {"type": "video_url", "video_url": {"url": "https://videos.example/clip.mp4"}},
-                    ],
-                },
-                {"role": "user", "content": "Describe the clip"},
-            ],
+            messages=messages,
             model="gemini-3.8-flash",
             optional_params={},
             custom_llm_provider="vertex_ai",
@@ -1072,3 +1187,119 @@ def test_gemini_completion_reports_a_tool_call_it_cannot_convert_as_a_gemini_bad
 
     assert exc_info.value.llm_provider == "gemini"
     assert "must be a JSON string, got dict" in str(exc_info.value)
+
+
+def _gemini_request_body(messages: list[openai.AllMessageValues]) -> RequestBody:
+    return transformation.transform_request_body(
+        messages=messages,
+        model="gemini-3.8-flash",
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+
+def _exchange_with_a_reminder(turn: int) -> tuple[openai.AllMessageValues, ...]:
+    return (
+        {"role": "user", "content": f"question {turn}"},
+        {"role": "system", "content": f"{turn} of 8 turns used"},
+        {"role": "assistant", "content": f"answer {turn}"},
+    )
+
+
+def _conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list[openai.AllMessageValues]:
+    exchanges: Final = tuple(chain.from_iterable(map(_exchange_with_a_reminder, range(1, user_turns + 1))))
+    return [{"role": "system", "content": "You are terse."}, *exchanges[:-1]]
+
+
+def test_a_reminder_after_each_user_turn_keeps_the_gemini_prompt_prefix_stable_across_turns():
+    turn_three: Final = _gemini_request_body(_conversation_with_a_reminder_after_each_user_turn(3))
+    turn_four: Final = _gemini_request_body(_conversation_with_a_reminder_after_each_user_turn(4))
+
+    assert turn_three["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert turn_four["system_instruction"] == turn_three["system_instruction"]
+    assert len(turn_four["contents"]) > len(turn_three["contents"])
+    assert turn_four["contents"][: len(turn_three["contents"])] == turn_three["contents"]
+
+
+def test_a_mid_conversation_system_message_reaches_gemini_as_a_user_part_after_the_operator_note():
+    messages: Final = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "system", "content": [{"type": "text", "text": "Answer in "}, {"type": "text", "text": "French."}]},
+        {"role": "user", "content": "question 1"},
+        {"role": "system", "content": "1 of 8 turns used"},
+    ]
+    sent: Final = json.loads(json.dumps(messages))
+
+    body: Final = _gemini_request_body(messages)
+
+    assert body["system_instruction"] == {"parts": [{"text": "You are terse."}, {"text": "Answer in French."}]}
+    assert body["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]}
+    ]
+    assert messages == sent
+
+
+def test_a_leading_system_message_with_no_content_sends_only_the_rest_of_the_conversation():
+    body: Final = _gemini_request_body([{"role": "system"}, {"role": "user", "content": "question 1"}])
+
+    assert "system_instruction" not in body
+    assert body["contents"] == [{"role": "user", "parts": [{"text": "question 1"}]}]
+
+
+def test_a_system_message_between_a_tool_call_and_its_result_goes_after_the_function_response():
+    body: Final = _gemini_request_body(
+        [
+            {"role": "user", "content": "weather in Boston?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+                    }
+                ],
+            },
+            {"role": "system", "content": "Tool results are authoritative."},
+            {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
+        ]
+    )
+
+    contents: Final = body["contents"]
+    assert "system_instruction" not in body
+    assert [content["role"] for content in contents] == ["user", "model", "user", "user"]
+    assert contents[1]["parts"][0]["function_call"]["name"] == "get_weather"
+    assert contents[2]["parts"][0]["function_response"]["response"] == {"content": "72F"}
+    assert contents[3]["parts"] == [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "Tool results are authoritative."}]
+
+
+def test_reminders_between_parallel_tool_results_go_after_the_last_function_response():
+    def call(call_id: str, name: str) -> openai.ChatCompletionAssistantToolCall:
+        return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+    body: Final = _gemini_request_body(
+        [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "weather and time in Boston?"},
+            {"role": "assistant", "content": None, "tool_calls": [call("a", "get_weather"), call("b", "get_time")]},
+            {"role": "system", "content": "reminder 1"},
+            {"role": "tool", "tool_call_id": "a", "content": "72F"},
+            {"role": "system", "content": "reminder 2"},
+            {"role": "tool", "tool_call_id": "b", "content": "3pm"},
+            {"role": "user", "content": "thanks"},
+        ]
+    )
+
+    contents: Final = body["contents"]
+    assert [content["role"] for content in contents] == ["user", "model", "user", "user"]
+    assert [part["function_response"]["name"] for part in contents[2]["parts"]] == ["get_weather", "get_time"]
+    assert contents[3]["parts"] == [
+        {"text": CONVERTED_SYSTEM_NOTE},
+        {"text": "reminder 1"},
+        {"text": CONVERTED_SYSTEM_NOTE},
+        {"text": "reminder 2"},
+        {"text": "thanks"},
+    ]

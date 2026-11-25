@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
+from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS, is_chat_latest_name
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -145,7 +145,11 @@ class AzureOpenAIConfig(BaseConfig):
         name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
         the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
         """
-        return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or "gpt5_series" in model
+        return (
+            any(marker in model for marker in GPT_REASONING_SERIES_MARKERS)
+            or is_chat_latest_name(model)
+            or "gpt5_series" in model
+        )
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
