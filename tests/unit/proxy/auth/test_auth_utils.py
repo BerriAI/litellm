@@ -876,6 +876,30 @@ def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_cr
     assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("api_key", "test-key"), ("api_base", "https://alternate.example/v1"), ("base_url", "https://alternate.example/v1")),
+)
+def test_named_provider_oauth_deployment_rejects_client_side_overrides(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.models.credentials import CredentialItem
+
+    credential: Final = CredentialItem(
+        credential_name="provider-oauth",
+        credential_values={"oauth_client_credentials": True},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    with pytest.raises(BadRequestError, match="OAuth client credentials deployments"):
+        get_dynamic_litellm_params(
+            litellm_params={"model": "custom_openai/gpt-6-luna", "litellm_credential_name": credential.credential_name},
+            request_kwargs={field: value},
+        )
+
+
 def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):
     """The admin UI tests a stored credential by name, which is how a proxy admin checks an oidc/ api_key works."""
     assert (

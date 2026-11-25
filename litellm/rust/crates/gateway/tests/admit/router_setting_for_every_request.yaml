@@ -7,7 +7,7 @@ config:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
   router_settings:
-    optional_pre_call_checks: [enforce_model_rate_limits]
+    optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]
     enable_tag_filtering: true
   general_settings:
     master_key: gateway-key
@@ -18,7 +18,7 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: settings
-    over: router_settings.optional_pre_call_checks
+    over: router_settings.enable_tag_filtering
 
   - name: other caller
     headers: {authorization: Bearer sk-someone-else}

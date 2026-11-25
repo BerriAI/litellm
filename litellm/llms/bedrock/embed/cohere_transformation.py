@@ -18,7 +18,7 @@ class BedrockCohereEmbeddingConfig:
     def get_supported_openai_params(self) -> list[str]:
         return ["encoding_format", "dimensions"]
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = [
