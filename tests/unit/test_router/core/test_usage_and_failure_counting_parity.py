@@ -29,6 +29,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     fresh,
     not_found,
     plain_error,
+    previous_response_rejected,
     rate_limited,
 )
 from tests.unit.test_router.core.scripted_host import Call, deployment, server_error, timeout
@@ -311,8 +312,15 @@ def selection_failure() -> Exception:
         (selection_failure, False, 1, None),
         (timeout, True, 0, None),
         (timeout, False, 1, 1),
+        (previous_response_rejected, False, 0, None),
     ],
-    ids=["server-error", "selection-tag-not-exempt", "stream-stall-exempt", "plain-timeout"],
+    ids=[
+        "server-error",
+        "selection-tag-not-exempt",
+        "stream-stall-exempt",
+        "plain-timeout",
+        "previous-response-rejected-exempt",
+    ],
 )
 async def test_a_failed_hop_past_the_first_logged_failure_takes_the_fallback_paths_exits(
     make_core: MakeCore,

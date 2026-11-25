@@ -27,6 +27,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     cooled_down,
     fresh,
     not_found,
+    previous_response_rejected,
 )
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
@@ -56,21 +57,6 @@ def selection_failure() -> Exception:
     error: Final = rate_limit()
     mark_deployment_selection_failure(error)
     return error
-
-
-def previous_response_rejected() -> Exception:
-    message: Final = "Previous response with id 'resp_gone' not found."
-    return litellm.BadRequestError(
-        message=message,
-        llm_provider="openai",
-        model="gpt-4o",
-        body={
-            "type": "invalid_request_error",
-            "param": "previous_response_id",
-            "code": "previous_response_not_found",
-            "message": message,
-        },
-    )
 
 
 def caller_auth_error() -> Exception:
