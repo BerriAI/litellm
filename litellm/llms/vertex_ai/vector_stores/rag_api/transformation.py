@@ -160,7 +160,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
         """
@@ -361,3 +361,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 status_code=response.status_code,
                 headers=response.headers,
             )
+
+
+vertex_rag_api_vector_store_config: Final = VertexVectorStoreConfig()

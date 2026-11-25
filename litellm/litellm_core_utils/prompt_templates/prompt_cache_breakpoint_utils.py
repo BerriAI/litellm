@@ -11,7 +11,7 @@ from litellm.types.llms.openai import (
     PromptCacheBreakpoint,
 )
 
-_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+_MarkedT = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT: Final = (
@@ -33,7 +33,7 @@ _PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
 _CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
 
 
-_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
+_AcceptedBreakpointT = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
 
 
 def _accepted_prompt_cache_breakpoint(
@@ -202,6 +202,17 @@ def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_pa
         _part_with_chat_completion_prompt_cache_breakpoint(part) for part in _BREAKPOINT_BLOCKS.validate_python(content)
     ]
     return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its parts' markers trimmed
+
+
+def with_only_content_part_prompt_cache_breakpoints(message: _MarkedT) -> _MarkedT:
+    """A message keeping only its content parts' ``prompt_cache_breakpoint``, cut down to what chat completions
+    accepts. The message's own marker, its tool calls' and a tool result's parts' are removed."""
+    stripped: Final = without_prompt_cache_breakpoints(message)
+    content: Final = message.get("content")
+    if message.get("role") == "tool" or not isinstance(content, list):
+        return stripped
+    marked: Final = cast(_MarkedT, {**stripped, "content": content})  # cast-ok: same message shape, parts restored
+    return chat_completion_prompt_cache_breakpoints_for_wire(marked, True)
 
 
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(

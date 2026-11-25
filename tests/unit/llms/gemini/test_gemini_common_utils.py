@@ -83,6 +83,37 @@ async def test_google_ai_studio_count_tokens_forwards_system_and_tools() -> None
 
 
 @pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_sends_a_union_root_tool_as_parameters_json_schema() -> None:
+    union_root: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+        "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+    }
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "Look up Atlas."}]}],
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            tools=[{"name": "lookup", "input_schema": union_root}],
+        )
+
+    assert result is not None
+    assert result.total_tokens == 11
+    assert peer.request_body == {
+        "generateContentRequest": {
+            "model": "models/gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "Look up Atlas."}]}],
+            "tools": [{"functionDeclarations": [{"name": "lookup", "parametersJsonSchema": union_root}]}],
+        }
+    }
+
+
+@pytest.mark.asyncio
 async def test_google_ai_studio_count_tokens_sends_an_entry_without_parts_as_the_caller_wrote_it() -> None:
     peer: Final = _GeminiCountTokensPeer()
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
@@ -224,6 +255,28 @@ async def test_google_ai_studio_count_tokens_rejects_a_non_string_tool_result_te
     assert result.error is True
     assert result.status_code == 400
     assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_google_ai_studio_count_tokens_rejects_a_non_string_user_text_without_request(
+    text: JsonValue, respx_mock: respx.MockRouter
+) -> None:
+    count_route: Final = respx_mock.post(_COUNT_TOKENS_URL).respond(200, json={"totalTokens": 11})
+
+    result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": text}]}],
+        contents=None,
+        deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+        request_model="gemini/gemini-2.5-flash",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message == "messages.0.content.1.text: Input should be a valid string"
     assert not count_route.called
 
 
@@ -571,13 +624,9 @@ def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config()
         ("gemini-3.1-flash-image", "1024x256", {"aspectRatio": "4:1", "imageSize": "512"}),
     ),
 )
-def test_size_mapping_respects_model_image_limits(
-    prefix: str, model: str, size: str, expected: dict[str, str]
-) -> None:
+def test_size_mapping_respects_model_image_limits(prefix: str, model: str, size: str, expected: dict[str, str]) -> None:
     """Limits as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
-    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {
-        "imageConfig": expected
-    }
+    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {"imageConfig": expected}
 
 
 @pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])

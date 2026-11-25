@@ -225,6 +225,17 @@ class OutputToolSearchCall(BaseLiteLLMOpenAIResponseObject):
     type: Literal["tool_search_call"]
 
 
+class OutputToolSearchOutput(BaseLiteLLMOpenAIResponseObject):
+    model_config = ConfigDict(extra="allow", frozen=True, protected_namespaces=())
+
+    id: str
+    call_id: str | None = None
+    execution: Literal["server", "client"]
+    status: Literal["in_progress", "completed", "incomplete"]
+    tools: tuple[Mapping[str, object], ...] = ()
+    type: Literal["tool_search_output"]
+
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item
@@ -255,7 +266,7 @@ class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
     deleted: bool | None
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation

@@ -1,12 +1,16 @@
 """Cross-group fallbacks of a router core: where the chain comes from, how it is walked, and what is raised."""
 
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, UnresolvablePreviousResponseError
+from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.utils import Usage
@@ -31,6 +35,14 @@ GROUPS_ABC = [deployment("a", "a"), deployment("b", "b"), deployment("c", "c")]
 GROUPS_ABCD = [*GROUPS_ABC, deployment("d", "d")]
 CHAIN_ABCD = [{"a": ["b"]}, {"b": ["c"]}, {"c": ["d"]}]
 TIERED_A = [deployment("a", "a1", order=1), deployment("a", "a2", order=2), deployment("b", "b")]
+ERROR_SPECIFIC_LISTS = pytest.mark.parametrize(
+    ("error", "field", "raised"),
+    [
+        (context_window, "context_window_fallbacks", litellm.ContextWindowExceededError),
+        (content_policy, "content_policy_fallbacks", litellm.ContentPolicyViolationError),
+    ],
+    ids=["context-window", "content-policy"],
+)
 
 
 def build(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok: the router's constructor arguments
@@ -92,6 +104,51 @@ async def test_a_failed_group_falls_back_to_the_chain_from_the_winning_source(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("fallbacks", rate_limit),
+        ("context_window_fallbacks", context_window),
+        ("content_policy_fallbacks", content_policy),
+    ],
+    ids=["fallbacks", "context-window", "content-policy"],
+)
+async def test_request_fallback_string_is_ignored_and_router_chain_is_used(
+    make_core: MakeCore, host: ScriptedHost, field: str, error: Callable[[], Exception]
+) -> None:
+    core = build(make_core, **{field: [{"a": ["b"]}]})
+    host.answer("openai/a", error())
+
+    response = await complete(core, **{field: "unconfigured-scalar-model"})
+
+    assert host.deployments_called("acompletion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
+
+
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("fallbacks", rate_limit),
+        ("context_window_fallbacks", context_window),
+        ("content_policy_fallbacks", content_policy),
+    ],
+    ids=["fallbacks", "context-window", "content-policy"],
+)
+def test_sync_request_fallback_string_is_ignored_and_router_chain_is_used(
+    make_core: MakeCore, host: ScriptedHost, field: str, error: Callable[[], Exception]
+) -> None:
+    core = build(make_core, **{field: [{"a": ["b"]}]})
+    host.answer("openai/a", error())
+
+    response: Final = core.completion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="a", messages=MESSAGES, **{field: "unconfigured-scalar-model"}
+    )
+
+    assert host.deployments_called("completion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
+
+
+@pytest.mark.asyncio
 async def test_an_empty_request_fallback_list_overrides_the_constructor_chain(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -100,6 +157,19 @@ async def test_an_empty_request_fallback_list_overrides_the_constructor_chain(
 
     with pytest.raises(litellm.RateLimitError):
         await complete(core, fallbacks=[])
+
+    assert host.deployments_called("acompletion") == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_a_null_request_fallback_list_overrides_the_constructor_chain(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core = build(make_core, fallbacks=[{"a": ["b"]}])
+    host.answer("openai/a", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError):
+        await complete(core, fallbacks=None)
 
     assert host.deployments_called("acompletion") == ["a"]
 
@@ -226,6 +296,62 @@ async def test_a_failed_fallback_group_follows_its_own_chain(make_core: MakeCore
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "previous_response_id",
+    [
+        ResponsesAPIRequestUtils._build_responses_api_response_id("gemini", "b-1", "ZJ8uaPqXOd2N1PIPrIK6sQk"),
+        ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "b-1", "chatcmpl-abc"),
+    ],
+    ids=["gemini-turn-the-chat-bridge-answered", "openai-turn-the-chat-bridge-answered"],
+)
+async def test_a_fallback_that_cannot_find_the_previous_response_ends_the_walk_with_its_own_400(
+    make_core: MakeCore, host: ScriptedHost, previous_response_id: str
+) -> None:
+    show_router_debug(host)
+    core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
+    refusal: Final = previous_response_not_found((previous_response_id,), "b", "openai")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", refusal)
+
+    with pytest.raises(UnresolvablePreviousResponseError) as raised:
+        await complete(core)
+
+    assert raised.value.message == refusal.message
+    assert host.deployments_called("acompletion") == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_cannot_rebuild_a_response_a_provider_holds_hands_it_to_the_next_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
+    held_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "a-1", "resp_abc")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", previous_response_not_found((held_id,), "b", "openai"))
+
+    response: Final = await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a", "b", "c"]
+    assert headers(response)["x-litellm-model-group"] == "c"
+
+
+@pytest.mark.asyncio
+async def test_a_walk_that_fails_after_a_fallback_could_not_rebuild_the_response_answers_with_the_first_groups_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
+    held_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "a-1", "resp_abc")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", previous_response_not_found((held_id,), "b", "openai"))
+    host.answer("openai/c", rate_limit())
+
+    with pytest.raises(litellm.InternalServerError):
+        await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("fallbacks", "expected"),
     [
         ([{"a": ["b"]}, {"b": ["a", "c"]}, {"c": ["a", "b"]}], ["a", "b", "c"]),
@@ -301,6 +427,71 @@ async def test_max_fallbacks_applied_by_changeset_bounds_the_walk(make_core: Mak
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, ["a", "b"]),
+        (False, ["a"]),
+        (1.0, ["a", "b"]),
+        ("1", ["a", "b"]),
+        ("1.0", ["a", "b"]),
+        (0, ["a"]),
+    ],
+    ids=["true", "false", "integral-float", "integer-string", "decimal-string", "zero"],
+)
+async def test_request_max_fallbacks_uses_bounded_integer_coercion(
+    make_core: MakeCore, host: ScriptedHost, value: object, expected: list[str]
+) -> None:
+    core = build(make_core, model_list=GROUPS_ABCD, fallbacks=CHAIN_ABCD)
+    host.answer("*", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError):
+        await complete(core, max_fallbacks=value)
+
+    assert host.deployments_called("acompletion") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fallbacks", 3),
+        ("fallbacks", ["c", 1]),
+        ("context_window_fallbacks", [None]),
+        ("content_policy_fallbacks", [True]),
+        ("max_fallbacks", "not-an-integer"),
+        ("max_fallbacks", -1),
+        ("max_fallbacks", 2**32),
+        ("max_fallbacks", 1.5),
+        ("max_fallbacks", float("nan")),
+        ("max_fallbacks", float("inf")),
+    ],
+    ids=[
+        "fallbacks-not-a-list",
+        "fallbacks-invalid-entry",
+        "context-window-invalid-entry",
+        "content-policy-invalid-entry",
+        "max-fallbacks-invalid-string",
+        "max-fallbacks-negative",
+        "max-fallbacks-too-large",
+        "max-fallbacks-fractional",
+        "max-fallbacks-nan",
+        "max-fallbacks-infinite",
+    ],
+)
+async def test_invalid_request_fallback_fields_raise_bad_request(
+    make_core: MakeCore, host: ScriptedHost, field: str, value: object
+) -> None:
+    core = build(make_core)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await complete(core, **{field: value})
+
+    assert raised.value.status_code == 400
+    assert host.deployments_called("acompletion") == []
+
+
+@pytest.mark.asyncio
 async def test_a_fallback_group_with_no_deployments_is_passed_over(make_core: MakeCore, host: ScriptedHost) -> None:
     core = build(make_core, fallbacks=[{"a": ["missing", "c"]}])
     host.answer("openai/a", rate_limit())
@@ -357,19 +548,6 @@ async def test_an_error_specific_chain_wins_over_the_general_chain(
 
     assert host.deployments_called("acompletion") == ["a", "c"]
     assert headers(response)["x-litellm-model-group"] == "c"
-
-
-@pytest.mark.asyncio
-async def test_an_unmatched_content_policy_chain_does_not_try_the_general_chain(
-    make_core: MakeCore, host: ScriptedHost
-) -> None:
-    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], content_policy_fallbacks=[{"other": ["c"]}])
-    host.answer("openai/a", content_policy())
-
-    with pytest.raises(litellm.ContentPolicyViolationError):
-        await complete(core)
-
-    assert host.deployments_called("acompletion") == ["a"]
 
 
 @pytest.mark.asyncio
@@ -469,11 +647,12 @@ async def test_order_tiers_are_walked_without_any_configured_fallbacks(make_core
 
 
 @pytest.mark.asyncio
-async def test_a_context_window_error_skips_the_order_tiers_for_its_own_chain(
-    make_core: MakeCore, host: ScriptedHost
+@ERROR_SPECIFIC_LISTS
+async def test_an_error_specific_chain_skips_the_order_tiers(
+    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception], field: str, raised: type[Exception]
 ) -> None:
-    core = build(make_core, model_list=TIERED_A, context_window_fallbacks=[{"a": ["b"]}])
-    host.answer("openai/a1", context_window())
+    core: Final = build(make_core, model_list=TIERED_A, **{field: [{"a": ["b"]}]})
+    host.answer("openai/a1", error())
 
     await complete(core)
 
@@ -482,7 +661,7 @@ async def test_a_context_window_error_skips_the_order_tiers_for_its_own_chain(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("window_key", "tiered", "client_side", "expected"),
+    ("list_key", "tiered", "client_side", "expected"),
     [
         (None, True, False, "a2"),
         ("other", True, False, "a2"),
@@ -504,10 +683,14 @@ async def test_a_context_window_error_skips_the_order_tiers_for_its_own_chain(
         "matched-list-beats-the-client-side-list",
     ],
 )
-async def test_a_context_window_error_takes_its_own_chain_only_when_the_group_matches(
+@ERROR_SPECIFIC_LISTS
+async def test_an_error_specific_error_takes_its_own_chain_only_when_the_group_matches(
     make_core: MakeCore,
     host: ScriptedHost,
-    window_key: str | None,
+    error: Callable[[], Exception],
+    field: str,
+    raised: type[Exception],
+    list_key: str | None,
     tiered: bool,
     client_side: bool,
     expected: str,
@@ -521,9 +704,9 @@ async def test_a_context_window_error_takes_its_own_chain_only_when_the_group_ma
             deployment("c", "c"),
         ],
         fallbacks=[{"a": ["b"]}],
-        context_window_fallbacks=None if window_key is None else [{window_key: ["c"]}],
+        **{field: None if list_key is None else [{list_key: ["c"]}]},
     )
-    host.answer("openai/a1", context_window())
+    host.answer("openai/a1", error())
 
     await complete(core, **({"fallbacks": ["b"]} if client_side else {}))
 
@@ -533,14 +716,26 @@ async def test_a_context_window_error_takes_its_own_chain_only_when_the_group_ma
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("first", "raised"),
-    [(context_window, litellm.ContextWindowExceededError), (server_error, litellm.Timeout)],
-    ids=["context-window-keeps-the-original-error", "any-other-error-raises-the-last-hop"],
+    [
+        (context_window, litellm.ContextWindowExceededError),
+        (content_policy, litellm.ContentPolicyViolationError),
+        (server_error, litellm.Timeout),
+    ],
+    ids=[
+        "context-window-keeps-the-original-error",
+        "content-policy-keeps-the-original-error",
+        "any-other-error-raises-the-last-hop",
+    ],
 )
 async def test_a_failed_order_chain_raises_by_the_error_that_started_it(
     make_core: MakeCore, host: ScriptedHost, first: Callable[[], Exception], raised: type[Exception]
 ) -> None:
     core: Final = build(
-        make_core, model_list=TIERED_A, fallbacks=[{"a": ["b"]}], context_window_fallbacks=[{"other": ["c"]}]
+        make_core,
+        model_list=TIERED_A,
+        fallbacks=[{"a": ["b"]}],
+        context_window_fallbacks=[{"other": ["c"]}],
+        content_policy_fallbacks=[{"other": ["c"]}],
     )
     host.answer("openai/a1", first())
     host.answer("openai/a2", rate_limit())
@@ -566,19 +761,20 @@ async def test_a_failed_order_chain_appends_no_outcome_message(make_core: MakeCo
 
 
 @pytest.mark.asyncio
-async def test_an_unmatched_context_window_list_reports_the_general_chain_it_fell_through_to(
-    make_core: MakeCore, host: ScriptedHost
+@ERROR_SPECIFIC_LISTS
+async def test_an_unmatched_error_specific_list_reports_the_general_chain_it_fell_through_to(
+    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception], field: str, raised: type[Exception]
 ) -> None:
     show_router_debug(host)
-    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], context_window_fallbacks=[{"other": ["c"]}])
-    host.answer("openai/a", context_window())
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], **{field: [{"other": ["c"]}]})
+    host.answer("openai/a", error())
     host.answer("openai/b", rate_limit())
 
-    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+    with pytest.raises(raised) as failure:
         await complete(core)
 
-    assert "No fallback was attempted" not in str(raised.value)
-    assert "context_window_fallbacks=None" not in str(raised.value)
+    assert "LiteLLM: model group 'a' failed with the error above. Fallback to b also failed" in str(failure.value)
+    assert "=None. fallbacks=" not in str(failure.value)
     assert host.deployments_called("acompletion") == ["a", "b"]
 
 
@@ -695,17 +891,27 @@ def unsupported_params() -> litellm.UnsupportedParamsError:
     return litellm.UnsupportedParamsError(message="nope", llm_provider="openai", model="a")
 
 
+def bad_request_with_status(status_code: int, llm_provider: str = "openai") -> litellm.BadRequestError:
+    response: Final = httpx.Response(status_code, request=httpx.Request("POST", "https://provider.test"))
+    return litellm.BadRequestError(message="rejected", llm_provider=llm_provider, model="a", response=response)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [bad_request, unsupported_params], ids=["bad-request", "unsupported-params"])
+@pytest.mark.parametrize(
+    "error",
+    [bad_request, partial(bad_request_with_status, 413), partial(bad_request_with_status, 422), unsupported_params],
+    ids=["bad-request", "bad-request-413", "bad-request-422", "unsupported-params"],
+)
 async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_params_is_off(
-    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception]
+    make_core: MakeCore, host: ScriptedHost, error: Callable[[], litellm.BadRequestError]
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}], fallback_on_unsupported_params=False)
     host.answer("openai/a", error())
 
-    with pytest.raises(type(error())):
+    with pytest.raises(type(error())) as raised:
         await complete(core)
 
+    assert raised.value.status_code == error().status_code
     assert host.deployments_called("acompletion") == ["a"]
 
 
@@ -714,7 +920,12 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
     ("error", "fallback_on_unsupported_params"),
     [
         (bad_request, True),
+        (partial(bad_request_with_status, 413), True),
+        (partial(bad_request_with_status, 422), True),
         (unsupported_params, True),
+        (partial(bad_request_with_status, 413, llm_provider=""), False),
+        (partial(bad_request_with_status, 422, llm_provider=""), False),
+        (partial(bad_request_with_status, 409), False),
         (context_window, False),
         (content_policy, False),
         (rate_limit, False),
@@ -722,7 +933,12 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
     ],
     ids=[
         "bad-request-flag-on",
+        "bad-request-413-flag-on",
+        "bad-request-422-flag-on",
         "unsupported-params-flag-on",
+        "providerless-413-flag-off",
+        "providerless-422-flag-off",
+        "bad-request-409-flag-off",
         "context-window-flag-off",
         "content-policy-flag-off",
         "rate-limit-flag-off",

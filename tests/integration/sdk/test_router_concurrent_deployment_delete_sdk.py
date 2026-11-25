@@ -32,6 +32,12 @@ _CHURN_UPSERTS: Final = 120
 _UNREPORTED_MODEL_ID: Final = frozenset({"aresponses-stream", "aanthropic-messages"})
 _LIST_REFRESH: Final = HostedModelList.refresh.__code__
 _HAND_CHANGES: Final = HostRegistry._hand_changes.__code__
+_REREADS_AFTER_A_WRITE: Final = frozenset(
+    {
+        (_LIST_REFRESH, _HAND_CHANGES),
+        (HostedModelList.end_build.__code__, HostRegistry._run_build.__code__),
+    }
+)
 
 
 def _router_source_files() -> frozenset[str]:
@@ -39,15 +45,16 @@ def _router_source_files() -> frozenset[str]:
     return frozenset({_HAND_CHANGES.co_filename, *(path for path in facade_files if path is not None)})
 
 
-def _lock_lines(path: str) -> frozenset[int]:
-    return frozenset(
-        number
-        for number, line in enumerate(linecache.getlines(path), start=1)
-        if "with self._deployment_index_lock" in line
-    )
+def _lock_lines(path: str, statement: str) -> frozenset[int]:
+    return frozenset(number for number, line in enumerate(linecache.getlines(path), start=1) if statement in line)
 
 
-_INDEX_LOCK_LINES: Final = MappingProxyType({path: _lock_lines(path) for path in _router_source_files()})
+_INDEX_LOCK_LINES: Final = MappingProxyType(
+    {
+        **{path: _lock_lines(path, "with self._deployment_index_lock") for path in _router_source_files()},
+        _LIST_REFRESH.co_filename: _lock_lines(_LIST_REFRESH.co_filename, "with self._lock"),
+    }
+)
 
 T = TypeVar("T")
 
@@ -103,9 +110,7 @@ def _read_during_held_write(read: Callable[[], T], write: Callable[[], object]) 
 
     def hold_at_reindex(frame: FrameType, event: str, _arg: object) -> None:
         caller: Final = frame.f_back
-        refreshes_after_a_write: Final = (
-            frame.f_code is _LIST_REFRESH and caller is not None and caller.f_code is _HAND_CHANGES
-        )
+        refreshes_after_a_write: Final = caller is not None and (frame.f_code, caller.f_code) in _REREADS_AFTER_A_WRITE
         if event == "call" and refreshes_after_a_write and not held.is_set():
             held.set()
             released_in_time.append(release.wait(timeout=_SYNC_SECONDS))

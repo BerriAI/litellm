@@ -10,14 +10,19 @@ while one that raises later fails while the caller iterates.
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Final, NoReturn
+from unittest.mock import patch
 
+import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.router_core import RouterCore
 from litellm.types.utils import Usage
 from tests.unit.test_router.core.scripted_host import (
@@ -35,12 +40,20 @@ from tests.unit.test_router.core.streaming_helpers import (
     collect_texts,
     collect_texts_sync,
     drain_into,
+    request_logging,
 )
 
 MakeCore = Callable[..., RouterCore]
 PREFILL_MODEL: Final = "anthropic/claude-sonnet-4-5"
 """A model whose deployments accept an assistant prefill, so a continuation may land on them."""
 GROUPS_AB: Final = [deployment("a", "a"), deployment("b", "b")]
+T1_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+T2_PUBLIC: Final = {"team_id": "T2", "team_public_model_name": "tp"}
+INTERLEAVED_TEAM_TIERS: Final = [
+    deployment("t1-first", "t1-first", order=1, model_info=T1_PUBLIC),
+    deployment("t2-first", "t2-first", order=2, model_info=T2_PUBLIC),
+    deployment("t1-second", "t1-second", order=3, model_info=T1_PUBLIC),
+]
 
 
 def build(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok: the router's constructor arguments
@@ -105,6 +118,51 @@ async def test_a_first_chunk_bad_request_is_raised_from_the_call_without_retry(
     with pytest.raises(litellm.BadRequestError, match="nope"):
         await open_stream(core)
     assert host.deployments_called() == ["a"]
+
+
+def _gemini_stream_that_fails_to_open(sync: bool) -> Callable[..., CustomStreamWrapper]:
+    request: Final = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash")
+    body: Final = b'{"error": {"code": 400, "message": "gemini said no", "status": "INVALID_ARGUMENT"}}'
+    sync_error: Final = MaskedHTTPStatusError(
+        httpx.HTTPStatusError("gemini said no", request=request, response=httpx.Response(400, request=request)),
+        message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+        text=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+    )
+
+    def make_sync_call(client: object) -> NoReturn:
+        raise sync_error
+
+    async def make_call(client: object) -> NoReturn:
+        raise VertexAIError(status_code=400, message=body.decode(), headers=None)
+
+    def answer(**_request: object) -> CustomStreamWrapper:  # kwargs-ok: the host passes the request kwargs
+        return CustomStreamWrapper(
+            completion_stream=None,
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+            logging_obj=request_logging(),
+            make_call=make_sync_call if sync else make_call,
+        )
+
+    return answer
+
+
+async def test_a_gemini_stream_that_fails_to_open_raises_the_mapped_bad_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", _gemini_stream_that_fails_to_open(sync=False))
+    core: Final = make_core(model_list=[deployment("a", "a")], num_retries=0)
+    with pytest.raises(litellm.BadRequestError, match="gemini said no"):
+        await open_stream(core)
+
+
+def test_a_sync_gemini_stream_that_fails_to_open_raises_the_mapped_bad_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", _gemini_stream_that_fails_to_open(sync=True))
+    core: Final = make_core(model_list=[deployment("a", "a")], num_retries=0)
+    with pytest.raises(litellm.BadRequestError, match="gemini said no"):
+        core.completion(model="a", messages=MESSAGES, stream=True)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
 
 
 async def test_the_first_chunk_already_read_is_still_delivered_to_the_caller(
@@ -275,6 +333,38 @@ async def test_a_mid_stream_server_error_before_content_falls_through_order_tier
     assert headers(stream)["x-litellm-model-group"] == "a"
 
 
+async def open_team_stream(core: RouterCore, bucket: str) -> object:
+    return await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="tp", messages=MESSAGES, stream=True, **{bucket: {"user_api_key_team_id": "T1"}}
+    )
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_a_mid_stream_error_before_content_falls_through_the_callers_team_order_tiers(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    host.answer("openai/t1-first", chat_stream(error=server_error(), leading_role_chunk=True))
+    host.answer("openai/t2-first", chat_stream("T2"))
+    host.answer("openai/t1-second", chat_stream("T1"))
+    core: Final = make_core(model_list=INTERLEAVED_TEAM_TIERS, num_retries=0)
+    stream: Final = await open_team_stream(core, bucket)
+    assert await collect_texts(stream) == "T1"
+    assert host.deployments_called() == ["t1-first", "t1-second"]
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_a_mid_stream_error_after_content_on_a_team_tier_is_raised_without_fallback(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    host.answer("openai/t1-first", chat_stream("partial", error=rate_limit(message="cut after content")))
+    host.answer("openai/t1-second", chat_stream("T1"))
+    core: Final = make_core(model_list=INTERLEAVED_TEAM_TIERS, num_retries=0)
+    stream: Final = await open_team_stream(core, bucket)
+    with pytest.raises(litellm.RateLimitError, match="cut after content"):
+        await collect_texts(stream)
+    assert host.deployments_called() == ["t1-first"]
+
+
 async def test_a_mid_stream_bad_request_before_content_is_raised_without_fallback(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -411,6 +501,35 @@ async def test_continuation_continues_after_content_on_a_prefill_capable_fallbac
     stream = await open_stream(core)
     assert await collect_texts(stream) == "hello world"
     assert host.deployments_called() == ["a", "b"]
+
+
+async def test_continuation_rejects_an_unknown_guardrail_before_calling_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    host.answer("openai/a", chat_stream("he", "llo", error=rate_limit()))
+    host.answer(PREFILL_MODEL, chat_stream(" world"))
+    core: Final = make_core(
+        model_list=[
+            deployment("a", "a"),
+            deployment("b", "b", model=PREFILL_MODEL, guardrails=["unknown-stream-guard"]),
+        ],
+        fallbacks=[{"a": ["b"]}],
+        num_retries=0,
+        enable_mid_stream_fallback_continuation=True,
+    )
+    token: Final = REQUEST_AUTH.set(UserAPIKeyAuth(api_key="test-key"))
+    try:
+        with patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": True}):
+            stream: Final = await open_stream(core)
+            with pytest.raises(HTTPException, match="unknown-stream-guard") as exc:
+                await collect_texts(stream)
+            assert exc.value.status_code == 400
+        assert host.deployments_called() == ["a"]
+    finally:
+        REQUEST_AUTH.reset(token)
 
 
 async def test_continuation_sends_the_partial_text_as_an_assistant_prefill(

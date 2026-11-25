@@ -67,6 +67,21 @@ def api_status(status: int) -> ErrorBuilder:
     )
 
 
+def previous_response_rejected() -> Exception:
+    message: Final = "Previous response with id 'resp_gone' not found."
+    return litellm.BadRequestError(
+        message=message,
+        llm_provider="openai",
+        model="gpt-4o",
+        body={
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+            "message": message,
+        },
+    )
+
+
 def plain_error() -> ValueError:
     return ValueError("not a provider error")
 

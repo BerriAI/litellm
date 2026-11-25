@@ -4,7 +4,7 @@ Python 3.13 is stricter about partially-initialized modules and surfaces
 cycles that Python 3.12 silently tolerated. The previous bug:
 
   litellm.proxy.hooks.__init__
-    -> enterprise.enterprise_hooks
+    -> litellm.enterprise.enterprise_hooks
     -> litellm_enterprise.proxy.hooks.managed_files
     -> litellm.llms.base_llm.managed_resources.isolation
     -> litellm.proxy.management_endpoints.common_utils

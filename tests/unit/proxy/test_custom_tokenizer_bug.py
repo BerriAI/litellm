@@ -14,13 +14,15 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request, Response
 
 import litellm
 import litellm.proxy.proxy_server
 import litellm.utils
 from litellm import Router
-from litellm.proxy._types import ProxyException, TokenCountRequest
-from litellm.proxy.proxy_server import token_counter
+from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy.proxy_server import count_request_tokens, token_counter
+from litellm.types.utils import TokenCountResponse
 
 
 def _fake_hf_tokenizer(num_tokens: int) -> MagicMock:
@@ -61,7 +63,7 @@ async def test_custom_tokenizer_from_model_info_is_used(monkeypatch):
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(7)
 
-        response = await token_counter(
+        response = await count_request_tokens(
             request=TokenCountRequest(
                 model="my-embedding-model",
                 messages=[{"role": "user", "content": "Bonjour le monde"}],
@@ -93,7 +95,7 @@ async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
-        response = await token_counter(
+        response = await count_request_tokens(
             request=TokenCountRequest(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "hello"}],
@@ -123,6 +125,18 @@ def _vertex_glm_router(model_info: Mapping[str, object]) -> Router:
     )
 
 
+async def _vertex_glm_count(body: Mapping[str, object]) -> TokenCountResponse:
+    return await token_counter(
+        request=TokenCountRequest.model_validate({"model": "vertex-glm", **body}),
+        http_request=Request(
+            {"type": "http", "method": "POST", "path": "/utils/token_counter", "query_string": b"", "headers": []}
+        ),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_endpoint=True,
+    )
+
+
 _GLM_TOKENIZER: Final = {"custom_tokenizer": {"identifier": "zai-org/GLM-5.2", "revision": "main", "auth_token": None}}
 
 _RETURN_OK_MESSAGES: Final = {"messages": [{"role": "user", "content": "Return exactly OK."}]}
@@ -138,14 +152,8 @@ async def test_custom_tokenizer_counts_a_vertex_partner_model_without_a_count_ro
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(9)
 
-        from_messages: Final = await token_counter(
-            request=TokenCountRequest.model_validate({"model": "vertex-glm", **_RETURN_OK_MESSAGES}),
-            call_endpoint=True,
-        )
-        from_contents: Final = await token_counter(
-            request=TokenCountRequest.model_validate({"model": "vertex-glm", **_RETURN_OK_CONTENTS}),
-            call_endpoint=True,
-        )
+        from_messages: Final = await _vertex_glm_count(_RETURN_OK_MESSAGES)
+        from_contents: Final = await _vertex_glm_count(_RETURN_OK_CONTENTS)
 
     mock_tokenizer_cls.from_pretrained.assert_called_once_with("zai-org/GLM-5.2", revision="main", token=None)
     assert (from_messages.error, from_contents.error) == (False, False)
@@ -163,10 +171,7 @@ async def test_count_of_a_vertex_partner_model_without_a_count_route_or_tokenize
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _vertex_glm_router({}))
 
     with pytest.raises(ProxyException) as raised:
-        await token_counter(
-            request=TokenCountRequest.model_validate({"model": "vertex-glm", **body}),
-            call_endpoint=True,
-        )
+        await _vertex_glm_count(body)
 
     assert raised.value.code == "400"
     assert raised.value.message == "LiteLLM does not support counting tokens for Vertex AI model zai-org/glm-5.2-maas."

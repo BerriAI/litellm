@@ -22,11 +22,17 @@ from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+from tests.integration._support.ports import allocate_port
+
 CHATGPT_AUTH_HOST: Final = "auth.openai.com"
 GITHUB_HOST: Final = "github.com"
 GITHUB_API_HOST: Final = "api.github.com"
 COPILOT_API_HOST: Final = "api.githubcopilot.com"
-AUTH_HOSTS: Final = (CHATGPT_AUTH_HOST, GITHUB_HOST, GITHUB_API_HOST)
+GHE_ACCESS_TOKEN_URL: Final = "https://octo.ghe.com/login/oauth/access_token"
+GHE_API_HOST: Final = "api.octo.ghe.com"
+GHE_COPILOT_API_HOST: Final = "copilot-api.octo.ghe.com"
+AUTH_HOSTS: Final = (CHATGPT_AUTH_HOST, GITHUB_HOST, GITHUB_API_HOST, GHE_API_HOST)
+COPILOT_API_HOSTS: Final = (COPILOT_API_HOST, GHE_COPILOT_API_HOST)
 CHATGPT_ACCOUNT: Final = "acct-device-login"
 _FAR_FUTURE: Final = 4102444800
 _LONG_AGO: Final = 946684800
@@ -75,6 +81,7 @@ COPILOT_ACCESS: Final = "device-login-github-access"
 COPILOT_REJECTED_ACCESS: Final = "device-login-github-access-rejected"
 COPILOT_FIRST_LOGIN_ACCESS: Final = "device-login-github-access-first-login"
 COPILOT_UNSAVED_KEY_ACCESS: Final = "device-login-github-access-unsaved-key"
+COPILOT_GHE_ACCESS: Final = "device-login-ghe-access"
 COPILOT_STORED_KEY: Final = "tid=device-login;stored"
 COPILOT_MINTED_KEY: Final = "tid=device-login;minted"
 COPILOT_REJECTED_KEY: Final = "tid=device-login;rejected"
@@ -87,6 +94,7 @@ ACCEPTED_BEARERS: Final = frozenset(
         COPILOT_ACCESS,
         COPILOT_FIRST_LOGIN_ACCESS,
         COPILOT_UNSAVED_KEY_ACCESS,
+        COPILOT_GHE_ACCESS,
         COPILOT_STORED_KEY,
         COPILOT_MINTED_KEY,
         CONTROL_KEY,
@@ -192,9 +200,16 @@ def _auth_hosts(api_url: str, grant: threading.Event) -> Callable[[Request], Rep
             case ("api.github.com", "GET", "/copilot_internal/v2/token"):
                 return _copilot_api_key(request, api_url)
             case ("api.github.com", "GET", "/copilot_internal/user"):
-                if request.headers.get("authorization") == f"token {COPILOT_REJECTED_ACCESS}":
+                if request.headers.get("authorization") in (
+                    f"token {COPILOT_REJECTED_ACCESS}",
+                    f"token {COPILOT_GHE_ACCESS}",
+                ):
                     return _json(401, {"message": "Bad credentials"})
                 return _json(200, {"endpoints": {"api": f"https://{COPILOT_API_HOST}"}})
+            case ("api.octo.ghe.com", "GET", "/copilot_internal/user"):
+                if request.headers.get("authorization") != f"token {COPILOT_GHE_ACCESS}":
+                    return _json(401, {"message": "Bad credentials"})
+                return _json(200, {"endpoints": {"api": f"https://{GHE_COPILOT_API_HOST}"}})
             case _:
                 return _switched_off()
 
@@ -342,7 +357,7 @@ def _tunnel(
                 return
             authority: Final = request_line[1]
             host: Final = authority.rsplit(":", 1)[0]
-            if host not in (*AUTH_HOSTS, COPILOT_API_HOST):
+            if host not in (*AUTH_HOSTS, *COPILOT_API_HOSTS):
                 self.wfile.write(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
                 return
             is_auth: Final = host in AUTH_HOSTS
@@ -366,7 +381,7 @@ def _tunnel(
                 _pipe(upstream, self.request)
                 outbound.join(timeout=12)
 
-    with _TunnelServer(("127.0.0.1", 0), Tunnel) as server:
+    with _TunnelServer(("127.0.0.1", allocate_port()), Tunnel) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:
@@ -378,10 +393,8 @@ def _tunnel(
 
 
 @contextmanager
-def device_login_peers(
-    directory: Path, provider: Callable[[Request], Reply] | None = None
-) -> Generator[Peers]:
-    cert, key = write_self_signed_cert(directory, (*AUTH_HOSTS, COPILOT_API_HOST))
+def device_login_peers(directory: Path, provider: Callable[[Request], Reply] | None = None) -> Generator[Peers]:
+    cert, key = write_self_signed_cert(directory, (*AUTH_HOSTS, *COPILOT_API_HOSTS))
     switches: Final = Switches(threading.Event(), threading.Event(), threading.Event(), threading.Event())
     authorities: Final[SimpleQueue[str]] = SimpleQueue()
     hangups: Final[SimpleQueue[Hangup]] = SimpleQueue()

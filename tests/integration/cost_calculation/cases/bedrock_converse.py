@@ -3470,7 +3470,13 @@ US_ANTHROPIC_CLAUDE_SONNET_5_5_STREAM: Final = CostTrackingTestCase(
                 event_type="metadata",
                 payload={
                     "metrics": {"latencyMs": 883},
-                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                    "usage": {
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 0,
+                        "inputTokens": 1840,
+                        "outputTokens": 412,
+                        "totalTokens": 2252,
+                    },
                 },
             ),
         ),
@@ -3937,7 +3943,13 @@ US_ANTHROPIC_CLAUDE_OPUS_5_5_STREAM: Final = CostTrackingTestCase(
                 event_type="metadata",
                 payload={
                     "metrics": {"latencyMs": 883},
-                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                    "usage": {
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 0,
+                        "inputTokens": 1840,
+                        "outputTokens": 412,
+                        "totalTokens": 2252,
+                    },
                 },
             ),
         ),
@@ -4198,7 +4210,13 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM: Final = CostTrackingTestCase(
                 event_type="metadata",
                 payload={
                     "metrics": {"latencyMs": 883},
-                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                    "usage": {
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 0,
+                        "inputTokens": 1840,
+                        "outputTokens": 412,
+                        "totalTokens": 2252,
+                    },
                 },
             ),
         ),

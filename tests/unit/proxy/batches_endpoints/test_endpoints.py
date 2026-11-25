@@ -36,10 +36,12 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Dict, Final, Optional
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
@@ -52,7 +54,8 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.batches.main import acreate_batch
+from litellm.proxy.utils import ProxyLogging, handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -84,6 +87,18 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_key": "sk-vllm",
         "api_base": "http://vllm.test/v1",
         "model": "hosted_vllm/qwen",
+    },
+    "mistral-model": {
+        "custom_llm_provider": "mistral",
+        "api_key": "sk-mistral",
+        "api_base": "https://mistral.test/v1",
+        "model": "mistral/mistral-small-latest",
+    },
+    "bedrock-batch": {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/us.amazon.nova-lite-v1:0",
+        "s3_bucket_name": "model-bucket",
+        "s3_output_bucket_name": "model-bucket",
     },
 }
 
@@ -158,6 +173,7 @@ class Harness:
     router: MagicMock
     logging: MagicMock
     creds_resolver: MagicMock
+    upstream: respx.MockRouter
     upstream_files_route: respx.Route
 
     @property
@@ -215,6 +231,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -271,6 +288,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
             router=router,
             logging=logging,
             creds_resolver=creds_resolver,
+            upstream=upstream,
             upstream_files_route=upstream_files_route,
         )
         yield h
@@ -424,6 +442,81 @@ async def test_create__model_from_body(harness):
     assert payload["custom_llm_provider"] == "vertex_ai"
     assert payload["input_file_id"] == "file-plain"
     assert resp.id == encode_file_id_with_model("batch-provider-id", "vertex-model", id_type="batch")
+
+
+_TEAM_A_KEY: Final = UserAPIKeyAuth(
+    api_key="sk-team-a", team_id="team-a", team_metadata={"allowed_s3_buckets": ["team-a-bucket"]}
+)
+
+
+def _batch_body_with_output_bucket(bucket: str) -> dict[str, object]:
+    return {
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "model": "vertex-model",
+        "s3_output_bucket_name": bucket,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_on_the_team_allowlist_reaches_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-a-bucket"))
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == "team-a-bucket"
+
+
+@pytest.mark.asyncio
+async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_bucket_to_the_model(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "vertex-model",
+        },
+    )
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert "s3_output_bucket_name" not in harness.acreate_kwargs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")])
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {"input_file_id": "file-plain", "model": "bedrock-batch"},
+        {"input_file_id": encode_file_id_with_model("file-plain", "bedrock-batch")},
+    ],
+    ids=["model_in_body", "model_encoded_file_id"],
+)
+async def test_create__model_routed_batch_keeps_the_team_bucket_over_the_deployment_bucket(
+    harness, routing: dict[str, str], request_bucket: str | None, expected_bucket: str
+):
+    body: Final = {"endpoint": "/v1/chat/completions", "completion_window": "24h", **routing}
+    set_body(harness, body if request_bucket is None else {**body, "s3_output_bucket_name": request_bucket})
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == expected_bucket
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_off_the_team_allowlist_is_rejected_before_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-b-bucket"))
+
+    with pytest.raises(ProxyException) as rejection:
+        await call_create(harness, user=_TEAM_A_KEY)
+
+    assert str(rejection.value.code) == "401"
+    assert "s3_output_bucket_name is not allowed in request body" in rejection.value.message
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1395,6 +1488,139 @@ async def test_create__exception_carries_the_litellm_call_id(harness, openai_env
     assert call_id in record.getMessage()
 
 
+_UPSTREAM_BATCH_CREATE: Final = httpx.Request("POST", "https://api.openai.com/v1/batches")
+_INPUT_FILE_DOWNLOAD: Final = httpx.Request("GET", "https://storage.test/batch-input/input.jsonl")
+
+
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+_BATCH_MAY_EXIST_NOTICE: Final = (
+    "\n\nThe provider may already have created this batch, so check your newest batches before you send it again"
+)
+
+
+@pytest.mark.parametrize(
+    "create_error, should_retry",
+    [
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), httpx.ReadTimeout("no answer in time")
+            ),
+            "false",
+            id="read-timeout",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_BATCH_CREATE),
+                httpx.RemoteProtocolError("the server closed the connection before it answered"),
+            ),
+            "false",
+            id="connection-dropped",
+        ),
+        pytest.param(
+            lambda: openai.InternalServerError(
+                "the gateway gave up waiting", response=httpx.Response(504, request=_UPSTREAM_BATCH_CREATE), body=None
+            ),
+            "false",
+            id="504",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), httpx.ConnectTimeout("no connection in time")
+            ),
+            None,
+            id="connect-timeout",
+        ),
+        pytest.param(
+            lambda: openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), "false", id="timeout-of-unknown-phase"
+        ),
+        pytest.param(
+            lambda: openai.APIConnectionError(request=_UPSTREAM_BATCH_CREATE),
+            None,
+            id="connection-error-of-unknown-cause",
+        ),
+        pytest.param(
+            lambda: openai.RateLimitError(
+                "slow down", response=httpx.Response(429, request=_UPSTREAM_BATCH_CREATE), body=None
+            ),
+            None,
+            id="rate-limited",
+        ),
+        pytest.param(
+            lambda: openai.AuthenticationError(
+                "invalid x-api-key",
+                response=httpx.Response(401, headers={"x-should-retry": "false"}, request=_UPSTREAM_BATCH_CREATE),
+                body=None,
+            ),
+            None,
+            id="rejected-with-should-retry-false",
+        ),
+        pytest.param(
+            lambda: httpx.ReadTimeout("the input file did not download in time", request=_INPUT_FILE_DOWNLOAD),
+            None,
+            id="input-download-timed-out",
+        ),
+        pytest.param(
+            lambda: httpx.HTTPStatusError(
+                "the storage gateway gave up waiting",
+                request=_INPUT_FILE_DOWNLOAD,
+                response=httpx.Response(504, request=_INPUT_FILE_DOWNLOAD),
+            ),
+            None,
+            id="input-download-504",
+        ),
+    ],
+)
+async def test_create__tells_the_caller_not_to_resend_only_a_create_the_provider_may_have_made(
+    harness, openai_env_creds, create_error, should_retry
+):
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    error: Final = create_error()
+    harness.litellm_acreate.side_effect = error
+    answer_without_the_notice: Final = handle_exception_on_proxy(error)
+    notice: Final = _BATCH_MAY_EXIST_NOTICE if should_retry == "false" else ""
+
+    with pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers.get("x-should-retry") == should_retry
+    assert (raised.value.code, raised.value.message, raised.value.type) == (
+        answer_without_the_notice.code,
+        answer_without_the_notice.message + notice,
+        answer_without_the_notice.type,
+    )
+
+
+async def test_create__tells_the_caller_not_to_resend_a_mistral_batch_whose_post_timed_out_after_it_was_sent(
+    harness,
+):
+    set_body(
+        harness,
+        {
+            "model": "mistral-model",
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.litellm_acreate.side_effect = acreate_batch
+    create_route: Final = harness.upstream.post(url__startswith=CREDS["mistral-model"]["api_base"]).mock(
+        side_effect=httpx.ReadTimeout("no answer in time")
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert create_route.call_count == 1
+    assert raised.value.headers.get("x-should-retry") == "false"
+    assert raised.value.message.endswith(_BATCH_MAY_EXIST_NOTICE)
+
+
 # =========================================================================== #
 #                                                                             #
 #   GET /v1/batches/{batch_id}  -  retrieve_batch routing-contract tests      #
@@ -1481,6 +1707,7 @@ def retrieve_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
@@ -1904,6 +2131,71 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
     assert retrieve_harness.update_batch_in_db.call_count == 1
 
 
+def _hook_rewriting_the_batch_id_to(batch_id: str) -> Callable[..., LiteLLMBatch]:
+    def hook(*, response: LiteLLMBatch, **_: object) -> LiteLLMBatch:
+        response.id = batch_id
+        return response
+
+    return hook
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_endpoint", ["/v1/chat/completions", ""])
+async def test_retrieve__provider_sync_keeps_the_endpoint_the_batch_was_created_for(
+    retrieve_harness: RetrieveHarness, provider_endpoint: str
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": "/v1/embeddings"})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": provider_endpoint}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+    retrieve_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "in_progress")
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert retrieve_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
+    assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
+
+
+@pytest.mark.asyncio
+async def test_retrieve__a_saved_batch_without_an_endpoint_keeps_the_providers(retrieve_harness: RetrieveHarness) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": ""})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress")
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/chat/completions"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__an_embeddings_endpoint_from_the_provider_corrects_a_saved_chat_endpoint(
+    retrieve_harness: RetrieveHarness,
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(
+        update={"endpoint": "/v1/chat/completions"}
+    )
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": "/v1/embeddings"}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/embeddings"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
 async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
@@ -2068,6 +2360,7 @@ def list_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -2493,6 +2786,7 @@ def cancel_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -2670,6 +2964,30 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
         await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
 
     assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
+async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harness: CancelHarness) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="in_progress").model_copy(update={"endpoint": "/v1/embeddings"})
+    stored_row: Final = MagicMock(status="in_progress", file_object=stored.model_dump(mode="json"))
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = stored_row
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="cancelling")
+    cancel_harness.router.acancel_batch.return_value = provider_batch
+    cancel_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+    cancel_harness.logging.get_proxy_hook.return_value = object()
+
+    with (
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
+        patch.object(proxy_server, "prisma_client", prisma_client),
+    ):
+        resp: Final = await call_cancel(cancel_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "cancelling")
+    written: Final = cancel_harness.update_batch_in_db.call_args.kwargs
+    assert (written["response"].endpoint, written["db_batch_object"]) == ("/v1/embeddings", stored_row)
+    assert cancel_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
 
 
 @pytest.mark.asyncio

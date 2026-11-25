@@ -15,8 +15,10 @@ import pytest
 
 from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel.mappers import (
+    GenAIMapper,
     LangfuseMapper,
     LangtraceMapper,
+    MixpanelMapper,
     OpenInferenceMapper,
     WeaveMapper,
     resolve_mappers,
@@ -33,6 +35,7 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.types.utils import Message
 from tests.unit.integrations.otel.test_otel_v2_sources_of_truth import _responses_payload
 
 
@@ -679,6 +682,18 @@ def test_langfuse_trace_attributes_match_between_root_and_generation():
     assert all(generation[key] == value for key, value in root.items())
 
 
+def test_langfuse_mapper_sends_release_and_version_on_root_and_generation():
+    controls: Final = TraceControls(release="commit-abc", version="v2")
+
+    root: Final = LangfuseMapper.trace_attributes(controls)
+    generation: Final = LangfuseMapper().map(_llm_call(trace=controls))
+
+    assert root == {"langfuse.release": "commit-abc", "langfuse.version": "v2"}
+    assert all(generation[key] == value for key, value in root.items())
+    assert root.keys() <= LangfuseMapper.LLM_CALL_ATTRIBUTES
+    assert root.keys().isdisjoint(LangfuseMapper().map(_llm_call(trace=TraceControls(release="", version=None))))
+
+
 def test_langfuse_mapper_skips_when_no_messages():
     data = _llm_call(messages_in=(), choices_out=())
     attrs = LangfuseMapper().map(data)
@@ -706,6 +721,78 @@ def test_langfuse_mapper_keeps_chat_output_when_no_embedding_summary():
     attrs = LangfuseMapper().map(_llm_call(embedding_output=None))
 
     assert json.loads(attrs["langfuse.observation.output"]) == [{"role": "assistant", "content": "Sunny."}]
+
+
+LITELLM_USER_MESSAGE: Final = Message(role="user", content="weather in sf?")
+NOT_JSON_ENCODABLE: Final = object()
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_prompt"),
+    [
+        ({"role": "user", "content": "weather in sf?"}, {"role": "user", "content": "weather in sf?"}),
+        (
+            {"role": "user", "content": "weather in sf?", 1: "one"},
+            {"role": "user", "content": "weather in sf?", "1": "one"},
+        ),
+        (LITELLM_USER_MESSAGE, LITELLM_USER_MESSAGE.model_dump(mode="json")),
+        (
+            Message(role="user", content="weather in sf?", trace_handle=NOT_JSON_ENCODABLE),
+            {**LITELLM_USER_MESSAGE.model_dump(mode="json"), "trace_handle": str(NOT_JSON_ENCODABLE)},
+        ),
+    ],
+    ids=[
+        "dict_message",
+        "dict_message_with_int_key",
+        "litellm_message_object",
+        "litellm_message_with_value_json_cannot_encode",
+    ],
+)
+def test_vendor_mappers_keep_the_prompt_of_litellm_message_objects(
+    message: Mapping[str, object] | Message, expected_prompt: Mapping[str, object]
+) -> None:
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-nano",
+        "messages": [message],
+        "response": {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}]},
+    }
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+
+    assert {
+        "genai": json.loads(str(GenAIMapper().map(data)["gen_ai.input.messages"])),
+        "langfuse": json.loads(str(LangfuseMapper().map(data)["langfuse.observation.input"])),
+        "langtrace": json.loads(str(LangtraceMapper().map(data)["llm.prompts"])),
+        "openinference": json.loads(str(OpenInferenceMapper().map(data)["input.value"])),
+    } == {
+        "genai": [expected_prompt],
+        "langfuse": [expected_prompt],
+        "langtrace": [expected_prompt],
+        "openinference": [{"role": "user", "content": "weather in sf?"}],
+    }
+
+
+def test_vendor_mappers_keep_the_span_when_a_litellm_message_cannot_be_dumped() -> None:
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-nano",
+        "messages": [
+            {"role": "system", "content": "be brief"},
+            Message(role="user", content="weather in sf?", audio_bytes=b"\xff\xfe"),
+        ],
+        "response": {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}]},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True))
+
+    assert {
+        "input": json.loads(str(attrs["langfuse.observation.input"])),
+        "output": json.loads(str(attrs["langfuse.observation.output"])),
+    } == {
+        "input": [{"role": "system", "content": "be brief"}],
+        "output": [{"role": "assistant", "content": "Sunny."}],
+    }
 
 
 def test_langfuse_mapper_renders_a_responses_api_call_from_the_standard_logging_payload():
@@ -1025,3 +1112,41 @@ def test_langfuse_root_trace_attributes_derive_the_name_only_when_the_caller_gav
     trace: TraceControls, call_type: str | None, expected: Mapping[str, object]
 ) -> None:
     assert LangfuseMapper.trace_attributes(trace, call_type) == expected
+
+
+def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent() -> None:
+    from litellm.integrations.otel.model.payloads import MCPToolCallSpanData
+
+    with_named_user: Final = _llm_call(identity=RequestIdentity(call_id="c1", user_id="user_123"))
+    assert MixpanelMapper().map(with_named_user) == {"user.id": "user_123"}
+
+    with_trace_user: Final = _llm_call(trace=TraceControls(user_id="trace_user_456"))
+    assert MixpanelMapper().map(with_trace_user) == {"user.id": "trace_user_456"}
+
+    mcp_span: Final = MCPToolCallSpanData(
+        operation=GenAIOperation.EXECUTE_TOOL,
+        method="tools/call",
+        tool_name="search",
+        server_name="srv",
+        server_address=None,
+        server_port=None,
+        session_id=None,
+        arguments_json=None,
+        result_json=None,
+        error=None,
+        response_cost=None,
+        identity=RequestIdentity(call_id="c2", user_id="mcp_user"),
+    )
+    assert MixpanelMapper().map(mcp_span) == {}
+    assert MixpanelMapper().map(_llm_call()) == {}
+
+    from litellm.integrations.otel.model.metadata import LLMCallEvent
+
+    sdk_event: Final = LLMCallEvent.from_dict(
+        {
+            "litellm_params": {"metadata": {"user.id": "sdk_user_789", "ignored_key": "x"}},
+            "standard_logging_object": {"id": "c3", "model": "gpt-4o", "metadata": {}},
+        }
+    )
+    assert sdk_event.caller_user_id == "sdk_user_789"
+    assert LLMCallEvent.from_dict({}).caller_user_id is None

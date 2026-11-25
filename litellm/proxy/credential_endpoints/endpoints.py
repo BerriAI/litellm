@@ -67,6 +67,7 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.router import server_owned_wif_fields_named, server_owned_wif_fields_written
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
+from .nim_model_discovery import router as nim_model_discovery_router
 from .user_provider_credentials import (
     GithubCopilotUserConnectionPayload,
     decode_user_provider_credential,
@@ -80,6 +81,7 @@ from .user_provider_credentials import (
 )
 
 router: Final = APIRouter()
+router.include_router(nim_model_discovery_router)
 _CREDENTIAL_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _GITHUB_COPILOT_PROVIDER: Final = "github_copilot"
 _DISPLAY_NAME_MAX_LENGTH: Final = 255
@@ -105,6 +107,25 @@ def _normalized_github_copilot_values(
     if host is None:
         raise HTTPException(status_code=400, detail=f"Invalid {GITHUB_COPILOT_HOST_KEY}")
     return {**credential_values, GITHUB_COPILOT_HOST_KEY: host}
+
+
+def _validate_github_app_values(values: Mapping[str, object]) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.llms.github_copilot.app_auth import app_config
+
+    try:
+        app_config(
+            {key: value for key, value in values.items() if key != "litellm_credential_name"},
+            validate_stored_key=True,
+        )
+    except BadRequestError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid GitHub App configuration. Use an App/client ID, positive installation ID, "
+                "and a valid RSA PEM private key or private-key secret reference."
+            ),
+        ) from None
 
 
 def _reject_non_admin_wif_fields(
@@ -154,6 +175,10 @@ def _reject_overlapping_credential_values(credential: UpdateCredentialItem) -> N
             status_code=400,
             detail=f"credential_values_to_delete overlaps credential_values for key(s): {sorted(overlap)}",
         )
+
+
+def _without_keys(credential_values: Mapping[str, object], keys: tuple[str, ...]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in credential_values.items() if key not in keys})
 
 
 def _without_null_values(credential_values: Mapping[str, object]) -> dict[str, object]:
@@ -324,6 +349,7 @@ async def create_credential(
     Stores credential in DB.
     Reloads credentials in memory.
     """
+    from litellm.llms.github_copilot.app_auth import blank_app_fields
     from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
@@ -345,11 +371,13 @@ async def create_credential(
         credential_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
             credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
         )
-        normalized_values: Final = _normalized_github_copilot_values(
+        copilot_values: Final = _normalized_github_copilot_values(
             _CREDENTIAL_DICT_ADAPTER.validate_python(credential_values),
             credential_info,
         )
-        _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
+        _reject_non_admin_wif_fields(server_owned_wif_fields_written(copilot_values), user_api_key_dict)
+        normalized_values: Final = _without_keys(copilot_values, blank_app_fields(copilot_values))
+        _validate_github_app_values(normalized_values)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )
@@ -987,6 +1015,7 @@ async def update_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
+    from litellm.llms.github_copilot.app_auth import blank_app_fields
     from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
@@ -1020,7 +1049,9 @@ async def update_credential(
             decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
                 decrypted_stored_credential.credential_values
             )
-            incoming_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
+            unmasked_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
+            cleared_app_fields: Final = blank_app_fields(unmasked_values)
+            incoming_values: Final = _without_keys(unmasked_values, cleared_app_fields)
             patch: Final = CredentialItem(
                 credential_name=credential_name,
                 display_name=(
@@ -1030,7 +1061,7 @@ async def update_credential(
                 ),
                 credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
                 credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(incoming_values),
-                credential_values_to_delete=credential.credential_values_to_delete,
+                credential_values_to_delete=(*(credential.credential_values_to_delete or ()), *cleared_app_fields),
             )
             stored_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
                 db_credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
@@ -1047,6 +1078,9 @@ async def update_credential(
                 else patch
             )
             merged_credential: Final = update_db_credential(db_credential, normalized_patch)
+            _validate_github_app_values(
+                _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values)
+            )
             credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
                 "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
             )

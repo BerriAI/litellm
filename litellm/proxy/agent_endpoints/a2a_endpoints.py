@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
@@ -23,7 +24,8 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, require_get
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
@@ -124,6 +126,12 @@ _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+def _httpx_url(url: object) -> str | httpx.URL:
+    if isinstance(url, (str, httpx.URL)):
+        return url
+    return httpx.URL(url)  # pyright: ignore[reportArgumentType]  # httpx.URL raises its own TypeError
+
+
 def _sse_event(payload: object) -> str:
     """Frame a JSON-RPC object as a single A2A SSE event (``data: <json>\\n\\n``)."""
     return f"data: {json.dumps(payload)}\n\n"
@@ -145,19 +153,20 @@ def _to_jsonrpc_object(chunk: object) -> object:
     return chunk
 
 
-def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
+def _build_message_send_params(params: object) -> "MessageSendParams":
     """Build MessageSendParams from wire (0.3) or A2A 1.0 JSON-RPC params."""
     from a2a.compat.v0_3.types import MessageSendParams
 
+    fields: Final = dict(**keyword_arguments(params, MessageSendParams))
     try:
-        return MessageSendParams(**params)
+        return MessageSendParams.model_validate(fields)
     except ValidationError:
         from a2a.compat.v0_3.conversions import pb2_v10, to_compat_send_message_request
         from google.protobuf.json_format import ParseDict, ParseError
 
         pb: Final = pb2_v10.SendMessageRequest()
         try:
-            ParseDict(params, pb, ignore_unknown_fields=True)
+            ParseDict(fields, pb, ignore_unknown_fields=True)
         except ParseError as e:
             raise ValueError(f"Invalid message/send params: {e}") from e
         return to_compat_send_message_request(pb, "").params
@@ -401,7 +410,7 @@ async def _forward_jsonrpc(
 
 
 async def _a2a_sse_event_source(
-    agent_url: str,
+    agent_url: object,
     body: Mapping[str, object],
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
@@ -426,7 +435,7 @@ async def _a2a_sse_event_source(
         params={"timeout": None},
     )
     async_client: Final = handler.client
-    req: Final = async_client.build_request("POST", agent_url, json=body, headers=headers)
+    req: Final = async_client.build_request("POST", _httpx_url(agent_url), json=body, headers=headers)
     resp: Final = await async_client.send(req, stream=True)
     try:
         if not resp.is_success:
@@ -481,7 +490,7 @@ def _sse_streaming_response(generator: AsyncGenerator[str, None]) -> StreamingRe
 
 
 async def _forward_jsonrpc_sse(
-    agent_url: str,
+    agent_url: object,
     body: Mapping[str, object],
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
@@ -547,7 +556,7 @@ async def _forward_jsonrpc_sse(
 async def _handle_stream_message(
     api_base: str | None,
     request_id: str | int,
-    params: dict[str, object],
+    params: object,
     litellm_params: dict[str, object] | None = None,
     agent_id: str | None = None,
     metadata: dict[str, object] | None = None,
@@ -811,6 +820,7 @@ async def invoke_agent_a2a(
         AgentRequestHandler,
     )
     from litellm.proxy.proxy_server import (
+        current_general_settings,
         general_settings,
         proxy_config,
         proxy_logging_obj,
@@ -832,19 +842,19 @@ async def invoke_agent_a2a(
         request_id: Final[Any | None] = body.get("id")
         original_method: Final[str | None] = body.get("method")
         method: str | None = original_method
-        params = body.get("params", {})
+        params = require_get(body).get("params", {})
 
         if method:
             method = _PASCAL_TO_WIRE.get(method, method)
 
-        if isinstance(params, dict):
+        if is_str_keyed_dict(params):
             # extract any litellm params from the params - eg. 'guardrails'
             # ``metadata`` is intentionally excluded: it's a first-class A2A
             # ``MessageSendParams`` field that the completion bridge forwards
             # downstream via ``get_forward_metadata``. Stripping it here would
             # collide with litellm's spend-tracking ``metadata`` kwarg and
             # silently drop the caller's A2A request-level metadata.
-            params_to_remove: Final = []
+            params_to_remove: Final[list[str]] = []
             for key, value in params.items():
                 if key in all_litellm_params and key not in {"id", "metadata"}:
                     params_to_remove.append(key)
@@ -942,6 +952,17 @@ async def invoke_agent_a2a(
             }
         )
 
+        # Reject unknown agent guardrails before pre-call hooks reserve rate limits.
+        _agent_guardrails = litellm_params.get("guardrails")
+        if _agent_guardrails:
+            from litellm.proxy.guardrails.guardrail_helpers import (
+                reject_unregistered_guardrails_enabled,
+                reject_unregistered_request_guardrails,
+            )
+
+            if reject_unregistered_guardrails_enabled(current_general_settings()):
+                reject_unregistered_request_guardrails({"guardrails": _agent_guardrails})
+
         # Add litellm data (user_api_key, user_id, team_id, etc.)
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
@@ -1003,11 +1024,10 @@ async def invoke_agent_a2a(
         # _handle_stream_message both pick them up.  A2A agents use model
         # a2a_agent/*, which is not an llm_router deployment, so
         # _check_and_merge_model_level_guardrails() skips them.
-        _agent_guardrails = litellm_params.get("guardrails")
         if _agent_guardrails:
             if not isinstance(_agent_guardrails, list):
                 _agent_guardrails = [_agent_guardrails]
-            _existing_guardrails: list = data.get("guardrails") or []
+            _existing_guardrails: list[object] = data.get("guardrails") or []
             if not isinstance(_existing_guardrails, list):
                 _existing_guardrails = [_existing_guardrails]
             data["guardrails"] = _existing_guardrails + [g for g in _agent_guardrails if g not in _existing_guardrails]
@@ -1027,7 +1047,7 @@ async def invoke_agent_a2a(
             from a2a.compat.v0_3.types import SendMessageRequest
 
             try:
-                message_send_params: Final = _build_message_send_params(params)
+                message_send_params: Final = _build_message_send_params(_DECODED_JSON.validate_python(params))
             except (ValidationError, ValueError) as e:
                 return _jsonrpc_error(request_id, -32602, f"Invalid params: {e}")
 
@@ -1105,16 +1125,16 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
+            if is_str_keyed_dict(params):
                 params = normalize_request_params(params, served_version, method=method)
             if method == "tasks/pushNotificationConfig/set":
-                if not isinstance(params, dict):
+                if not is_str_keyed_dict(params):
                     raise HTTPException(
                         status_code=400,
                         detail="params must be an object",
                     )
                 push_config: Final = params.get("pushNotificationConfig", {})
-                if "pushNotificationConfig" in params and not isinstance(push_config, dict):
+                if not is_str_keyed_dict(push_config):
                     raise HTTPException(
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
@@ -1165,9 +1185,10 @@ async def invoke_agent_a2a(
             )
 
         elif method == "tasks/resubscribe":
-            if not agent_url:
+            resubscribe_url: Final[object] = agent_url
+            if not resubscribe_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
+            if is_str_keyed_dict(params):
                 params = normalize_request_params(params, served_version, method=method)
             forward_body = {
                 "jsonrpc": "2.0",
@@ -1176,7 +1197,7 @@ async def invoke_agent_a2a(
                 "params": params,
             }
             return await _forward_jsonrpc_sse(
-                agent_url,
+                resubscribe_url,
                 forward_body,
                 request_id=request_id,
                 extra_headers=agent_extra_headers,

@@ -28,7 +28,6 @@ from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration._support.sdk_models import build_sdk_models
 from tests.integration._support.workers import gateway_profile, start_worker_stacks, worker_stack
-from tests.integration.run import GITHUB_FILES
 
 if TYPE_CHECKING:
     from tests.integration._support.actors import ActorSet, GatewayClient, ManagementDatabase, ScratchResources
@@ -71,6 +70,11 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.addinivalue_line("markers", "shares_worker_state: owned proxies here share the worker DB and Redis")
+    config.addinivalue_line(
+        "markers",
+        "billed_against_real_provider_by_cost_tracking_reconciliation_automation: "
+        "the daily automation also sends this case to the real provider and checks the bill",
+    )
     config.stash[REPORTS] = []
     config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
@@ -216,11 +220,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         for item in items
         if item.path.is_relative_to(root) and item.path.relative_to(root).parts[0] in OWNED_DIRECTORIES
     )
-    circleci_only: Final = tuple(
-        item for item in owned if item.path.relative_to(root.parents[1]).as_posix() not in GITHUB_FILES
-    )
-    if circleci_only and os.environ.get("GITHUB_ACTIONS") == "true":
-        raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
     config.stash[INVENTORY] = tuple(_case_identity(item.nodeid) for item in owned)
@@ -230,7 +229,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Integration shard index must be within the positive shard count")
     files: Final = config.stash[SHARD_FILES]
     if count > 1 and files is None:
-        raise pytest.UsageError("Parallel integration runs require CircleCI's shard file selection")
+        raise pytest.UsageError("Parallel integration runs require a shard file selection")
     if files is not None:
         available: Final = frozenset(item.nodeid.split("::", 1)[0] for item in owned)
         for file in sorted(files - available - config.stash.get(FAILED_COLLECTIONS, frozenset())):

@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
+import respx
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
@@ -18,14 +19,15 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.tool_fields import DeferredTopLevelTool, NamespaceMember, chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 from litellm.responses.litellm_completion_transformation.tool_search import tool_search_routing
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -35,7 +37,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.base import HiddenParams
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
-from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
+from litellm.types.responses.main import OutputToolSearchCall, OutputToolSearchOutput, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -46,6 +48,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -268,6 +271,104 @@ class TestLiteLLMCompletionResponsesConfig:
         assert result["image_url"]["detail"] == "auto"
         assert "extra_field" not in result
         assert "another_field" not in result
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "detail": "auto",
+                        "bucket_owner": "111122223333",
+                    },
+                },
+                id="input-image",
+            ),
+            pytest.param(
+                {
+                    "type": "input_image",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "detail": "auto",
+                        "bucket_owner": "111122223333",
+                    },
+                },
+                id="input-image-nested-url",
+            ),
+            pytest.param(
+                {"type": "input_file", "file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                {
+                    "type": "file",
+                    "file": {"file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                },
+                id="input-file",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": 111122223333},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "detail": "auto",
+                        "bucket_owner": 111122223333,
+                    },
+                },
+                id="input-image-owner-left-for-bedrock-to-check",
+            ),
+            pytest.param(
+                {
+                    "type": "input_image",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": ""},
+                    "bucket_owner": "111122223333",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "detail": "auto", "bucket_owner": ""},
+                },
+                id="input-image-empty-owner-left-for-bedrock-to-check",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_keeps_bucket_owner(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "data:image/png;base64,AA", "bucket_owner": "111122223333"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA", "detail": "auto"}},
+                id="data-url-image",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "https://example.test/cat.png", "bucket_owner": 111122223333},
+                {"type": "image_url", "image_url": {"url": "https://example.test/cat.png", "detail": "auto"}},
+                id="https-image-with-an-int-owner",
+            ),
+            pytest.param(
+                {
+                    "type": "input_file",
+                    "file_data": "data:application/pdf;base64,AA",
+                    "bucket_owner": ["111122223333"],
+                },
+                {"type": "file", "file": {"file_data": "data:application/pdf;base64,AA"}},
+                id="data-url-file-with-a-list-owner",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_drops_bucket_owner_off_s3(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
 
     def test_transform_chat_completion_response_with_reasoning_content(self):
         """Test that reasoning content is preserved in the full transformation pipeline"""
@@ -909,6 +1010,296 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].name == "spawn_agent"
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
+
+    def test_namespace_member_past_64_characters_round_trips_through_a_chat_name_within_64(self):
+        namespace = "mcp__codex_apps__codex_document_control"
+        member = "_get_document_tool_schemas"
+        sibling = "_get_document_tool_schemas_v2"
+        request_tools = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Document control",
+                "tools": [
+                    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                    for name in (member, sibling)
+                ],
+            }
+        ]
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=request_tools
+        )
+        chat_names = [tool["function"]["name"] for tool in chat_tools]
+        assert len(f"{namespace}__{member}") > 64
+        assert all(len(name) <= 64 for name in chat_names)
+        assert len(set(chat_names)) == 2
+
+        echoed = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": member,
+                "namespace": namespace,
+                "call_id": "call_echo",
+                "arguments": "{}",
+            }
+        )
+        assert echoed[0]["tool_calls"][0]["function"]["name"] == chat_names[0]
+
+        tool_call_id = "call_long_namespace_member"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="muse-ember-1.0",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name=chat_names[0], arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="List the document tools",
+                    responses_api_request={"tools": request_tools},
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(call.namespace, call.name) for call in tool_calls] == [(namespace, member)]
+
+    def test_forced_tool_choice_on_a_namespace_member_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="azure_ai/grok-4.3",
+            input="Fetch the document tool schemas",
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ],
+                "tool_choice": {"type": "function", "name": f"{namespace}__{member}"},
+            },
+            custom_llm_provider="azure_ai",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        assert len(declared_names[0]) <= 64
+        assert result["tool_choice"] == {"type": "function", "function": {"name": declared_names[0]}}
+
+    def test_replayed_function_call_with_a_joined_name_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-haiku-5-5",
+            input=[
+                {"type": "message", "role": "user", "content": "Fetch the document tool schemas"},
+                {
+                    "type": "function_call",
+                    "name": f"{namespace}__{member}",
+                    "call_id": "call_flattened_history",
+                    "arguments": "{}",
+                },
+                {"type": "function_call_output", "call_id": "call_flattened_history", "output": "[]"},
+            ],
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ]
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        replayed_names: Final = [
+            call["function"]["name"] for message in result["messages"] for call in message.get("tool_calls") or ()
+        ]
+        assert len(declared_names[0]) <= 64
+        assert replayed_names == declared_names
+
+    def test_transform_tools_rejects_a_top_level_function_named_like_a_namespace_member_past_64_characters(
+        self,
+    ) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        with pytest.raises(
+            litellm.BadRequestError,
+            match=f"Top-level function names conflict with flattened namespace tools: {namespace}__{member}",
+        ) as exc_info:
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {"type": "function", "name": f"{namespace}__{member}", "parameters": {"type": "object"}},
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [{"type": "function", "name": member, "parameters": {"type": "object"}}],
+                    },
+                ]
+            )
+        assert exc_info.value.status_code == 400
+
+    def test_transform_tools_rejects_a_namespace_member_named_like_another_members_shortened_name(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = "_get_document_tool_schemas"
+        shortened: Final = chat_member_name(namespace, long_member)
+        with pytest.raises(litellm.BadRequestError, match=f"Flattened namespace tools share a name: {shortened}"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [
+                            {"type": "function", "name": long_member, "parameters": {"type": "object"}},
+                            {
+                                "type": "function",
+                                "name": shortened.removeprefix(f"{namespace}__"),
+                                "parameters": {"type": "object"},
+                            },
+                        ],
+                    },
+                ]
+            )
+
+    def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
+        """A deferred top-level function (defer_loading=True) comes back with namespace == name,
+        the shape the OpenAI Agents SDK reserves for it. Without it the SDK raises
+        "Tool get_reporting_categories not found" after a native tool search."""
+        tool_call_id = "call_deferred_top_level"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="bedrock/invoke/anthropic.claude-opus-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="get_reporting_categories", arguments='{"market":"TR-TITCK"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="Is CHG-TR-0042 Type IB in TR-TITCK?",
+                    responses_api_request={
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "get_reporting_categories",
+                                "defer_loading": True,
+                                "parameters": {"type": "object", "properties": {"market": {"type": "string"}}},
+                            }
+                        ]
+                    },
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(c.name, c.namespace, c.arguments) for c in tool_calls] == [
+            ("get_reporting_categories", "get_reporting_categories", '{"market":"TR-TITCK"}')
+        ]
+
+    def test_transform_chat_completion_response_tool_loaded_by_client_side_search_has_namespace_equal_to_name(self):
+        """A deferred tool the client's own tool search loaded is still a deferred top-level tool to the
+        Agents SDK, so its call comes back as namespace == name through the client-search bridge too."""
+        from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
+
+        tool_call_id = "call_client_searched_deploy"
+        bridged = bridge_client_tool_search(
+            [
+                {"type": "tool_search_call", "call_id": "s1", "execution": "client", "arguments": {"query": "deploy"}},
+                {
+                    "type": "tool_search_output",
+                    "call_id": "s1",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [{"type": "function", "name": "deploy", "parameters": {"type": "object"}}],
+                },
+            ],
+            [
+                {"type": "tool_search", "execution": "client"},
+                {"type": "function", "name": "deploy", "defer_loading": True, "parameters": {"type": "object"}},
+            ],
+        )
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="bedrock/invoke/anthropic.claude-opus-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id, type="function", function=Function(name="deploy", arguments="{}")
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input=bridged.input,
+                    responses_api_request={"tools": list(bridged.tools)},
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(c.name, c.namespace) for c in tool_calls] == [("deploy", "deploy")]
 
     def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
         """A non-namespace function call must not gain a namespace attribute, matching
@@ -1696,6 +2087,77 @@ def _chat_response_with_tool_search_call(
     )
 
 
+_STOCK_PRICE_TOOL: Final = {"type": "function", "name": "get_stock_price", "defer_loading": True}
+_FX_RATE_TOOL: Final = {"type": "function", "name": "get_fx_rate", "defer_loading": True}
+_CONVERT_TOOL: Final = {"type": "custom", "name": "convert_currency", "defer_loading": True}
+_FINANCE_NAMESPACE: Final = {
+    "type": "namespace",
+    "name": "finance",
+    "description": "Market data",
+    "tools": [_STOCK_PRICE_TOOL, _FX_RATE_TOOL, _CONVERT_TOOL, {"type": "web_search"}],
+}
+_UNNAMED_TOOL: Final = {"type": "function", "name": None}
+
+
+def _chat_response_with_tool_search_result(result_content: Mapping[str, object]) -> ModelResponse:
+    response: Final = _chat_response_with_tool_search_call('{"pattern": "weather"}')
+    message: Final = response.choices[0].message
+    return response.model_copy(
+        update={
+            "choices": [
+                response.choices[0].model_copy(
+                    update={
+                        "message": Message(
+                            content=None,
+                            tool_calls=message.tool_calls,
+                            provider_specific_fields={
+                                "tool_results": [
+                                    {
+                                        "type": "tool_search_tool_result",
+                                        "tool_use_id": "srvtoolu_01Search",
+                                        "content": result_content,
+                                    }
+                                ]
+                            },
+                        )
+                    }
+                )
+            ]
+        }
+    )
+
+
+def _stateless_tool_search_input(
+    call_id: str | None, output_status: Literal["completed", "incomplete"]
+) -> Sequence[Mapping[str, object]]:
+    return [
+        {"type": "message", "role": "user", "content": "What is the weather in Paris right now?"},
+        {
+            "type": "tool_search_call",
+            "id": "tsc_01",
+            "call_id": call_id,
+            "arguments": {"pattern": "weather"},
+            "execution": "server",
+            "status": "completed",
+        },
+        {
+            "type": "tool_search_output",
+            "id": "tso_01",
+            "call_id": call_id,
+            "execution": "server",
+            "status": output_status,
+            "tools": [_deferred_tools_with_server_tool_search()[1]],
+        },
+        {
+            "type": "function_call",
+            "call_id": "toolu_01Weather",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+        },
+        {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+    ]
+
+
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
 
@@ -1926,6 +2388,30 @@ class TestToolTransformation:
         )
 
         assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather", "finance__get_stock_price"]
+        assert all("defer_loading" not in tool for tool in result["tools"])
+
+    @pytest.mark.parametrize(
+        ("model", "provider"),
+        [
+            ("anthropic/claude-sonnet-5-5", "anthropic"),
+            ("bedrock/invoke/us.anthropic.claude-opus-5", "bedrock"),
+            ("gemini/gemini-2.5-flash", "gemini"),
+        ],
+    )
+    def test_tools_loaded_by_a_client_side_search_go_out_undeferred(self, model: str, provider: str) -> None:
+        tools: Final = [
+            {"type": "tool_search", "execution": "client"},
+            {"type": "function", "name": "deploy", "defer_loading": True, "parameters": {"type": "object"}},
+        ]
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="Deploy the service.",
+            responses_api_request={"tools": tools},
+            custom_llm_provider=provider,
+        )
+
+        assert [tool["function"]["name"] for tool in result["tools"]] == ["tool_search", "deploy"]
         assert all("defer_loading" not in tool for tool in result["tools"])
 
     def test_native_bm25_search_tool_keeps_the_other_tools_deferred(self) -> None:
@@ -2249,6 +2735,201 @@ class TestToolTransformation:
         assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
         assert [call["id"] for call in messages[1]["tool_calls"]] == ["toolu_01Weather"]
         assert "tool_search" not in json.dumps(messages)
+
+    @pytest.mark.parametrize(
+        ("result_content", "status", "loaded_tools"),
+        [
+            pytest.param(
+                {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [
+                        {"type": "tool_reference", "tool_name": name}
+                        for name in ("get_weather", "finance__get_stock_price", "convert_currency", "not_a_tool")
+                    ],
+                },
+                "completed",
+                [
+                    _deferred_tools_with_server_tool_search()[1],
+                    {**_FINANCE_NAMESPACE, "tools": [_STOCK_PRICE_TOOL, _CONVERT_TOOL]},
+                ],
+                id="found_tools",
+            ),
+            pytest.param(
+                {"type": "tool_search_tool_result_error", "error_code": "unavailable"},
+                "incomplete",
+                [],
+                id="search_failed",
+            ),
+        ],
+    )
+    def test_anthropic_tool_search_result_becomes_a_tool_search_output_of_the_tools_as_sent(
+        self,
+        result_content: Mapping[str, object],
+        status: str,
+        loaded_tools: list[Mapping[str, object]],
+    ) -> None:
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_result(result_content),
+            responses_api_request={
+                "tools": [*_deferred_tools_with_server_tool_search()[:2], _FINANCE_NAMESPACE, _UNNAMED_TOOL],
+            },
+        )
+
+        assert [item.type for item in items] == ["tool_search_call", "tool_search_output", "function_call"]
+        search_output: Final = items[1]
+        assert isinstance(search_output, OutputToolSearchOutput)
+        assert (search_output.call_id, search_output.execution, search_output.status) == (
+            "srvtoolu_01Search",
+            "server",
+            status,
+        )
+        assert [dict(tool) for tool in search_output.tools] == loaded_tools
+
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "call_id", "output_status", "replayed_call_ids"),
+        [
+            pytest.param(
+                "anthropic/claude-sonnet-5-5",
+                "anthropic",
+                "srvtoolu_01Search",
+                "completed",
+                ["srvtoolu_01Search", "toolu_01Weather"],
+                id="claude_search_on_anthropic",
+            ),
+            pytest.param(
+                "anthropic/claude-sonnet-5-5",
+                "anthropic",
+                "srvtoolu_01Search",
+                "incomplete",
+                ["toolu_01Weather"],
+                id="failed_claude_search_on_anthropic",
+            ),
+            pytest.param(
+                "anthropic/claude-sonnet-5-5", "anthropic", None, "completed", ["toolu_01Weather"], id="openai_search"
+            ),
+            pytest.param(
+                "mistral/mistral-small-latest",
+                "mistral",
+                "srvtoolu_01Search",
+                "completed",
+                ["toolu_01Weather"],
+                id="claude_search_off_anthropic",
+            ),
+            pytest.param(
+                "anthropic/claude-3-7-sonnet-20250219",
+                "anthropic",
+                "srvtoolu_01Search",
+                "completed",
+                ["toolu_01Weather"],
+                id="claude_search_sent_to_a_claude_without_tool_search",
+            ),
+        ],
+    )
+    def test_stateless_tool_search_items_are_replayed_only_for_a_completed_claude_search_on_anthropic(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        call_id: str | None,
+        output_status: Literal["completed", "incomplete"],
+        replayed_call_ids: Sequence[str],
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input(call_id, output_status))
+            ),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert [message["role"] for message in request["messages"]] == ["user", "assistant", "tool"]
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == replayed_call_ids
+
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "replayed_call_ids"),
+        [
+            pytest.param(
+                "anthropic/claude-3-7-sonnet-20250219",
+                "anthropic",
+                ["srvtoolu_01Search", "toolu_01Weather"],
+                id="on_anthropic",
+            ),
+            pytest.param("mistral/mistral-small-latest", "mistral", ["toolu_01Weather"], id="off_anthropic"),
+        ],
+    )
+    def test_stateless_tool_search_items_follow_anthropics_own_search_tool_on_a_claude_the_cost_map_does_not_flag(
+        self, model: str, custom_llm_provider: str, replayed_call_ids: Sequence[str]
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input("srvtoolu_01Search", "completed"))
+            ),
+            responses_api_request={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    *_deferred_tools_with_server_tool_search()[1:],
+                ]
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == replayed_call_ids
+
+    @pytest.mark.parametrize(
+        "tools",
+        [
+            pytest.param(_deferred_tools_with_server_tool_search()[1:], id="only_the_tools_it_found"),
+            pytest.param(
+                [{"type": "tool_search", "execution": "client"}, *_deferred_tools_with_server_tool_search()[1:]],
+                id="a_search_the_client_runs",
+            ),
+            pytest.param([], id="no_tools"),
+        ],
+    )
+    def test_stateless_claude_search_is_dropped_when_the_follow_up_sends_no_search_tool_the_route_runs(
+        self, tools: list[dict[str, object]]
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input("srvtoolu_01Search", "completed"))
+            ),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == ["toolu_01Weather"]
+
+    @pytest.mark.parametrize(
+        ("arguments", "search_tool_name"),
+        [
+            pytest.param({"pattern": "weather"}, "tool_search_tool_regex", id="regex_object"),
+            pytest.param({"query": "weather"}, "tool_search_tool_bm25", id="bm25_object"),
+            pytest.param('{"query": "weather"}', "tool_search_tool_bm25", id="bm25_json"),
+            pytest.param("weather", "tool_search_tool_regex", id="not_json"),
+        ],
+    )
+    def test_stateless_claude_search_is_replayed_under_the_search_tool_its_arguments_belong_to(
+        self, arguments: object, search_tool_name: str
+    ) -> None:
+        items: Final = (
+            {**item, "arguments": arguments} if item["type"] == "tool_search_call" else item
+            for item in _stateless_tool_search_input("srvtoolu_01Search", "completed")
+        )
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(items)
+            ),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [(call["id"], call["function"]["name"]) for call in request["messages"][1]["tool_calls"]] == [
+            ("srvtoolu_01Search", search_tool_name),
+            ("toolu_01Weather", "get_weather"),
+        ]
 
     def test_transform_local_shell_tools_dropped(self) -> None:
         (
@@ -2878,6 +3559,104 @@ class TestToolTransformation:
 
         assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
 
+    def test_function_call_echo_with_namespace_equal_to_name_keeps_bare_name(self):
+        """The Agents SDK echoes a deferred top-level call with namespace == name. The provider
+        was given the bare tool name, so the outbound chat tool_call must not become
+        "get_reporting_categories__get_reporting_categories"."""
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "get_reporting_categories",
+                    "namespace": "get_reporting_categories",
+                    "call_id": "call_3",
+                    "arguments": '{"market": "KR-MFDS"}',
+                }
+            ],
+            responses_api_request={
+                "tools": [{"type": "function", "name": "get_reporting_categories", "defer_loading": True}]
+            },
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["get_reporting_categories"]
+
+    def test_function_call_echo_with_namespace_equal_to_name_keeps_bare_name_without_request_tools(self):
+        """Stored history (previous_response_id) is rebuilt with no request tools. A deferred call echoed
+        there still carries namespace == name and must go to the provider under its bare name, not
+        "get_reporting_categories__get_reporting_categories"."""
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "get_reporting_categories",
+                    "namespace": "get_reporting_categories",
+                    "call_id": "call_7",
+                    "arguments": "{}",
+                }
+            ],
+            responses_api_request={},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["get_reporting_categories"]
+
+    def test_function_call_echo_from_namespace_with_member_of_same_name_keeps_qualified_name(self):
+        """A namespace "search" with a member "search" is advertised as the chat tool
+        "search__search" and comes back as name == namespace == "search". Its echo must
+        still join, or the provider gets a call to a tool it was never given."""
+        tools = [
+            {
+                "type": "namespace",
+                "name": "search",
+                "description": "Search tools",
+                "tools": [{"type": "function", "name": "search", "defer_loading": True}],
+            }
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "search",
+                    "namespace": "search",
+                    "call_id": "call_4",
+                    "arguments": "{}",
+                }
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["search__search"]
+        assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset()
+
+    def test_deferred_top_level_name_shared_with_self_named_namespace_member_stays_qualified(self):
+        """When a deferred top-level "search" and a namespace "search" with a member "search"
+        are both in the request, namespace == name cannot tell them apart. Neither direction
+        uses that shape for the top-level tool, so the namespace member keeps its round trip."""
+        tools = [
+            {"type": "function", "name": "search", "defer_loading": True},
+            {"type": "function", "name": "lookup", "defer_loading": True},
+            {
+                "type": "namespace",
+                "name": "search",
+                "description": "Search tools",
+                "tools": [{"type": "function", "name": "search"}],
+            },
+        ]
+
+        assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset({"lookup"})
+        assert dict(LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)) == {
+            "search__search": NamespaceMember("search", "search"),
+            "lookup": DeferredTopLevelTool("lookup"),
+        }
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {"type": "function_call", "name": "search", "namespace": "search", "call_id": "c5", "arguments": "{}"},
+                {"type": "function_call", "name": "lookup", "namespace": "lookup", "call_id": "c6", "arguments": "{}"},
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["search__search", "lookup"]
+
     def test_custom_tool_call_echo_keeps_short_name(self):
         """Custom tools stay advertised under their short name, so a namespace on
         a custom_tool_call echo is routing metadata and must not be prefixed."""
@@ -2987,8 +3766,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map([namespace_tool])
 
-        assert result["collaboration__wait_agent"] == ("collaboration", "wait_agent")
-        assert result["wait_agent"] == ("collaboration", "wait_agent")
+        assert result["collaboration__wait_agent"] == NamespaceMember("collaboration", "wait_agent")
+        assert result["wait_agent"] == NamespaceMember("collaboration", "wait_agent")
 
     def test_namespace_tool_name_map_drops_ambiguous_unqualified_names(self):
         tools = [
@@ -3031,10 +3810,31 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["alpha__run"] == ("alpha", "run")
-        assert result["beta__run"] == ("beta", "run")
-        assert result["gamma__run"] == ("gamma", "run")
+        assert result["alpha__run"] == NamespaceMember("alpha", "run")
+        assert result["beta__run"] == NamespaceMember("beta", "run")
+        assert result["gamma__run"] == NamespaceMember("gamma", "run")
         assert "run" not in result
+
+    def test_namespace_tool_name_map_keeps_the_object_tools_beside_a_malformed_entry(self):
+        tools = LiteLLMCompletionResponsesConfig.request_tools(
+            {
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "ns",
+                        "tools": [{"type": "function", "name": "a"}, "junk"],
+                    },
+                    "junk",
+                    {"type": "function", "name": "top", "defer_loading": True},
+                ]
+            }
+        )
+
+        assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools) == {
+            "ns__a": NamespaceMember("ns", "a"),
+            "a": NamespaceMember("ns", "a"),
+            "top": DeferredTopLevelTool("top"),
+        }
 
     def test_namespace_tool_name_map_drops_top_level_function_collision(self):
         tools = [
@@ -3054,8 +3854,27 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["admin__run"] == ("admin", "run")
+        assert result["admin__run"] == NamespaceMember("admin", "run")
         assert "run" not in result
+
+    def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
+        tools = [
+            {
+                "type": "namespace",
+                "name": "x",
+                "tools": [{"type": "function", "name": "foo", "parameters": {"type": "object"}}],
+            },
+            {
+                "type": "namespace",
+                "name": "y",
+                "tools": [{"type": "function", "name": "x__foo", "parameters": {"type": "object"}}],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+
+        assert result["x__foo"] == NamespaceMember("x", "foo")
+        assert result["y__x__foo"] == NamespaceMember("y", "x__foo")
 
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [
@@ -3078,7 +3897,7 @@ class TestToolTransformation:
         ]
 
         with pytest.raises(
-            ValueError,
+            litellm.BadRequestError,
             match="Top-level function names conflict with flattened namespace tools: admin__run",
         ):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
@@ -4280,6 +5099,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._pending_response_events = []
         iterator._pending_tool_events = []
         iterator._annotations_awaiting_message = ()
+        iterator._compaction_summary = None
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
         iterator._tool_item_id_by_call_id = {}
@@ -4785,7 +5605,8 @@ class TestEnsureOutputItemContentPartAdded:
             iterator._responses_namespace_tool_call_fields("admin__run")
             iterator._responses_namespace_tool_call_fields("admin__run")
 
-        namespace_map.assert_called_once_with(request["tools"])
+        namespace_map.assert_called_once()
+        assert namespace_map.call_args.args[0] == tuple(request["tools"])
 
     def test_emit_terminal_event_uses_stream_finish_reason(self):
         """
@@ -5187,11 +6008,21 @@ class TestHostedWebSearchReplay:
         ("server_tool_use", "expected_input"),
         (
             (
-                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Pending",
+                    "name": "web_fetch",
+                    "input": {"url": _FETCHED_URL},
+                },
                 {"url": _FETCHED_URL},
             ),
             (
-                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Pending",
+                    "name": "web_search",
+                    "input": {"query": "python"},
+                },
                 {"query": "python"},
             ),
         ),
@@ -5220,7 +6051,12 @@ class TestHostedWebSearchReplay:
 
         assert [turn["role"] for turn in anthropic_turns] == ["user", "assistant", "user"]
         assert [block for block in anthropic_turns[1]["content"] if block["type"] != "text"] == [
-            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": server_tool_use["name"], "input": expected_input},
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Pending",
+                "name": server_tool_use["name"],
+                "input": expected_input,
+            },
             {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
         ]
         assert [(block["type"], block["tool_use_id"]) for block in anthropic_turns[2]["content"]] == [
@@ -6009,6 +6845,326 @@ def test_no_cache_control_when_absent():
     assert "cache_control" not in msg
 
 
+_NULL_USER_ITEM: Final = {"role": "user", "content": None}
+_QUESTION_ITEM: Final = {"role": "user", "content": "What is 2+2?"}
+_ANSWER_ITEM: Final = {"role": "assistant", "content": "Four."}
+
+
+@pytest.mark.parametrize("item_cache_control", (False, True))
+@pytest.mark.parametrize(
+    "input_item",
+    (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM, {"role": "user"}),
+    ids=("user", "assistant", "null_content", "no_content_key"),
+)
+def test_single_object_input_is_read_like_a_one_item_list(
+    input_item: dict[str, object], item_cache_control: bool
+) -> None:
+    marked_item: Final = {**input_item, "cache_control": {"type": "ephemeral"}}
+    listed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, [marked_item]),
+        responses_api_request={},
+        item_cache_control=item_cache_control,
+        route_fills_empty_user_turns=lambda: True,
+    )
+    single: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, marked_item),
+        responses_api_request={},
+        item_cache_control=item_cache_control,
+        route_fills_empty_user_turns=lambda: True,
+    )
+    assert single == listed
+
+
+def _bridged_turns(
+    model: str, provider: str | None, items: Sequence[Mapping[str, object]]
+) -> list[tuple[object, object]]:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=cast(ResponseInputParam, list(items)),
+        responses_api_request={},
+        custom_llm_provider=provider,
+    )
+    return [(message["role"], message.get("content")) for message in result["messages"]]
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (
+        ("bedrock/us.anthropic.claude-opus-5-5", "bedrock"),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", "bedrock"),
+        ("anthropic/claude-opus-5-5", "anthropic"),
+        ("vertex_ai/claude-opus-5-5", "vertex_ai"),
+        ("azure_ai/claude-opus-5-5", "azure_ai"),
+    ),
+)
+@pytest.mark.parametrize(
+    "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
+)
+def test_a_final_user_input_item_without_content_stays_an_empty_user_turn(
+    model: str, provider: str, empty_user_item: dict[str, object]
+) -> None:
+    assert _bridged_turns(
+        model,
+        provider,
+        (
+            _QUESTION_ITEM,
+            {"role": "assistant", "content": None},
+            {"type": "item_reference", "id": "msg_earlier"},
+            _ANSWER_ITEM,
+            empty_user_item,
+        ),
+    ) == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "")]
+
+
+_ARN_DEPLOYMENT: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
+_ROUTED_BASE_MODEL_CASES: Final = (
+    pytest.param({"model_info": {"base_model": "anthropic.claude-opus-5-5"}}, [("user", "")], id="model_info_base_model"),
+    pytest.param({"model_info": {}}, [], id="no_base_model"),
+    pytest.param(
+        {"base_model": "", "model_info": {"base_model": "anthropic.claude-opus-5-5"}},
+        [("user", "")],
+        id="empty_request_base_model_falls_back",
+    ),
+    pytest.param(
+        {"base_model": "amazon.nova-pro-v1:0", "model_info": {"base_model": "anthropic.claude-opus-5-5"}},
+        [],
+        id="request_base_model_wins",
+    ),
+)
+
+
+@pytest.mark.parametrize(("request_kwargs", "expected_tail"), _ROUTED_BASE_MODEL_CASES)
+def test_an_arn_deployment_reads_its_model_from_model_info_base_model_like_chat_inference(
+    request_kwargs: dict[str, object], expected_tail: list[tuple[object, object]]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=_ARN_DEPLOYMENT,
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+        **request_kwargs,
+    )
+
+    assert [(message["role"], message.get("content")) for message in result["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *expected_tail,
+    ]
+
+
+@pytest.mark.parametrize(("request_kwargs", "expected_tail"), _ROUTED_BASE_MODEL_CASES)
+def test_an_arn_deployment_follow_up_reads_its_model_from_model_info_base_model_like_chat_inference(
+    request_kwargs: dict[str, object], expected_tail: list[tuple[object, object]]
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "Four."}],
+            litellm_session_id=None,
+        )
+
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=_ARN_DEPLOYMENT,
+        input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+        responses_api_request={"previous_response_id": "resp_stored"},
+        custom_llm_provider="bedrock",
+        **request_kwargs,
+    )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_stored",
+            litellm_completion_request=chat_request,
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs=request_kwargs,
+            request_input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+        )
+    )
+
+    assert [(message["role"], message.get("content")) for message in request["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *expected_tail,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("items", "expected"),
+    (
+        ((_NULL_USER_ITEM,), []),
+        ((_QUESTION_ITEM, _NULL_USER_ITEM), [("user", "What is 2+2?")]),
+        ((_QUESTION_ITEM, _ANSWER_ITEM), [("user", "What is 2+2?"), ("assistant", "Four.")]),
+        (
+            (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM, {"role": "user", "content": "And 3+3?"}),
+            [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "And 3+3?")],
+        ),
+    ),
+    ids=("lone", "after_a_user_item", "ending_on_an_assistant_item", "before_a_later_item"),
+)
+def test_a_user_input_item_without_content_is_dropped_where_no_assistant_turn_would_end_the_request(
+    items: Sequence[Mapping[str, object]], expected: list[tuple[object, object]]
+) -> None:
+    assert _bridged_turns("bedrock/us.anthropic.claude-opus-5-5", "bedrock", items) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (
+        ("moonshot/kimi-k3", "moonshot"),
+        ("bedrock/us.amazon.nova-2-lite-v1:0", "bedrock"),
+        ("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+        ("anthropic/claude-sonnet-4-5-20250929", "anthropic"),
+    ),
+    ids=("sends_empty_text_as_is", "nova", "claude_with_prefill_on_converse", "claude_with_prefill_on_anthropic"),
+)
+def test_a_final_user_input_item_without_content_stays_dropped_on_routes_that_need_no_empty_turn(
+    model: str, provider: str
+) -> None:
+    assert _bridged_turns(model, provider, (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+    ]
+
+
+def test_a_final_user_input_item_without_content_stays_dropped_when_no_provider_resolves_the_model() -> None:
+    assert _bridged_turns("my-batch-alias", None, (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+    ]
+
+
+_HIDDEN_BEDROCK_ARN: Final = "bedrock/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+def _bridged_hidden_arn_turns(**request_kwargs: object) -> list[tuple[object, object]]:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=_HIDDEN_BEDROCK_ARN,
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+        **request_kwargs,
+    )
+    return [(message["role"], message.get("content")) for message in result["messages"]]
+
+
+def test_a_final_user_input_item_without_content_reads_a_hidden_arn_model_from_base_model() -> None:
+    assert _bridged_hidden_arn_turns(base_model="anthropic.claude-opus-5-5")[-1] == ("user", "")
+    assert _bridged_hidden_arn_turns()[-1] == ("assistant", "Four.")
+
+
+def test_a_final_user_input_item_without_content_keeps_its_cache_mark_on_the_empty_user_turn() -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=cast(
+            ResponseInputParam,
+            [_QUESTION_ITEM, _ANSWER_ITEM, {**_NULL_USER_ITEM, "cache_control": {"type": "ephemeral"}}],
+        ),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+    )
+
+    assert result["messages"][-1] == {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}}
+
+
+@pytest.mark.parametrize("instructions", (None, "Be brief."), ids=("no_instructions", "instructions"))
+@pytest.mark.parametrize("object_input", (False, True), ids=("list", "object"))
+@pytest.mark.parametrize(
+    "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
+)
+def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history_on_an_empty_user_turn(
+    instructions: str | None, empty_user_item: dict[str, object], object_input: bool
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "Four."}],
+            litellm_session_id=None,
+        )
+
+    input_items: Final = cast(ResponseInputParam, empty_user_item if object_input else [empty_user_item])
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=input_items,
+        responses_api_request={
+            "previous_response_id": "resp_stored",
+            **({"instructions": instructions} if instructions else {}),
+        },
+        custom_llm_provider="bedrock",
+    )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_stored",
+            litellm_completion_request=chat_request,
+            instructions=instructions,
+            session_lookup=session_lookup,
+            request_input=input_items,
+        )
+    )
+
+    assert [(message["role"], message.get("content")) for message in request["messages"] if message["role"] != "system"] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
+    ]
+
+
+@pytest.mark.parametrize("object_input", (False, True), ids=("list", "object"))
+def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is_still_refused(object_input: bool) -> None:
+    async def no_stored_turns(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(messages=[], litellm_session_id=None)
+
+    input_items: Final = cast(ResponseInputParam, _NULL_USER_ITEM if object_input else [_NULL_USER_ITEM])
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=input_items,
+        responses_api_request={"previous_response_id": "resp_unknown"},
+        custom_llm_provider="bedrock",
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="Previous response with id 'resp_unknown' not found"):
+        asyncio.run(
+            LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id="resp_unknown",
+                litellm_completion_request=chat_request,
+                instructions=None,
+                session_lookup=no_stored_turns,
+                request_input=input_items,
+            )
+        )
+
+
+def test_a_user_input_item_without_content_between_function_calls_keeps_them_in_one_turn() -> None:
+    def call(call_id: str) -> dict[str, object]:
+        return {"type": "function_call", "call_id": call_id, "name": "f", "arguments": "{}"}
+
+    def output(call_id: str) -> dict[str, object]:
+        return {"type": "function_call_output", "call_id": call_id, "output": "ok"}
+
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=cast(
+            ResponseInputParam, [_QUESTION_ITEM, call("c1"), _NULL_USER_ITEM, call("c2"), output("c1"), output("c2")]
+        ),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+    )
+
+    assert [message["role"] for message in result["messages"]] == ["user", "assistant", "tool", "tool"]
+    assert [call["id"] for call in result["messages"][1]["tool_calls"]] == ["c1", "c2"]
+
+
+def test_callers_that_only_read_the_input_see_no_turn_for_a_user_item_without_content() -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+    )
+
+    assert [(message["role"], message.get("content")) for message in messages] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+    ]
+
+
 def test_cache_control_on_function_call_output():
     """cache_control on a function_call_output should be passed through to tool message"""
     TOOL_CALLS_CACHE.set_cache(
@@ -6280,10 +7436,11 @@ _EPHEMERAL: Final = {"type": "ephemeral"}
 
 def _replayed_messages_from(
     turns: Sequence[Mapping[str, object]],
-    current: Mapping[str, object],
+    current: Mapping[str, object] | None,
     *,
     model: str = _CLAUDE_ON_BEDROCK,
     tools: Sequence[Mapping[str, object]] = (),
+    request_input: ResponseInputParam | None = None,
     **request_kwargs: object,
 ) -> Sequence[Mapping[str, object]]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
@@ -6296,12 +7453,13 @@ def _replayed_messages_from(
             litellm_completion_request={
                 "model": model,
                 "custom_llm_provider": "bedrock",
-                "messages": [current],
+                "messages": [current] if current else [],
                 **({"tools": list(tools)} if tools else {}),
             },
             instructions=None,
             session_lookup=session_lookup,
             request_kwargs=request_kwargs,
+            request_input=request_input,
         )
     )
     return TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
@@ -6461,6 +7619,66 @@ def test_replayed_marks_stay_untouched_for_a_target_without_cache_points():
     )
 
     assert messages[:5] == replayed_turns
+
+
+def test_the_marked_empty_user_turn_a_follow_up_restores_takes_a_slot_from_the_replayed_marks():
+    stored_turns: Final[tuple[Mapping[str, object], ...]] = (
+        *_marked_turns(MAX_CACHE_CONTROL_BLOCKS - 1),
+        {"role": "user", "content": "last stored turn", "cache_control": _EPHEMERAL},
+        {"role": "assistant", "content": "Four."},
+    )
+    marked_empty_item: Final[dict[str, object]] = {**_NULL_USER_ITEM, "cache_control": _EPHEMERAL}
+
+    messages: Final = _replayed_messages_from(
+        stored_turns,
+        None,
+        model="us.anthropic.claude-opus-5-5",
+        request_input=cast(ResponseInputParam, [marked_empty_item]),
+    )
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == MAX_CACHE_CONTROL_BLOCKS
+    assert messages[-1] == {"role": "user", "content": "", "cache_control": _EPHEMERAL}
+
+
+_MARKED_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object"}},
+    "cache_control": _EPHEMERAL,
+}
+
+
+def _follow_up_ending_on_a_marked_empty_item(
+    current_items: Sequence[Mapping[str, object]], marked_tools: int
+) -> Sequence[Mapping[str, object]]:
+    return _replayed_messages_from(
+        ({"role": "user", "content": "Remember the number 7."}, {"role": "assistant", "content": "OK."}),
+        current_items[0] if current_items else None,
+        model="us.anthropic.claude-opus-5-5",
+        tools=(_MARKED_LOOKUP_TOOL,) * marked_tools,
+        request_input=cast(
+            ResponseInputParam, [*current_items, {**_NULL_USER_ITEM, "cache_control": _EPHEMERAL}]
+        ),
+        drop_params=True,
+        cache_control=_EPHEMERAL,
+    )
+
+
+def test_the_marked_empty_user_turn_a_follow_up_restores_yields_its_mark_to_a_full_request_under_drop_params():
+    messages: Final = _follow_up_ending_on_a_marked_empty_item((), MAX_CACHE_CONTROL_BLOCKS - 1)
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
+    assert messages[-1] == {"role": "user", "content": ""}
+
+
+def test_the_marked_empty_user_turn_a_follow_up_restores_keeps_the_newest_request_mark_under_drop_params():
+    messages: Final = _follow_up_ending_on_a_marked_empty_item(
+        ({"role": "assistant", "content": "Seven.", "cache_control": _EPHEMERAL},), MAX_CACHE_CONTROL_BLOCKS - 2
+    )
+
+    assert messages[-2:] == [
+        {"role": "assistant", "content": "Seven."},
+        {"role": "user", "content": "", "cache_control": _EPHEMERAL},
+    ]
 
 
 def _bridged_request(
@@ -6727,7 +7945,7 @@ def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on
             {
                 "model_name": "opted-in",
                 "litellm_params": {"model": "bedrock/moonshotai.kimi-k3", "aws_region_name": "us-east-1"},
-                "model_info": {"id": "opted-in-id", "supports_prompt_cache_breakpoint": True},
+                "model_info": {"id": "opted-in-id", "supports_bedrock_converse_cache_point": True},
             }
         ]
     )
@@ -6738,8 +7956,9 @@ def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on
 
     assert (
         bridged_system({"id": "flagless-id"}),
-        bridged_system({"id": "opted-in-id", "supports_prompt_cache_breakpoint": True}),
-    ) == ({"role": "system", "content": "House rules"}, marked_system)
+        bridged_system({"id": "opted-in-id", "supports_bedrock_converse_cache_point": True}),
+        bridged_system({"id": "openai-flagged-id", "supports_prompt_cache_breakpoint": True}),
+    ) == ({"role": "system", "content": "House rules"}, marked_system, {"role": "system", "content": "House rules"})
 
 
 def test_the_shared_input_transform_keeps_every_item_mark_for_a_request_it_sends():
@@ -7164,6 +8383,7 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
             litellm_completion_request=chat_request,
             instructions=None,
             session_lookup=no_stored_turns,
+            input_replaces_history=True,
         )
     )
 
@@ -7265,8 +8485,6 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
     monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object], logged_metadata_key: str
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    sent_kwargs: Final = deepcopy(request_kwargs)
-
     request: Final = _continued_chain_request(request_kwargs)
 
     assert request["litellm_trace_id"] == "chain-session"
@@ -7275,7 +8493,7 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
         **TypeAdapter(dict[str, object]).validate_python(request_kwargs[logged_metadata_key]),
         CALLER_SESSION_ID_METADATA_KEY: "chain-session",
     }
-    assert request_kwargs == sent_kwargs
+    assert request[logged_metadata_key] is request_kwargs[logged_metadata_key]
 
 
 def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_correlation(
@@ -7289,6 +8507,42 @@ def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_corre
     assert request["litellm_trace_id"] == "chain-session"
     assert "litellm_metadata" not in request
     assert request["metadata"] == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
+
+
+@pytest.mark.parametrize("request_correlation_in_logs", [True, False])
+def test_a_continued_chain_stores_the_replayed_turns_as_its_path_to_the_root(
+    monkeypatch: pytest.MonkeyPatch, request_correlation_in_logs: bool
+):
+    """The proxy's spend log row for this turn carries the ids it replayed, so a fork off it replays only them."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "turn 1"}],
+            litellm_session_id="chain-session",
+            previous_response_ids=("chatcmpl-root", "chatcmpl-turn-1"),
+        )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_turn_1",
+            litellm_completion_request={
+                "model": _CLAUDE_ON_BEDROCK,
+                "custom_llm_provider": "bedrock",
+                "messages": [{"role": "user", "content": "turn 2"}],
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs={"litellm_metadata": {"user_api_key": "hashed"}, "metadata": {"tag": "client"}},
+        )
+    )
+
+    assert request["litellm_metadata"] == {
+        "user_api_key": "hashed",
+        **({CALLER_SESSION_ID_METADATA_KEY: "chain-session"} if request_correlation_in_logs else {}),
+        PREVIOUS_RESPONSE_IDS_METADATA_KEY: ["chatcmpl-root", "chatcmpl-turn-1"],
+    }
+    assert "metadata" not in request
 
 
 @pytest.mark.asyncio
@@ -7395,6 +8649,127 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+_DEEPWIKI_MCP_TOOL: Final = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    }
+)
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+@pytest.mark.parametrize("function_names", [("get_weather",), ("get_weather", "deepwiki")])
+def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_function(
+    monkeypatch: pytest.MonkeyPatch, function_names: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), *map(_function_tool, function_names)],
+        tool_choice={"type": "mcp", "server_label": "deepwiki"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == list(function_names)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_stays_a_400_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*")
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'") as exc:
+        litellm.responses(
+            model="gemini/gemini-3.8-flash",
+            input="Weather in Paris?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+            tool_choice={"type": "mcp", "server_label": "unsent"},
+            drop_params=True,
+            api_key="gemini-test-key",
+        )
+
+    assert "This request sends no hosted MCP tool with server_label `unsent`." in exc.value.message
+    assert not gemini.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_function_tool_choice_under_drop_params_still_forces_the_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+        tool_choice={"type": "function", "name": "get_weather"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert sent["toolConfig"]["functionCallingConfig"]["allowed_function_names"] == ["get_weather"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_without_drop_params_is_a_400_on_a_route_that_runs_the_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = respx.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_weather",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Sunny."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 2},
+        }
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(
+            model="anthropic/claude-haiku-5-5",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL)],
+            tool_choice={"type": "mcp", "server_label": "deepwiki"},
+            api_key="anthropic-test-key",
+        )
+
+    assert raised.value.status_code == 400
+    assert not anthropic.called
 
 
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"
@@ -7607,3 +8982,254 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+_HELLO: Final = {"role": "assistant", "content": "Hello!"}
+_EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "last_item", "extra_kwargs", "expected_tail"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", None, {"role": "user"}, {}, [_HELLO, _EMPTY_USER_TURN], id="gemini"),
+        pytest.param(
+            "gemini-3.8-flash",
+            "vertex_ai",
+            {"role": "user", "content": None},
+            {},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_gemini",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/gemini-3.8-flash"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model_in_model_info",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/claude-sonnet-4-5", "model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO],
+            id="vertex_ai_endpoint_base_model_param_wins_over_model_info",
+        ),
+        pytest.param(
+            "1234567890",
+            "vertex_ai",
+            {"role": "user"},
+            {"api_base": "http://10.96.32.8"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_private_service_connect_endpoint",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", {"role": "user"}, {}, [_HELLO], id="vertex_ai_claude_accepts_it_as_before"
+        ),
+        pytest.param(
+            "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user"},
+            {"ensure_alternating_roles": True},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="gemini_with_ensure_alternating_roles",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user", "content": "Go on"},
+            {},
+            [_HELLO, {"role": "user", "content": "Go on"}],
+            id="gemini_with_user_text",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "assistant", "content": "Sure,"},
+            {},
+            [_HELLO, {"role": "assistant", "content": "Sure,"}],
+            id="gemini_with_assistant_prefill",
+        ),
+        pytest.param("an-unmapped-model", None, {"role": "user"}, {}, [_HELLO], id="unresolvable_provider"),
+    ],
+)
+def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemini_target(
+    model: str,
+    custom_llm_provider: str | None,
+    last_item: dict[str, object],
+    extra_kwargs: dict[str, object],
+    expected_tail: list[dict[str, object]],
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[{"role": "user", "content": "Hi"}, _HELLO, last_item],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+        **extra_kwargs,
+    )
+
+    assert [
+        {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
+    ] == expected_tail
+
+
+@pytest.mark.parametrize(
+    ("input_items", "expected_roles"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"},
+                {"role": "user"},
+            ],
+            ["user", "assistant", "tool"],
+            id="after_a_tool_result",
+        ),
+        pytest.param([{"role": "user", "content": "Hi"}, {"role": "user"}], ["user"], id="after_a_user_message"),
+    ],
+)
+def test_a_dropped_empty_user_item_gets_no_empty_user_turn_for_gemini_when_a_user_side_turn_ends_the_request(
+    input_items: list[dict[str, object]], expected_roles: list[str]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=input_items,
+        responses_api_request={},
+        custom_llm_provider=None,
+    )
+
+    assert [message_field(message, "role") for message in result["messages"]] == expected_roles
+
+
+@pytest.mark.parametrize("empty_item", [{"role": "user", "content": None}, {"role": "user"}], ids=["null", "missing"])
+def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty_user_turn(
+    empty_item: dict[str, object],
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "Hi"}, Message(role="assistant", content="Hello!")],
+            litellm_session_id=None,
+        )
+
+    bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=[empty_item],
+        responses_api_request={"previous_response_id": "resp_earlier"},
+        custom_llm_provider=None,
+    )
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_earlier",
+            litellm_completion_request=bridged,
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message_field(message, "role"), message_field(message, "content")) for message in request["messages"]] == [
+        ("user", "Hi"),
+        ("assistant", "Hello!"),
+        ("user", ""),
+    ]
+
+
+_RESUMED_NAMESPACE: Final = "mcp__vault"
+_RESUMED_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+_RESUMED_HISTORY: Final = cast(
+    ResponseInputParam,
+    [
+        {"type": "message", "role": "user", "content": "Read the secret"},
+        {
+            "type": "function_call",
+            "call_id": "call_earlier",
+            "name": _RESUMED_TOOL,
+            "namespace": _RESUMED_NAMESPACE,
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "s3cr3t"},
+        {"type": "message", "role": "user", "content": "Read it again"},
+    ],
+)
+
+
+def _replayed_chat_name() -> str:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-sonnet-5-5",
+        input=_RESUMED_HISTORY,
+        responses_api_request=cast(ResponsesAPIOptionalRequestParams, {"tools": []}),
+        custom_llm_provider="bedrock",
+    )
+    names: Final = [
+        str(call["function"]["name"]) for message in request["messages"] for call in message.get("tool_calls") or ()
+    ]
+    assert len(names) == 1 and len(names[0]) <= 64, names
+    return names[0]
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("non_streaming", "streaming"))
+def test_a_resumed_turn_that_repeats_a_shortened_call_from_history_gets_the_original_tool_back(stream: bool) -> None:
+    """Codex can resume before it lists its MCP tools again, so the earlier call is the only trace of the tool."""
+    from unittest.mock import Mock
+
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    chat_name: Final = _replayed_chat_name()
+    request: Final = cast(ResponsesAPIOptionalRequestParams, {"tools": []})
+
+    if stream:
+        wrapper: Final = Mock(spec=litellm.CustomStreamWrapper)
+        wrapper.logging_obj = Mock()
+        iterator: Final = LiteLLMCompletionStreamingIterator(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            litellm_custom_stream_wrapper=wrapper,
+            request_input=_RESUMED_HISTORY,
+            responses_api_request=request,
+        )
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_again", "function": {"name": chat_name, "arguments": "{}"}}]
+        )
+        item: Final = iterator._pending_tool_events[0].item
+        assert (item.name, item.namespace) == (_RESUMED_TOOL, _RESUMED_NAMESPACE)
+        return
+
+    try:
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input=_RESUMED_HISTORY,
+            responses_api_request=request,
+            chat_completion_response=ModelResponse(
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_again", type="function", function=Function(name=chat_name, arguments="{}")
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            ),
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key="call_again")
+    calls: Final = [item for item in response.output if item.type == "function_call"]
+    assert [(call.name, call.namespace) for call in calls] == [(_RESUMED_TOOL, _RESUMED_NAMESPACE)]
