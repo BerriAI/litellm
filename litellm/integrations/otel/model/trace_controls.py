@@ -18,8 +18,8 @@ _ITEMS: Final = TypeAdapter(tuple[object, ...])
 class TraceControls:
     """The caller's trace-level Langfuse controls: ``metadata.trace_name`` / ``trace_user_id`` / ``session_id`` /
     ``tags`` / ``trace_release`` / ``trace_version`` (else ``version``) on the request (SDK or proxy body), with the
-    proxy's ``langfuse_<control>`` headers winning over the body for the scalar ones. ``update_trace_keys`` is
-    deliberately not carried, and ``trace_id`` / ``existing_trace_id`` are not attributes: on the proxy they pick
+    proxy's ``langfuse_<control>`` headers winning over the body for the scalar ones. ``existing_trace_id`` and
+    ``update_trace_keys`` are deliberately not carried, and ``trace_id`` is not an attribute: on the proxy it picks
     the trace the request's server span starts in (``plumbing.named_trace``)."""
 
     name: str | None = None

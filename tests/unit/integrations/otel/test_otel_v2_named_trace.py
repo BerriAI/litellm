@@ -43,6 +43,10 @@ def _isolate():
 def proxy(monkeypatch):
     """A V2-instrumented app whose LLM routes echo the body they read and start the request's LLM span and a
     detached root span, as the proxy does for the call and for its spend tracking."""
+    return _instrumented(monkeypatch)
+
+
+def _instrumented(monkeypatch, **instrument_kwargs):
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
     logger: Final = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
@@ -60,7 +64,7 @@ def proxy(monkeypatch):
 
     for path in PATHS:
         app.add_api_route(path, llm_route, methods=["POST"])
-    instrument_fastapi_app(app, tracer_provider=provider)
+    instrument_fastapi_app(app, tracer_provider=provider, **instrument_kwargs)
     return TestClient(app), exporter
 
 
@@ -79,9 +83,8 @@ def _trace_ids(exporter, name=None):
         pytest.param({"metadata": {"trace_id": UUID}}, UUID_HEX, id="metadata-uuid"),
         pytest.param({"metadata": {"trace_id": UUID_HEX.upper()}}, UUID_HEX, id="metadata-32-hex"),
         pytest.param({"litellm_metadata": {"trace_id": UUID}}, UUID_HEX, id="litellm_metadata-uuid"),
-        pytest.param({"metadata": {"existing_trace_id": UUID}}, UUID_HEX, id="existing_trace_id"),
         pytest.param(
-            {"metadata": {"trace_id": OTHER_HEX, "existing_trace_id": UUID}}, UUID_HEX, id="existing_trace_id-wins"
+            {"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}, UUID_HEX, id="existing_trace_id-not-read"
         ),
         pytest.param(
             {"metadata": {"trace_id": UUID}, "litellm_metadata": {"trace_id": OTHER_HEX}}, UUID_HEX, id="metadata-wins"
@@ -105,13 +108,29 @@ def test_requests_naming_one_trace_share_that_otel_trace(proxy, path, body, expe
     assert [r.headers["traceresponse"].split("-")[1] for r in responses] == [expected, expected]
 
 
-def test_a_langfuse_trace_id_header_names_the_trace(proxy):
+@pytest.mark.parametrize("header", ["langfuse_trace_id", "x-litellm-trace-id"])
+def test_a_trace_id_header_names_the_trace(proxy, header):
     client, exporter = proxy
 
     for _ in range(2):
-        client.post(PATHS[0], json={"model": "m"}, headers={"langfuse_trace_id": UUID})
+        client.post(PATHS[0], json={"model": "m"}, headers={header: UUID})
 
     assert _trace_ids(exporter) == [UUID_HEX, UUID_HEX]
+
+
+@pytest.mark.parametrize(
+    "headers, expected",
+    [
+        pytest.param({"langfuse_trace_id": UUID, "x-litellm-trace-id": OTHER_HEX}, UUID_HEX, id="langfuse-header"),
+        pytest.param({"x-litellm-trace-id": UUID}, UUID_HEX, id="litellm-header"),
+    ],
+)
+def test_a_trace_id_header_wins_over_the_body(proxy, headers, expected):
+    client, exporter = proxy
+
+    client.post(PATHS[1], json={"litellm_metadata": {"trace_id": "body-trace"}}, headers=headers)
+
+    assert _trace_ids(exporter) == [expected]
 
 
 def test_requests_naming_different_traces_stay_apart(proxy):
@@ -158,6 +177,8 @@ def test_work_the_request_detaches_keeps_its_own_trace(proxy):
         pytest.param({"json": {"metadata": "trace_id"}}, id="metadata-not-an-object"),
         pytest.param({"json": ["trace_id"]}, id="body-not-an-object"),
         pytest.param({"json": {"model": "m"}, "headers": {"x-litellm-session-id": UUID}}, id="session-header"),
+        pytest.param({"json": {"metadata": {"existing_trace_id": UUID}}}, id="existing_trace_id"),
+        pytest.param({"json": {"model": "m"}, "headers": {"langfuse_existing_trace_id": UUID}}, id="existing-header"),
         pytest.param(
             {"content": b'{"metadata": {"trace_id": ', "headers": {"content-type": "application/json"}},
             id="invalid-json",
@@ -251,11 +272,17 @@ def test_a_body_over_the_lookahead_cap_is_not_held_and_reaches_the_route_whole(p
     assert UUID_HEX not in _trace_ids(exporter)
 
 
+@pytest.mark.parametrize(
+    ("lookahead_cap", "max_body_bytes"),
+    [(10, None), (None, 10), (10, 1000)],
+    ids=["lookahead cap", "app size limit", "lookahead cap under a larger app size limit"],
+)
 @pytest.mark.asyncio
-async def test_reading_stops_at_the_lookahead_cap(monkeypatch):
+async def test_reading_stops_at_the_lookahead_cap(monkeypatch, lookahead_cap, max_body_bytes):
     from litellm.integrations.otel.plumbing import named_trace
 
-    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 10)
+    if lookahead_cap is not None:
+        monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", lookahead_cap)
     sent: Final = [{"type": "http.request", "body": b"x" * 8, "more_body": True} for _ in range(5)]
     pulled: Final = []
 
@@ -264,7 +291,10 @@ async def test_reading_stops_at_the_lookahead_cap(monkeypatch):
         return pulled[-1]
 
     scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
+    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget(), max_body_bytes) as (
+        named,
+        replay,
+    ):
         assert named is None
         assert len(pulled) == 2
         assert await replay() == {"type": "http.request", "body": b"x" * 16, "more_body": True}
@@ -546,3 +576,64 @@ async def test_a_compressed_body_is_not_held_up_by_another_requests_decoding(mon
             slow_decoding.set()
     finally:
         slow_decoding.set()
+
+
+@pytest.mark.asyncio
+async def test_a_body_declared_over_the_apps_size_limit_is_never_read():
+    from litellm.integrations.otel.plumbing import named_trace
+
+    body: Final = _named_body()
+    scope: Final = {**JSON_POST, "headers": [*JSON_POST["headers"], (b"content-length", b"%d" % len(body))]}
+
+    async def receive():
+        raise AssertionError("read a body the app turns away by its declared length")
+
+    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget(), len(body) - 1) as (
+        named,
+        replay,
+    ):
+        assert named is None
+        assert replay is receive
+    sent: Final = {"type": "http.request", "body": body, "more_body": False}
+    async with named_trace.read_named_trace(scope, _sends(sent), named_trace.LookaheadBudget(), len(body)) as (
+        named,
+        _,
+    ):
+        assert named == int(UUID_HEX, 16)
+
+
+@pytest.mark.asyncio
+async def test_a_compressed_body_decoding_past_the_apps_size_limit_names_no_trace():
+    import gzip
+
+    from litellm.integrations.otel.plumbing import named_trace
+
+    body: Final = b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 1000)
+    sent: Final = {"type": "http.request", "body": gzip.compress(body), "more_body": False}
+
+    async with named_trace.read_named_trace(
+        GZIP_JSON_POST, _sends(sent), named_trace.LookaheadBudget(), len(body) - 1
+    ) as (
+        named,
+        replay,
+    ):
+        assert named is None
+        assert await replay() == sent
+    async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), named_trace.LookaheadBudget(), len(body)) as (
+        named,
+        _,
+    ):
+        assert named == int(UUID_HEX, 16)
+
+
+def test_the_apps_size_limit_for_each_request_bounds_its_lookahead(monkeypatch):
+    body: Final = _named_body()
+    client, exporter = _instrumented(
+        monkeypatch, max_request_body_bytes=lambda scope: len(body) - 1 if scope["path"] == PATHS[1] else None
+    )
+
+    over_limit: Final = client.post(PATHS[1], content=body, headers={"content-type": "application/json"})
+    within_limit: Final = client.post(PATHS[0], content=body, headers={"content-type": "application/json"})
+
+    assert over_limit.content == within_limit.content == body
+    assert _trace_ids(exporter).count(UUID_HEX) == 1

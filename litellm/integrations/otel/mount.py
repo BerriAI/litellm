@@ -12,7 +12,7 @@ when the feature gate is off.
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -47,7 +47,9 @@ _DEFAULT_EXCLUDED_URLS: Final = ",".join(_DEFAULT_EXCLUDED_ROUTES)
 
 
 class _RequestTraceExclusionMiddleware:
-    def __init__(self, app: "ASGIApp", excluded_urls: str) -> None:
+    def __init__(
+        self, app: "ASGIApp", excluded_urls: str, max_request_body_bytes: "Callable[[Scope], int | None]"
+    ) -> None:
         from opentelemetry.util.http import parse_excluded_urls
 
         from litellm.integrations.otel.plumbing.named_trace import LookaheadBudget
@@ -55,6 +57,7 @@ class _RequestTraceExclusionMiddleware:
         self.app = app
         self.excluded_urls = parse_excluded_urls(excluded_urls)
         self.lookahead_budget: Final = LookaheadBudget()
+        self.max_request_body_bytes: Final = max_request_body_bytes
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] not in ("http", "websocket"):
@@ -76,7 +79,10 @@ class _RequestTraceExclusionMiddleware:
             with request_trace_scope(excluded):
                 await self.app(scope, receive, send)
             return
-        async with read_named_trace(scope, receive, self.lookahead_budget) as (named, request_receive):
+        async with read_named_trace(scope, receive, self.lookahead_budget, self.max_request_body_bytes(scope)) as (
+            named,
+            request_receive,
+        ):
             with request_trace_scope(excluded), named_trace_scope(named):
                 await self.app(scope, request_receive, send)
 
@@ -139,7 +145,11 @@ def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: Mapping[s
         pass
 
 
-def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | None" = None) -> None:
+def instrument_fastapi_app(
+    app: "FastAPI",
+    tracer_provider: "TracerProvider | None" = None,
+    max_request_body_bytes: "Callable[[Scope], int | None]" = lambda _scope: None,
+) -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
@@ -159,6 +169,8 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     ``traceresponse`` from an upstream that restarted the trace becomes a link on the
     server span. The server span also gets ``litellm.call_id`` from the response's
     ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
+    ``max_request_body_bytes`` is the largest body the app accepts for a request, ``None`` for no limit, so
+    the trace a body names is never read past what the app would take.
     """
     try:
         if not is_otel_v2_enabled():
@@ -206,7 +218,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
         instrumented_stack: Final = app.build_middleware_stack
 
         def build_middleware_stack() -> "ASGIApp":
-            return _RequestTraceExclusionMiddleware(instrumented_stack(), excluded_urls)
+            return _RequestTraceExclusionMiddleware(instrumented_stack(), excluded_urls, max_request_body_bytes)
 
         app.build_middleware_stack = build_middleware_stack  # rebind-ok: wrap the complete ASGI stack
         if get_global_response_propagator() is None:
