@@ -151,4 +151,35 @@ mod tests {
             ))
         );
     }
+
+    fn key_of(holder: Holder<NativeRows>, project: Option<&str>) -> Authenticated<NativeRows> {
+        Authenticated::from(Caller {
+            credential: Credential::Key {
+                key: Key::stored("hash", None),
+            },
+            affiliation: Affiliation {
+                holder,
+                org: None,
+                project: project.map(|id| Named::Unstored(id.to_owned())),
+            },
+            end_user: EndUserRecord::default(),
+        })
+    }
+
+    /// The standard logging payload of a native call logs a team's, owner's and project's id and
+    /// alias but none of their spend, budget or email, so a key that names any of them must stay
+    /// with Python until the builder logs those too.
+    #[rstest]
+    #[case::a_key_in_a_team(key_of(Holder::Team(Team::Unstored("t1".to_owned())), None), "team")]
+    #[case::a_key_with_an_owner(key_of(Holder::User(Named::Unstored("u1".to_owned())), None), "user")]
+    #[case::a_key_in_a_project(key_of(Holder::Nobody, Some("p1")), "project")]
+    fn a_key_in_a_team_with_an_owner_or_in_a_project_goes_to_python(
+        #[case] caller: Authenticated<NativeRows>,
+        #[case] over: &'static str,
+    ) {
+        assert_eq!(
+            super::caller(&reserving(false), &Ok(caller)),
+            Some(Reason::new(Refused::Credential, over))
+        );
+    }
 }
