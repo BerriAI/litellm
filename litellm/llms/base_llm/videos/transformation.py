@@ -131,7 +131,7 @@ class BaseVideoConfig(ABC):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
         variant: str | None = None,
     ) -> tuple[str, dict]:
         """
@@ -192,7 +192,7 @@ class BaseVideoConfig(ABC):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
         extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
@@ -216,7 +216,7 @@ class BaseVideoConfig(ABC):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
@@ -244,7 +244,7 @@ class BaseVideoConfig(ABC):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict]:
         """
         Transform the video delete request into a URL and data
@@ -267,7 +267,7 @@ class BaseVideoConfig(ABC):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict]:
         """
         Transform the video retrieve request into a URL and data/params
@@ -329,7 +329,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video get character request into a URL and params.
 
@@ -402,7 +402,7 @@ class BaseVideoConfig(ABC):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video extension request into a URL and JSON data.
 

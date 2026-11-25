@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
@@ -59,11 +63,11 @@ def _failed_line(index: int) -> str:
     )
 
 
-def _batch(status: str, *, files_ready: bool) -> dict[str, JsonValue]:
+def _batch(status: str, *, files_ready: bool, endpoint: str = "/v1/chat/completions") -> dict[str, JsonValue]:
     return {
         "id": "batch-$REQUEST_ID",
         "object": "batch",
-        "endpoint": "/v1/chat/completions",
+        "endpoint": endpoint,
         "errors": None,
         "input_file_id": "file-in-$REQUEST_ID",
         "completion_window": "24h",
@@ -79,7 +83,7 @@ def _batch(status: str, *, files_ready: bool) -> dict[str, JsonValue]:
     }
 
 
-def _provider_routes() -> RoutedResponse:
+def _provider_routes(created_endpoint: str = "/v1/chat/completions") -> RoutedResponse:
     output_lines: Final = (
         _successful_line(1, REASONING_TOKENS[0]),
         _failed_line(2),
@@ -102,7 +106,8 @@ def _provider_routes() -> RoutedResponse:
                 },
             ),
             "POST /batches": JsonResponse(
-                content_type="application/json", body=_batch("validating", files_ready=False)
+                content_type="application/json",
+                body=_batch("validating", files_ready=False, endpoint=created_endpoint),
             ),
             "GET /batches/batch-$REQUEST_ID": JsonResponse(
                 content_type="application/json", body=_batch("completed", files_ready=True)
@@ -150,44 +155,53 @@ def _metadata(row: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return object_value(JSON_OBJECT.validate_json(value) if isinstance(value, str) else value)
 
 
+@dataclass(frozen=True, slots=True)
+class CompletedBatch:
+    key: str
+    batch_id: str
+    retrieval: httpx.Response
+
+
+def _complete_a_batch(gateway: Gateway, scenario: Scenario, created_endpoint: str, *, managed: bool) -> CompletedBatch:
+    scenario_id: Final = f"batch-observability-{uuid.uuid4().hex[:12]}"
+    handle: Final = register_scenario(scenario_id, _provider_routes(created_endpoint))
+    scenario.cleanups.callback(delete_scenario, handle)
+    model_name: Final = scenario.model(api_base=handle.api_base())
+    key: Final = scenario.key(models=[model_name])
+    file_response: Final = gateway.request_multipart(
+        "/v1/files",
+        {"purpose": "batch", "target_model_names" if managed else "model": model_name},
+        {"file": ("in.jsonl", _input_file(model_name), "application/jsonl")},
+        key=key,
+    )
+    assert file_response.status_code == 200, file_response.text
+    input_file_id: Final = string_value(JSON_OBJECT.validate_json(file_response.content)["id"])
+    batch_response: Final = gateway.request(
+        "POST",
+        "/v1/batches",
+        {"input_file_id": input_file_id, "endpoint": created_endpoint, "completion_window": "24h"}
+        | ({} if managed else {"model": model_name}),
+        key=key,
+    )
+    assert batch_response.status_code == 200, batch_response.text
+    batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+    retrieval: Final = eventually(
+        lambda: gateway.request("GET", f"/v1/batches/{batch_id}", key=key),
+        lambda response: response.status_code == 200 and response.json()["status"] == "completed",
+        seconds=30,
+    )
+    assert retrieval.status_code == 200, retrieval.text
+    return CompletedBatch(key=key, batch_id=batch_id, retrieval=retrieval)
+
+
 @pytest.mark.covers("spend.batches.retrieval_row_aggregates_reasoning_tokens_and_per_request_counts")
 def test_batch_retrieval_row_sums_reasoning_tokens_and_counts_output_and_error_file_failures(
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
-        scenario_id: Final = f"batch-observability-{uuid.uuid4().hex[:12]}"
-        handle: Final = register_scenario(scenario_id, _provider_routes())
-        scenario.cleanups.callback(delete_scenario, handle)
-        model_name: Final = scenario.model(api_base=handle.api_base())
-        key: Final = scenario.key(models=[model_name])
-        file_response: Final = gateway.request_multipart(
-            "/v1/files",
-            {"purpose": "batch", "model": model_name},
-            {"file": ("in.jsonl", _input_file(model_name), "application/jsonl")},
-            key=key,
-        )
-        assert file_response.status_code == 200, file_response.text
-        input_file_id: Final = string_value(JSON_OBJECT.validate_json(file_response.content)["id"])
-        batch_response: Final = gateway.request(
-            "POST",
-            "/v1/batches",
-            {
-                "input_file_id": input_file_id,
-                "endpoint": "/v1/chat/completions",
-                "completion_window": "24h",
-                "model": model_name,
-            },
-            key=key,
-        )
-        assert batch_response.status_code == 200, batch_response.text
-        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
-        retrieval: Final = eventually(
-            lambda: gateway.request("GET", f"/v1/batches/{batch_id}", key=key),
-            lambda response: response.status_code == 200 and response.json()["status"] == "completed",
-            seconds=30,
-        )
-        assert retrieval.status_code == 200, retrieval.text
-        rows: Final = eventually(lambda: _retrieval_rows(key), lambda values: len(values) == 1, seconds=70)
+        batch: Final = _complete_a_batch(gateway, scenario, "/v1/chat/completions", managed=False)
+        retrieval: Final = batch.retrieval
+        rows: Final = eventually(lambda: _retrieval_rows(batch.key), lambda values: len(values) == 1, seconds=70)
         row: Final = rows[0]
         metadata: Final = _metadata(row)
         usage: Final = object_value(metadata["usage_object"])
@@ -199,3 +213,19 @@ def test_batch_retrieval_row_sums_reasoning_tokens_and_counts_output_and_error_f
         )
         assert metadata["batch_successful_requests"] == 2, (retrieval.text, metadata)
         assert metadata["batch_failed_requests"] == 1 + ERROR_FILE_FAILURES, (retrieval.text, metadata)
+
+
+@pytest.mark.timeout(240)
+def test_managed_batch_keeps_its_created_endpoint_when_the_provider_reports_another(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        owned_proxy(gateway, tmp_path, {"PROXY_BATCH_POLLING_ENABLED": "false"}) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        batch: Final = _complete_a_batch(candidate, scenario, "/v1/embeddings", managed=True)
+        stored: Final = candidate.request("GET", f"/v1/batches/{batch.batch_id}", key=batch.key)
+        assert (batch.retrieval.json()["endpoint"], stored.json()["endpoint"]) == (
+            "/v1/embeddings",
+            "/v1/embeddings",
+        ), stored.text

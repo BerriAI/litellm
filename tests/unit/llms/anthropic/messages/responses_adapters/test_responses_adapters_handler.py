@@ -596,12 +596,13 @@ def test_build_responses_kwargs_drops_a_bare_client_none_on_o3_only_under_drop_p
     )
 
     o3_row: Final = litellm.model_cost["o3"]
-    unconfirmed_none: Final = (
-        model_reasoning_efforts("o3", "openai") is None
-        and o3_row.get("supports_reasoning") is True
-        and o3_row.get("supports_none_reasoning_effort") is not True
+    o3_levels: Final = model_reasoning_efforts("o3", "openai")
+    refuses_none: Final = (
+        "none" not in o3_levels
+        if o3_levels is not None
+        else o3_row.get("supports_reasoning") is True and o3_row.get("supports_none_reasoning_effort") is not True
     )
-    assert responses_kwargs.get("reasoning") == (None if drop_params and unconfirmed_none else {"effort": "none"})
+    assert responses_kwargs.get("reasoning") == (None if drop_params and refuses_none else {"effort": "none"})
 
 
 def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_the_client_effort() -> None:
@@ -1217,6 +1218,24 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"},
     ]
+
+
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_non_string_user_text_answers_400_naming_its_field(text_block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs=OPENAI_API,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {"role": "assistant", "content": "on it"},
+                {"role": "user", "content": [{"type": "text", "text": "and test"}, dict(text_block)]},
+            ],
+        )
+
+    assert rejected.value.status_code == 400
+    assert "messages.2.content.1.text: Input should be a valid string" in rejected.value.message
 
 
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:

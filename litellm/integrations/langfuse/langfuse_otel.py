@@ -161,7 +161,7 @@ def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
 
 
 class LangfuseOtelLogger(OpenTelemetry):
-    def __init__(self, config: OpenTelemetryConfig | None = None, *args, **kwargs):
+    def __init__(self, config: OpenTelemetryConfig | None = None, *args: object, **kwargs):
         # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
         # and passing it to the parent OpenTelemetry class
         if config is None:
@@ -169,7 +169,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
@@ -184,7 +184,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
 
     @staticmethod
-    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
+    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict[str, object]:
         """
         Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
 

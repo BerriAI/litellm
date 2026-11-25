@@ -95,7 +95,9 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
-def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
+def redacted_model_call_details_for_custom_logger(
+    model_call_details: dict[str, object], custom_logger: CustomLogger
+) -> dict[str, object]:
     """
     Returns a copy of model_call_details with the request messages, instructions and streaming responses
     redacted when the custom logger has opted out of message logging. The shared model_call_details is left
@@ -250,6 +252,7 @@ def _redact_choice_content(choice: object) -> None:
             choice.message.content = REDACTED_BY_LITELLM
         if getattr(choice.message, "reasoning_content", None) is not None:
             choice.message.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.message, "refusal")
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
@@ -263,6 +266,7 @@ def _redact_choice_content(choice: object) -> None:
             choice.delta.content = REDACTED_BY_LITELLM
         if getattr(choice.delta, "reasoning_content", None) is not None:
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.delta, "refusal")
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
@@ -816,7 +820,7 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
             if (
                 body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
             ) is not None:
-                for field in ("content", "reasoning_content"):
+                for field in ("content", "reasoning_content", "refusal"):
                     if body.get(field) is not None:
                         body[field] = redacted_str
                 for field in ("thinking_blocks", "reasoning_items", "audio", "images"):
@@ -882,7 +886,9 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True):
+def perform_redaction(
+    model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True
+) -> object:
     """
     Performs the actual redaction on the logging object and result.
 
@@ -1057,7 +1063,7 @@ def _get_turn_off_message_logging_from_dynamic_params(
     return None
 
 
-def redact_user_api_key_info(metadata: dict) -> dict:
+def redact_user_api_key_info(metadata: dict) -> dict[str, object]:
     """
     removes any user_api_key_info before passing to logging object, if flag set
 

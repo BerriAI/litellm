@@ -108,7 +108,9 @@ class FireworksAIMixin:
     Common Base Config functions across Fireworks AI Endpoints
     """
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return FireworksAIException(
             status_code=status_code,
             message=error_message,
@@ -120,11 +122,11 @@ class FireworksAIMixin:
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -138,6 +140,6 @@ class FireworksAIMixin:
         )
         return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
 
-    def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
+    def _add_session_affinity_header(self, headers: dict, litellm_params: dict[str, object]) -> dict[str, object]:
         pinned: Final = with_fireworks_session_affinity(headers, litellm_params)
         return dict(pinned)

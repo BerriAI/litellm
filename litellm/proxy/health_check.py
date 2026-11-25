@@ -717,12 +717,12 @@ async def _run_model_health_check(model: dict):
     )
 
 
-async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list, int]:
+async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list[object], int]:
     """
     Run health checks with at most `concurrency_limit` active tasks.
     Preserves result ordering to match `models`.
     """
-    results: Final[list] = [None] * len(models)
+    results: Final[list[object]] = [None] * len(models)
     tasks_to_index: Final[dict[asyncio.Task, int]] = {}
     model_iter: Final = iter(enumerate(models))
     peak_in_flight = 0
@@ -888,11 +888,11 @@ def _deployment_model_string_for_health_check(litellm_params: dict) -> str:
     return litellm_params.get("model") or ""
 
 
-def _health_check_deployment_is_wildcard(litellm_params: dict) -> bool:
+def _health_check_deployment_is_wildcard(litellm_params: dict[str, object]) -> bool:
     return "*" in _deployment_model_string_for_health_check(litellm_params)
 
 
-def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> int | None:
+def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict[str, object]) -> int | None:
     """
     Pick max_tokens for the health check request.
 
@@ -961,7 +961,7 @@ def _same_health_check_model(deployment_model: str | None, probe_params: Mapping
 
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
-) -> dict:
+) -> dict[str, object]:
     """
     Update the litellm params for health check.
 

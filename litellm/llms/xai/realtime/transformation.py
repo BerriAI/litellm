@@ -69,7 +69,7 @@ class XAIRealtimeNormalizer:
         """Return True for provider-specific keepalives unknown to GA clients."""
         return isinstance(event, dict) and event.get("type") == "ping"
 
-    def normalize(self, event: dict) -> dict:
+    def normalize(self, event: dict[str, object]) -> dict[str, object]:
         """Apply all xAI normalization passes in order."""
         event = self._normalize_content_part_events(event)
         event_type: Final = event.get("type") or ""

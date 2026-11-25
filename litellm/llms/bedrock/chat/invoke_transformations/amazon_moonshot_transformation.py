@@ -244,6 +244,8 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
         return BedrockError(status_code=status_code, message=error_message, headers=headers)

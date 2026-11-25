@@ -370,6 +370,51 @@ async def test_prior_advisor_blocks_replaced_in_history():
     assert "trial division" in feedback_blocks[0]["text"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True], ids=["kept-for-the-provider", "dropped-under-drop-params"])
+async def test_prior_advisor_result_with_a_list_id_is_dropped_only_under_drop_params(drop_params: bool) -> None:
+    from litellm.llms.anthropic.messages.native.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    history: Final = [
+        *MESSAGES,
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtool_01", "name": "advisor", "input": {}},
+                {"type": "advisor_tool_result", "tool_use_id": ["srvtool_01"], "content": "Use trial division."},
+                {"type": "text", "text": "I will now write the function."},
+            ],
+        },
+        {"role": "user", "content": "Actually make it more efficient."},
+    ]
+    forwarded: Final[list[list[dict]]] = []
+
+    async def executor_call(model, messages, tools, stream, max_tokens, **kwargs):
+        forwarded.append(messages)
+        return _make_text_response("Here is the efficient version.")
+
+    with patch(
+        "litellm.llms.anthropic.messages.native.interceptors.advisor._call_messages_handler",
+        side_effect=executor_call,
+    ):
+        await AdvisorOrchestrationHandler().handle(
+            model="openai/gpt-4o-mini",
+            messages=history,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+            drop_params=drop_params,
+        )
+
+    assistant: Final = next(message for message in forwarded[0] if message.get("role") == "assistant")
+    assert [block["type"] for block in assistant["content"]] == (
+        ["text"] if drop_params else ["advisor_tool_result", "text"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # 8. Advisor tool is translated to a regular tool for the executor
 # ---------------------------------------------------------------------------

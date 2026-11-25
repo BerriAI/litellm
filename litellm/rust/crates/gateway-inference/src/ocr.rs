@@ -8,7 +8,7 @@ use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
 };
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
-use litellm_llms_types::formats::ocr::OcrDocument;
+use litellm_llms_types::formats::{chat_completions::ChatCompletionsUsage, ocr::OcrDocument};
 use litellm_router_core::{Attempt, Op};
 use serde_json::{Map, Value};
 
@@ -18,8 +18,9 @@ use crate::{
     hooks::CallType,
     model_restamp::ReportedModel,
     request::{InferenceBody, Upload},
-    routing::{self, Host, RouteAttempt},
+    routing::{self, Host, Prompt, RouteAttempt},
     serve::{self, Call, Endpoint},
+    stream_event::Counts,
 };
 
 pub(crate) async fn create<H: Host>(call: Call<H>, body: Result<InferenceBody, Error>) -> Response {
@@ -86,6 +87,21 @@ impl Endpoint for OcrAttempt<'_> {
     const PATH: &'static str = "/ocr";
     const ERRORS: ErrorFormat = ErrorFormat::OpenAi;
 
+    /// OCR counts pages, not tokens.
+    fn usage(_counts: Counts) -> Option<ChatCompletionsUsage> {
+        None
+    }
+
+    /// The `id` an OCR answer names, as Python's `get_spend_logs_id` reads `response_obj["id"]`.
+    fn response_id(outcome: &Value) -> Option<String> {
+        outcome.get("id").and_then(Value::as_str).map(str::to_owned)
+    }
+
+    /// OCR never streams.
+    fn stream_response_id(_data: &str) -> Option<String> {
+        None
+    }
+
     fn render(outcome: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
         Ok(Json(outcome).into_response())
     }
@@ -93,6 +109,10 @@ impl Endpoint for OcrAttempt<'_> {
 
 impl RouteAttempt for OcrAttempt<'_> {
     type Outcome = Value;
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        None
+    }
 
     async fn run(&self, attempt: &Attempt) -> Result<Value, Error> {
         let deployment = &attempt.deployment;
@@ -123,7 +143,8 @@ impl RouteAttempt for OcrAttempt<'_> {
         })
     }
 
-    fn total_tokens(outcome: &Value) -> u64 {
-        routing::total_tokens(outcome.get("usage"))
+    /// Nothing: Python's router reads no `usage` off an OCR response.
+    fn counts(_outcome: &Value) -> Option<Counts> {
+        None
     }
 }

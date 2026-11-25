@@ -2,7 +2,7 @@
 Support for gpt model family
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
@@ -76,12 +76,12 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         best_of: int | None = None,
         echo: bool | None = None,
         frequency_penalty: int | None = None,
-        logit_bias: dict | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         logprobs: int | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         suffix: str | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
@@ -157,8 +157,8 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         prompt: Final = transform_prompt(messages)
         return {

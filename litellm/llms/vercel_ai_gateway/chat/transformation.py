@@ -80,7 +80,7 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -90,7 +90,9 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         """
         return super().transform_request(model, messages, optional_params, litellm_params, headers)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VercelAIGatewayException(
             message=error_message,
             status_code=status_code,
