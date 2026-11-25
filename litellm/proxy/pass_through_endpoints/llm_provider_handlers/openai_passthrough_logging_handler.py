@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
+    deployment_pricing_model_info,
     get_standard_logging_object_payload,
 )
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
@@ -46,6 +48,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     LlmProviders,
+    ModelInfo,
     ModelResponseStream,
     PassthroughCallTypes,
     StandardPassThroughResponseObject,
@@ -248,6 +251,20 @@ def count_relayed_prompt_tokens(model: str, messages: Sequence[Mapping[str, obje
     )
 
 
+class _DeploymentPricing(TypedDict):
+    custom_pricing: ReadOnly[bool]
+    router_model_id: ReadOnly[str | None]
+
+
+def _deployment_model_info(logging_obj: LiteLLMLoggingObj, model: str) -> ModelInfo | None:
+    return deployment_pricing_model_info(model_id=logging_obj.get_router_model_id(), deployment_model=model)
+
+
+def _deployment_pricing(logging_obj: LiteLLMLoggingObj, model: str) -> _DeploymentPricing:
+    priced: Final = _deployment_model_info(logging_obj, model) is not None
+    return {"custom_pricing": priced, "router_model_id": logging_obj.get_router_model_id() if priced else None}
+
+
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     """
     OpenAI-specific passthrough logging handler that provides cost tracking for /chat/completions endpoints.
@@ -440,6 +457,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         model: str,
         response_body: Mapping[str, object],
         request_body: dict,
+        model_info: ModelInfo | None = None,
     ) -> float:
         """Calculate cost for OpenAI image generation."""
         try:
@@ -462,6 +480,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 n=n,
                 size=size,
                 optional_params=request_body,
+                model_info=model_info,
             )
 
             return cost
@@ -474,6 +493,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         model: str,
         response_body: Mapping[str, object],
         request_body: dict,
+        model_info: ModelInfo | None = None,
     ) -> float:
         """Calculate cost for OpenAI image editing."""
         try:
@@ -496,6 +516,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 n=n,
                 size=size,
                 optional_params=request_body,
+                model_info=model_info,
             )
 
             return cost
@@ -508,6 +529,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         litellm_model_response: EmbeddingResponse,
         model: str,
         custom_llm_provider: str,
+        pricing: _DeploymentPricing,
     ) -> float:
         try:
             return litellm.completion_cost(
@@ -515,6 +537,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 call_type="aembedding",
+                **pricing,
             )
         except Exception as e:  # noqa: BLE001  # completion_cost raises bare Exception for unmapped models; cost failure must never drop the spend log
             verbose_proxy_logger.warning(
@@ -555,6 +578,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             model=model,
             custom_llm_provider=custom_llm_provider,
             call_type="responses",
+            **_deployment_pricing(logging_obj, model),
         )
         return litellm_model_response, response_cost
 
@@ -644,6 +668,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             custom_llm_provider: Final = TypeAdapter(str).validate_python(
                 kwargs.get("custom_llm_provider", logged_custom_llm_provider)
             )
+            requested_model: Final = TypeAdapter(str).validate_python(model)
+            pricing: Final = _deployment_pricing(logging_obj, requested_model)
+            deployment_model_info: Final = _deployment_model_info(logging_obj, requested_model)
 
             if is_chat_completions:
                 # Handle chat completions with existing logic
@@ -669,6 +696,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     completion_response=litellm_model_response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
+                    **pricing,
                 )
             elif is_embeddings:
                 litellm_model_response = convert_to_model_response_object(
@@ -680,6 +708,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     litellm_model_response=litellm_model_response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
+                    pricing=pricing,
                 )
                 set_hidden_param(litellm_model_response, "response_cost", response_cost)
             elif is_image_generation:
@@ -688,6 +717,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     response_body=response_body,
                     request_body=request_body,
+                    model_info=deployment_model_info,
                 )
                 logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 # Create a simple response object for logging
@@ -703,6 +733,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     response_body=response_body,
                     request_body=request_body,
+                    model_info=deployment_model_info,
                 )
                 logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 # Create a simple response object for logging
@@ -733,6 +764,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     call_type="decisions",
+                    **pricing,
                 )
 
             # Update kwargs with cost information
@@ -937,6 +969,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 }
 
             custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
+            pricing: Final = _deployment_pricing(litellm_logging_obj, model)
             # Calculate cost using LiteLLM's cost calculator
             response_cost: Final = (
                 0.0
@@ -946,12 +979,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     call_type="responses",
+                    **pricing,
                 )
                 if is_responses
                 else litellm.completion_cost(
                     completion_response=complete_response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
+                    **pricing,
                 )
             )
 

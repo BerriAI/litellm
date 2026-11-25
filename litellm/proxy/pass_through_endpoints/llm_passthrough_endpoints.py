@@ -332,7 +332,9 @@ def _object_mapping(value: object) -> Mapping[str, object]:
     return _OBJECT_MAPPING.validate_python(value if isinstance(value, Mapping) else {})
 
 
-def _anthropic_deployment_model_info(deployment: object, model: str) -> Mapping[str, object] | None:
+def _provider_deployment_model_info(
+    deployment: object, model: str, passthrough_provider: LlmProviders
+) -> Mapping[str, object] | None:
     fields: Final = _object_mapping(deployment)
     params: Final = _object_mapping(fields.get("litellm_params"))
     backend: Final = params.get("model")
@@ -345,7 +347,7 @@ def _anthropic_deployment_model_info(deployment: object, model: str) -> Mapping[
         )
     except litellm.BadRequestError:
         return None
-    if provider != LlmProviders.ANTHROPIC.value or model not in (backend_model, backend.removeprefix(f"{provider}/")):
+    if provider != passthrough_provider.value or model not in (backend_model, backend.removeprefix(f"{provider}/")):
         return None
     return {
         **_object_mapping(fields.get("model_info")),
@@ -353,13 +355,16 @@ def _anthropic_deployment_model_info(deployment: object, model: str) -> Mapping[
     }
 
 
-def anthropic_deployment_pricing_model_info(
-    llm_router: litellm.Router | None, request_body: Mapping[str, object], team_id: str | None
+def _passthrough_deployment_pricing_model_info(
+    passthrough_provider: LlmProviders,
+    llm_router: litellm.Router | None,
+    request_body: Mapping[str, object],
+    team_id: str | None,
 ) -> Mapping[str, object] | None:
     """
     The pass-through selects no deployment, so ``request_body`` is the body it forwards. Only a single deployment in
-    that model's group serving that exact Anthropic model can say what it costs: with several, any pick could bill
-    another deployment's negotiated price.
+    that model's group serving that exact model on the pass-through's provider can say what it costs: with several,
+    any pick could bill another deployment's negotiated price.
     """
     model: Final = request_body.get("model")
     if llm_router is None or not isinstance(model, str) or not model:
@@ -368,12 +373,18 @@ def anthropic_deployment_pricing_model_info(
         model_info
         for deployment in llm_router.registry().deployments(model, team_id=team_id) or ()
         if llm_router.registry().includes(deployment, team_id=team_id)
-        and (model_info := _anthropic_deployment_model_info(deployment, model)) is not None
+        and (model_info := _provider_deployment_model_info(deployment, model, passthrough_provider)) is not None
     )
     if len(candidates) != 1:
         return None
     (only_match,) = candidates
     return only_match if any(only_match.get(field) is not None for field in _DEPLOYMENT_PRICING_FIELDS) else None
+
+
+anthropic_deployment_pricing_model_info: Final = partial(
+    _passthrough_deployment_pricing_model_info, LlmProviders.ANTHROPIC
+)
+openai_deployment_pricing_model_info: Final = partial(_passthrough_deployment_pricing_model_info, LlmProviders.OPENAI)
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -3970,6 +3981,15 @@ async def openai_proxy_route(
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
+    from litellm.proxy.proxy_server import llm_router
+
+    setattr(
+        request.state,
+        LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+        DeploymentPricingResolver(
+            resolve=partial(openai_deployment_pricing_model_info, llm_router, team_id=user_api_key_dict.team_id)
+        ),
+    )
     return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
         endpoint=endpoint,
         request=request,

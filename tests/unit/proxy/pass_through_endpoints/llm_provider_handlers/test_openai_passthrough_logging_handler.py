@@ -573,6 +573,8 @@ class TestOpenAIPassthroughLoggingHandler:
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
+            custom_pricing=False,
+            router_model_id=None,
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
@@ -645,6 +647,8 @@ class TestOpenAIPassthroughLoggingHandler:
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
+            custom_pricing=False,
+            router_model_id=None,
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
@@ -703,6 +707,8 @@ class TestOpenAIPassthroughLoggingHandler:
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
+            custom_pricing=False,
+            router_model_id=None,
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload", return_value=None)
@@ -1667,6 +1673,7 @@ class TestOpenAIPassthroughIntegration:
             n=1,
             size="1024x1024",
             optional_params=request_body,
+            model_info=None,
         )
 
     @patch("litellm.cost_calculator.default_image_cost_calculator")
@@ -1706,6 +1713,7 @@ class TestOpenAIPassthroughIntegration:
             n=1,
             size="1024x1024",
             optional_params=request_body,
+            model_info=None,
         )
 
     def test_cost_calculation_preservation(self):
@@ -4616,3 +4624,183 @@ def test_count_relayed_prompt_tokens_charges_an_uppercase_scheme_remote_high_det
     assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
         litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
     )
+
+
+NEGOTIATED_INPUT_COST: Final = 3.3e-7
+NEGOTIATED_OUTPUT_COST: Final = 7.7e-6
+CHAT_MODEL: Final = "gpt-5.4-mini"
+EMBEDDING_MODEL: Final = "text-embedding-3-small"
+CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": CHAT_MODEL,
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000},
+}
+CHAT_STREAM: Final = (
+    "data: "
+    + json.dumps(
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": CHAT_MODEL,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        }
+    ),
+    "data: "
+    + json.dumps(
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": CHAT_MODEL,
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000},
+        }
+    ),
+)
+EMBEDDING: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.0, 1.0]}],
+    "model": EMBEDDING_MODEL,
+    "usage": {"prompt_tokens": 1000, "total_tokens": 1000},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _PricedCall:
+    url: str
+    request_body: Mapping[str, object]
+    response_body: Mapping[str, object] | None
+    stream_chunks: tuple[str, ...]
+    input_tokens: int
+    output_tokens: int
+
+
+def _negotiated_deployment_logging_obj(model: str) -> LiteLLMLoggingObj:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import openai_deployment_pricing_model_info
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": f"openai/{model}", "api_key": "sk-test"},
+                "model_info": {
+                    "id": "negotiated-openai-deployment",
+                    "input_cost_per_token": NEGOTIATED_INPUT_COST,
+                    "output_cost_per_token": NEGOTIATED_OUTPUT_COST,
+                },
+            }
+        ]
+    )
+    model_info: Final = openai_deployment_pricing_model_info(router, {"model": model}, None)
+    assert model_info is not None, "the passthrough found no OpenAI deployment to price this model"
+    return _identified_logging_obj("negotiated-price-call", metadata={"model_info": dict(model_info)})
+
+
+def _passthrough_cost(call: _PricedCall, logging_obj: LiteLLMLoggingObj) -> object:
+    if call.response_body is None:
+        return OpenAIPassthroughLoggingHandler.handle_logging_openai_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=PassThroughEndpointLogging(),
+            url_route=call.url,
+            request_body=dict(call.request_body),
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            all_chunks=list(call.stream_chunks),
+            end_time=DISPATCH_TIME,
+        )["kwargs"].get("response_cost")
+    return OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+        httpx_response=httpx.Response(200, json=call.response_body, request=httpx.Request("POST", call.url)),
+        response_body=dict(call.response_body),
+        logging_obj=logging_obj,
+        url_route=call.url,
+        result="success",
+        start_time=DISPATCH_TIME,
+        end_time=DISPATCH_TIME,
+        cache_hit=False,
+        request_body=dict(call.request_body),
+        litellm_params={},
+    )["kwargs"].get("response_cost")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            _PricedCall(
+                url="https://api.openai.com/v1/chat/completions",
+                request_body={"model": CHAT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+                response_body=CHAT_COMPLETION,
+                stream_chunks=(),
+                input_tokens=1000,
+                output_tokens=1000,
+            ),
+            id="chat",
+        ),
+        pytest.param(
+            _PricedCall(
+                url="https://api.openai.com/v1/chat/completions",
+                request_body={"model": CHAT_MODEL, "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                response_body=None,
+                stream_chunks=CHAT_STREAM,
+                input_tokens=1000,
+                output_tokens=1000,
+            ),
+            id="chat-streamed",
+        ),
+        pytest.param(
+            _PricedCall(
+                url=RESPONSES_URL,
+                request_body=CREATE_REQUEST,
+                response_body=_stored_response("completed", background=False, usage=RESPONSES_USAGE),
+                stream_chunks=(),
+                input_tokens=11,
+                output_tokens=5,
+            ),
+            id="responses",
+        ),
+        pytest.param(
+            _PricedCall(
+                url=RESPONSES_URL,
+                request_body={**CREATE_REQUEST, "stream": True},
+                response_body=None,
+                stream_chunks=(
+                    "data: "
+                    + json.dumps(
+                        {
+                            "type": "response.completed",
+                            "sequence_number": 9,
+                            "response": _stored_response("completed", background=False, usage=RESPONSES_USAGE),
+                        }
+                    ),
+                    "data: [DONE]",
+                ),
+                input_tokens=11,
+                output_tokens=5,
+            ),
+            id="responses-streamed",
+        ),
+        pytest.param(
+            _PricedCall(
+                url="https://api.openai.com/v1/embeddings",
+                request_body={"model": EMBEDDING_MODEL, "input": "hello"},
+                response_body=EMBEDDING,
+                stream_chunks=(),
+                input_tokens=1000,
+                output_tokens=0,
+            ),
+            id="embeddings",
+        ),
+    ],
+)
+def test_openai_passthrough_bills_the_matching_deployment_negotiated_price(local_model_cost_map, call):
+    logging_obj: Final = _negotiated_deployment_logging_obj(str(call.request_body["model"]))
+
+    response_cost: Final = _passthrough_cost(call, logging_obj)
+
+    assert response_cost == pytest.approx(
+        call.input_tokens * NEGOTIATED_INPUT_COST + call.output_tokens * NEGOTIATED_OUTPUT_COST
+    ), f"passthrough billed {response_cost} instead of the deployment's negotiated rates"

@@ -7856,6 +7856,107 @@ async def test_anthropic_proxy_route_bills_the_custom_price_of_the_forwarded_mod
     )
 
 
+def _openai_deployment(deployment_id: str, backend: str, pricing: Mapping[str, float]) -> dict[str, object]:
+    return {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": backend, "api_key": "sk-test", "api_base": "https://example.invalid"},
+        "model_info": {"id": deployment_id, **pricing},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployments", "expected_pricing"),
+    [
+        pytest.param(
+            (_openai_deployment("openai-dep", "openai/gpt-5.4-mini", _RELAY_HAIKU_PRICING),),
+            _RELAY_HAIKU_PRICING,
+            id="openai-deployment-price",
+        ),
+        pytest.param(
+            (
+                _openai_deployment("openai-dep", "openai/gpt-5.4-mini", _RELAY_HAIKU_PRICING),
+                _openai_deployment("azure-dep", "azure/gpt-5.4-mini", _RELAY_OPUS_PRICING),
+            ),
+            _RELAY_HAIKU_PRICING,
+            id="ignores-azure-deployment-in-the-same-group",
+        ),
+    ],
+)
+async def test_openai_proxy_route_bills_the_custom_price_of_the_requested_deployment(
+    monkeypatch, deployments, expected_pricing
+):
+    for name in ("OPENAI_API_BASE", "OPENAI_BASE_URL", "SERVER_ROOT_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=[*deployments]))
+    upstream_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-relay",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-5.4-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 18, "completion_tokens": 4, "total_tokens": 22},
+        },
+        request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+    )
+    httpx_client: Final = MagicMock()
+    httpx_client.build_request = MagicMock(return_value=MagicMock())
+    httpx_client.send = AsyncMock(return_value=upstream_response)
+    client_wrapper: Final = MagicMock()
+    client_wrapper.client = httpx_client
+    body: Final = json.dumps({"model": "gpt-5.4-mini", "messages": [*_RELAY_MESSAGES]}).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/openai_passthrough/v1/chat/completions",
+            "raw_path": b"/openai_passthrough/v1/chat/completions",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 51234),
+            "server": ("proxy.local", 4000),
+            "state": {},
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: the upstream http client is the boundary, it answers with a real OpenAI body
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=client_wrapper,
+        ),
+        patch(  # test-quality-ok: the relay calls these hooks, and they need a db this test has no use for
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj,
+    ):
+        mock_logging_obj.pre_call_hook = AsyncMock(side_effect=_hook_passes_body_through)
+        mock_logging_obj.post_call_success_hook = AsyncMock()
+        mock_logging_obj.post_call_failure_hook = AsyncMock()
+        mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        response: Final = await openai_proxy_route(
+            endpoint="v1/chat/completions",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+        )
+
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+        18 * expected_pricing["input_cost_per_token"] + 4 * expected_pricing["output_cost_per_token"]
+    ), response.body
+
+
 class TestAnthropicProxyRouteCallerAuthHeaders:
     """Regression for a caller credential riding upstream next to a server-owned one.
 
