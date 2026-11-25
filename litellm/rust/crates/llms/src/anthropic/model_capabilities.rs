@@ -214,10 +214,9 @@ pub fn bedrock_model_capabilities(
         supports_safeguards: declared(SAFEGUARDS).unwrap_or_else(|| {
             match base_model.map(strip_bedrock_routing_prefix) {
                 Some(base) if is_bedrock_application_inference_profile_arn(model) => {
-                    !is_claude_model(base)
-                        || Probe::new(catalog, base, base, BEDROCK, &|_| None).supports(SAFEGUARDS)
+                    safeguards_support(&Probe::new(catalog, base, base, BEDROCK, &|_| None), base)
                 }
-                _ => !is_claude_model(model) || probe.supports(SAFEGUARDS),
+                _ => safeguards_support(&probe, model),
             }
         }),
         supports_server_side_fallback: declared(SERVER_SIDE_FALLBACK).unwrap_or_else(|| {
@@ -314,6 +313,16 @@ impl<'a> Probe<'a> {
     fn bare_supports(&self, capability: &str) -> bool {
         self.info.is_some() && flag(self.bare, capability) == Some(true)
     }
+
+    fn mapped(&self, capability: &str) -> Option<bool> {
+        flag(self.info.as_ref(), capability)
+    }
+}
+
+fn safeguards_support(probe: &Probe, model: &str) -> bool {
+    probe
+        .mapped(SAFEGUARDS)
+        .unwrap_or_else(|| !is_claude_model(model) || probe.supports(SAFEGUARDS))
 }
 
 fn model_info_flag(info: &Fields, capability: &str) -> Option<bool> {
@@ -495,6 +504,11 @@ mod tests {
             "mode": "chat",
             "supports_adaptive_thinking": true,
             "supports_output_config": true
+        },
+        "amazon.nova-unguarded-v1:0": {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "supports_safeguards": false
         },
         "vertex_ai/claude-test-5": {
             "litellm_provider": "vertex_ai-anthropic_models",
@@ -923,6 +937,7 @@ mod tests {
     #[case::claude_3_5("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", None, false)]
     #[case::unmapped_newer_claude("bedrock/us.anthropic.claude-opus-9-v1:0", None, true)]
     #[case::other_family("bedrock/amazon.nova-pro-v1:0", None, true)]
+    #[case::word_named_claude("bedrock/anthropic.claude-mythos-preview", None, true)]
     #[case::application_profile(APPLICATION, None, true)]
     #[case::deployment_opts_in(OPUS_4_1, Some(true), true)]
     #[case::deployment_opts_out(SONNET_4_5, Some(false), false)]
@@ -957,8 +972,23 @@ mod tests {
     }
 
     #[rstest]
+    #[case::flagged_off("bedrock/amazon.nova-unguarded-v1:0", false)]
+    #[case::unmapped("bedrock/amazon.nova-unlisted-v1:0", true)]
+    fn non_claude_bedrock_safeguards_follow_the_cost_map_flag_first(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            bedrock_model_capabilities(&catalog, model, None, &|_| None).supports_safeguards,
+            expected
+        );
+    }
+
+    #[rstest]
     #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5", true)]
-    #[case::amazon_mantle("bedrock/mantle/anthropic.claude-mythos-preview", false)]
+    #[case::amazon_mantle("bedrock/mantle/anthropic.claude-mythos-preview", true)]
+    #[case::amazon_mantle_old_claude("bedrock/mantle/anthropic.claude-opus-4-1-20250805-v1:0", false)]
     fn mantle_routes_read_safeguards_off_the_bedrock_row_as_python_does(
         bundled: Catalog,
         #[case] model: &str,

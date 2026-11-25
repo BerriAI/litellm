@@ -102,6 +102,7 @@ from litellm.llms.anthropic.messages.safeguards import (
     SafeguardsEvaluator,
     StreamedSafeguardResults,
     native_route_classifies,
+    proxy_serves_safeguards,
     with_safeguard_results,
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
@@ -2397,7 +2398,17 @@ def _handler_model(request: Mapping[str, object]) -> tuple[str, str | None]:
     return model, provider
 
 
+def _route_drops_safeguards(request: Mapping[str, object]) -> bool:
+    return proxy_serves_safeguards(request["safeguards"]) and handler.route_drops_safeguards(
+        *_handler_model(request), request
+    )
+
+
 def safeguards(request: Mapping[str, object]) -> MessagesSafeguards | None:
-    if "safeguards" not in request or not native_route_classifies(str(request["model"]), request["safeguards"]):
+    if "safeguards" not in request:
+        return None
+    if not native_route_classifies(str(request["model"]), request["safeguards"]) and not _route_drops_safeguards(
+        request
+    ):
         return None
     return MessagesSafeguards(request)

@@ -35,6 +35,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.anthropic_beta_gated_fields import SAFEGUARDS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
@@ -1841,6 +1842,9 @@ def bedrock_supports_safeguards(model: str, model_info: Mapping[str, object] | N
     deployment_flag: Final = (model_info or {}).get("supports_safeguards")
     if isinstance(deployment_flag, bool):
         return deployment_flag
+    mapped_flag: Final = AnthropicModelInfo.resolved_model_capability(model, "supports_safeguards", "bedrock")
+    if mapped_flag is not None:
+        return mapped_flag
     return "claude" not in model.lower() or AnthropicModelInfo.supports_model_capability(
         model, "supports_safeguards", "bedrock"
     )
@@ -1858,13 +1862,36 @@ def log_dropped_safeguards(model: str, provider: str) -> None:
     )
 
 
+def bedrock_drops_safeguards(
+    model: str, model_info: Mapping[str, object] | None, drop_params: object, *, sends_beta: bool
+) -> bool:
+    return drops_unsupported_params(drop_params) and not (sends_beta and bedrock_supports_safeguards(model, model_info))
+
+
 def drops_safeguards_bedrock_rejects(
     model: str, model_info: Mapping[str, object] | None, drop_params: object, provider: str, *, sends_beta: bool
 ) -> bool:
-    if not drops_unsupported_params(drop_params) or (sends_beta and bedrock_supports_safeguards(model, model_info)):
+    if not bedrock_drops_safeguards(model, model_info, drop_params, sends_beta=sends_beta):
         return False
     log_dropped_safeguards(model, provider)
     return True
+
+
+_BODY_BETA_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def without_safeguards(fields: Mapping[str, object]) -> Mapping[str, object]:
+    body_betas: Final = fields.get("anthropic_beta")
+    if not isinstance(body_betas, list):
+        return {key: value for key, value in fields.items() if key != SAFEGUARDS}
+    kept_betas: Final = [
+        beta
+        for beta in _BODY_BETA_ITEMS.validate_python(body_betas)
+        if beta != ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+    ]
+    return {key: value for key, value in fields.items() if key not in (SAFEGUARDS, "anthropic_beta")} | (
+        {"anthropic_beta": kept_betas} if kept_betas else {}
+    )
 
 
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:

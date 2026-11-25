@@ -2559,7 +2559,7 @@ def test_bedrock_chat_invoke_drops_safeguards_and_beta_under_drop_params_when_be
 
 
 def _bedrock_invoke_claude_with_extra_body(
-    extra_body: Mapping[str, object] | str, drop_params: bool
+    extra_body: Mapping[str, object] | str, drop_params: bool, model: str = "us.anthropic.claude-sonnet-5"
 ) -> tuple[httpx.Request, ...]:
     captured_requests: Final[list[httpx.Request]] = []
 
@@ -2581,7 +2581,7 @@ def _bedrock_invoke_claude_with_extra_body(
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
     try:
         litellm.completion(
-            model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+            model=f"bedrock/invoke/{model}",
             messages=[{"role": "user", "content": "Hello"}],
             aws_access_key_id="AKIAEXAMPLE",
             aws_secret_access_key="fake-secret",
@@ -2594,6 +2594,33 @@ def _bedrock_invoke_claude_with_extra_body(
     finally:
         client.close()
     return tuple(captured_requests)
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "drop_params", "forwarded"),
+    [
+        pytest.param(_OPUS_4_1, True, False, id="old_model_drop_params"),
+        pytest.param(_OPUS_4_1, False, True, id="old_model_without_drop_params"),
+        pytest.param(_SONNET_4_5, True, True, id="flagged_model_drop_params"),
+    ],
+)
+def test_bedrock_chat_invoke_extra_body_safeguards_follow_the_same_drop_as_the_safeguards_param(
+    monkeypatch: pytest.MonkeyPatch, model: str, drop_params: bool, forwarded: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    safeguards: Final = [{"type": "dangerous_tool_use"}]
+
+    requests: Final = _bedrock_invoke_claude_with_extra_body(
+        {"safeguards": safeguards, "anthropic_beta": [_DANGEROUS_TOOL_USE_BETA, "context-1m-2025-08-07"]},
+        drop_params,
+        model=model,
+    )
+
+    request_body: Final = json.loads(requests[0].content)
+    assert request_body.get("safeguards") == (safeguards if forwarded else None)
+    assert (_DANGEROUS_TOOL_USE_BETA in request_body.get("anthropic_beta", [])) is forwarded
+    assert "context-1m-2025-08-07" in request_body["anthropic_beta"]
 
 
 _GUARDED_EXTRA_BODY: Final = MappingProxyType(

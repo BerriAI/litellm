@@ -40,6 +40,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
+    bedrock_drops_safeguards,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     drops_safeguards_bedrock_rejects,
@@ -103,6 +104,14 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
+
+    def drops_model_safeguards(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return bedrock_drops_safeguards(
+            bedrock_capability_model(model, kwargs.get("base_model")),
+            _MODEL_INFO.validate_python(kwargs.get("model_info")),
+            kwargs.get("drop_params"),
+            sends_beta=True,
+        )
 
     def supports_diagnostics(self) -> bool:
         return False

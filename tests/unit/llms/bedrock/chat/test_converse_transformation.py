@@ -13225,6 +13225,23 @@ def test_converse_safeguards_drop_keeps_the_other_betas_the_client_sent(
     assert request["additionalModelRequestFields"] == {"anthropic_beta": ["interleaved-thinking-2025-05-14"]}
 
 
+def test_converse_safeguards_drop_leaves_a_string_beta_as_the_client_sent_it(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    string_beta: Final = "context-1m-2025-08-07,interleaved-thinking-2025-05-14"
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="us.anthropic.claude-opus-4-1-20250805-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"safeguards": [{"type": "dangerous_tool_use"}], "anthropic_beta": string_beta},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert request["additionalModelRequestFields"] == {"anthropic_beta": string_beta}
+
+
 _CONVERSE_CLAUDE: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
 _CONVERSE_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "The user said hi.", "signature": "sig-1"}
 _CONVERSE_WEATHER_TOOL: Final = {

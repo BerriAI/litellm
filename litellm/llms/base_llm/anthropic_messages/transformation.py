@@ -145,6 +145,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def supports_safeguards(self) -> bool:
         return True
 
+    def drops_model_safeguards(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return False
+
     def supports_message_threads(self) -> bool:
         return False
 

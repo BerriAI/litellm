@@ -334,26 +334,41 @@ def _native_messages_config(
     return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
 
 
-async def _proxy_classifies(model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None) -> bool:
+async def _proxy_classifies(
+    model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None, kwargs: Mapping[str, object]
+) -> bool:
     if not proxy_serves_safeguards(safeguards):
         return False
     if native_config is None:
         return True
     if native_config.should_filter_anthropic_beta_headers():
         await aload_beta_headers_config()
-    return not native_config.supports_safeguards() or native_route_classifies(model, safeguards)
+    return (
+        not native_config.supports_safeguards()
+        or native_route_classifies(model, safeguards)
+        or native_config.drops_model_safeguards(model, kwargs)
+    )
+
+
+def _routed_messages_config(
+    model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]
+) -> BaseAnthropicMessagesConfig | None:
+    api_base: Final = kwargs.get("api_base")
+    return _native_messages_config(
+        model, custom_llm_provider, kwargs.get("model_info"), api_base if isinstance(api_base, str) else None
+    )
 
 
 async def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
     """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
-    api_base: Final = kwargs.get("api_base")
     return await _proxy_classifies(
-        model,
-        kwargs.get("safeguards"),
-        _native_messages_config(
-            model, custom_llm_provider, kwargs.get("model_info"), api_base if isinstance(api_base, str) else None
-        ),
+        model, kwargs.get("safeguards"), _routed_messages_config(model, custom_llm_provider, kwargs), kwargs
     )
+
+
+def route_drops_safeguards(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    native_config: Final = _routed_messages_config(model, custom_llm_provider, kwargs)
+    return native_config is not None and native_config.drops_model_safeguards(model, kwargs)
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -1013,6 +1028,12 @@ def anthropic_messages_handler(
         return native_response
     return _with_native_safeguard_results(
         native_response,
-        partial(_proxy_classifies, model, safeguard_kwargs.get("safeguards"), anthropic_messages_provider_config),
+        partial(
+            _proxy_classifies,
+            model,
+            safeguard_kwargs.get("safeguards"),
+            anthropic_messages_provider_config,
+            safeguard_kwargs,
+        ),
         partial(_native_safeguards_evaluator, safeguard_kwargs, messages),
     )

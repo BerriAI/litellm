@@ -5,7 +5,7 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.anthropic_beta_gated_fields import SAFEGUARDS, strip_beta_gated_request_body
+from litellm.anthropic_beta_gated_fields import SAFEGUARDS, active_beta_values, strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
@@ -47,6 +47,7 @@ from litellm.llms.bedrock.common_utils import (
     strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
+    without_safeguards,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -69,6 +70,16 @@ _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _drops_rejected_safeguards(model: str, litellm_params: Mapping[str, object], *, sends_beta: bool) -> bool:
+    return drops_safeguards_bedrock_rejects(
+        bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model")),
+        deployment_model_info(litellm_params),
+        litellm_params.get("drop_params"),
+        "bedrock_invoke",
+        sends_beta=sends_beta,
+    )
 
 
 def _anthropic_config_max_tokens() -> int | None:
@@ -264,15 +275,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         headers: dict[str, object],
     ) -> dict:
         params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
-        typed_litellm_params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
         upstream_params: Final = (
             {key: value for key, value in params.items() if key != SAFEGUARDS}
             if SAFEGUARDS in params
-            and drops_safeguards_bedrock_rejects(
-                bedrock_capability_model(strip_bedrock_routing_prefix(model), typed_litellm_params.get("base_model")),
-                deployment_model_info(typed_litellm_params),
-                typed_litellm_params.get("drop_params"),
-                "bedrock_invoke",
+            and _drops_rejected_safeguards(
+                model,
+                _LITELLM_PARAMS.validate_python(litellm_params),
                 sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
                 in get_anthropic_beta_from_headers(headers),
             )
@@ -320,14 +328,25 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         unguarded: Final = AnthropicConfig.transform_extra_body(
             self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
         )
+        upstream: Final = (
+            without_safeguards(unguarded)
+            if SAFEGUARDS in unguarded
+            and _drops_rejected_safeguards(
+                model,
+                litellm_params,
+                sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+                in active_beta_values({}, unguarded.get("anthropic_beta", request.get("anthropic_beta"))),
+            )
+            else unguarded
+        )
         stripped: Final = strip_beta_gated_request_body(
-            {**request, **unguarded},
+            {**request, **upstream},
             {},
             drop_params=litellm_params.get("drop_params"),
             model=model,
             provider="bedrock_invoke",
         )
-        return {key: stripped[key] for key in unguarded if key in stripped}
+        return {key: stripped[key] for key in upstream if key in stripped}
 
     @property
     def uses_async_transform_request(self) -> bool:

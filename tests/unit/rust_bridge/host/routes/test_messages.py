@@ -1960,6 +1960,52 @@ def test_safeguards_classify_only_what_the_proxy_answers(
     assert (messages_host.safeguards(request_fields) is not None) is classifies
 
 
+_OPUS_4_1_ON_BEDROCK: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+_BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "classifies"),
+    (
+        pytest.param(
+            {"model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}", "drop_params": True}, True, id="opus_4_1_drop_params"
+        ),
+        pytest.param(
+            {"model": "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "drop_params": True},
+            False,
+            id="sonnet_4_5_drop_params",
+        ),
+        pytest.param({"model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}"}, False, id="opus_4_1_no_drop_params"),
+        pytest.param(
+            {
+                "model": f"bedrock/mantle/{_BEDROCK_PROFILE_ARN}",
+                "base_model": f"bedrock/{_OPUS_4_1_ON_BEDROCK}",
+                "drop_params": True,
+            },
+            True,
+            id="profile_arn_of_opus_4_1",
+        ),
+    ),
+)
+async def test_safeguards_classify_exactly_what_the_bedrock_route_drops(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Mapping[str, object],
+    classifies: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _CLASSIFIER_SETTINGS)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    classifier: Final = messages_host.safeguards(
+        {**deployment, "safeguards": _DANGEROUS_TOOL_USE, "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    assert (classifier is not None and await classifier.open_stream()) is classifies
+
+
 @pytest.mark.asyncio
 async def test_safeguards_frames_split_and_stamp_like_the_python_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
