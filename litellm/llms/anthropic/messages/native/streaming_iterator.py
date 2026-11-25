@@ -425,9 +425,11 @@ class AnthropicMessagesStreamingResponse:
         self,
         completion_stream: AsyncIterator[bytes],
         hidden_params: AnthropicMessagesStreamHiddenParams,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
     ) -> None:
         self.completion_stream = completion_stream
         self._hidden_params = hidden_params
+        self.litellm_logging_obj: Final = litellm_logging_obj
 
     @property
     def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
@@ -452,21 +454,21 @@ class AnthropicMessagesStreamingResponse:
 
 
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
-_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
-_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
+SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
+_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in SSE_FRAME_TERMINATORS) - 1
 
 
 def _sse_data_payload(line: bytes) -> bytes | None:
     return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
 
 
-def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+def sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
     return loads_json_object(b"\n".join(payload for payload in payloads if payload is not None))
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
-    event: Final = _sse_frame_event(frame)
+    event: Final = sse_frame_event(frame)
     if event is None:
         return frame
     stamped: Final = await safeguard_results.observe(event)
@@ -474,7 +476,7 @@ async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardR
 
 
 def _ends_a_frame(open_frame: bytearray, scan_from: int) -> bool:
-    return any(open_frame.find(terminator, scan_from) != -1 for terminator in _SSE_FRAME_TERMINATORS)
+    return any(open_frame.find(terminator, scan_from) != -1 for terminator in SSE_FRAME_TERMINATORS)
 
 
 async def _stamped_sse_frames(
@@ -494,15 +496,15 @@ async def _stamped_sse_frames(
         yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
 
 
-async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+async def sse_frames_by_read(stream: AsyncIterator[bytes]) -> AsyncGenerator[tuple[bytes, ...], None]:
     open_frame: Final = bytearray()
     try:
         async for chunk in stream:
             if not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
                 if open_frame:
-                    yield bytes(open_frame)
+                    yield (bytes(open_frame),)
                     open_frame.clear()
-                yield chunk
+                yield (chunk,)
                 continue
             scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
             open_frame.extend(chunk)
@@ -510,14 +512,23 @@ async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None
                 continue
             *frames, unterminated = _SSE_FRAME_END.split(open_frame)
             open_frame[:] = unterminated
-            for frame in frames:
-                yield bytes(frame)
+            yield tuple(bytes(frame) for frame in frames)
     except Exception:
         if open_frame:
-            yield bytes(open_frame)
+            yield (bytes(open_frame),)
         raise
     if open_frame:
-        yield bytes(open_frame)
+        yield (bytes(open_frame),)
+
+
+async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+    reads: Final = sse_frames_by_read(stream)
+    try:
+        async for frames in reads:
+            for frame in frames:
+                yield frame
+    finally:
+        await reads.aclose()
 
 
 class SafeguardedAnthropicSSEStream:
@@ -549,7 +560,7 @@ class BaseAnthropicMessagesStreamingIterator:
     def __init__(
         self,
         litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: dict,
+        request_body: dict[str, object],
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
@@ -591,10 +602,10 @@ class BaseAnthropicMessagesStreamingIterator:
 
     def get_async_streaming_response_iterator(
         self,
-        httpx_response,
-        request_body: dict,
+        httpx_response: httpx.Response,
+        request_body: dict[str, object],
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,

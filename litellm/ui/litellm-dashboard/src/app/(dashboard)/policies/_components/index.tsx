@@ -3,7 +3,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { Alert, AlertDescription, AlertTitle, AlertAction } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { TabsContent } from "@/components/ui/tabs";
-import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsBar, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 import { toast } from "@/lib/toast";
@@ -450,7 +450,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   }
 
   return (
-    <Page>
+    <>
       <PageContent>
         <PageTabs value={activeTab} onValueChange={setActiveTab}>
           <PageHeader>
@@ -459,18 +459,21 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
               {t("shell.nav.items.policies")}
             </PageHeaderTitle>
             <PageHeaderDescription>{t("shell.pageDescriptions.policies")}</PageHeaderDescription>
-            <PageHeaderControls className="flex-wrap">
-              {activeTab === "policies" && (
-                <Button onClick={handleAddPolicy} disabled={!accessToken}>
-                  {t("policies.panel.addPolicy")}
-                </Button>
-              )}
-              <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
+            <PageHeaderControls>
+              <PageTabsBar
+                actions={
+                  activeTab === "policies" && (
+                    <Button onClick={handleAddPolicy} disabled={!accessToken}>
+                      {t("policies.panel.addPolicy")}
+                    </Button>
+                  )
+                }
+              >
                 <PageTabsTrigger value="templates">{t("policies.panel.tabs.templates")}</PageTabsTrigger>
                 <PageTabsTrigger value="policies">{t("policies.panel.tabs.policies")}</PageTabsTrigger>
                 <PageTabsTrigger value="attachments">{t("policies.panel.tabs.attachments")}</PageTabsTrigger>
                 <PageTabsTrigger value="simulator">{t("policies.panel.tabs.simulator")}</PageTabsTrigger>
-              </PageTabsList>
+              </PageTabsBar>
             </PageHeaderControls>
           </PageHeader>
 
@@ -674,7 +677,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         accessToken={accessToken}
         allTemplates={loadedTemplates}
       />
-    </Page>
+    </>
   );
 };
 

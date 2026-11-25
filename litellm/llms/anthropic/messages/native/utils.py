@@ -17,6 +17,13 @@ from litellm.llms.anthropic.common_utils import (
     strip_empty_content_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.api_versions import serves_anthropic_api_versions
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_system_texts,
+    drop_non_string_texts,
+    reject_emptied_messages,
+    reject_non_string_system_text,
+    reject_non_string_user_text,
+)
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.types.llms.anthropic import (
@@ -61,7 +68,7 @@ def refusal_stop_details(explanation: str | None) -> AnthropicStopDetails:
     return AnthropicStopDetails(type="refusal", category=None, explanation=explanation)
 
 
-MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results")
+MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results", "container")
 
 
 def anthropic_message_delta(
@@ -69,10 +76,11 @@ def anthropic_message_delta(
 ) -> Mapping[str, object]:
     """
     The ``delta`` of the ``message_delta`` event synthesized from a complete
-    Anthropic Messages response. A real stream carries ``stop_details`` and
-    ``safeguard_results`` there, so a client that asked to stream reads them
-    from this event and nowhere else. ``optional_fields`` replaces the
-    response's own when it was rebuilt from a stream that carried them.
+    Anthropic Messages response. A real stream carries ``stop_details``,
+    ``safeguard_results`` and ``container`` there, so a client that asked to
+    stream reads them from this event and nowhere else. ``optional_fields``
+    replaces the response's own when it was rebuilt from a stream that carried
+    them.
     """
     optional_source: Final = response if optional_fields is None else optional_fields
     present_optional: Final = {
@@ -296,6 +304,38 @@ def _rewrites_tool_use_ids(model: str, custom_llm_provider: str | None, api_base
     return provider_messages_config(resolved_model, provider, api_base) is not None
 
 
+def native_messages_to_send(
+    messages: Sequence[object], drop_params: object, *, rewrites_tool_use_ids: bool = True
+) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]
+    normalized: Final = normalize_native_messages(messages, rewrites_tool_use_ids=rewrites_tool_use_ids)
+    return list(drop_non_string_texts(normalized, drop_params))
+
+
+def cleaned_native_messages(
+    messages: Sequence[object],
+    drop_params: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    rewrites_tool_use_ids: bool = True,
+) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
+    reject_non_string_user_text(messages, drop_params, model, custom_llm_provider)
+    cleaned: Final = native_messages_to_send(messages, drop_params, rewrites_tool_use_ids=rewrites_tool_use_ids)
+    reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
+    return cleaned
+
+
+def cleaned_native_system(
+    system: str | list[dict[str, JsonValue]] | None,  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    drop_params: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+) -> str | list[dict[str, JsonValue]] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    reject_non_string_system_text(system, drop_params, model, custom_llm_provider)
+    return drop_non_string_system_texts(system, drop_params)
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -307,18 +347,42 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
+    from litellm.responses.bridge_check import needs_empty_user_turn_back
+
     normalized: Final = (
         messages
         if presanitized
-        else normalize_native_messages(
-            messages, rewrites_tool_use_ids=_rewrites_tool_use_ids(model, custom_llm_provider, api_base)
+        else cleaned_native_messages(
+            messages,
+            kwargs.get("drop_params"),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            rewrites_tool_use_ids=_rewrites_tool_use_ids(model, custom_llm_provider, api_base),
         )
+    )
+    cleaned_system: Final = (
+        system
+        if presanitized
+        else cleaned_native_system(
+            system, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
+    )
+    restored: Final = (
+        [*normalized, {"role": "user", "content": ""}]
+        if needs_empty_user_turn_back(
+            messages[-1] if messages else None,
+            normalized,
+            model,
+            custom_llm_provider,
+            {**kwargs, "api_base": api_base},
+        )
+        else normalized
     )
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(
-            normalized,
-            system,
+            restored,
+            cleaned_system,
             kwargs,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -456,10 +520,10 @@ class AnthropicMessagesRequestUtils:
 
 def mock_response(
     model: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
-    **kwargs,
+    **kwargs: object,
 ) -> AnthropicMessagesResponse:
     """
     Mock response for Anthropic messages

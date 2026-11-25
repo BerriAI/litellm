@@ -7,7 +7,7 @@ test.describe("Models and Endpoints responsive header", () => {
     viewport: { width: 900, height: 720 },
   });
 
-  test("keeps the refresh action fully visible in the header above the tabs", async ({ page }) => {
+  test("keeps the refresh action fully visible on the same row as the tabs", async ({ page }) => {
     await page.goto("/ui");
     await page
       .getByRole("complementary")
@@ -36,8 +36,10 @@ test.describe("Models and Endpoints responsive header", () => {
     ).toBeLessThanOrEqual(contentBox!.x + contentBox!.width);
     await expect(refresh).toBeInViewport({ ratio: 1 });
 
-    expect(refreshBox!.y + refreshBox!.height, "refresh overlaps or sits below the tabs").toBeLessThanOrEqual(
-      tabsBox!.y,
+    const refreshCenterY = refreshBox!.y + refreshBox!.height / 2;
+    expect(refreshCenterY, "refresh sits above the tabs row").toBeGreaterThan(tabsBox!.y);
+    expect(refreshCenterY, "refresh wrapped onto its own row below the tabs").toBeLessThan(
+      tabsBox!.y + tabsBox!.height,
     );
 
     await refresh.click({ trial: true });

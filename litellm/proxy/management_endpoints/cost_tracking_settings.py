@@ -413,10 +413,11 @@ async def update_cost_margin_config(
         )
 
     # Validate that all providers are valid LiteLLM providers (except "global")
-    invalid_providers: Final = []
-    for provider in cost_margin_config:
-        if provider not in ("global", CUSTOMER_MARGIN_KEY) and provider not in LlmProvidersSet:
-            invalid_providers.append(provider)
+    invalid_providers: Final = [
+        provider
+        for provider in cost_margin_config
+        if provider not in ("global", CUSTOMER_MARGIN_KEY) and provider not in LlmProvidersSet
+    ]
 
     if invalid_providers:
         raise HTTPException(

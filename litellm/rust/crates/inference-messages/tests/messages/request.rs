@@ -1180,7 +1180,7 @@ fn replayed_tool_round() -> Value {
         {"role": "user", "content": "run it"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
         {"role": "user", "content": [
-            {"type": "text", "text": 5},
+            {"type": "text", "text": "Note.", "id": 5},
             {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
         ]}
     ])
@@ -1190,7 +1190,10 @@ fn sent_tool_round(id: &str) -> Value {
     json!([
         {"role": "user", "content": "run it"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}
+        {"role": "user", "content": [
+            {"type": "text", "text": "Note.", "id": 5},
+            {"type": "tool_result", "tool_use_id": id, "content": "ok"}
+        ]}
     ])
 }
 
@@ -1282,6 +1285,35 @@ async fn an_env_anthropic_base_gets_the_callers_tool_use_ids_for_a_model_that_is
         only_request(&upstream).await.json()["messages"],
         sent_tool_round("functions.Bash:0")
     );
+}
+
+#[rstest]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
 }
 
 #[rstest]

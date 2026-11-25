@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.types.utils import admin_api_key_secret_reference
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.routing import assert_served_natively
@@ -170,3 +171,18 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
+
+
+@pytest.mark.asyncio
+async def test_the_secret_behind_an_admin_oidc_env_api_key_reaches_the_provider(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_SA_TOKEN", "env-token")
+    reference: Final = admin_api_key_secret_reference(
+        {"api_key": "oidc/env/ANTHROPIC_SA_TOKEN", "api_base": server.base_url}
+    )["api_key"]
+
+    await call(server, api_key=reference)
+
+    _, headers = sent(server)
+    assert headers["x-api-key"] == "env-token"

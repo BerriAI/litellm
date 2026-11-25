@@ -1,334 +1,151 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Trace",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "$ref": "#/$defs/TraceSummary"
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AgentNode"
+      }
+    },
+    "spans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Span"
+      }
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-python-optional": true
+    }
+  },
+  "required": [
+    "summary",
+    "agents",
+    "spans",
+    "next_cursor"
+  ],
   "$defs": {
-    "AgentNode": {
-      "description": "One distinct agent in a trace: 200 invocations of `researcher` are one node.",
-      "properties": {
-        "duration_ms": {
-          "format": "double",
-          "type": "number"
-        },
-        "invocations": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "llm_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "name": {
-          "type": "string"
-        },
-        "parent_agent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priced_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "spend": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "tool_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "name",
-        "parent_agent",
-        "invocations",
-        "llm_calls",
-        "tool_calls",
-        "duration_ms",
-        "spend",
-        "priced_calls"
-      ],
-      "type": "object"
-    },
-    "RunSource": {
-      "description": "The conversation that started the run, from the `agent.source.*` span attributes.",
-      "properties": {
-        "title": {
-          "type": "string"
-        },
-        "type": {
-          "$ref": "#/$defs/RunSourceType"
-        },
-        "url": {
-          "type": "string"
-        },
-        "user": {
-          "description": "Who started the conversation, e.g. the Slack user's email.",
-          "type": "string",
-          "x-python-optional": true
-        }
-      },
-      "required": [
-        "type",
-        "url",
-        "title"
-      ],
-      "type": "object"
-    },
-    "RunSourceType": {
-      "enum": [
-        "slack",
-        "teams",
-        "discord",
-        "linear",
-        "github",
-        "jira",
-        "custom"
-      ],
-      "type": "string"
-    },
-    "Span": {
-      "properties": {
-        "agent": {
-          "type": "string"
-        },
-        "duration_ms": {
-          "format": "double",
-          "type": "number"
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "error_truncated": {
-          "type": "boolean"
-        },
-        "framework": {
-          "type": "string"
-        },
-        "input_preview": {
-          "type": "string"
-        },
-        "input_tokens": {
-          "format": "uint32",
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "litellm_request_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "output_tokens": {
-          "format": "uint32",
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "parent_span_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "span_id": {
-          "type": "string"
-        },
-        "spend": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "spend_log_request_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "spend_match": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SpendMatch"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "start_offset_ms": {
-          "format": "double",
-          "type": "number"
-        },
-        "status": {
-          "$ref": "#/$defs/SpanStatus"
-        },
-        "type": {
-          "$ref": "#/$defs/SpanType"
-        }
-      },
-      "required": [
-        "span_id",
-        "parent_span_id",
-        "name",
-        "type",
-        "agent",
-        "framework",
-        "start_offset_ms",
-        "duration_ms",
-        "status",
-        "error",
-        "error_truncated",
-        "input_preview",
-        "model",
-        "input_tokens",
-        "output_tokens",
-        "litellm_request_id",
-        "spend",
-        "spend_log_request_id",
-        "spend_match"
-      ],
-      "type": "object"
-    },
-    "SpanStatus": {
-      "enum": [
-        "ok",
-        "error",
-        "unset"
-      ],
-      "type": "string"
-    },
-    "SpanType": {
-      "enum": [
-        "agent",
-        "llm",
-        "tool",
-        "chain",
-        "framework",
-        "retriever",
-        "embedding",
-        "reranker",
-        "guardrail",
-        "evaluator",
-        "prompt",
-        "decision"
-      ],
-      "type": "string"
-    },
-    "SpendMatch": {
-      "enum": [
-        "matched",
-        "no_call_id",
-        "no_spend_log",
-        "ambiguous",
-        "incomplete_evidence"
-      ],
-      "type": "string"
-    },
     "TraceSummary": {
+      "type": "object",
       "properties": {
-        "agent_count": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "agent_invocations": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "agent_names": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-python-optional": true
-        },
-        "duration_ms": {
-          "format": "double",
-          "type": "number"
-        },
-        "error_count": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "frameworks": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-python-optional": true
-        },
-        "input_preview": {
-          "type": "string"
-        },
-        "input_tokens": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "llm_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "models": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "name": {
-          "type": "string"
-        },
-        "output_tokens": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "priced_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
         "resolution_limited": {
           "type": "boolean",
           "x-python-optional": true
         },
+        "trace_id": {
+          "type": "string"
+        },
+        "trace_ref": {
+          "type": "string",
+          "x-python-optional": true
+        },
+        "name": {
+          "type": "string"
+        },
         "service": {
           "type": "string"
+        },
+        "agent_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-python-optional": true
+        },
+        "frameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-python-optional": true
+        },
+        "input_preview": {
+          "type": "string"
+        },
+        "start_time": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "status": {
+          "$ref": "#/$defs/SpanStatus"
+        },
+        "span_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "agent_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "agent_invocations": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "llm_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "tool_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "error_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "spend": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "priced_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
         },
         "source": {
           "anyOf": [
@@ -339,38 +156,6 @@
               "type": "null"
             }
           ],
-          "x-python-optional": true
-        },
-        "span_count": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "spend": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "start_time": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/SpanStatus"
-        },
-        "tool_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "trace_ref": {
-          "type": "string",
           "x-python-optional": true
         }
       },
@@ -397,41 +182,256 @@
         "models",
         "spend",
         "priced_calls"
-      ],
-      "type": "object"
-    }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "agents": {
-      "items": {
-        "$ref": "#/$defs/AgentNode"
+      ]
+    },
+    "SpanStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "unset"
+      ]
+    },
+    "RunSource": {
+      "description": "The conversation that started the run, from the `agent.source.*` span attributes.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/RunSourceType"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "user": {
+          "description": "Who started the conversation, e.g. the Slack user's email.",
+          "type": "string",
+          "x-python-optional": true
+        }
       },
-      "type": "array"
+      "required": [
+        "type",
+        "url",
+        "title"
+      ]
     },
-    "next_cursor": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-python-optional": true
+    "RunSourceType": {
+      "type": "string",
+      "enum": [
+        "slack",
+        "teams",
+        "discord",
+        "linear",
+        "github",
+        "jira",
+        "custom"
+      ]
     },
-    "spans": {
-      "items": {
-        "$ref": "#/$defs/Span"
+    "AgentNode": {
+      "description": "One distinct agent in a trace: 200 invocations of `researcher` are one node.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "parent_agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invocations": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "llm_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "tool_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "duration_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "spend": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "priced_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
       },
-      "type": "array"
+      "required": [
+        "name",
+        "parent_agent",
+        "invocations",
+        "llm_calls",
+        "tool_calls",
+        "duration_ms",
+        "spend",
+        "priced_calls"
+      ]
     },
-    "summary": {
-      "$ref": "#/$defs/TraceSummary"
+    "Span": {
+      "type": "object",
+      "properties": {
+        "span_id": {
+          "type": "string"
+        },
+        "parent_span_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/SpanType"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "framework": {
+          "type": "string"
+        },
+        "start_offset_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "duration_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "status": {
+          "$ref": "#/$defs/SpanStatus"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_truncated": {
+          "type": "boolean"
+        },
+        "input_preview": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "litellm_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spend": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "spend_log_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spend_match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpendMatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "span_id",
+        "parent_span_id",
+        "name",
+        "type",
+        "agent",
+        "framework",
+        "start_offset_ms",
+        "duration_ms",
+        "status",
+        "error",
+        "error_truncated",
+        "input_preview",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "litellm_request_id",
+        "spend",
+        "spend_log_request_id",
+        "spend_match"
+      ]
+    },
+    "SpanType": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "llm",
+        "tool",
+        "chain",
+        "framework",
+        "retriever",
+        "embedding",
+        "reranker",
+        "guardrail",
+        "evaluator",
+        "prompt",
+        "decision"
+      ]
+    },
+    "SpendMatch": {
+      "type": "string",
+      "enum": [
+        "matched",
+        "no_call_id",
+        "no_spend_log",
+        "ambiguous",
+        "incomplete_evidence"
+      ]
     }
-  },
-  "required": [
-    "summary",
-    "agents",
-    "spans",
-    "next_cursor"
-  ],
-  "title": "Trace",
-  "type": "object"
+  }
 }
