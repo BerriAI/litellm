@@ -29,9 +29,10 @@ use litellm_callbacks::{
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
 };
 use litellm_callbacks_model_capacity::{
-    CapacityError, ClassShareEntity, Engine, Fact, Facts, GroupInfo, KeyFacts, LoggedGroup, NAME,
-    PreCall, Priority, Request as CapacityRequest, SaturationFallback, Settings as EngineSettings,
-    Settlement, SharedStash, StoreLimiter, TokenRateLimitType, UsageTokens,
+    CapacityError, Charge, ClassShareEntity, Engine, Fact, Facts, GroupInfo, KeyFacts, LoggedGroup,
+    NAME, PreCall, Priority, Request as CapacityRequest, SaturationFallback,
+    Settings as EngineSettings, Settlement, SharedStash, StoreLimiter, TokenRateLimitType,
+    UsageTokens,
 };
 use litellm_callbacks_parallel_request_limiter::{
     PolicyFacts, TokenRateLimitType as LimiterTokenType,
@@ -322,7 +323,10 @@ impl ModelCapacity {
                 Some(&counted.stash),
                 &settlement,
                 counted.priority.as_deref(),
-                UsageTokens::settled(Some(&used), self.settings.rate_limit_type),
+                Charge::Reported(UsageTokens::settled(
+                    Some(&used),
+                    self.settings.rate_limit_type,
+                )),
                 Some(&request),
             )
             .await;

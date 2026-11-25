@@ -20,6 +20,7 @@ Configuration in proxy config YAML:
         mode: post_call
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -63,7 +64,7 @@ def _attribute(source: object, name: str) -> object:
 
 
 def _get_request_object_permission_ids(
-    request_data: dict,
+    request_data: Mapping[str, object],
 ) -> tuple[str | None, str | None]:
     """Extract object_permission_id and team_object_permission_id from request_data."""
     if not request_data:

@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -186,7 +186,7 @@ class OllamaConfig(BaseConfig):
         repeat_penalty: float | None = None,
         temperature: float | None = None,
         seed: int | None = None,
-        stop: list | None = None,
+        stop: Sequence[object] | None = None,
         tfs_z: float | None = None,
         num_predict: int | None = None,
         top_k: int | None = None,
@@ -233,11 +233,11 @@ class OllamaConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
@@ -263,7 +263,7 @@ class OllamaConfig(BaseConfig):
 
         return optional_params
 
-    def _supports_function_calling(self, ollama_model_info: dict) -> bool:
+    def _supports_function_calling(self, ollama_model_info: Mapping[str, object]) -> bool:
         """
         Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
         """
@@ -317,8 +317,8 @@ class OllamaConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -432,7 +432,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> dict:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
 
@@ -477,14 +477,14 @@ class OllamaConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
     def get_complete_url(
@@ -492,8 +492,8 @@ class OllamaConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -510,7 +510,7 @@ class OllamaConfig(BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ):
+    ) -> "OllamaTextCompletionResponseIterator":
         return OllamaTextCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -519,7 +519,12 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> None:
         super().__init__(streaming_response, sync_stream, json_mode)
         self.response_id: Final[str] = generate_id()
         self.started_reasoning_content: bool = False

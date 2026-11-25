@@ -10,7 +10,7 @@ be of type Object`.
 Reference: https://docs.cohere.com/v2/reference/embed
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:
@@ -57,8 +57,8 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -77,9 +77,9 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: "AllEmbeddingInputValues",
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform embedding request for Cohere models on SageMaker
         """
@@ -108,8 +108,8 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> "EmbeddingResponse":
         """
         Transform embedding response for Cohere models on SageMaker.
@@ -136,14 +136,14 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: Sequence[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment for SageMaker Cohere embeddings
         """

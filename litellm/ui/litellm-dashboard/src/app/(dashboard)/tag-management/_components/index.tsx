@@ -144,7 +144,26 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     />
   ) : (
     <PageContent>
-      <PageHeader>
+      <PageHeader
+        aside={
+          <>
+            {lastRefreshed && (
+              <p className="text-sm">
+                {t("tagManagement.page.lastRefreshedPrefix")}
+                {lastRefreshed}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={t("tagManagement.page.refresh")}
+              onClick={handleRefreshClick}
+            >
+              <RefreshCw />
+            </Button>
+          </>
+        }
+      >
         <PageHeaderTitle>
           <Tags />
           {t("tagManagement.page.title")}
@@ -161,22 +180,8 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
             }}
           />
         </PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap">
+        <PageHeaderControls>
           <Button onClick={() => setIsCreateModalVisible(true)}>{t("tagManagement.page.create")}</Button>
-          {lastRefreshed && (
-            <p className="text-sm">
-              {t("tagManagement.page.lastRefreshedPrefix")}
-              {lastRefreshed}
-            </p>
-          )}
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label={t("tagManagement.page.refresh")}
-            onClick={handleRefreshClick}
-          >
-            <RefreshCw />
-          </Button>
         </PageHeaderControls>
       </PageHeader>
 

@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, NoReturn, Optional
@@ -783,7 +783,7 @@ class TestLensRenamePendingCheck:
 
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
 
-        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> NoReturn:
             raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
 
         with pytest.raises(RuntimeError) as err:
@@ -800,7 +800,9 @@ class TestLensRenamePendingCheck:
         with pytest.raises(psycopg.Error) as libpq:
             psycopg.connect(database_url, connect_timeout=10, autocommit=True)
 
-        def raise_libpq_error(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+        def raise_libpq_error(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> NoReturn:
             raise libpq.value
 
         with pytest.raises(RuntimeError) as err:
@@ -812,7 +814,9 @@ class TestLensRenamePendingCheck:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
-        def legacy_tables_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+        def legacy_tables_present(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> _FakePsycopgConn:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
@@ -828,7 +832,9 @@ class TestCustomerMemberBudgetRenamePendingCheck:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
-        def legacy_column_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+        def legacy_column_present(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> _FakePsycopgConn:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
@@ -841,7 +847,7 @@ class TestCustomerMemberBudgetRenamePendingCheck:
 
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
 
-        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> NoReturn:
             raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
 
         with pytest.raises(RuntimeError) as err:
@@ -1101,6 +1107,7 @@ class _MigrateDeployHarness:
         monkeypatch.setattr(utils_module.time, "sleep", self.sleeps.append)
 
         self.baseline_succeeds = True
+        self.on_deploy: Callable[[str], None] = lambda database_url: None
 
     def _fake_baseline(self, *args, **kwargs):
         self.baselines += 1
@@ -1118,6 +1125,7 @@ class _MigrateDeployHarness:
         if cmd[1:] == ["migrate", "deploy"]:
             self.deploy_calls.append(cmd)
             self.deploy_environments.append(env.get("DATABASE_URL", ""))
+            self.on_deploy(env.get("DATABASE_URL", ""))
             self.deploy_prisma_environments.append(dict(env))
             outcome = self._next_outcome()
             if outcome == "ok":
@@ -1225,7 +1233,92 @@ class TestConcurrentP3009Recovery:
         assert len(harness.deploy_calls) == 1
 
 
+def _session_name(database_url: str) -> str:
+    from urllib.parse import parse_qsl, urlsplit
+
+    names: Final = tuple(value for key, value in parse_qsl(urlsplit(database_url).query) if key == "application_name")
+    assert len(names) == 1, database_url
+    return names[0]
+
+
+def _without_session_name(database_url: str) -> str:
+    return re.sub(r"[?&]application_name=litellm-migrate-[0-9a-f]+$", "", database_url)
+
+
+def test_tagged_environment_replaces_the_application_name_and_keeps_every_other_parameter() -> None:
+    from litellm_proxy_extras.migration_lock import tagged_environment
+
+    tagged: Final = tagged_environment(
+        {
+            "DATABASE_URL": "postgresql://u:p%40ss@db:5432/x?schema=tenant&application_name=litellm-prisma"
+            "&options=-c%20lock_timeout%3D5000",
+            "PRISMA_OFFLINE_MODE": "true",
+        },
+        "litellm-migrate-abc",
+    )
+
+    assert tagged == {
+        "DATABASE_URL": "postgresql://u:p%40ss@db:5432/x?schema=tenant&options=-c%20lock_timeout%3D5000"
+        "&application_name=litellm-migrate-abc",
+        "PRISMA_OFFLINE_MODE": "true",
+    }
+
+
+def test_tagged_environment_without_a_database_url_is_unchanged() -> None:
+    from litellm_proxy_extras.migration_lock import tagged_environment
+
+    environment: Final = {"PRISMA_OFFLINE_MODE": "true"}
+
+    assert tagged_environment(environment, "litellm-migrate-abc") is environment
+
+
 class TestMigrateDeployAttemptAccounting:
+    def test_a_deploy_killed_at_its_time_limit_has_its_own_sessions_rolled_back_before_the_retry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        database_url: Final = "postgresql://u:p@localhost:9/x"
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["timeout", "timeout", "ok"],
+            ledger=_FakeLedger(at_error=(), after_peer=()),
+            database_url=database_url,
+            prisma_env={"DATABASE_URL": database_url},
+        )
+        events: Final[list[str]] = []
+        harness.on_deploy = lambda url: events.append(f"deploy {_session_name(url)}")
+
+        while not ProxyExtrasDBManager._run_database_v2(
+            use_migrate=True,
+            roll_back_killed=lambda session_name, attempt_started: events.append(f"roll back {session_name}"),
+        ):
+            continue
+
+        first, second, third = (_session_name(url) for url in harness.deploy_environments)
+        assert len({first, second, third}) == 3, "each attempt needs its own session name"
+        assert events == [
+            f"deploy {first}",
+            f"roll back {first}",
+            f"deploy {second}",
+            f"roll back {second}",
+            f"deploy {third}",
+        ]
+
+    def test_a_deploy_that_fails_on_its_own_is_not_rolled_back_as_killed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [_P3005_STDERR, "ok"])
+        killed: Final[list[str]] = []
+
+        while not ProxyExtrasDBManager._run_database_v2(
+            use_migrate=True,
+            baseline_existing=harness._fake_baseline,
+            roll_back_killed=lambda session_name, attempt_started: killed.append(session_name),
+        ):
+            continue
+
+        assert killed == []
+
     def test_migrate_deploy_does_not_add_startup_options_to_a_pooled_url(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1243,7 +1336,7 @@ class TestMigrateDeployAttemptAccounting:
 
         assert harness.run() is True
         received_url: Final = harness.deploy_environments[0]
-        assert received_url == pooled_url
+        assert _without_session_name(received_url) == pooled_url
         assert all(key != "options" for key, _ in parse_qsl(urlsplit(received_url).query))
 
     def test_a_push_created_database_finishes_bootstrapping(self, monkeypatch, tmp_path):
@@ -1945,7 +2038,7 @@ class TestV1MigrationFailuresLogAtError:
                 return (1,) if member_budget_rename_pending else None
 
         monkeypatch.setattr(
-            "psycopg.connect", lambda conninfo, *, connect_timeout, autocommit: _MemberColumnCheck()
+            "psycopg.connect", lambda conninfo, *, connect_timeout, autocommit, client_encoding: _MemberColumnCheck()
         )
         calls: Final[list[list[str]]] = []
         killed_pids: Final[list[int]] = []
@@ -2420,7 +2513,7 @@ class TestV2MigrationsWithoutPsycopg:
         assert len(harness.deploy_calls) == 1
         deployed_with: Final = harness.deploy_prisma_environments[0]
         assert "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK" not in deployed_with
-        assert deployed_with["DATABASE_URL"] == f"{self.DIRECT_URL}?schema=tenant"
+        assert _without_session_name(deployed_with["DATABASE_URL"]) == f"{self.DIRECT_URL}?schema=tenant"
         warnings: Final = "\n".join(record.getMessage() for record in caplog.records)
         assert "prisma runs its migrations under its own advisory lock" in warnings
         assert "skipping the request-log index build" in warnings

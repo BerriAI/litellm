@@ -34,7 +34,7 @@ These are target invariants. Where the code still lags them, the Notion page lis
   - `authz::authorize` in `authz/models.rs` is the one model rule. It takes each list as a `Layer` with the `ModelAsk` the host's router resolved the name to (the name asked for, its model group and that group's access groups), and a request has to be reached by every layer. No layer, as the master key has, reaches every model
   - A list reaches a model when it is empty, holds `*` or `all-proxy-models`, or names the model, its group or one of its access groups
   - An entry the rule does not read, a provider pattern such as `anthropic/*`, `all-team-models` or `no-default-models`, is the host's to decline at authentication. Reading one means porting it here, never matching it in a host
-  - A team's or a user's list is a new `Layer` variant with its own `Denied`, fed by the host method that yields the layers. A route never names a row type and never compares a list itself
+  - A team's or a user's list is a new `Layer` variant with its own `DeniedList` case, fed by the host method that yields the layers. A route never names a row type and never compares a list itself
 
 ## No Python semantics
 

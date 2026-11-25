@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -601,6 +601,8 @@ def failure_spend_rows(
 
 
 class _ProxyDBLogger(CustomLogger):
+    runs_on_no_log_requests: ClassVar[bool] = True
+
     def __init__(
         self,
         spend_event_producer: SpendEventProducer | None = None,
@@ -1280,6 +1282,7 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 if team_obj.team_alias is not None:
                     metadata["user_api_key_team_alias"] = team_obj.team_alias
@@ -1558,7 +1561,7 @@ async def _update_database_and_spend_counters(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1636,7 +1639,7 @@ async def _update_database_and_spend_counters_in_batch(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
