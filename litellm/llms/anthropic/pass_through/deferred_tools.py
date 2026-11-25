@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "emulate", "drop"]
 CLAUDE_CODE_TOOL_SEARCH_NAME: Final = "ToolSearch"
 CLIENT_TOOL_SEARCH_PROVIDERS: Final = frozenset({"azure", "openai"})
+DEFERRAL_REJECTING_CHAT_PROVIDERS: Final = CLIENT_TOOL_SEARCH_PROVIDERS | {"mistral"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +60,7 @@ def usable_deferred_tools_mode(model_info: object, provider: str | None) -> Defe
     mode: Final = deferred_tools_mode(model_info)
     if mode == "native" and provider not in CLIENT_TOOL_SEARCH_PROVIDERS:
         return "drop"
-    if mode == "passthrough" and provider in CLIENT_TOOL_SEARCH_PROVIDERS:
+    if mode == "passthrough" and provider in DEFERRAL_REJECTING_CHAT_PROVIDERS:
         return "drop"
     return mode
 
@@ -74,10 +75,11 @@ def unusable_deferred_tools_refusal(model_info: object, provider: str | None) ->
             f"out of the prompt, which provider {provider} lacks. Pick emulate, passthrough or drop for this "
             "deployment, or set drop_params to send deferred tools the drop way"
         )
+    other_modes: Final = "native or emulate" if provider in CLIENT_TOOL_SEARCH_PROVIDERS else "emulate or drop"
     return (
         f"model_info.deferred_tools passthrough sends deferred tools as Claude Code sent them, which provider "
-        f"{provider} rejects without its own tool search. Pick native or emulate for this deployment, or set "
-        "drop_params to send deferred tools the drop way"
+        f"{provider} rejects. Pick {other_modes} for this deployment, or set drop_params to send deferred tools "
+        "the drop way"
     )
 
 
