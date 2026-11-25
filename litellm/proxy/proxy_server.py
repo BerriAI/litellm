@@ -972,20 +972,15 @@ from litellm.router_config import build_router_config
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
-        billing_metrics_heartbeat_configured as _billing_metrics_heartbeat_configured,
-    )
-    from litellm.proxy.enterprise_billing.billing_metrics import (
         build_billing_metrics_recorder as _build_billing_metrics_recorder,
     )
     from litellm.proxy.enterprise_billing.billing_metrics import (
         shutdown_billing_metrics_recorder as _shutdown_billing_metrics_recorder,
     )
 
-    billing_metrics_heartbeat_configured: Callable[[], bool] | None = _billing_metrics_heartbeat_configured
     build_billing_metrics_recorder: Callable[..., BillingRecorder | None] | None = _build_billing_metrics_recorder
     shutdown_billing_metrics_recorder: Callable[[], None] | None = _shutdown_billing_metrics_recorder
 except ImportError:
-    billing_metrics_heartbeat_configured = None
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
@@ -2203,8 +2198,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     await setup_proxy_callbacks(app, startup_callbacks)
                     gc.freeze()
                     verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
-                    if billing_metrics_heartbeat_configured is not None and billing_metrics_heartbeat_configured():
-                        _get_or_build_billing_metrics_recorder()
+                    _get_or_build_billing_metrics_recorder(heartbeat_only=True)
                     yield state
                 finally:
                     if model_info_scheduler is not None and model_info_scheduler.running:
@@ -3214,13 +3208,14 @@ app.add_middleware(
 )
 
 
-def _get_or_build_billing_metrics_recorder() -> BillingRecorder | None:
+def _get_or_build_billing_metrics_recorder(*, heartbeat_only: bool = False) -> BillingRecorder | None:
     if build_billing_metrics_recorder is None:
         return None
     return build_billing_metrics_recorder(
         premium=premium_user,
         license_data=_license_check.airgapped_license_data,
         litellm_version=version,
+        heartbeat_only=heartbeat_only,
     )
 
 

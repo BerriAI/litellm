@@ -302,14 +302,16 @@ class _ActiveRecorderRegistry:
 _ACTIVE_RECORDER: Final = _ActiveRecorderRegistry()
 
 
-def billing_metrics_heartbeat_configured() -> bool:
-    return bool(os.getenv(DEPLOYMENT_ID_ENV))
-
-
 def build_billing_metrics_recorder(
-    *, premium: bool, license_data: "EnterpriseLicenseData | None", litellm_version: str
+    *,
+    premium: bool,
+    license_data: "EnterpriseLicenseData | None",
+    litellm_version: str,
+    heartbeat_only: bool = False,
 ) -> BillingMetricsRecorder | None:
     """Build the recorder, or None when the deployment is not licensed or metering is unconfigured."""
+    if heartbeat_only and not os.getenv(DEPLOYMENT_ID_ENV):
+        return None
     if not premium:
         # Debug, not warning: unlicensed is the common case and a warning here
         # would be noise on every OSS proxy. Every other disable path warns.
