@@ -4679,7 +4679,9 @@ class _PricedCall:
     output_tokens: int
 
 
-def _negotiated_deployment_logging_obj(model: str) -> LiteLLMLoggingObj:
+def _negotiated_deployment_logging_obj(
+    model: str, stream: bool = False, callbacks: tuple[CustomLogger, ...] = ()
+) -> LiteLLMLoggingObj:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import openai_deployment_pricing_model_info
 
     router: Final = litellm.Router(
@@ -4697,21 +4699,27 @@ def _negotiated_deployment_logging_obj(model: str) -> LiteLLMLoggingObj:
     )
     model_info: Final = openai_deployment_pricing_model_info(router, {"model": model}, None)
     assert model_info is not None, "the passthrough found no OpenAI deployment to price this model"
-    return _identified_logging_obj("negotiated-price-call", metadata={"model_info": dict(model_info)})
+    return _identified_logging_obj(
+        "negotiated-price-call", metadata={"model_info": dict(model_info)}, stream=stream, callbacks=callbacks
+    )
 
 
-def _passthrough_cost(call: _PricedCall, logging_obj: LiteLLMLoggingObj) -> object:
+async def _passthrough_cost(call: _PricedCall) -> object:
+    model: Final = str(call.request_body["model"])
     if call.response_body is None:
-        return OpenAIPassthroughLoggingHandler.handle_logging_openai_collected_chunks(
-            litellm_logging_obj=logging_obj,
+        recorder: Final = _SpendRowRecorder()
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=_negotiated_deployment_logging_obj(model, stream=True, callbacks=(recorder,)),
             passthrough_success_handler_obj=PassThroughEndpointLogging(),
             url_route=call.url,
             request_body=dict(call.request_body),
             endpoint_type=EndpointType.OPENAI,
             start_time=DISPATCH_TIME,
-            all_chunks=list(call.stream_chunks),
+            raw_bytes=tuple(f"{chunk}\n\n".encode() for chunk in call.stream_chunks),
             end_time=DISPATCH_TIME,
-        )["kwargs"].get("response_cost")
+        )
+        return (await asyncio.wait_for(recorder.call, timeout=5)).spend_row["spend"]
+    logging_obj: Final = _negotiated_deployment_logging_obj(model)
     return OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
         httpx_response=httpx.Response(200, json=call.response_body, request=httpx.Request("POST", call.url)),
         response_body=dict(call.response_body),
@@ -4796,10 +4804,9 @@ def _passthrough_cost(call: _PricedCall, logging_obj: LiteLLMLoggingObj) -> obje
         ),
     ],
 )
-def test_openai_passthrough_bills_the_matching_deployment_negotiated_price(local_model_cost_map, call):
-    logging_obj: Final = _negotiated_deployment_logging_obj(str(call.request_body["model"]))
-
-    response_cost: Final = _passthrough_cost(call, logging_obj)
+@pytest.mark.asyncio
+async def test_openai_passthrough_bills_the_matching_deployment_negotiated_price(local_model_cost_map, call):
+    response_cost: Final = await _passthrough_cost(call)
 
     assert response_cost == pytest.approx(
         call.input_tokens * NEGOTIATED_INPUT_COST + call.output_tokens * NEGOTIATED_OUTPUT_COST

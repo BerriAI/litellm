@@ -989,6 +989,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     **pricing,
                 )
             )
+            if not is_responses:
+                set_hidden_param(complete_response, "response_cost", response_cost)
 
             settles_background_response: Final = (
                 BackgroundResponseSettlement.SETTLES
