@@ -28,7 +28,7 @@ use crate::{
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
-    record::{self, Recorder},
+    record::{self, Recorder, ServedMessage},
     routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
@@ -136,6 +136,24 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
 
     fn configured_timeout<G: Host>(gateway: &Gateway<G>, deployment_id: &str) -> Option<Duration> {
         gateway.shaping(deployment_id).settings.request_timeout()
+    }
+
+    fn keep_output(ran: &Self::Output) {
+        let body = match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => {
+                match serde_json::to_value(message) {
+                    Ok(Value::Object(body)) => body,
+                    _ => return,
+                }
+            }
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.clone(),
+            CallOutput::Stream { .. } => return,
+        };
+        record::write(|entries| entries.served_message = Some(ServedMessage::Complete(body)));
+    }
+
+    fn keep_event(data: &str) {
+        record::write(|entries| ServedMessage::see(&mut entries.served_message, data));
     }
 
     fn render(ran: Self::Output, reported: ReportedModel<'_>) -> Result<Response, Error> {

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
-use super::{AttemptRecord, ServedDeployment};
+use super::{AttemptRecord, ServedDeployment, ServedMessage};
 use crate::{CallType, ServedCall, headers::Routing};
 
 const MODEL: &str = "model";
@@ -129,6 +129,8 @@ pub struct CallState {
     pub stream_response: bool,
     /// The time the callbacks spent on the call's hooks so far.
     pub callback_time: Duration,
+    /// The answer that served a `/v1/messages` call, for its logging payload's `response`.
+    pub served_message: Option<ServedMessage>,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -165,6 +167,7 @@ impl CallState {
             stream_timeout: false,
             stream_response: false,
             callback_time: Duration::ZERO,
+            served_message: None,
         }
     }
 

@@ -48,6 +48,7 @@ litellm-callbacks-spend-logger = { path = "crates/callbacks-spend-logger" }
 litellm-framer = { path = "crates/framer" }
 litellm-fnmatch = { path = "crates/fnmatch" }
 litellm-starlette = { path = "crates/starlette" }
+litellm-standard-logging = { path = "crates/standard-logging" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-secret-value = { path = "crates/secret-value" }
