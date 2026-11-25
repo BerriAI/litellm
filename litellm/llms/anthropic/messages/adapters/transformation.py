@@ -1,6 +1,7 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -29,6 +30,7 @@ from litellm.llms.anthropic.messages.utils import (
     json_copy_or_original,
     local_model_name,
     maps_bare_output_effort,
+    model_excludes_effort,
     object_mapping,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
@@ -1258,14 +1260,31 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def _effort_within_thinking_budget(
-        output_effort: object, budget_effort: str | None, model: str, *, drop_params: bool
+        output_effort: object,
+        budget_effort: str | None,
+        model: str,
+        excludes_effort: Callable[[str], bool],
+        *,
+        drop_params: bool,
     ) -> str | None:
-        if not drop_params or not isinstance(output_effort, str) or output_effort in KNOWN_REASONING_EFFORTS:
-            return reasoning_effort_within_thinking_budget(output_effort, budget_effort)
-        warn_dropped_reasoning(
-            "output_config.effort", output_effort, model, "no reasoning API defines it", drop_params_gated=True
-        )
-        return budget_effort
+        effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
+        if not drop_params or effort is None or effort == budget_effort:
+            return effort
+        if effort not in KNOWN_REASONING_EFFORTS:
+            warn_dropped_reasoning(
+                "output_config.effort", effort, model, "no reasoning API defines it", drop_params_gated=True
+            )
+            return budget_effort
+        if excludes_effort(effort):
+            warn_dropped_reasoning(
+                "output_config.effort",
+                effort,
+                model,
+                "its model cost map entry does not list it",
+                drop_params_gated=True,
+            )
+            return budget_effort
+        return effort
 
     @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
@@ -1347,6 +1366,12 @@ class LiteLLMAnthropicMessagesAdapter:
                     report_reasoning_drops=report_reasoning_drops,
                 ),
                 model,
+                partial(
+                    model_excludes_effort,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=deployment_model_info,
+                ),
                 drop_params=drop_params,
             )
             if thinking

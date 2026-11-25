@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final
 from unittest.mock import MagicMock
@@ -8,6 +9,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from pydantic import BaseModel
 
+import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
@@ -80,3 +82,24 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
     for name, value in proxy_globals.items():
         monkeypatch.setattr(proxy_server, name, value)
     return ProxyAuthState(cache=cache, monkeypatch=monkeypatch)
+
+
+WITHOUT_LOW_TIERS_MODEL: Final = "reasoner-without-low-tiers"
+
+
+@pytest.fixture
+def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    litellm.model_cost[WITHOUT_LOW_TIERS_MODEL] = {
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supports_reasoning": True,
+        "supports_none_reasoning_effort": False,
+        "supports_minimal_reasoning_effort": False,
+        "supports_low_reasoning_effort": False,
+    }
+    litellm.get_model_info.cache_clear()
+    try:
+        yield f"openai/{WITHOUT_LOW_TIERS_MODEL}"
+    finally:
+        litellm.model_cost.pop(WITHOUT_LOW_TIERS_MODEL, None)
+        litellm.get_model_info.cache_clear()

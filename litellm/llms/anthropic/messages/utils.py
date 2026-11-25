@@ -585,6 +585,19 @@ def is_unconfirmed_none(
     ) is None and _reasons_without_confirming_none(model_info)
 
 
+def model_excludes_effort(
+    effort: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
+
+    if deployment_rounds_reasoning_effort(deployment_model_info):
+        return False
+    levels: Final = deployment_reasoning_efforts(model, custom_llm_provider, deployment_model_info) or ()
+    return (bool(levels) and effort not in levels) or is_unconfirmed_none(
+        effort, model, custom_llm_provider, deployment_model_info=deployment_model_info
+    )
+
+
 def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:
     from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
