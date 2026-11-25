@@ -1,9 +1,12 @@
 //! The record of one inference call: what the route, the callbacks and every later reader know of
 //! it so far. [`scoped`] makes one for each request on the inference routes and runs the handler,
 //! every layer inside it and the response body with it in a task-local, so code reaches the call's
-//! record through [`read`] and [`write`] and never takes it as a parameter. A task spawned for the
-//! call keeps it through [`spawn_in_call`].
+//! record through [`read`] and [`write`] and never takes it as a parameter. The record lives in
+//! `litellm_call_scope`'s task-local, so a task any crate spawns for the call through
+//! `litellm_call_scope::spawn_in_call` keeps it. Each attempt runs in its own [`AttemptRecord`]
+//! through [`attempt`], which [`Recorder`] writes, and the route hands the served one to the record.
 
+mod attempt;
 mod entries;
 mod trace;
 
@@ -12,6 +15,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Instant,
 };
 
 use axum::{
@@ -21,14 +25,18 @@ use axum::{
     response::Response,
 };
 use http_body::{Frame, SizeHint};
+use litellm_call_scope::Call;
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::task::{JoinHandle, futures::TaskLocalFuture};
+use tokio::task::futures::TaskLocalFuture;
 
-pub use self::entries::{CallState, Charged, Ended, unix};
+pub use self::{
+    attempt::{AttemptRecord, Recorder, ServedDeployment},
+    entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
+};
 
 tokio::task_local! {
-    static RECORD: Arc<CallRecord>;
+    static ATTEMPT: Arc<Mutex<AttemptRecord>>;
 }
 
 /// One call as it stands. Every access is one short lock, never held across an await.
@@ -45,51 +53,81 @@ impl CallRecord {
 }
 
 /// Runs `future` as part of the call `record` keeps.
-pub fn scope<F: Future>(record: Arc<CallRecord>, future: F) -> TaskLocalFuture<Arc<CallRecord>, F> {
-    RECORD.scope(record, future)
+pub fn scope<F: Future>(record: Arc<CallRecord>, future: F) -> TaskLocalFuture<Call, F> {
+    litellm_call_scope::scope(record, future)
 }
 
 /// Changes the record of the call this code runs in. `None` outside a call, which is a bug.
 pub fn write<R>(change: impl FnOnce(&mut CallState) -> R) -> Option<R> {
-    RECORD
-        .try_with(|record| change(&mut record.0.lock()))
-        .map_err(missed)
+    litellm_call_scope::with(|record: &CallRecord| change(&mut record.0.lock()))
+        .map_err(|error| missed("call record", error))
         .ok()
 }
 
 /// Reads the record of the call this code runs in. `None` outside a call, which is a bug.
 pub fn read<R>(look: impl FnOnce(&CallState) -> R) -> Option<R> {
-    RECORD
-        .try_with(|record| look(&record.0.lock()))
-        .map_err(missed)
+    litellm_call_scope::with(|record: &CallRecord| look(&record.0.lock()))
+        .map_err(|error| missed("call record", error))
         .ok()
 }
 
-/// Adds a header to the answer of the call this code runs in.
-pub fn add_header(name: impl Into<String>, value: impl Into<Value>) {
-    write(|entries| entries.add_header(name.into(), value.into()));
+/// Adds a header to the response of the call this code runs in. Refused once the response's head
+/// was written, which for a stream is before its first byte.
+pub fn add_header(name: impl Into<String>, value: impl Into<Value>) -> Result<(), HeadSent> {
+    write(|entries| entries.add_header(name.into(), value.into())).unwrap_or(Ok(()))
 }
 
-/// Spawns `future` as part of the call this code runs in, so it reads and writes the same record.
-/// Outside a call it is spawned as it is.
-pub fn spawn_in_call<F>(future: F) -> JoinHandle<F::Output>
+/// Adds a header the response of the call this code runs in carries only when nothing else set
+/// one of the same name. Refused once the response's head was written.
+pub(crate) fn default_header(
+    name: impl Into<String>,
+    value: impl Into<Value>,
+) -> Result<(), HeadSent> {
+    write(|entries| entries.add_default_header(name.into(), value.into())).unwrap_or(Ok(()))
+}
+
+/// Runs `future` as one attempt of the call, and hands back what it recorded next to its output.
+/// The call's record stays in scope. A failed attempt's record also goes into the call's
+/// `failed_attempts`, with the provider's answer its error carries, since the core hands no
+/// interceptor a failed response.
+pub async fn attempt<T, F>(future: F) -> (Result<T, crate::Error>, AttemptRecord)
 where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
+    F: Future<Output = Result<T, crate::Error>>,
 {
-    match RECORD.try_get() {
-        Ok(record) => tokio::spawn(RECORD.scope(record, future)),
-        Err(_) => tokio::spawn(future),
+    let record = Arc::new(Mutex::new(AttemptRecord {
+        started: Some(Instant::now()),
+        ..AttemptRecord::default()
+    }));
+    let output = ATTEMPT.scope(record.clone(), future).await;
+    let mut record = std::mem::take(&mut *record.lock());
+    if let Err(error) = &output {
+        record.record_failure(error);
+        write(|state| state.failed_attempts.push(record.clone()));
     }
+    (output, record)
 }
 
-/// A read or write with no record in scope: a spawn that skipped [`spawn_in_call`], or code run
-/// outside a call.
-fn missed(error: impl std::fmt::Display) {
+/// The headers a stream's head carried, which its encoder does not pass on, into the attempt in
+/// scope.
+pub(crate) fn stream_head(headers: Vec<(String, String)>) {
+    note(|record| record.provider_headers = headers);
+}
+
+/// Changes what the attempt this code runs in recorded. Outside an attempt, which is a bug, it
+/// does nothing.
+fn note(change: impl FnOnce(&mut AttemptRecord)) {
+    let _ = ATTEMPT
+        .try_with(|record| change(&mut record.lock()))
+        .map_err(|error| missed("attempt", error));
+}
+
+/// A read or write with no `what` in scope: a spawn that skipped
+/// `litellm_call_scope::spawn_in_call`, or code run outside a call or an attempt.
+fn missed(what: &str, error: impl std::fmt::Display) {
     if cfg!(debug_assertions) {
-        panic!("no call record in scope: {error}");
+        panic!("no {what} in scope: {error}");
     }
-    tracing::error!(%error, "no call record in scope");
+    tracing::error!(%error, "no {what} in scope");
 }
 
 /// The layer outermost on the inference routes. It makes the request's record, under the trace
@@ -97,7 +135,7 @@ fn missed(error: impl std::fmt::Display) {
 /// hyper polls the body after the handler returned.
 pub(crate) async fn scoped(request: Request, next: Next) -> Response {
     let record = CallRecord::traced(trace::of(request.headers()));
-    let response = RECORD.scope(record.clone(), next.run(request)).await;
+    let response = scope(record.clone(), next.run(request)).await;
     response.map(|body| {
         Body::new(Scoped {
             record,
@@ -125,7 +163,7 @@ impl HttpBody for Scoped {
         let Some(body) = this.body.as_mut() else {
             return Poll::Ready(None);
         };
-        RECORD.sync_scope(this.record.clone(), || Pin::new(body).poll_frame(context))
+        litellm_call_scope::sync_scope(this.record.clone(), || Pin::new(body).poll_frame(context))
     }
 
     fn is_end_stream(&self) -> bool {
@@ -142,7 +180,7 @@ impl HttpBody for Scoped {
 impl Drop for Scoped {
     fn drop(&mut self) {
         let body = self.body.take();
-        RECORD.sync_scope(self.record.clone(), || drop(body));
+        litellm_call_scope::sync_scope(self.record.clone(), || drop(body));
     }
 }
 
@@ -165,9 +203,9 @@ mod tests {
             .route(
                 "/",
                 get(|| async {
-                    add_header("x-handler", "yes");
+                    add_header("x-handler", "yes").unwrap();
                     let body = futures_util::stream::once(async {
-                        add_header("x-body", "yes");
+                        add_header("x-body", "yes").unwrap();
                         Ok::<_, std::convert::Infallible>(Bytes::from(added().unwrap().to_string()))
                     });
                     Body::from_stream(body)
@@ -199,7 +237,7 @@ mod tests {
         let router = Router::new()
             .route(
                 "/",
-                get(|| async { read(|entries| entries.trace_id().to_owned()).unwrap() }),
+                get(|| async { read(|entries| entries.trace_id.clone()).unwrap() }),
             )
             .layer(axum::middleware::from_fn(scoped));
         let request = Request::get("/")
@@ -220,7 +258,7 @@ mod tests {
     async fn a_task_spawned_in_a_call_writes_its_record() {
         let record = CallRecord::new();
         scope(record.clone(), async {
-            spawn_in_call(async { add_header("x-spawned", "yes") })
+            litellm_call_scope::spawn_in_call(async { add_header("x-spawned", "yes").unwrap() })
                 .await
                 .unwrap();
         })
@@ -237,7 +275,7 @@ mod tests {
         struct Dropped;
         impl Drop for Dropped {
             fn drop(&mut self) {
-                add_header("x-dropped", "yes");
+                add_header("x-dropped", "yes").unwrap();
             }
         }
         let record = CallRecord::new();

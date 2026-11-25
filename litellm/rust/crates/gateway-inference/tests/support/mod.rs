@@ -154,18 +154,15 @@ fn hosted_app(
     host: NativeHost,
     router_settings: &RouterSettings,
 ) -> Router {
-    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-    let http = Resolution::from(&HttpSettings::default()).config;
-    let secrets = Arc::new(NoSecrets);
-    let resources = CoreResources::new(pool);
+    let model_list = vec![DeploymentSpec {
+        model_name: "public/model".into(),
+        litellm_params,
+        ..DeploymentSpec::default()
+    }];
     let (config, dynamic) = RouterConfig::from_settings(router_settings).unwrap();
     let models = litellm_router_core::Router::new(
         RouterConfig {
-            model_list: vec![DeploymentSpec {
-                model_name: "public/model".into(),
-                litellm_params,
-                ..DeploymentSpec::default()
-            }],
+            model_list,
             ..config
         },
         dynamic,
@@ -174,12 +171,43 @@ fn hosted_app(
     let id = models.registry().group("public/model").unwrap()[0]
         .id
         .clone();
+    let shaping = HashMap::from([(id, serde_json::from_value(shaping).unwrap())]);
+    served_app(models, shaping, cache, host)
+}
+
+/// The app whose router serves `model_list`, each entry as a config spells it, under
+/// `router_settings`.
+pub fn app_with_models(model_list: Value, router_settings: Value) -> Router {
+    let (config, dynamic) =
+        RouterConfig::from_settings(&serde_json::from_value(router_settings).unwrap()).unwrap();
+    let model_list = serde_json::from_value(model_list).unwrap();
+    let models = litellm_router_core::Router::new(
+        RouterConfig {
+            model_list,
+            ..config
+        },
+        dynamic,
+    )
+    .unwrap();
+    served_app(models, HashMap::new(), None, NativeHost::default())
+}
+
+fn served_app(
+    models: litellm_router_core::Router,
+    shaping: HashMap<String, litellm_inference_messages::MessagesShaping>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    host: NativeHost,
+) -> Router {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let secrets = Arc::new(NoSecrets);
+    let resources = CoreResources::new(pool);
     let gateway = Gateway::new(
         resources,
         http,
         secrets,
         models,
-        HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        shaping,
         RoutingCache::new(None, RouterTiers::default()),
         host,
     )

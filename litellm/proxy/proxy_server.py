@@ -8702,12 +8702,13 @@ class ProxyConfig:
         )
         applied: Final = {**decrypted, **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()}}
         os.environ.update(applied)
+        previous_keys: Final = self._db_environment_keys
         if revision is None or revision == applied_revision:
             self._db_environment_keys = self._db_environment_keys | frozenset(applied)
         else:
             stored: Final = frozenset(key for key, stored_value in row.items() if stored_value is not None)
             still_stored: Final = stored | frozenset(key.upper() for key in stored)
-            removed: Final = self._db_environment_keys - still_stored
+            removed: Final = previous_keys - still_stored
             _restore_environment(removed - _SSO_ENVIRONMENT_VARIABLES, environment_before_db)
             self._sso_environment_removals = (
                 self._sso_environment_removals | (removed & _SSO_ENVIRONMENT_VARIABLES)
@@ -8715,6 +8716,30 @@ class ProxyConfig:
             self._db_environment_keys = (self._db_environment_keys & still_stored) | frozenset(applied)
             self._db_environment_revision = revision
         self.environment_variables.apply_db_row("environment_variables", _as_settings_mapping(applied))
+        self._apply_otel_background_service_spans(applied, previous_keys - self._db_environment_keys)
+
+    @staticmethod
+    def _apply_otel_background_service_spans(environment: Mapping[str, str], removed: frozenset[str]) -> None:
+        if open_telemetry_logger is None:
+            return
+        from litellm.integrations.otel.logger import OpenTelemetryV2
+        from litellm.integrations.otel.model.config import (
+            EMIT_BACKGROUND_SERVICE_SPANS_ENV,
+            background_service_spans_from_yaml,
+            parse_background_service_spans_setting,
+        )
+
+        if not isinstance(open_telemetry_logger, OpenTelemetryV2):
+            return
+        yaml_setting: Final = background_service_spans_from_yaml((litellm.callback_settings or {}).get("otel"))
+        if yaml_setting is None and EMIT_BACKGROUND_SERVICE_SPANS_ENV in removed:
+            restored: Final = parse_background_service_spans_setting(os.getenv(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+            open_telemetry_logger.restore_background_service_spans_setting(restored)
+        open_telemetry_logger.background_service_spans_db_override = (
+            None
+            if yaml_setting is not None
+            else parse_background_service_spans_setting(environment.get(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+        )
 
     def _restore_sso_environment_removals(self, sso_table_keys: frozenset[str]) -> None:
         _restore_environment(

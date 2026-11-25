@@ -127069,5 +127069,24 @@
             "/v1/images/generations"
         ],
         "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/models/inkling-2-small": {
+        "cache_read_input_token_cost": 3e-08,
+        "cache_read_input_token_cost_priority": 3.75e-08,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_priority": 3.75e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "output_cost_per_token_priority": 1.25e-06,
+        "source": "https://docs.fireworks.ai/serverless/pricing",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
