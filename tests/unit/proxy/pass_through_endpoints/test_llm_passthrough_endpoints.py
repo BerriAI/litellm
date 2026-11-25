@@ -346,6 +346,34 @@ async def test_gemini_pass_through_refuses_a_request_body_that_reads_a_file_the_
 
 
 @pytest.mark.asyncio
+async def test_gemini_pass_through_refuses_a_json_body_nested_too_deeply_to_check_its_file_references(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _AnotherCallersFilesGuard("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    custom_body: Final = json.dumps({"contents": [{"parts": [{"fileData": {"fileUri": "files/abc123"}}]}]})
+    body: Final = f'{{"custom_body": {custom_body}, "padding": {"[" * 300}{"]" * 300}}}'.encode()
+    assert json.loads(body)["custom_body"] == json.loads(custom_body), "the forwarding path can still read this body"
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("POST", "v1beta/models/gemini-2.5-flash:generateContent", body=body)
+
+    assert refused.value.status_code == 400
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [

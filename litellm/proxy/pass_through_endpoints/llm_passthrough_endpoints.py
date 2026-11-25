@@ -577,10 +577,30 @@ def _decoded_json(raw: bytes) -> JsonValue:
         return None
 
 
+def _is_json_too_deep_to_inspect(raw: bytes) -> bool:
+    """The forwarding path reads the body with the standard library, which accepts deeper nesting than Pydantic"""
+    try:
+        json.loads(raw)
+    except RecursionError:
+        return True
+    except ValueError:
+        return False
+    return True
+
+
 async def _enforce_gemini_passthrough_body_file_ownership(
     request: Request, guard: _ProviderFileListGuard, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
-    references: Final = tuple(dict.fromkeys(_iter_gemini_file_references(_decoded_json(await request.body()))))
+    raw: Final = await request.body()
+    try:
+        body: Final = _JSON_VALUE.validate_json(raw)
+    except ValidationError:
+        if _is_json_too_deep_to_inspect(raw):
+            raise HTTPException(
+                status_code=400, detail="The request body is nested too deeply to check its file references"
+            ) from None
+        return
+    references: Final = tuple(dict.fromkeys(_iter_gemini_file_references(body)))
     denied: Final = await guard.provider_file_ids_denied_to(references, user_api_key_dict) if references else ()
     if denied:
         raise HTTPException(
