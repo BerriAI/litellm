@@ -102,7 +102,9 @@ test.describe("Performance alert thresholds", () => {
         reliability: { multiplier: 3, minimum_increase: 0.07 },
       },
     });
-    await expect(dialog.getByRole("status")).toHaveText("Thresholds saved.");
+    await expect(
+      dialog.getByRole("status").filter({ hasText: "Thresholds saved." }),
+    ).toBeVisible();
     await expect(
       dialog.getByText("At least 2.5× the usual spend and $50 higher."),
     ).toBeVisible();
@@ -147,24 +149,24 @@ test.describe("Alert destinations", () => {
     page,
     request,
   }) => {
+    const url = `https://example.test/teams-hook-${Date.now()}`;
     const panel = await openSettingsTab(page, "MS Teams Alerts");
     const webhook = panel.locator('input[name="MS_TEAMS_WEBHOOK_URL"]');
     await expect(webhook).toBeVisible();
-    const config = await api<{
-      alerts?: { name: string }[];
-      general_settings?: { alerting?: string[] };
-    }>(request, "GET", "/get/config/callbacks");
-    const current = config.general_settings?.alerting ?? [];
+    const config = await api<{ active_alerting_destinations?: string[] }>(
+      request,
+      "GET",
+      "/get/config/callbacks",
+    );
+    const current = config.active_alerting_destinations ?? [];
     await stubSuccess(page, "/config/update");
-    await webhook.fill("https://example.test/teams-hook");
+    await webhook.fill(url);
     const body = await captureWrite(page, "POST", "/config/update", () =>
       panel.getByRole("button", { name: "Save Changes" }).click(),
     );
     expect(body).toEqual({
       general_settings: { alerting: [...new Set([...current, "ms_teams"])] },
-      environment_variables: {
-        MS_TEAMS_WEBHOOK_URL: "https://example.test/teams-hook",
-      },
+      environment_variables: { MS_TEAMS_WEBHOOK_URL: url },
     });
     await expect(
       page.getByText("MS Teams settings updated successfully"),
@@ -172,23 +174,20 @@ test.describe("Alert destinations", () => {
   });
 
   test("email save sends only the edited SMTP fields", async ({ page }) => {
+    const port = String(10000 + (Date.now() % 50000));
+    const sender = `alerts-${Date.now()}@example.test`;
     const panel = await openSettingsTab(page, "Email Alerts");
-    const port = panel.locator('input[name="SMTP_PORT"]');
-    await expect(port).toBeVisible();
+    const portInput = panel.locator('input[name="SMTP_PORT"]');
+    await expect(portInput).toBeVisible();
     await stubSuccess(page, "/config/update");
-    await port.fill("2525");
-    await panel
-      .locator('input[name="SMTP_SENDER_EMAIL"]')
-      .fill("alerts@example.test");
+    await portInput.fill(port);
+    await panel.locator('input[name="SMTP_SENDER_EMAIL"]').fill(sender);
     const body = await captureWrite(page, "POST", "/config/update", () =>
       panel.getByRole("button", { name: "Save Changes" }).last().click(),
     );
     expect(body).toEqual({
       general_settings: { alerting: ["email"] },
-      environment_variables: {
-        SMTP_PORT: "2525",
-        SMTP_SENDER_EMAIL: "alerts@example.test",
-      },
+      environment_variables: { SMTP_PORT: port, SMTP_SENDER_EMAIL: sender },
     });
     await expect(
       page.getByText("Email settings updated successfully"),
