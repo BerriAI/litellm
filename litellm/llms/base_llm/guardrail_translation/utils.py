@@ -314,6 +314,14 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
     return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
 
 
+def anthropic_mcp_server_name(server: object) -> str | None:
+    try:
+        name: Final = _FIELDS.validate_python(server).get("name")
+    except ValidationError:
+        return None
+    return name if isinstance(name, str) and name else None
+
+
 def anthropic_tool_name(tool: object) -> str | None:
     names: Final = anthropic_tool_names(tool)
     return names[0] if names else None
