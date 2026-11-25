@@ -40,6 +40,14 @@ const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
   reader.readAsText(file);
 };
 
+// Browsers often report an empty or generic MIME type for .json files, so trust the extension too.
+const isJsonFile = (file: File) => file.type === "application/json" || file.name.toLowerCase().endsWith(".json");
+
+const uploadedMessageKey = (fieldKey: string) =>
+  fieldKey === "github_copilot_app_private_key"
+    ? "addModel.providerAuthTypes.githubApp.keyProvided"
+    : "addModel.providerSpecificFields.jsonFileLoaded";
+
 interface ProviderCredentialField {
   key: string;
   label: string;
@@ -146,8 +154,13 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
           form.clearErrors(field.key);
           onLoaded(contents);
         });
-      } else if (file.type === "application/json") {
-        readTextFile(file, onLoaded);
+      } else if (isJsonFile(file)) {
+        readTextFile(file, (contents) => {
+          form.clearErrors(field.key);
+          onLoaded(contents);
+        });
+      } else {
+        form.setError(field.key, { message: t("addModel.providerSpecificFields.invalidJsonFile") });
       }
     };
 
@@ -305,7 +318,8 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     }
 
     if (field.type === "upload") {
-      const hasAppKey = Boolean(control.value) || hasAppKeyReference;
+      const hasUpload =
+        Boolean(control.value) || (field.key === "github_copilot_app_private_key" && hasAppKeyReference);
       return (
         <>
           <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
@@ -322,9 +336,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             onBlur={control.onBlur}
             onChange={pickCredentialsFile(field, control.onChange)}
           />
-          {field.key === "github_copilot_app_private_key" && hasAppKey && (
-            <p className="text-sm text-muted-foreground">{t("addModel.providerAuthTypes.githubApp.keyProvided")}</p>
-          )}
+          {hasUpload && <p className="text-sm text-muted-foreground">{t(uploadedMessageKey(field.key))}</p>}
         </>
       );
     }

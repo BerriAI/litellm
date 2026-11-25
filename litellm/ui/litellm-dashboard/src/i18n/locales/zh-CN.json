@@ -19028,6 +19028,8 @@
       "loadingFields": "正在加载提供商字段…",
       "failedToLoadFields": "无法加载提供商凭据字段",
       "required": "必填",
+      "invalidJsonFile": "请选择 .json 文件。",
+      "jsonFileLoaded": "已提供 JSON 文件。如需更改，请上传替换文件。",
       "vertexCredentialsHelp": "提供 GCP 服务账号 JSON 文件",
       "baseModelHelp": "您的 Azure 部署实际使用的模型，用于准确跟踪成本。请从<docs>此处</docs>选择名称"
     },

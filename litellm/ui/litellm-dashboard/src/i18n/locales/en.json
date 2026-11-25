@@ -19341,6 +19341,8 @@
       "loadingFields": "Loading provider fields...",
       "failedToLoadFields": "Failed to load provider credential fields",
       "required": "Required",
+      "invalidJsonFile": "Choose a .json file.",
+      "jsonFileLoaded": "JSON file provided. Upload a replacement to change it.",
       "vertexCredentialsHelp": "Give a gcp service account(.json file)",
       "baseModelHelp": "The actual model your azure deployment uses. Used for accurate cost tracking. Select name from <docs>here</docs>"
     },
