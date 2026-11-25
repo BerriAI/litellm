@@ -2580,6 +2580,66 @@ class TestPostCallNativeResponseShapes:
         assert client.posts == []
 
 
+def _reasoning_output(summary: str, content: str) -> list[dict[str, object]]:
+    reasoning: Final = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": summary}],
+        "content": [{"type": "reasoning_text", "text": content}],
+    }
+    answer: Final = {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+    }
+    return [reasoning, answer]
+
+
+def _reasoning_responses_reply(summary: str, content: str) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(id="resp_1", created_at=1, output=_reasoning_output(summary, content))
+
+
+def _reasoning_body_reply(summary: str, content: str) -> dict[str, object]:
+    return {"id": "resp_1", "object": "response", "created_at": 1, "output": _reasoning_output(summary, content)}
+
+
+def _reasoning_texts(response: object) -> tuple[object, ...]:
+    if isinstance(response, ResponsesAPIResponse):
+        return (response.output[0].summary[0].text, response.output[0].content[0].text)
+    return (response["output"][0]["summary"][0]["text"], response["output"][0]["content"][0]["text"])
+
+
+_REASONING_SHAPES: Final = [
+    pytest.param(_reasoning_responses_reply, id="responses"),
+    pytest.param(_reasoning_body_reply, id="responses-passthrough-body"),
+]
+
+
+@pytest.mark.asyncio
+class TestPostCallResponsesReasoning:
+    @pytest.mark.parametrize("reply", _REASONING_SHAPES)
+    async def test_lakera_sees_reasoning_summary_and_content_as_assistant_text(self, reply):
+        _, client = await _post_call("block", _CLEAN_VERDICT, {"model": "m", "input": "Which card?"}, reply("S.", "C."))
+
+        assert client.posts[0]["json"]["messages"] == [
+            {"role": "user", "content": "Which card?"},
+            {"role": "assistant", "content": "S."},
+            {"role": "assistant", "content": "C."},
+            {"role": "assistant", "content": "Done."},
+        ]
+
+    @pytest.mark.parametrize("reply", _REASONING_SHAPES)
+    async def test_mask_rewrites_the_reasoning_summary_in_place(self, reply):
+        response = reply(_CARD_REPLY, "C.")
+
+        result, _ = await _post_call("mask", _card_verdict(1), {"model": "m", "input": "Which card?"}, response)
+
+        assert result is response
+        assert _reasoning_texts(result) == ("Card [MASKED CREDIT_CARD] is on file.", "C.")
+
+
 @pytest.mark.asyncio
 async def test_post_call_sends_chat_prompt_text_parts_as_plain_text() -> None:
     data: Final = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": "Which card?"}]}]}
@@ -2621,3 +2681,4 @@ async def test_chat_reply_with_nothing_to_inspect_skips_lakera() -> None:
 
     assert result is chat_response
     assert client.posts == []
+

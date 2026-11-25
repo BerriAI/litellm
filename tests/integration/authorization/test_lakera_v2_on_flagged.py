@@ -24,6 +24,7 @@ _CLEAN_PROMPT: Final = "Which card is on file for my account?"
 _REPLY: Final = f"The card on file is {_CARD}."
 _BENIGN_PROMPT: Final = "What is the capital of France?"
 _BENIGN_REPLY: Final = "The capital of France is Paris."
+_REASONING_PROMPT: Final = "Think about which card is on file, then say only that it is on file."
 _ENDPOINTS: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
 _CHAT_REPLY: Final = {
     "id": "chatcmpl-lakera-on-flagged",
@@ -93,12 +94,24 @@ def _lakera_verdict(request: Request) -> Reply:
     return Reply(body=json.dumps({"flagged": bool(breakdown), "breakdown": breakdown, "payload": payload}).encode())
 
 
+def _reasoning_response() -> JsonValue:
+    reasoning: Final = {
+        "type": "reasoning",
+        "id": "rs_lakera",
+        "summary": [{"type": "summary_text", "text": _REPLY}],
+    }
+    answer: Final = responses_stream.completed("resp_lakera", _BENIGN_REPLY)["response"]
+    return {**object_value(answer), "output": [reasoning, *_LIST.validate_python(object_value(answer)["output"])]}
+
+
 def _provider_reply(request: Request) -> Reply:
     streaming: Final = _JSON_OBJECT.validate_json(request.body).get("stream") is True
     text: Final = _BENIGN_REPLY if _BENIGN_PROMPT.encode() in request.body else _REPLY
     if request.target.endswith("/responses"):
         if streaming:
             return Reply(content_type="text/event-stream", chunks=_RESPONSES_STREAM)
+        if _REASONING_PROMPT.encode() in request.body:
+            return Reply(body=json.dumps(_reasoning_response()).encode())
         return Reply(body=json.dumps(responses_stream.completed("resp_lakera", text)["response"]).encode())
     if streaming:
         return Reply(content_type="text/event-stream", chunks=_CHAT_STREAM)
@@ -252,6 +265,29 @@ def test_lakera_v2_pii_only_reply_follows_on_flagged(gateway: Gateway, on_flagge
             assert _CARD.encode() not in response.content, response.text
         else:
             _assert_blocked(response)
+
+
+@pytest.mark.parametrize("on_flagged", ["block", "mask"])
+def test_lakera_v2_pii_only_reasoning_summary_follows_on_flagged(gateway: Gateway, on_flagged: str) -> None:
+    with (
+        wire_server(_provider_reply) as provider,
+        wire_server(_lakera_verdict) as lakera,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        guardrail: Final = _create_lakera_guardrail(gateway, scenario.cleanups, lakera.url, "post_call", on_flagged)
+
+        response: Final = _send(gateway, "/v1/responses", model, guardrail, _REASONING_PROMPT)
+
+        assert len(provider.drain()) == 1
+        assert len(lakera.drain()) == 1
+        if on_flagged == "block":
+            _assert_blocked(response)
+            return
+        assert response.status_code == 200, response.text
+        summary: Final = _first(_first(_JSON_OBJECT.validate_json(response.content)["output"])["summary"])
+        assert summary["text"] == _REPLY.replace(_CARD, _MASKED.decode()), response.text
+        assert _CARD.encode() not in response.content, response.text
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)

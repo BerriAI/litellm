@@ -240,19 +240,26 @@ def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Ma
     ]
 
 
+def _present_texts(blocks: Sequence[object]) -> tuple[tuple[object, str], ...]:
+    texts: Final = tuple((block, stream_item_field(block, "text")) for block in blocks)
+    return tuple((block, text) for block, text in texts if isinstance(text, str) and text)
+
+
 def _text_blocks(container: object, text_type: str) -> tuple[tuple[object, str], ...]:
-    blocks: Final = tuple(
-        (block, stream_item_field(block, "text"))
-        for block in stream_item_items(container, "content")
-        if stream_item_field(block, "type") == text_type
-    )
-    return tuple((block, text) for block, text in blocks if isinstance(text, str) and text)
+    blocks: Final = stream_item_items(container, "content")
+    return _present_texts(tuple(block for block in blocks if stream_item_field(block, "type") == text_type))
+
+
+def _output_item_text_blocks(item: object) -> tuple[tuple[object, str], ...]:
+    if stream_item_field(item, "type") == "reasoning":
+        return _present_texts((*stream_item_items(item, "summary"), *stream_item_items(item, "content")))
+    return _text_blocks(item, "output_text")
 
 
 def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...] | None:
     if isinstance(response, ResponsesAPIResponse) or stream_item_field(response, "object") == "response":
         output: Final = stream_item_items(response, "output")
-        return tuple(chain.from_iterable(_text_blocks(item, "output_text") for item in output))
+        return tuple(chain.from_iterable(_output_item_text_blocks(item) for item in output))
     if stream_item_field(response, "type") == "message":
         return _text_blocks(response, "text")
     return None
