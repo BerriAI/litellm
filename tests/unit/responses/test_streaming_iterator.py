@@ -8,22 +8,28 @@ import functools
 import gc
 import json
 import threading
+import time
 import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Final, Optional
+from typing import Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
 import websockets.exceptions
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import PydanticSerializationError
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.bigmodel.responses.transformation import BigModelResponsesAPIConfig
+from litellm.llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -34,12 +40,14 @@ from litellm.responses.streaming_iterator import (
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
 from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from types import SimpleNamespace
@@ -83,6 +91,7 @@ def _make_iterator(
     trailing_error: Optional[Exception] = None,
     config: Mock | None = None,
     request_data: dict | None = None,
+    litellm_metadata: dict[str, object] | None = None,
 ) -> ResponsesAPIStreamingIterator:
     async def aiter_bytes():
         for evt in sse_events:
@@ -99,7 +108,7 @@ def _make_iterator(
         model="gpt-4o-mini",
         responses_api_provider_config=config or _mock_config(),
         logging_obj=logging_obj,
-        litellm_metadata={},
+        litellm_metadata=litellm_metadata or {},
         custom_llm_provider="openai",
         request_data=request_data,
     )
@@ -366,6 +375,136 @@ def test_sync_transport_read_timeout_raises_litellm_timeout(prefix):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+@pytest.mark.parametrize("error_class", [httpx.ReadError, httpx.RemoteProtocolError])
+async def test_transport_cut_error_names_the_deployment(prefix, error_class):
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        }
+    }
+    trailing_error: Final = error_class("peer closed connection without sending complete message body")
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=trailing_error)
+
+    with pytest.raises((error_class, MidStreamFallbackError)) as exc_info:
+        async for _ in iterator:
+            pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "model_group: `responses-alias`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+class _FailureDebugInfoRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.debug_info: object = None
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.debug_info = getattr(kwargs["exception"], "litellm_debug_info", None)
+
+
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+def test_sync_transport_cut_failure_callbacks_see_the_deployment(prefix):
+    recorder: Final = _FailureDebugInfoRecorder()
+    logging_obj: Final = _real_logging_obj(
+        call_type="responses",
+        litellm_params={
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        },
+        callbacks=(recorder,),
+    )
+    iterator: Final = _make_sync_iterator(
+        sse_events=prefix,
+        logging_obj=logging_obj,
+        trailing_error=httpx.ReadError("peer closed connection without sending complete message body"),
+    )
+
+    with pytest.raises((httpx.ReadError, MidStreamFallbackError)):
+        for _ in iterator:
+            pass
+
+    assert isinstance(recorder.debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in recorder.debug_info
+    assert "model_group: `responses-alias`" in recorder.debug_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+async def test_stream_ending_without_terminal_event_names_the_deployment(prefix):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        }
+    }
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj)
+
+    with pytest.raises((litellm.APIConnectionError, MidStreamFallbackError)) as exc_info:
+        async for _ in iterator:
+            pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+_DEPLOYMENT_LITELLM_PARAMS: Final = {
+    "metadata": {
+        "api_base": "https://relay.example/openai/v1",
+        "model_group": "responses-alias",
+        "deployment": "openai/gpt-4o-mini",
+    }
+}
+
+
+async def _drain_async(iterator: ResponsesAPIStreamingIterator) -> None:
+    async for _ in iterator:
+        pass
+
+
+async def _drain_sync(iterator: SyncResponsesAPIStreamingIterator) -> None:
+    for _ in iterator:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make_iterator", "drain"), [(_make_iterator, _drain_async), (_make_sync_iterator, _drain_sync)]
+)
+async def test_max_streaming_duration_timeout_names_the_deployment(monkeypatch, make_iterator, drain):
+    monkeypatch.setattr(streaming_module, "LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0)
+    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj.model_call_details = {"litellm_params": _DEPLOYMENT_LITELLM_PARAMS}
+    iterator: Final = make_iterator(sse_events=_PARTIAL_OUTPUT_EVENTS, logging_obj=logging_obj)
+    iterator._stream_created_time = time.time() - 20
+
+    with pytest.raises(litellm.Timeout, match="max streaming duration") as exc_info:
+        await drain(iterator)
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
     """A clean EOF or `[DONE]` after output text but with no response.completed /
@@ -412,6 +551,293 @@ async def test_complete_stream_still_ends_normally(trailer):
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.async_failure_handler.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_event_without_a_type_reaches_the_caller_instead_of_ending_the_stream():
+    iterator: Final = _make_iterator(
+        sse_events=[_CREATED_EVENT, _sse_event({"note": "hook output without a type"})],
+        logging_obj=_failure_tracking_logging_obj(),
+        config=OpenAIResponsesAPIConfig(),
+    )
+
+    await iterator.__anext__()
+    untyped: Final = await iterator.__anext__()
+
+    assert untyped.model_extra == {"note": "hook output without a type"}
+
+
+_REASONING_ITEM_ID: Final = "rs_affinity"
+_MESSAGE_ITEM_ID: Final = "msg_affinity"
+_STREAMED_REASONING_ITEM: Final = {
+    "id": _REASONING_ITEM_ID,
+    "type": "reasoning",
+    "summary": [{"type": "summary_text", "text": "thinking"}],
+    "encrypted_content": "ciphertext",
+}
+_STREAMED_MESSAGE_ITEM: Final = {
+    "id": _MESSAGE_ITEM_ID,
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+_REASONING_SCOPED_EVENT_TYPES: Final = (
+    ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+    "response.reasoning_text.delta",
+    ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+)
+
+
+def _reasoning_response_body(status: str, output: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "id": "resp_affinity",
+        "object": "response",
+        "created_at": 1,
+        "status": status,
+        "model": "gpt-5-mini",
+        "output": output,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+_REASONING_STREAM_EVENTS: Final = [
+    _sse_event(
+        {"type": "response.created", "sequence_number": 0, "response": _reasoning_response_body("in_progress", [])}
+    ),
+    _sse_event(
+        {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {"id": _REASONING_ITEM_ID, "type": "reasoning", "summary": []},
+        }
+    ),
+    _sse_event(
+        {
+            "type": "response.content_part.added",
+            "sequence_number": 2,
+            "item_id": _REASONING_ITEM_ID,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "reasoning_text", "text": ""},
+        }
+    ),
+    _sse_event(
+        {
+            "type": "response.reasoning_text.delta",
+            "sequence_number": 3,
+            "item_id": _REASONING_ITEM_ID,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "thinking",
+        }
+    ),
+    _sse_event(
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "sequence_number": 4,
+            "item_id": _REASONING_ITEM_ID,
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "thinking",
+        }
+    ),
+    _sse_event(
+        {"type": "response.output_item.done", "sequence_number": 5, "output_index": 0, "item": _STREAMED_REASONING_ITEM}
+    ),
+    _sse_event(
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 6,
+            "item_id": _MESSAGE_ITEM_ID,
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "ok",
+        }
+    ),
+    _sse_event(
+        {"type": "response.output_item.done", "sequence_number": 7, "output_index": 1, "item": _STREAMED_MESSAGE_ITEM}
+    ),
+    _sse_event(
+        {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM]),
+        }
+    ),
+]
+
+
+_ITEM_RECORD: Final = TypeAdapter(dict[str, object])
+
+
+def _item_record(item: object) -> dict[str, object]:
+    return _ITEM_RECORD.validate_python(item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_metadata, origin",
+    [
+        ({"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}}, "dep-1"),
+        ({"encrypted_content_affinity_enabled": False, "model_info": {"id": "dep-1"}}, None),
+        ({"encrypted_content_affinity_enabled": True}, None),
+    ],
+    ids=["affinity-on", "affinity-off", "no-model-id"],
+)
+async def test_streamed_reasoning_item_keeps_one_id_and_replays_as_one_input_item(
+    litellm_metadata: dict[str, object], origin: str | None
+):
+    iterator: Final = _make_iterator(
+        sse_events=_REASONING_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+        config=OpenAIResponsesAPIConfig(),
+        litellm_metadata=litellm_metadata,
+    )
+
+    events: Final = [event async for event in iterator]
+
+    item_events: Final = [
+        _item_record(event.item)
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output_items: Final = [_item_record(item) for item in completed.output]
+    scoped_item_ids: Final = {event.type: event.item_id for event in events if getattr(event, "item_id", None)}
+    expected_reasoning_id: Final = (
+        _REASONING_ITEM_ID
+        if origin is None
+        else ResponsesAPIRequestUtils._build_encrypted_item_id(origin, _REASONING_ITEM_ID)
+    )
+    assert {item["id"] for item in [*item_events, *output_items] if item["type"] == "reasoning"} | {
+        scoped_item_ids[event_type] for event_type in _REASONING_SCOPED_EVENT_TYPES
+    } == {expected_reasoning_id}
+    assert {item["id"] for item in [*item_events, *output_items] if item["type"] == "message"} | {
+        scoped_item_ids[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
+    } == {_MESSAGE_ITEM_ID}
+
+    done_reasoning: Final = next(item for item in reversed(item_events) if item["type"] == "reasoning")
+    completed_reasoning: Final = next(item for item in output_items if item["type"] == "reasoning")
+    assert done_reasoning["encrypted_content"] == completed_reasoning["encrypted_content"]
+    assert ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(
+        str(done_reasoning["encrypted_content"])
+    ) == (origin, "ciphertext")
+
+    replayed: Final = list(
+        {
+            record["id"]: {key: record[key] for key in ("id", "type", "encrypted_content")}
+            for record in (done_reasoning, completed_reasoning)
+        }.values()
+    )
+    assert ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(replayed) == [
+        {"id": _REASONING_ITEM_ID, "type": "reasoning", "encrypted_content": "ciphertext"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_output_item_added_without_an_item_streams_through_under_affinity():
+    iterator: Final = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_item.added", "sequence_number": 0, "output_index": 0, "item": None})
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=OpenAIResponsesAPIConfig(),
+        litellm_metadata={"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}},
+    )
+
+    added: Final = await iterator.__anext__()
+
+    assert (added.type, added.output_index, added.item) == (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0, None)
+
+
+def _faked_reasoning_stream(
+    response: Mapping[str, object], litellm_metadata: dict[str, object]
+) -> MockResponsesAPIStreamingIterator:
+    return MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200, json=response),
+        model="gpt-5-mini",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata=litellm_metadata,
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "affinity, origin",
+    [(True, "dep-1"), (False, None)],
+    ids=["affinity-on", "affinity-off"],
+)
+async def test_faked_stream_carries_the_reasoning_and_response_ids_a_real_stream_carries(
+    affinity: bool, origin: str | None
+):
+    iterator: Final = _faked_reasoning_stream(
+        _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM]),
+        {"encrypted_content_affinity_enabled": affinity, "model_info": {"id": "dep-1"}},
+    )
+
+    events: Final = [event async for event in iterator]
+
+    item_records: Final = [
+        _item_record(event.item)
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output_records: Final = [_item_record(item) for item in completed.output]
+    summary_item_ids: Final = {
+        event.item_id for event in events if event.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    }
+    expected_reasoning_id: Final = (
+        _REASONING_ITEM_ID
+        if origin is None
+        else ResponsesAPIRequestUtils._build_encrypted_item_id(origin, _REASONING_ITEM_ID)
+    )
+    assert {
+        record["id"] for record in [*item_records, *output_records] if record["type"] == "reasoning"
+    } | summary_item_ids == {expected_reasoning_id}
+
+    done_reasoning: Final = next(record for record in reversed(item_records) if record["type"] == "reasoning")
+    completed_reasoning: Final = next(record for record in output_records if record["type"] == "reasoning")
+    assert [
+        ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(str(record["encrypted_content"]))
+        for record in (done_reasoning, completed_reasoning)
+    ] == [(origin, "ciphertext"), (origin, "ciphertext")]
+
+    response_ids: Final = {event.response.id for event in events if getattr(event, "response", None) is not None}
+    assert [ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id) for response_id in response_ids] == [
+        {"custom_llm_provider": "openai", "model_id": "dep-1", "response_id": "resp_affinity"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_faked_stream_of_an_already_encoded_response_keeps_its_ids():
+    litellm_metadata: Final[dict[str, object]] = {
+        "encrypted_content_affinity_enabled": True,
+        "model_info": {"id": "dep-1"},
+    }
+    encoded: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        responses_api_response=ResponsesAPIResponse.model_validate(
+            _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM])
+        ),
+        custom_llm_provider="openai",
+        litellm_metadata=litellm_metadata,
+    )
+
+    events: Final = [event async for event in _faked_reasoning_stream(encoded.model_dump(), litellm_metadata)]
+
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.id == encoded.id
+    assert [_item_record(item) for item in completed.output] == [_item_record(item) for item in encoded.output]
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -729,8 +1155,10 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
     """LIT-5466: the provider call is timed to first byte, so at stream completion the total minus
     that duration is token generation, not LiteLLM overhead."""
     logging_obj = _logging_obj_stub()
+    logging_obj.stream = True
     logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 200.0}
     logging_obj.caching_details = None
+    logging_obj.response_timing_metrics = {"_response_ms": 300.0, "litellm_overhead_time_ms": 100.0}
 
     class _CompletedEvent:
         def __init__(self) -> None:
@@ -744,6 +1172,9 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
     assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+    logging_obj.set_response_timing_metrics.assert_called_once_with(
+        {"_response_ms": 10000.0, "litellm_overhead_time_ms": 100.0}
+    )
 
 
 def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:
@@ -837,6 +1268,61 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
         object="response",
         output=[],
         usage=ResponseAPIUsage(input_tokens=20, output_tokens=60, total_tokens=80),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rates", "expected_cost"),
+    [
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0),
+        ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 140e-6),
+        ({"input_cost_per_token": 0.0}, None),
+        ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
+    ],
+)
+def test_responses_stream_usage_distinguishes_free_from_unpriced_calls(
+    monkeypatch: pytest.MonkeyPatch, rates: dict[str, object], expected_cost: float | None
+) -> None:
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    model: Final = "responses-zero-cost-regression"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
+    response: Final = _responses_api_response_with_usage().model_copy(update={"model": model})
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="free-response",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
     )
 
 
@@ -955,7 +1441,7 @@ def _capture_dispatch(logged: list):
     return _dispatch
 
 
-def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
+def _headers_config(*, transform_hidden_params: dict | None = None, usage: dict | None = None) -> Mock:
     """Config whose completed event carries a real ResponsesAPIResponse, so the logging copy
     performs a genuine model_dump/model_validate round trip."""
     mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -973,6 +1459,7 @@ def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
             parallel_tool_calls=False,
             tool_choice="auto",
             tools=[],
+            usage=usage,
         )
         if transform_hidden_params is not None:
             response._hidden_params.update(transform_hidden_params)
@@ -1068,6 +1555,36 @@ async def test_streaming_logging_copy_preserves_transform_hidden_params():
     assert iterator.completed_response is not logged[0]
     # only the header keys travel: response_cost would short-circuit the cost calculator
     assert "response_cost" not in hidden_params
+
+
+@pytest.mark.asyncio
+async def test_streaming_logging_copy_keeps_the_stamped_bill_as_litellms_own():
+    """The terminal event's usage.cost is litellm's bill. The logging copy must carry upstream_usage_cost
+    beside it, or the spend row reads that bill back as an upstream charge (input 0, output total)."""
+    logging_obj = _logging_obj_stub()
+    logging_obj.response_cost_calculator.return_value = 0.00039
+    logged: list[object] = []
+    logging_obj.dispatch_success_handlers = _capture_dispatch(logged)
+    logging_obj._on_deferred_stream_complete = None
+
+    iterator = _make_header_iterator(
+        headers={},
+        config=_headers_config(usage={"input_tokens": 1840, "output_tokens": 412, "total_tokens": 2252}),
+        logging_obj=logging_obj,
+    )
+    async for _ in iterator:
+        pass
+
+    assert len(logged) == 1
+    event: Final = logged[0]
+    assert isinstance(event, ResponseCompletedEvent), event
+    logging_response: Final = event.response
+    assert logging_response is not iterator.completed_response.response
+    assert logging_response.usage is not None
+    assert logging_response.usage.cost == 0.00039
+    assert logging_response._hidden_params[UPSTREAM_USAGE_COST] is None
+    assert logging_response._hidden_params["response_cost"] == 0.00039
+    assert billed_usage_cost(logging_response, "openai") is None
 
 
 @pytest.mark.asyncio
@@ -1400,11 +1917,6 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception:
-        pass
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     yield
@@ -1425,6 +1937,9 @@ class _FakeLoggingObj:
         self.model_call_details = {"litellm_params": {}}
         self.success_logged = threading.Event()
         self.failure_logged = threading.Event()
+
+    def post_call(self, *, original_response: str, additional_args: Mapping[str, object]) -> None:
+        pass
 
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
@@ -2004,6 +2519,43 @@ async def test_responses_streaming_completed_event_persists_async_cache():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_responses_streaming_incomplete_event_from_the_provider_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logging_obj: Final = _FakeLoggingObj()
+    cache: Final = SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock())
+    monkeypatch.setattr(litellm, "cache", cache)
+    request_kwargs: Final = {"model": "test-model", "input": "hello", "stream": True}
+    logging_obj.llm_caching_handler = SimpleNamespace(
+        request_kwargs=request_kwargs,
+        preset_cache_key="responses-stream-cache-key",
+        original_function=litellm.aresponses,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data=request_kwargs,
+        call_type=CallTypes.aresponses.value,
+    )
+    iterator.completed_response = ResponseIncompleteEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        response=_make_completed_response().response.model_copy(update={"status": "incomplete"}),
+    )
+
+    existing_tasks: Final = asyncio.all_tasks()
+    iterator._handle_logging_completed_response()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert logging_obj.success_logged.wait(timeout=5)
+    cache.async_add_cache.assert_not_called()
+    cache.add_cache.assert_not_called()
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_responses_streaming_completed_event_persists_sync_cache():
     logging_obj = _FakeLoggingObj()
     original_cache = litellm.cache
@@ -2486,6 +3038,88 @@ def _answer_with_text_and_tool_call() -> ResponsesAPIResponse:
     )
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("completed", "incomplete"))
+@pytest.mark.parametrize("cached", (False, True))
+@pytest.mark.parametrize("sync", (False, True))
+@pytest.mark.parametrize("empty_output", (False, True))
+async def test_synthetic_stream_preserves_terminal_status_and_success_callbacks(
+    status: Literal["completed", "incomplete"],
+    cached: bool,
+    sync: bool,
+    empty_output: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    original: Final = _answer_with_text_and_tool_call()
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            **original.model_dump(),
+            "status": status,
+            "incomplete_details": {"reason": "max_output_tokens"} if status == "incomplete" else None,
+            "output": [] if empty_output else original.output,
+            "usage": {
+                "input_tokens": 13,
+                "input_tokens_details": {"cached_tokens": 3},
+                "output_tokens": 32,
+                "output_tokens_details": {"reasoning_tokens": 16},
+                "total_tokens": 45,
+            },
+        }
+    )
+    logging_obj: Final = _FakeLoggingObj()
+    cache: Final = SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock())
+    monkeypatch.setattr(litellm, "cache", cache)
+    logging_obj.llm_caching_handler = SimpleNamespace(
+        request_kwargs={"model": transformed.model, "input": "hello", "stream": True},
+        preset_cache_key="synthetic-terminal-cache",
+        original_function=litellm.aresponses,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    iterator: Final = (
+        CachedResponsesAPIStreamingIterator(response=transformed, logging_obj=logging_obj)
+        if cached
+        else MockResponsesAPIStreamingIterator(
+            response=httpx.Response(200, json=transformed.model_dump()),
+            model=transformed.model,
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+        )
+    )
+    existing_tasks: Final = asyncio.all_tasks()
+    events: Final = tuple(iterator) if sync else tuple([event async for event in iterator])
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert logging_obj.success_logged.wait(timeout=5)
+    assert tuple(event.type for event in events if event.type in ("response.completed", "response.incomplete")) == (
+        f"response.{status}",
+    )
+    expected: Final = (
+        transformed
+        if cached
+        else ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=transformed.model_copy(), custom_llm_provider=None
+        )
+    ).model_dump()
+    assert events[-1].response.model_dump() == expected
+    downstream_response: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(iterator)
+    assert isinstance(downstream_response, ResponsesAPIResponse)
+    assert downstream_response.model_dump() == expected
+    assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == (
+        "" if empty_output else "Checking the weather."
+    )
+    assert logging_obj.success_calls == logging_obj.async_success_calls == 1
+    assert logging_obj.failure_calls == logging_obj.async_failure_calls == 0
+    assert logging_obj.last_success_kwargs["cache_hit"] is (True if cached else None)
+    assert logging_obj.last_async_success_kwargs["cache_hit"] is (True if cached else None)
+    expected_cache_writes: Final = int(not cached and not empty_output)
+    assert cache.add_cache.call_count == (expected_cache_writes if sync else 0)
+    assert cache.async_add_cache.call_count == (0 if sync else expected_cache_writes)
+
+
 def test_faked_stream_bridged_to_chat_sends_tool_arguments_once():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -2691,14 +3325,17 @@ async def test_shutdown_drain_waits_for_a_pending_logging_task():
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
-    stuck: Final = streaming_module.spawn_logging_task(
-        asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck"
-    )
+    loop: Final = asyncio.get_running_loop()
+    with patch.object(loop, "time", return_value=0.0):
+        stuck: Final = streaming_module.spawn_logging_task(loop, asyncio.Event().wait(), task_name="stuck")
 
-    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
-
-    assert not stuck.done()
-    stuck.cancel()
+        try:
+            await streaming_module.drain_logging_tasks(timeout=0)
+            assert not stuck.done()
+        finally:
+            stuck.cancel()
+            with suppress(asyncio.CancelledError):
+                await stuck
 
 
 async def _drain_held_until_released(release: asyncio.Event) -> bool:
@@ -2835,3 +3472,139 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     await _run_websocket_turn(logger, terminal_event)
 
     assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [
+            {
+                "type": "message",
+                "id": "msg_seq",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world", "annotations": []}],
+            }
+        ],
+        [
+            {
+                "type": "reasoning",
+                "id": "rs_seq",
+                "summary": [{"type": "summary_text", "text": "thinking about it"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_seq",
+                "call_id": "call_seq",
+                "name": "lookup",
+                "arguments": '{"id":1}',
+            },
+        ],
+    ],
+    ids=["message", "reasoning_and_tool"],
+)
+def test_synthetic_stream_serializes_every_event_position_from_zero(output: list[dict[str, object]]):
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_seq",
+            "created_at": 1741476542,
+            "status": "completed",
+            "model": "claude-sonnet-5-5",
+            "object": "response",
+            "output": output,
+        }
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=transformed,
+        logging_obj=None,
+        chunk_size=5,
+    )
+
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))
+
+
+_TOOL_INPUT_EVENTS: Final = (
+    ("response.function_call_arguments.delta", "delta"),
+    ("response.function_call_arguments.done", "arguments"),
+    ("response.mcp_call_arguments.delta", "delta"),
+    ("response.mcp_call_arguments.done", "arguments"),
+    ("response.mcp_call.arguments.delta", "delta"),
+    ("response.mcp_call.arguments.done", "arguments"),
+    ("response.custom_tool_call_input.delta", "delta"),
+    ("response.custom_tool_call_input.done", "input"),
+)
+_PROVIDER_STREAM_READERS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig, id="openai_and_its_subclasses"),
+    pytest.param(BigModelResponsesAPIConfig, id="bigmodel"),
+    pytest.param(VolcEngineResponsesAPIConfig, id="volcengine"),
+)
+
+
+def _streamed_event_fields(
+    provider_config: type[OpenAIResponsesAPIConfig], event: Mapping[str, object]
+) -> Mapping[str, object]:
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=provider_config(),
+        logging_obj=_FakeLoggingObj(),
+        litellm_metadata={},
+        request_data={},
+        call_type=CallTypes.responses.value,
+    )
+    streamed: Final = iterator._process_chunk(
+        json.dumps({"item_id": "call_1", "output_index": 0, "sequence_number": 1, **event})
+    )
+    assert streamed is not None
+    return json.loads(streamed.model_dump_json(exclude_none=True))
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+@pytest.mark.parametrize("value", [42, {"q": "雪"}, [1, "a"], True])
+def test_streamed_tool_input_that_is_not_a_string_reaches_the_client_as_its_json_text(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str, value: object
+):
+    fields: Final = _streamed_event_fields(provider_config, {"type": event_type, field: value})
+
+    assert fields["type"] == event_type
+    assert isinstance(fields[field], str)
+    assert json.loads(fields[field]) == value
+    assert "\\u" not in fields[field]
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_sent_as_null_reaches_the_client_as_an_empty_string(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str
+):
+    assert _streamed_event_fields(provider_config, {"type": event_type, field: None})[field] == ""
+
+
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_on_an_event_the_provider_reader_cannot_validate_still_reaches_the_client_as_a_string(
+    event_type: str, field: str
+):
+    fields: Final = _streamed_event_fields(
+        OpenAIResponsesAPIConfig, {"type": event_type, field: {"q": 1}, "output_index": "not-an-int"}
+    )
+
+    assert json.loads(fields[field]) == {"q": 1}
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_that_is_already_a_string_reaches_the_client_unchanged(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str
+):
+    assert _streamed_event_fields(provider_config, {"type": event_type, field: '{"ci'})[field] == '{"ci'
+
+
+def test_streamed_delta_on_an_event_that_is_not_tool_input_is_left_as_sent():
+    fields: Final = _streamed_event_fields(
+        OpenAIResponsesAPIConfig, {"type": "response.some_provider_event", "delta": {"q": 1}}
+    )
+
+    assert fields["delta"] == {"q": 1}

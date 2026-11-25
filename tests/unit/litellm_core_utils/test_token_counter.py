@@ -2,50 +2,56 @@
 #    This tests litellm.token_counter.token_counter() function
 import asyncio
 import base64
+import copy
 import importlib
 import io
 import json
-import os
-import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Set
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from itertools import accumulate, chain
-from pathlib import Path
+from itertools import chain
 from queue import SimpleQueue
-from typing import Final, cast
-from unittest.mock import MagicMock, sentinel
+from typing import Final, Literal, cast
+from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 import anyio.to_thread
 import pytest
 import tiktoken
 from PIL import Image
-from tokenizers import Regex, Tokenizer, models, pre_tokenizers
-
-from unittest.mock import AsyncMock, patch
+from tokenizers import Tokenizer
 
 import litellm
+import litellm.constants
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
-import litellm.constants
 from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    PdfDocumentPricing,
+    TokenCountMemo,
+    UnsupportedContentTypeError,
+    _count_content_list,
     _encoding_count,
-    _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
+    _resolve_exact_count,
     calculate_img_tokens,
     estimate_image_tokens,
+    has_only_text_content,
     high_detail_image_token_upper_bound,
+    inline_pdf_token_delta,
+    inline_pdf_token_deltas,
     is_openai_model,
+    messages_reach_token_count,
     offload_token_count,
+    openai_tokenizer_encoding,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -55,8 +61,10 @@ from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
     timed_with_loop_lags,
+    uncounted_text,
     warm_tokenizer,
 )
+from tests.unit.litellm_core_utils.handbuilt_pdf import pdf_base64 as _pdf_base64
 from tests.unit.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
@@ -127,6 +135,29 @@ def test_token_counter_default_encoding_matches_cl100k():
     assert token_counter_new(model=None, text="hello world") == expected
 
 
+def test_token_counter_counts_with_a_custom_openai_tokenizer_encoding():
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    o200k: Final = tiktoken.get_encoding("o200k_base")
+    assert len(o200k.encode(japanese)) != len(tiktoken.get_encoding("cl100k_base").encode(japanese))
+
+    assert token_counter_new(custom_tokenizer={"type": "openai_tokenizer", "tokenizer": o200k}, text=japanese) == len(
+        o200k.encode(japanese)
+    )
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "openai/gpt-5.6-luna", "azure/gpt-5.6-luna"])
+def test_a_selected_tokenizer_never_overrides_an_openai_models_own_encoding(model: str):
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    own_encoding: Final = openai_tokenizer_encoding(model)
+    selected: Final = litellm.utils.select_tokenizer(model)
+    assert selected["type"] == "openai_tokenizer"
+    assert len(own_encoding.encode(japanese)) != len(selected["tokenizer"].encode(japanese))
+
+    assert token_counter_new(model=model, custom_tokenizer=selected, text=japanese) == token_counter_new(
+        model=model, text=japanese
+    )
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")
@@ -173,7 +204,7 @@ async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free()
     warm_tokenizer("claude-fable-5")
 
     tokens, took, lags = await timed_with_loop_lags(
-        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=uncounted_text())
     )
 
     assert tokens > 0
@@ -218,7 +249,7 @@ class _SlowEncoder:
 @pytest.mark.asyncio
 async def test_offloaded_counts_do_not_borrow_from_the_shared_thread_pool():
     encoder: Final = _SlowEncoder()
-    count: Final = _get_exact_count_function(None, {"type": "huggingface_tokenizer", "tokenizer": encoder})
+    count: Final = _resolve_exact_count(None, {"type": "huggingface_tokenizer", "tokenizer": encoder}).count
     shared_pool: Final = anyio.to_thread.current_default_thread_limiter()
     burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 
@@ -277,7 +308,7 @@ def test_token_counter_applies_the_default_cap():
     max_exact_chars: Final = litellm.constants.TOKEN_COUNTER_MAX_EXACT_CHARS
     prose: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
     over_the_cap: Final = prose + "a" * 200_000
-    exact: Final = _get_exact_count_function("gpt-5.6")(over_the_cap)
+    exact: Final = _resolve_exact_count("gpt-5.6").count(over_the_cap)
 
     estimate: Final = token_counter_new(model="gpt-5.6", text=over_the_cap)
 
@@ -638,8 +669,14 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
         ("deepseek/deepseek-chat:free", "DeepSeek-V4-Flash-0731"),
         ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
         ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
-        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
-        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("DeepSeek-V4.1-Flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("databricks-deepseek-v4-1-flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-ai/deepseek-v4.1-flash-maas", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-v4p1-flash-1017", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("grok-4.1-fast-non-reasoning", "grok-4-1-fast-reasoning"),
+        ("xai.grok-4.1-fast", "grok-4-1-fast-reasoning"),
+        ("grok-4.3-latest", "grok-4.3"),
+        ("xai.grok-4-3", "grok-4.3"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
         ("qwen3-235b-a22b", "mistral-large-latest"),
     ],
@@ -693,22 +730,139 @@ def test_token_counter_counts_function_tools_like_chat_completions_tools_for_cha
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
 
 
+def test_token_counter_counts_a_gemini_parameters_json_schema_like_parameters():
+    json_schema_function: Final = {
+        "name": _WEATHER_FUNCTION["name"],
+        "description": _WEATHER_FUNCTION["description"],
+        "parametersJsonSchema": _WEATHER_FUNCTION["parameters"],
+    }
+
+    assert token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(json_schema_function)]
+    ) == token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(_WEATHER_FUNCTION)]
+    )
+
+
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
-# these tool_choice values on 2026-10-17, the same as without one
+# these tool_choice values on 2026-10-17, the same as without one. On 2026-10-29 aiand's
+# deepseek-v4.1-flash billed 296 for each, and Fireworks' deepseek-v4p1-flash and OpenRouter's
+# deepseek-v3.2 billed the same for "required" and the named tool as without one
+@pytest.mark.parametrize(
+    "model",
+    [
+        "DeepSeek-V4-Flash-0731",
+        "aiand/deepseek-ai/deepseek-v4.1-flash",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "openrouter/deepseek/deepseek-v3.2",
+    ],
+)
 @pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
-def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
 
     assert token_counter_new(
-        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
-    ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# Gemini API gemini-3.8-flash, gemini-3.1-pro-preview and gemini-3.5-flash-lite each billed 51 prompt tokens for the
+# weather tool with no toolConfig, NONE, ANY and ANY limited to the tool on 2026-11-11
+@pytest.mark.parametrize("model", ["gemini/gemini-3.8-flash", "gemini/gemini-3.1-pro-preview", "gemini-3.5-flash-lite"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_gemini(model: str, tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI grok-4.3 and grok-4-1-fast-reasoning each billed 275 prompt tokens for the weather tool with no tool_choice,
+# 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and OpenRouter, which served
+# x-ai/grok-4.3 from xAI, billed the same on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "grok-4-1-fast-reasoning", "openrouter/x-ai/grok-4.3"])
+@pytest.mark.parametrize(
+    ("tool_choice", "billed_over_unset"),
+    [
+        pytest.param("none", 21, id="none"),
+        pytest.param({"type": "none"}, 21, id="anthropic-none"),
+        pytest.param("required", 11, id="required"),
+        pytest.param({"type": "any"}, 11, id="anthropic-any"),
+        pytest.param({"type": "function", "function": {"name": "get_weather"}}, 14, id="named"),
+        pytest.param({"type": "tool", "name": "get_weather"}, 14, id="anthropic-tool"),
+        pytest.param({"type": "function", "name": "get_weather"}, 14, id="responses-function"),
+        pytest.param("auto", 0, id="auto"),
+    ],
+)
+def test_token_counter_counts_each_grok_tool_choice_the_way_xai_bills_it(
+    model: str, tool_choice: str | Mapping[str, object], billed_over_unset: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert (
+        token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice)
+        - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+        == billed_over_unset
+    )
+
+
+# Azure AI Foundry grok-4-1 billed 351 prompt tokens for the weather tool with no tool_choice, 163 with "none" and
+# 352 with "required" or the named tool on 2026-11-10, so xAI's costs would count it 10 to 21 over
+@pytest.mark.parametrize("model", ["azure_ai/grok-4-1-fast-reasoning", "azure_ai/grok-4.3", "vertex_ai/xai/grok-4.3"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_grok_served_off_xai(model: str, tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI and OpenAI both answered 400 to a tool_choice sent without tools on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "gpt-4.1"])
+@pytest.mark.parametrize("tool_choice", ["none", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_without_tools_adds_nothing(model: str, tool_choice: object):
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tool_choice=tool_choice) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES)
+    )
+
+
+def _counted_with_strict(model: str, **strict: bool) -> int:
+    return token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool({**_WEATHER_FUNCTION, **strict})]
+    )
+
+
+# A one-function tool billed the same prompt tokens with strict unset and false on 2026-10-29: 357 through Azure AI
+# Foundry grok-4-1-fast-reasoning chat and 283 through xAI grok-4.3
+@pytest.mark.parametrize("model", ["grok-4-1-fast-reasoning", "grok-4.3"])
+def test_token_counter_renders_a_false_strict_like_an_unset_one_for_grok(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model)
+        < _counted_with_strict(model, strict=True)
+    )
+
+
+# A one-function tool billed 5 prompt tokens more with strict false than unset, the same as with strict true, on
+# 2026-10-30: 310 against 305 through Baseten DeepSeek-V4.1-Flash and 309 against 304 through Together
+@pytest.mark.parametrize(
+    "model", ["accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v4-flash", "qwen3.5-plus"]
+)
+def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_templates(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model, strict=True)
+        > _counted_with_strict(model)
+    )
 
 
 @pytest.mark.parametrize(
     ("tool_choice", "expected_tool_choice"),
     [
         pytest.param({"type": "auto"}, None, id="anthropic-auto"),
-        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "any"}, "required", id="anthropic-any"),
         pytest.param({"type": "none"}, "none", id="anthropic-none"),
         pytest.param(
             {"type": "tool", "name": "get_weather"},
@@ -759,9 +913,17 @@ def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
 
 # Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
 # request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
-# either way (both read on Hugging Face on 2026-10-17)
+# either way (both read on Hugging Face on 2026-10-17). A system message cost the same with and without a tool on
+# Fireworks deepseek-v4p1-flash, Azure AI Foundry grok-4-1-fast-reasoning and xAI grok-4.3 on 2026-10-29
 @pytest.mark.parametrize(
-    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+    ("model", "implicit_system_turn_tokens"),
+    [
+        ("DeepSeek-V4-Flash-0731", 0),
+        ("databricks-qwen35-122b-a10b", 5),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", 0),
+        ("grok-4-1-fast-reasoning", 0),
+        ("grok-4.3", 0),
+    ],
 )
 def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
     model: str, implicit_system_turn_tokens: int
@@ -784,48 +946,6 @@ class NeedsToleranceUpdateError(Exception):
 
 
 # test_tokenizers()
-
-
-def test_encoding_and_decoding(tmp_path: Path):
-    sample_text = "Hellö World, this is my input string!"
-
-    # openai encoding + decoding
-    openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
-    openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
-
-    assert openai_text == sample_text
-
-    # claude encoding + decoding
-    claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
-
-    claude_text = decode(model="claude-3-5-haiku-20241022", tokens=claude_tokens)
-
-    assert claude_text == sample_text
-
-    # cohere encoding + decoding
-    cohere_tokens = encode(model="command-nightly", text=sample_text)
-    cohere_text = decode(model="command-nightly", tokens=cohere_tokens)
-
-    assert cohere_text == sample_text
-
-    # llama2 encoding + decoding
-    words = sample_text.split()
-    result = _run_in_memory_hub(
-        HUB_ROUND_TRIP_SCRIPT,
-        {
-            "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(
-                pre_tokenizers.WhitespaceSplit(),
-                vocab={"[UNK]": 0, **{word: i + 1 for i, word in enumerate(words)}},
-            )
-        },
-        sample_text,
-        tmp_path,
-    )
-
-    assert result["decoded"] == sample_text
-    assert result["requested"] == ["hf-internal-testing/llama-tokenizer"]
-    assert len(result["tokens"]) == len(words)
-    assert len(result["tokens"]) != len(encode(model="gpt-3.5-turbo", text=sample_text))
 
 
 # test_encoding_and_decoding()
@@ -925,20 +1045,6 @@ def test_empty_tools():
     print(result)
 
 
-@pytest.mark.skip(
-    reason="Skipping this test temporarily because it relies on a function being called that I am removing."
-)
-def test_gpt_4o_token_counter():
-    with patch.object(
-        litellm.utils, "openai_token_counter", new=MagicMock()
-    ) as mock_client:
-        token_counter(
-            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
-        )
-
-        mock_client.assert_called()
-
-
 @pytest.mark.parametrize(
     "img_url",
     [
@@ -954,6 +1060,7 @@ def test_img_url_token_counter(img_url, monkeypatch):
     third-party image URL goes away.
     """
     import base64
+
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     # Minimal valid 1x1 PNG, served by the mocked safe_get for the URL case.
@@ -1026,8 +1133,9 @@ from litellm.utils import (
     _HuggingFaceTokenizerLoadOutcomes,
     _return_huggingface_tokenizer,
     _select_tokenizer_helper,
-    claude_json_str,
     encoding,
+    huggingface_tokenizer_may_download,
+    without_huggingface_tokenizer_downloads,
 )
 
 # Clear the cache at module load to ensure clean state
@@ -1190,7 +1298,7 @@ def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_toke
 
 @pytest.mark.parametrize(
     "model",
-    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+    ["deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
 )
 def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
@@ -1330,6 +1438,33 @@ def _eventually(probe: Callable[[], bool]) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def test_a_hub_tokenizer_may_download_only_until_it_has_loaded_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes()
+    before_loading: Final = huggingface_tokenizer_may_download(model, outcomes)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+        _return_huggingface_tokenizer(model, outcomes)
+
+    assert before_loading
+    assert not huggingface_tokenizer_may_download(model, outcomes)
+
+
+def test_a_count_that_must_not_wait_on_a_download_uses_only_a_tokenizer_already_loaded():
+    model: Final = "hostinger_router/llama-3.1-8b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(start_retry=_run_now)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer) as from_pretrained:
+        with without_huggingface_tokenizer_downloads():
+            before_any_load: Final = _return_huggingface_tokenizer(model, outcomes)
+        loaded_by_a_normal_count: Final = _return_huggingface_tokenizer(model, outcomes)
+        with without_huggingface_tokenizer_downloads():
+            after_the_load: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert before_any_load is None
+    assert from_pretrained.call_count == 1
+    assert loaded_by_a_normal_count == after_the_load == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
 def test_failed_download_is_retried_once_per_window_until_it_loads():
@@ -1982,6 +2117,34 @@ def test_token_counter_with_compaction_block():
     assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
 
 
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_nothing_for_a_fallback_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+
+    with_block: Final = [user_turn, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    without_block: Final = [user_turn, {"role": "assistant", "content": [reply, reply]}]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
+
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_the_text_a_fallback_block_carries_like_a_text_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    carried: Final = "Text a caller put on the block. " * 20
+
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": carried}]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": carried}]}]
+
+    assert token_counter(model=model, messages=with_fallback) == token_counter(model=model, messages=with_text)
+
+
 def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
     """
     Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
@@ -2095,13 +2258,14 @@ def test_token_counter_with_tool_reference_block():
 
 def test_count_content_list_rejects_unknown_type():
     """
-    An unrecognized content block type must raise, and the error message must
-    enumerate the supported types (including `tool_reference`). This pins the
-    catch-all contract so a future block type isn't silently dropped.
+    An unrecognized content block type must raise, naming the type, so a
+    future block type isn't silently dropped.
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+    with pytest.raises(
+        ValueError, match=r"^The token counter can't count content blocks of type totally_unknown_block$"
+    ):
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
@@ -2109,9 +2273,126 @@ def test_count_content_list_rejects_unknown_type():
             default_token_count=None,
         )
 
-    message = str(exc_info.value)
-    assert "Invalid content item type: totally_unknown_block" in message
-    assert "tool_reference" in message
+
+_CLAUDE: Final = "anthropic/claude-sonnet-5-5"
+_REMOVE_WEATHER: Final = {"type": "tool_removal", "tool": {"type": "tool_reference", "name": "get_weather"}}
+
+
+def _weather_tool(description: str, *extra_properties: str) -> dict[str, object]:
+    return {
+        "name": "get_weather",
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                **{name: {"type": "string"} for name in extra_properties},
+            },
+            "required": ["city"],
+        },
+    }
+
+
+def _add_definition(definition: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": definition}}
+
+
+def _conversation(*system_blocks: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "system", "content": [{"type": "text", "text": "Your tools changed."}, *system_blocks]},
+    ]
+
+
+def _then_remove_weather(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [*messages, {"role": "user", "content": "Never mind."}, {"role": "system", "content": [_REMOVE_WEATHER]}]
+
+
+def test_tool_addition_counts_an_inline_definition_like_the_same_tool_declared_in_tools() -> None:
+    brief: Final = _weather_tool("Weather.")
+    detailed: Final = _weather_tool("Current weather, temperature and wind for a city.", "country", "date")
+    add_by_reference: Final = {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "get_weather"}}
+    by_reference: Final = _conversation(add_by_reference)
+
+    inline_delta: Final = token_counter_new(model=_CLAUDE, messages=_conversation(_add_definition(detailed))) - (
+        token_counter_new(model=_CLAUDE, messages=_conversation(_add_definition(brief)))
+    )
+    declared_delta: Final = token_counter_new(model=_CLAUDE, messages=by_reference, tools=[detailed]) - (
+        token_counter_new(model=_CLAUDE, messages=by_reference, tools=[brief])
+    )
+
+    assert declared_delta > 0
+    assert inline_delta == declared_delta
+
+
+@pytest.mark.parametrize("change", ["tool_addition", "tool_removal"])
+@pytest.mark.parametrize(
+    ("target", "referenced_names"),
+    [
+        ({"type": "tool_reference", "name": "get_weather"}, ("get_weather",)),
+        ({"type": "mcp_tool_reference", "server_name": "calendar", "name": "list_events"}, ("calendar", "list_events")),
+        ({"type": "mcp_toolset_reference", "server_name": "calendar"}, ("calendar",)),
+    ],
+    ids=["tool_reference", "mcp_tool_reference", "mcp_toolset_reference"],
+)
+def test_tool_change_by_reference_counts_the_referenced_names(
+    change: str, target: dict[str, object], referenced_names: tuple[str, ...]
+) -> None:
+    counted: Final = _count_content_list(len, [{"type": change, "tool": target}], False, None)
+
+    assert counted == sum(map(len, referenced_names))
+
+
+def test_tool_removal_never_subtracts_an_earlier_inline_definition() -> None:
+    with_definition: Final = _conversation(_add_definition(_weather_tool("Current weather for a city.")))
+    without_definition: Final = _conversation()
+
+    removal_with_definition: Final = token_counter_new(
+        model=_CLAUDE, messages=_then_remove_weather(with_definition)
+    ) - token_counter_new(model=_CLAUDE, messages=with_definition)
+    removal_without_definition: Final = token_counter_new(
+        model=_CLAUDE, messages=_then_remove_weather(without_definition)
+    ) - token_counter_new(model=_CLAUDE, messages=without_definition)
+
+    assert removal_with_definition > 0
+    assert removal_with_definition == removal_without_definition
+
+
+def test_messages_reach_token_count_agrees_with_token_counter_across_tool_changes() -> None:
+    messages: Final = _then_remove_weather(_conversation(_add_definition(_weather_tool("Current weather for a city."))))
+    total: Final = token_counter_new(model=_CLAUDE, messages=messages)
+
+    reached: Final = (
+        messages_reach_token_count(model=_CLAUDE, messages=messages, threshold=total),
+        messages_reach_token_count(model=_CLAUDE, messages=messages, threshold=total + 1),
+    )
+
+    assert reached == (True, False)
+
+
+def test_counting_tool_changes_leaves_the_messages_unchanged() -> None:
+    messages: Final = _then_remove_weather(_conversation(_add_definition(_weather_tool("Current weather for a city."))))
+    sent: Final = copy.deepcopy(messages)
+
+    token_counter_new(model=_CLAUDE, messages=messages)
+    messages_reach_token_count(model=_CLAUDE, messages=messages, threshold=1)
+
+    assert messages == sent
+
+
+@pytest.mark.parametrize(
+    "tool_change",
+    [
+        {"type": "tool_addition", "tool": {"type": "future_reference", "name": "get_weather"}},
+        {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": "get_weather"}},
+        {"type": "tool_removal"},
+    ],
+    ids=["unknown_target_type", "definition_not_an_object", "missing_target"],
+)
+def test_tool_change_with_an_unrecognized_target_stays_unsupported(tool_change: dict[str, object]) -> None:
+    with pytest.raises(UnsupportedContentTypeError, match=r"^The token counter can't count tool changes whose target"):
+        _count_content_list(len, [tool_change], False, None)
 
 
 @pytest.mark.parametrize(
@@ -2248,6 +2529,208 @@ def test_anthropic_image_block_with_empty_base64_data():
     assert tokens > 0
 
 
+@pytest.mark.parametrize(
+    "block, expected",
+    (
+        (
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": {"status": "done"}},
+            "{'status': 'done'}",
+        ),
+        (
+            {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "release"}},
+            "web_search{'query': 'release'}",
+        ),
+        (
+            {
+                "type": "mcp_tool_use",
+                "id": "mcp_1",
+                "server_name": "notes",
+                "name": "lookup",
+                "input": {"q": "release"},
+            },
+            "lookup{'q': 'release'}",
+        ),
+        (
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srv_1",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.invalid",
+                        "title": "Release",
+                        "snippet": "Streaming added.",
+                        "encrypted_content": "opaque" * 1000,
+                        "page_age": "yesterday",
+                    }
+                ],
+            },
+            "https://example.invalidReleaseStreaming added.",
+        ),
+        (
+            {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.invalid",
+                    "retrieved_at": "metadata",
+                    "content": {
+                        "type": "document",
+                        "title": "Release",
+                        "source": {"type": "text", "media_type": "text/plain", "data": "Streaming added."},
+                    },
+                },
+            },
+            "https://example.invalidReleaseStreaming added.",
+        ),
+        (
+            {
+                "type": "code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "code_execution_result",
+                    "stdout": "42",
+                    "stderr": "warning",
+                    "return_code": 0,
+                    "content": [{"type": "code_execution_output", "file_id": "opaque-file-id"}],
+                },
+            },
+            "42warning",
+        ),
+        (
+            {
+                "type": "code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "encrypted_code_execution_result",
+                    "encrypted_stdout": "opaque" * 1000,
+                    "stderr": "warning",
+                    "return_code": 0,
+                    "content": [],
+                },
+            },
+            "warning",
+        ),
+        (
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_1",
+                "is_error": False,
+                "content": [{"type": "text", "text": "Streaming added."}],
+            },
+            "Streaming added.",
+        ),
+        (
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "42",
+                    "stderr": "warning",
+                    "return_code": 0,
+                    "content": [{"type": "bash_code_execution_output", "file_id": "opaque-file-id"}],
+                },
+            },
+            "42warning",
+        ),
+        (
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "text_editor_code_execution_view_result",
+                    "content": "print(42)",
+                    "file_type": "text",
+                    "num_lines": 1,
+                },
+            },
+            "print(42)",
+        ),
+        (
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "text_editor_code_execution_str_replace_result",
+                    "lines": ["first", "second"],
+                    "old_lines": 1,
+                    "new_lines": 2,
+                },
+            },
+            "firstsecond",
+        ),
+        (
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {"type": "text_editor_code_execution_create_result", "is_file_update": False},
+            },
+            "",
+        ),
+    ),
+)
+def test_token_counter_counts_anthropic_tool_readable_content(block: Mapping[str, object], expected: str) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    assert _count_content_list(len, [block], False, None) == len(expected)
+
+
+def test_token_counter_bounds_nested_server_results_and_honors_the_fallback() -> None:
+    from functools import reduce
+
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    def wrap(content: Mapping[str, object], _: int) -> Mapping[str, object]:
+        return {"type": "web_fetch_result", "content": content}
+
+    leaf: Final[Mapping[str, object]] = {"type": "web_fetch_result", "url": "https://example.invalid"}
+    block: Final = reduce(wrap, range(DEFAULT_MAX_RECURSE_DEPTH + 1), leaf)
+
+    with pytest.raises(UnsupportedContentTypeError, match="nesting exceeds the token counter limit"):
+        _count_content_list(len, [block], False, None)
+    assert _count_content_list(len, [block], False, 123) == 123
+
+
+@pytest.mark.parametrize(
+    "tool", ("web_search", "web_fetch", "code_execution", "bash_code_execution", "text_editor_code_execution")
+)
+def test_token_counter_counts_server_tool_errors(tool: str) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    block: Final = {
+        "type": f"{tool}_tool_result",
+        "tool_use_id": "srv_1",
+        "content": {"type": f"{tool}_tool_result_error", "error_code": "unavailable"},
+    }
+    assert _count_content_list(len, [block], False, None) == len("unavailable")
+
+
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
+        {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
+        {"type": "web_fetch_tool_result", "tool_use_id": "srv_1", "content": {"url": "https://example.invalid"}},
+    ),
+    ids=("result-without-type", "unknown-result-type", "mapping-without-type"),
+)
+@pytest.mark.parametrize("nested", (False, True), ids=("assistant-content", "tool-result"))
+def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, object], nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+
+    with pytest.raises(
+        UnsupportedContentTypeError,
+        match=rf"^The token counter can't read the content field of a {block['type']} block: ",
+    ):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_token_counter_counts_anthropic_search_result_text() -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
@@ -2278,14 +2761,14 @@ def test_token_counter_counts_a_search_result_without_a_title() -> None:
     )
 
 
-@pytest.mark.parametrize("nested", (False, True))
-def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(nested: bool) -> None:
+@pytest.mark.parametrize("container", (None, "tool_result", "web_search_tool_result"))
+def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(container: str | None) -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
     unknown: Final = {"type": "future_block"}
-    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [unknown]}] if nested else [unknown]
+    content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
-    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block$"):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
@@ -2412,53 +2895,6 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, named]) == _count_user_content(
         [prompt, {"type": "text", "text": "report.pdf"}]
     )
-
-
-def _pdf_base64(
-    pages: tuple[str, ...],
-    width: int = 612,
-    height: int = 792,
-    xobjects: tuple[bytes, ...] = (),
-    drawing: bytes = b"",
-    page_resources: str | None = None,
-) -> str:
-    """`xobjects` are numbered from 4 + 2 * len(pages), every page lists the first one as its /X0 XObject, and every
-    page's content stream ends with `drawing`. `page_resources` replaces every page's /Resources dictionary."""
-    first_xobject: Final = 4 + 2 * len(pages)
-    page_xobjects: Final = f" /XObject << /X0 {first_xobject} 0 R >>" if xobjects else ""
-    resources: Final = page_resources if page_resources is not None else f"<< /Font << /F1 3 0 R >>{page_xobjects} >>"
-
-    def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
-        escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1") + drawing
-        content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
-        page: Final = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
-            f"/Resources {resources} /Contents {4 + 2 * index} 0 R >>"
-        ).encode()
-        return content, page
-
-    kids: Final = " ".join(f"{5 + 2 * index} 0 R" for index in range(len(pages)))
-    bodies: Final = (
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        f"<< /Type /Pages /Count {len(pages)} /Kids [ {kids} ] >>".encode(),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        *chain.from_iterable(page_objects(index, text) for index, text in enumerate(pages)),
-        *xobjects,
-    )
-    header: Final = b"%PDF-1.4\n"
-    objects: Final = tuple(
-        f"{number} 0 obj\n".encode() + body + b"\nendobj\n" for number, body in enumerate(bodies, start=1)
-    )
-    offsets: Final = accumulate((len(header), *(len(obj) for obj in objects[:-1])))
-    xref: Final = f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode() + b"".join(
-        f"{offset:010d} 00000 n \n".encode() for offset in offsets
-    )
-    trailer: Final = (
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-        f"startxref\n{len(header) + sum(len(obj) for obj in objects)}\n%%EOF\n"
-    ).encode()
-    return base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
 
 
 def _pdf_source(pdf_base64: str) -> dict[str, str]:
@@ -2819,7 +3255,7 @@ def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deploym
 
 
 @pytest.mark.parametrize(
-    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat", "azure/gpt-4.5-preview"]
+    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat"]
 )
 def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
@@ -2921,6 +3357,269 @@ def test_messages_reach_token_count_prices_pdf_pages_like_token_counter():
 def _png_data_url(width: int, height: int) -> str:
     ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+def _pypdf_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name.startswith("pypdf")]
+
+
+@pytest.mark.parametrize("size", ["1.00MB", "12.5KB"])
+def test_a_redacted_pdf_placeholder_is_priced_like_an_image_without_being_parsed(
+    size: str, caplog: pytest.LogCaptureFixture
+):
+    placeholder: Final = f"data:application/pdf;base64,[base64_data truncated: {size}]"
+    caplog.set_level("WARNING", logger="pypdf")
+
+    assert len(base64.b64decode(placeholder.removeprefix("data:application/pdf;base64,"))) == 18
+
+    as_file: Final = _count_user_content([{"type": "file", "file": {"file_data": placeholder}}], model="")
+    as_document: Final = _count_user_content(
+        [{"type": "document", "source": {"type": "url", "url": placeholder}}], model=""
+    )
+
+    assert as_file == as_document == _count_user_content([{"type": "image_url", "image_url": {"url": placeholder}}], "")
+    assert _pypdf_warnings(caplog) == []
+
+
+def test_messages_the_logging_redaction_rewrote_reach_the_counter_without_a_pdf_parse(
+    caplog: pytest.LogCaptureFixture,
+):
+    from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+
+    messages: Final = [{"role": "user", "content": [_as_pdf_file(_pdf_base64(("",)))]}]
+    redacted: Final = truncate_base64_in_messages(messages)
+    caplog.set_level("WARNING", logger="pypdf")
+
+    assert redacted[0]["content"][0]["file"]["file_data"].startswith(
+        "data:application/pdf;base64," + TRUNCATED_BASE64_MARKER
+    )
+
+    total: Final = token_counter_new(model="", messages=redacted)
+
+    assert messages_reach_token_count(model="", messages=redacted, threshold=total) is True
+    assert messages_reach_token_count(model="", messages=redacted, threshold=total + 1) is False
+    assert total < token_counter_new(model="", messages=messages)
+    assert _pypdf_warnings(caplog) == []
+
+
+def test_a_line_wrapped_base64_pdf_keeps_its_page_price():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    wrapped: Final = "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+    assert _pdf_cost("", wrapped, _as_pdf_file) == _pdf_cost("", encoded, _as_pdf_file)
+    assert _pdf_cost("", wrapped, _as_pdf_file) == _text_cost("", _REVENUE_LINE) + 2 * 1534
+
+
+_THREE_PAGE_PDF: Final = _pdf_base64((_REVENUE_LINE,) * 3)
+_OTHER_PDF: Final = _pdf_base64((_HEADCOUNT_LINE, ""))
+
+
+def _document(pdf_base64: str) -> dict[str, object]:
+    return {"type": "document", "source": _pdf_source(pdf_base64)}
+
+
+def _image(pdf_base64: str) -> dict[str, object]:
+    return {"type": "image", "source": _pdf_source(pdf_base64)}
+
+
+def _file(pdf_base64: str) -> dict[str, object]:
+    return {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf_base64}"}}
+
+
+def _image_url(pdf_base64: str) -> dict[str, object]:
+    return {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_base64}"}}
+
+
+def _tool_result(*content: object) -> dict[str, object]:
+    return {"type": "tool_result", "tool_use_id": "t1", "content": list(content)}
+
+
+def _single_image_shapes() -> list[tuple[list[object], list[object]]]:
+    shared_document: Final = _document(_THREE_PAGE_PDF)
+    shared_image: Final = _image(_THREE_PAGE_PDF)
+    return [
+        ([_document(_THREE_PAGE_PDF)], [_image(_THREE_PAGE_PDF)]),
+        ([_file(_THREE_PAGE_PDF)], [_image_url(_THREE_PAGE_PDF)]),
+        ([shared_document, shared_document, _document(_OTHER_PDF)], [shared_image, shared_image, _image(_OTHER_PDF)]),
+        (
+            [_tool_result(_document(_THREE_PAGE_PDF), _document(_OTHER_PDF))],
+            [_tool_result(_image(_THREE_PAGE_PDF), _image(_OTHER_PDF))],
+        ),
+        (
+            [{"type": "document", "source": {"type": "content", "content": [_document(_THREE_PAGE_PDF)]}}],
+            [{"type": "document", "source": {"type": "content", "content": [_image(_THREE_PAGE_PDF)]}}],
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pdf_content", "image_content"),
+    _single_image_shapes(),
+    ids=["document", "file", "repeated_document_and_another", "tool_result", "nested_document"],
+)
+def test_repricing_inline_pdfs_as_single_images_matches_sending_the_same_bytes_as_images(
+    pdf_content: list[object], image_content: list[object]
+):
+    pdf_messages: Final = [{"role": "user", "content": pdf_content}]
+
+    assert token_counter_new(model="", messages=pdf_messages) + inline_pdf_token_delta(
+        "", pdf_messages, "single_image"
+    ) == token_counter_new(model="", messages=[{"role": "user", "content": image_content}])
+
+
+def test_repricing_with_a_custom_tokenizer_moves_the_count_that_tokenizer_made():
+    accented: Final = _pdf_base64(("naïve café déjà vu résumé " * 3,))
+    o200k: Final[SelectTokenizerResponse] = {
+        "type": "openai_tokenizer",
+        "tokenizer": tiktoken.get_encoding("o200k_base"),
+    }
+    pdf_messages: Final = [{"role": "user", "content": [_document(accented)]}]
+    image_messages: Final = [{"role": "user", "content": [_image(accented)]}]
+    repriced: Final = inline_pdf_token_deltas("", pdf_messages, ("single_image",), custom_tokenizer=o200k)
+
+    assert token_counter_new(model="", messages=pdf_messages, custom_tokenizer=o200k) != token_counter_new(
+        model="", messages=pdf_messages
+    )
+    assert token_counter_new(model="", messages=pdf_messages, custom_tokenizer=o200k) + repriced[
+        "single_image"
+    ] == token_counter_new(model="", messages=image_messages, custom_tokenizer=o200k)
+
+
+def test_repricing_inline_pdfs_for_openai_moves_each_occurrence_by_its_page_price_difference():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    document: Final = _document(encoded)
+    once: Final = [{"role": "user", "content": [document]}]
+    twice: Final = [
+        {"role": "user", "content": [document]},
+        {"role": "user", "content": [{"type": "text", "text": "and"}, document]},
+    ]
+
+    assert inline_pdf_token_delta("", once, "openai") == 13 - 2 * 1534
+    assert inline_pdf_token_delta("", twice, "openai") == 2 * (13 - 2 * 1534)
+
+
+def _web_fetch_of(document: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": {"type": "web_fetch_result", "url": "https://example.invalid/report.pdf", "content": document},
+    }
+
+
+def _web_fetch_document(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_1", "content": document}
+
+
+@pytest.mark.parametrize("wrap", [_web_fetch_of, _web_fetch_document], ids=["web_fetch_result", "document_content"])
+@pytest.mark.parametrize("pdf_pricing", ["single_image", "openai"])
+def test_repricing_a_pdf_a_server_tool_returned_moves_only_the_pdf(
+    wrap: Callable[[Mapping[str, object]], dict[str, object]], pdf_pricing: PdfDocumentPricing
+):
+    def returning(document: Mapping[str, object]) -> list[dict[str, object]]:
+        return [{"role": "user", "content": [{"type": "text", "text": "the fetched report"}, wrap(document)]}]
+
+    def plain(document: Mapping[str, object]) -> list[dict[str, object]]:
+        return [{"role": "user", "content": [document]}]
+
+    def page_price(messages: Callable[[Mapping[str, object]], list[dict[str, object]]]) -> int:
+        return token_counter_new(model="", messages=messages(_document(_THREE_PAGE_PDF))) - token_counter_new(
+            model="", messages=messages(_document(_pdf_base64(())))
+        )
+
+    assert page_price(returning) == page_price(plain) > 0
+    assert token_counter_new(model="", messages=returning(_document(_THREE_PAGE_PDF))) > token_counter_new(
+        model="", messages=plain(_document(_THREE_PAGE_PDF))
+    )
+    assert inline_pdf_token_delta("", returning(_document(_THREE_PAGE_PDF)), pdf_pricing) == (
+        inline_pdf_token_delta("", plain(_document(_THREE_PAGE_PDF)), pdf_pricing)
+    )
+    assert inline_pdf_token_delta("", plain(_document(_THREE_PAGE_PDF)), pdf_pricing) < 0
+
+
+def test_repricing_pdfs_listed_in_a_server_tool_result_matches_sending_them_as_images():
+    def mcp_result(*content: object) -> list[dict[str, object]]:
+        listed: Final = {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "content": list(content)}
+        return [{"role": "user", "content": [listed]}]
+
+    note: Final = {"type": "text", "text": "two reports"}
+    pdfs: Final = mcp_result(_document(_THREE_PAGE_PDF), note, _document(_OTHER_PDF))
+    images: Final = mcp_result(_image(_THREE_PAGE_PDF), note, _image(_OTHER_PDF))
+
+    assert token_counter_new(model="", messages=pdfs) + inline_pdf_token_delta(
+        "", pdfs, "single_image"
+    ) == token_counter_new(model="", messages=images)
+
+
+def test_repricing_a_page_that_draws_an_image_keeps_its_rendered_price_for_openai():
+    drawn: Final = _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=_DRAW_X0)
+    messages: Final = [{"role": "user", "content": [_document(drawn), _document(_pdf_base64((_REVENUE_LINE,)))]}]
+
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image"))["openai"] == 13 - 1534
+
+
+def test_repricing_a_line_wrapped_pdf_matches_the_unwrapped_one():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    wrapped: Final = "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+    def deltas(pdf_base64: str) -> Mapping[PdfDocumentPricing, int]:
+        messages: Final = [{"role": "user", "content": [_file(pdf_base64)]}]
+        return inline_pdf_token_deltas("", messages, ("openai", "single_image"))
+
+    assert deltas(wrapped) == deltas(encoded)
+    assert deltas(encoded)["openai"] == 13 - 2 * 1534
+
+
+def test_repricing_without_pypdf_moves_nothing(monkeypatch: pytest.MonkeyPatch):
+    messages: Final = [{"role": "user", "content": [_document(_THREE_PAGE_PDF), _file(_OTHER_PDF)]}]
+
+    monkeypatch.setitem(sys.modules, "pypdf", None)
+
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image")) == {"openai": 0, "single_image": 0}
+
+
+def test_repricing_an_encrypted_pdf_keeps_its_opaque_document_count():
+    from pypdf import PdfWriter
+
+    writer: Final = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt("private-document")
+    output: Final = io.BytesIO()
+    writer.write(output)
+    encoded: Final = base64.b64encode(output.getvalue()).decode("ascii")
+    messages: Final = [{"role": "user", "content": [_document(encoded)]}]
+
+    assert token_counter_new(model="", messages=messages) > 0
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image")) == {"openai": 0, "single_image": 0}
+
+
+def test_repricing_reads_a_pdf_inside_its_own_tool_result_once():
+    content: Final[list[object]] = [_document(_THREE_PAGE_PDF)]  # mutable-ok: closed into a cycle below
+    looped: Final = {"type": "tool_result", "tool_use_id": "t1", "content": content}
+    content.append(looped)
+    once: Final = [{"role": "user", "content": [_tool_result(_document(_THREE_PAGE_PDF))]}]
+
+    assert inline_pdf_token_delta("", [{"role": "user", "content": [looped]}], "single_image") == (
+        inline_pdf_token_delta("", once, "single_image")
+    )
+    assert inline_pdf_token_delta("", once, "single_image") < 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "text", "text": _REVENUE_LINE}],
+        [{"type": "image_url", "image_url": {"url": _png_data_url(1024, 1024)}}],
+        [_as_pdf_file(base64.b64encode(b"not a pdf at all").decode())],
+        [_as_pdf_file("[base64_data truncated: 1.00MB]")],
+        [{"type": "text", "text": "see the report", "content": [_document(_THREE_PAGE_PDF)]}],
+    ],
+    ids=["text", "image", "unreadable_pdf", "redacted_pdf", "pdf_the_counter_does_not_read"],
+)
+@pytest.mark.parametrize("pdf_pricing", ["single_image", "openai"])
+def test_repricing_leaves_every_prompt_without_a_counted_readable_pdf_alone(
+    content: list[object], pdf_pricing: PdfDocumentPricing
+):
+    assert inline_pdf_token_delta("", [{"role": "user", "content": content}], pdf_pricing) == 0
 
 
 @pytest.mark.parametrize(
@@ -3128,129 +3827,6 @@ def test_image_estimate_bounds_header_decoding_for_large_inline_payloads() -> No
     assert len(decode_header.call_args.args[0]) <= 65_536
 
 
-HUB_SETUP_SCRIPT: Final = """
-import json
-import sys
-sys.path.insert(0, sys.argv[1])
-import httpx
-import huggingface_hub
-import litellm
-served = json.loads(sys.argv[2])
-text = sys.argv[3]
-requested = []
-def handle(request):
-    repo = request.url.path.lstrip("/").split("/resolve/")[0]
-    if repo not in served or not request.url.path.endswith("/tokenizer.json"):
-        return httpx.Response(404)
-    requested.append(repo)
-    payload = served[repo].encode()
-    headers = {"content-length": str(len(payload)), "etag": '"fixture"', "x-repo-commit": "a" * 40}
-    return httpx.Response(200, headers=headers, content=payload if request.method == "GET" else b"")
-huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
-"""
-
-HUB_TOKENIZER_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-litellm.cohere_models = {"command-r-v1"}
-litellm.anthropic_models = {"claude-2"}
-custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
-print(json.dumps({
-    "llama2": litellm.token_counter(model="meta-llama/Llama-2-7b-chat", text=text),
-    "llama3": litellm.token_counter(model="meta-llama/llama-3-70b-instruct", text=text),
-    "cohere": litellm.token_counter(model="command-r-v1", text=text),
-    "anthropic": litellm.token_counter(model="claude-2", text=text),
-    "custom": litellm.token_counter(custom_tokenizer=custom, text=text),
-    "requested": sorted(set(requested)),
-}))
-"""
-
-HUB_ROUND_TRIP_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
-print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
-"""
-
-HUB_RETRY_DURING_EXIT_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-import threading
-import time
-from litellm.utils import _HuggingFaceTokenizerLoadOutcomes, _return_huggingface_tokenizer
-retry_reached_hub = threading.Event()
-def answer_once_the_process_is_exiting(request):
-    retry_reached_hub.set()
-    while threading.main_thread().is_alive():
-        time.sleep(0.01)
-    time.sleep(0.5)
-    return handle(request)
-now = [0.0]
-outcomes = _HuggingFaceTokenizerLoadOutcomes(clock=lambda: now[0])
-model = "meta-llama/llama-3-70b-instruct"
-_return_huggingface_tokenizer(model, outcomes)
-huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(answer_once_the_process_is_exiting)))
-now[0] = 3600.0
-_return_huggingface_tokenizer(model, outcomes)
-print(json.dumps({"retry_reached_hub": retry_reached_hub.wait(timeout=60)}))
-"""
-
-
-def _word_level_tokenizer_json(
-    pre_tokenizer: pre_tokenizers.PreTokenizer, vocab: Mapping[str, int] | None = None
-) -> str:
-    tokenizer: Final = Tokenizer(
-        models.WordLevel(vocab=dict(vocab) if vocab is not None else {"[UNK]": 0}, unk_token="[UNK]")
-    )
-    tokenizer.pre_tokenizer = pre_tokenizer
-    return tokenizer.to_str()
-
-
-def _run_in_memory_hub(script: str, served: dict[str, str], text: str, tmp_path: Path) -> dict:
-    result: Final = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            script,
-            str(Path(litellm.__file__).parent.parent),
-            json.dumps(served),
-            text,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={
-            **os.environ,
-            "HF_HOME": str(tmp_path / "home"),
-            "HF_HUB_CACHE": str(tmp_path / "cache"),
-            "HF_ENDPOINT": "http://127.0.0.1:9",
-            "HF_HUB_OFFLINE": "0",
-            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads(result.stdout.strip().splitlines()[-1])
-
-
-def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_tokenizer(tmp_path: Path) -> None:
-    sample: Final = "Tokenizers disagree: anthropic, tiktoken; llama-2 & llama-3!"
-    served: Final = {
-        "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()),
-        "Xenova/llama-3-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Split(Regex("."), "isolated")),
-        "Xenova/c4ai-command-r-v01-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Whitespace()),
-    }
-    expected: Final = {repo: len(Tokenizer.from_str(payload).encode(sample).ids) for repo, payload in served.items()}
-    anthropic_count: Final = len(Tokenizer.from_str(claude_json_str).encode(sample).ids)
-    tiktoken_count: Final = litellm.token_counter(model="gpt-3.5-turbo", text=sample)
-    assert len({*expected.values(), anthropic_count, tiktoken_count}) == len(expected) + 2
-
-    counts: Final = _run_in_memory_hub(HUB_TOKENIZER_SCRIPT, served, sample, tmp_path)
-    assert counts == {
-        "llama2": expected["hf-internal-testing/llama-tokenizer"],
-        "llama3": expected["Xenova/llama-3-tokenizer"],
-        "cohere": expected["Xenova/c4ai-command-r-v01-tokenizer"],
-        "anthropic": anthropic_count,
-        "custom": expected["Xenova/llama-3-tokenizer"],
-        "requested": sorted(served),
-    }
-
-
 def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encoding() -> None:
     sample: Final = "A custom tokenizer passed with no model still counts."
 
@@ -3259,14 +3835,10 @@ def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encodin
     )
 
 
-def test_process_exits_cleanly_while_a_background_tokenizer_retry_is_downloading(tmp_path: Path) -> None:
-    assert _run_in_memory_hub(HUB_RETRY_DURING_EXIT_SCRIPT, {}, "", tmp_path) == {"retry_reached_hub": True}
-
-
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
     text_value: Final = "A tokenizer fallback should preserve the model encoding."
-    custom_count: Final = _get_exact_count_function("gpt-3.5-turbo", {})(text_value)
-    model_count: Final = _get_exact_count_function("gpt-3.5-turbo", None)(text_value)
+    custom_count: Final = _resolve_exact_count("gpt-3.5-turbo", {}).count(text_value)
+    model_count: Final = _resolve_exact_count("gpt-3.5-turbo", None).count(text_value)
 
     assert custom_count == model_count
 
@@ -3538,7 +4110,6 @@ def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k
         "azure/my-deployment",
         "azure/ada",
         "azure/mistral-large-latest",
-        "azure/command-r-plus",
         "azure_ai/mistral-large-latest",
     ],
 )
@@ -3570,3 +4141,148 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)
+
+
+@pytest.mark.parametrize(
+    ("messages", "text_only"),
+    [
+        ([{"role": "user", "content": "hi"}, {"role": "assistant", "content": None}], True),
+        ([{"role": "user", "content": ["part", {"type": "text", "text": "hi"}, {"type": "thinking"}]}], True),
+        ([{"role": "user", "content": "hi"}, "a bare string message"], False),
+        ([{"role": "user", "content": "hi"}, 42], False),
+        ([None], False),
+        ([{"role": "user", "content": {"type": "text", "text": "hi"}}], False),
+        (
+            [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]}],
+            False,
+        ),
+        ([{"role": "user", "content": [{"type": ["text"], "text": "hi"}]}], False),
+        ([{"role": "user", "content": [{"text": "hi"}]}], False),
+    ],
+    ids=[
+        "string_and_empty_content",
+        "text_blocks",
+        "string_message",
+        "number_message",
+        "none_message",
+        "mapping_content",
+        "image_block",
+        "non_string_block_type",
+        "untyped_block",
+    ],
+)
+def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
+    assert has_only_text_content(messages) is text_only
+
+
+_MEMOIZED_TEXT: Final = "a long turn of the conversation, resent with every request. " * 40
+
+
+class _CallCountingCounter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, text: str) -> int:
+        self.calls += 1
+        return len(text) // 4
+
+
+class _CallCountingEncoder:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        self.calls += 1
+        return [[0] * len(text) for text in texts]
+
+
+def test_token_count_memo_counts_a_repeated_long_text_once():
+    counter: Final = _CallCountingCounter()
+    count: Final = TokenCountMemo().wrap(object(), counter)
+
+    assert count(_MEMOIZED_TEXT) == count(_MEMOIZED_TEXT) == len(_MEMOIZED_TEXT) // 4
+    assert counter.calls == 1
+
+
+def test_token_count_memo_counts_text_below_the_threshold_every_time():
+    counter: Final = _CallCountingCounter()
+    count: Final = TokenCountMemo(min_chars=1024).wrap(object(), counter)
+    short_text: Final = _MEMOIZED_TEXT[:1023]
+
+    assert count(short_text) == count(short_text)
+    assert counter.calls == 2
+
+
+def test_token_count_memo_evicts_the_least_recently_used_count():
+    counter: Final = _CallCountingCounter()
+    count: Final = TokenCountMemo(max_entries=2).wrap(object(), counter)
+    first, second, third = (f"{index} {_MEMOIZED_TEXT}" for index in range(3))
+
+    tuple(map(count, (first, second, first, third)))
+    assert counter.calls == 3
+    count(first)
+    assert counter.calls == 3
+    count(second)
+    assert counter.calls == 4
+
+
+def test_token_count_memo_holds_no_reference_to_the_text():
+    memo: Final = TokenCountMemo()
+    text: Final = "".join(("fresh ", _MEMOIZED_TEXT))
+    references_before: Final = sys.getrefcount(text)
+
+    memo.wrap(object(), len)(text)
+
+    assert sys.getrefcount(text) == references_before
+
+
+def test_memoized_counts_match_uncached_counts_for_each_model_sharing_the_memo():
+    text: Final = "Ünïcödé prose, code() and 🙂 emoji in one long message, counted for several models. " * 60
+    models: Final = ("gpt-4o", "gpt-3.5-turbo", "claude-sonnet-4-5")
+    uncached: Final = tuple(_resolve_exact_count(model).count(text) for model in models)
+
+    assert len(set(uncached)) == len(models)
+    assert tuple(token_counter_new(model=model, text=text) for model in models * 2) == uncached * 2
+
+
+class _CallCountingByteEncoding(tiktoken.Encoding):
+    def __init__(self) -> None:
+        super().__init__(
+            "call-counting-bytes",
+            pat_str=r"\S+|\s+",
+            mergeable_ranks={bytes([byte]): byte for byte in range(256)},
+            special_tokens={},
+        )
+        self.calls = 0
+
+    def encode(
+        self,
+        text: str,
+        *,
+        allowed_special: Literal["all"] | Set[str] = frozenset(),
+        disallowed_special: Literal["all"] | Collection[str] = "all",
+    ) -> list[int]:
+        self.calls += 1
+        return super().encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+
+
+def test_openai_encoding_custom_tokenizer_counts_are_memoized():
+    encoding: Final = _CallCountingByteEncoding()
+    custom_tokenizer: Final = {"type": "openai_tokenizer", "tokenizer": encoding}
+
+    first: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+    calls_for_one_count: Final = encoding.calls
+    second: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+
+    assert first == second == len(_MEMOIZED_TEXT)
+    assert encoding.calls == calls_for_one_count > 0
+
+
+def test_custom_tokenizer_counts_are_not_memoized():
+    encoder: Final = _CallCountingEncoder()
+    custom_tokenizer: Final = {"type": "huggingface_tokenizer", "tokenizer": encoder}
+
+    counts: Final = tuple(token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT) for _ in range(2))
+
+    assert counts == (len(_MEMOIZED_TEXT), len(_MEMOIZED_TEXT))
+    assert encoder.calls == 2

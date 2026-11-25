@@ -3,8 +3,10 @@
 import datetime
 import json
 import logging
+import operator
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Container, Iterator, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -14,16 +16,31 @@ from openai.types.chat import ChatCompletionChunk
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
+    KeywordArguments,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
+    callable_of,
+    claude_subscription_usage,
+    concatenated,
+    dict_from_pairs,
     drop_params_env_flag,
-    drop_params_flag,
+    env_flag,
+    filter_internal_params,
+    float_of,
     get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
+    int_of,
+    iter_items,
+    joined,
+    json_contains,
+    json_loaded,
+    keyword_arguments,
+    length_of,
     map_finish_reason,
     normalize_drop_params,
+    only,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
     provider_reported_usage_cost,
@@ -31,9 +48,17 @@ from litellm.litellm_core_utils.core_helpers import (
     qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    require_attributes,
+    require_get,
     response_cost_in_hidden_params,
+    set_item,
     set_provider_response_headers_in_hidden_params,
+    spread,
+    subscript,
+    sum_of,
     unbind_budget_reservation_from_callbacks,
+    unpackable_mapping,
+    without,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
@@ -44,6 +69,58 @@ from litellm.types.utils import (
     StreamingChoices,
     TranscriptionResponse,
 )
+
+
+@pytest.mark.parametrize("prefix", ("", "llm_provider-"))
+@pytest.mark.parametrize(
+    "signals, expected_overage",
+    (
+        ({"status": "allowed"}, False),
+        ({"status": "allowed_warning", "overage-status": "allowed"}, False),
+        ({"status": "rejected", "overage-status": "allowed"}, True),
+        ({"status": "rejected", "overage-status": "allowed_warning"}, True),
+        ({"status": "allowed", "overage-in-use": "true"}, True),
+        ({"overage-in-use": "true"}, True),
+        ({"status": "rejected", "overage-status": "rejected"}, False),
+    ),
+)
+def test_claude_subscription_usage_reads_oauth_billing_signals(
+    prefix: str, signals: dict[str, str], expected_overage: bool
+) -> None:
+    usage: Final = claude_subscription_usage(
+        {
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {"litellm_metadata": {"used_client_oauth_token": True}},
+            "response_headers": {
+                f"{prefix}anthropic-ratelimit-unified-{key}": value
+                for key, value in signals.items()
+            },
+        }
+    )
+    assert usage == {
+        "is_overage": expected_overage,
+        "status": signals.get("status"),
+        "overage_status": signals.get("overage-status"),
+    }
+
+
+@pytest.mark.parametrize(
+    "provider, metadata, headers",
+    (
+        ("anthropic", {"used_client_oauth_token": True}, {}),
+        ("anthropic", {"used_client_oauth_token": True}, {"anthropic-ratelimit-unified-status": 123}),
+        ("anthropic", {}, {"anthropic-ratelimit-unified-status": "allowed"}),
+        ("anthropic", {"used_client_oauth_token": False}, {"anthropic-ratelimit-unified-status": "allowed"}),
+        ("bedrock", {"used_client_oauth_token": True}, {"anthropic-ratelimit-unified-status": "allowed"}),
+    ),
+)
+def test_claude_subscription_usage_requires_oauth_anthropic_and_valid_headers(provider, metadata, headers) -> None:
+    assert (
+        claude_subscription_usage(
+            {"custom_llm_provider": provider, "litellm_params": {"metadata": metadata}, "response_headers": headers}
+        )
+        is None
+    )
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -201,6 +278,27 @@ class TestGetOrCreateMetadataBucket:
         assert bucket is request_data["litellm_metadata"]
 
 
+def test_filter_internal_params_drops_only_the_mcp_handler_keys() -> None:
+    rest_of_the_call: Final = {
+        "api_key": "sk-test",
+        "guardrails": ["default"],
+        "metadata": {"team": "search"},
+        "stream_chunk_size": 64,
+        "temperature": 0.2,
+    }
+
+    filtered: Final = filter_internal_params(
+        {
+            **rest_of_the_call,
+            "_skip_mcp_handler": True,
+            "skip_mcp_handler": True,
+            "mcp_handler_context": {"server": "docs"},
+        }
+    )
+
+    assert filtered == rest_of_the_call
+
+
 def test_reconstruct_model_name_prefers_deployment_value():
     """Ensure deployment metadata wins when reconstructing the model name."""
 
@@ -265,6 +363,7 @@ class TestMapFinishReasonAnthropic:
             ("max_tokens", "length"),
             ("tool_use", "tool_calls"),
             ("compaction", "length"),
+            ("pause_turn", "length"),
             ("model_context_window_exceeded", "length"),
             ("content_filtered", "content_filter"),
         ],
@@ -317,6 +416,12 @@ class TestMapFinishReasonCohere:
 
     def test_error(self):
         assert map_finish_reason("ERROR") == "stop"
+
+    def test_tool_call(self):
+        assert map_finish_reason("TOOL_CALL") == "tool_calls"
+
+    def test_stop_sequence(self):
+        assert map_finish_reason("STOP_SEQUENCE") == "stop"
 
 
 class TestMapFinishReasonHuggingFace:
@@ -446,20 +551,6 @@ def test_normalize_drop_params(value, expected):
     assert normalize_drop_params(value) is expected
 
 
-@pytest.mark.parametrize("value, expected", [("true", True), ("off", False), (None, False)])
-def test_drop_params_flag_returns_a_bool_without_a_warning(value, expected, caplog):
-    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
-        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is expected
-    assert caplog.text == ""
-
-
-@pytest.mark.parametrize("value", ["temperature", "ture", 2])
-def test_drop_params_flag_treats_non_flag_values_as_off_with_a_warning(value, caplog):
-    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
-        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is False
-    assert f"LITELLM_DROP_PARAMS={value!r} is not a flag value, treating it as off" in caplog.text
-
-
 @pytest.mark.parametrize(
     "environ, expected",
     [
@@ -485,6 +576,32 @@ def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configure
         f"LITELLM_DROP_PARAMS={configured!r} is not a flag value, treating it as on. Set it to true or false"
         in caplog.text
     )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("", False), ("false", False), ("False", False), ("0", False), ("no", False), ("true", True), (" 1 ", True)],
+)
+def test_env_flag_parses_modify_params_as_a_bool(configured: str, expected: bool, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": configured}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is expected
+        )
+    assert caplog.text == ""
+
+
+def test_env_flag_treats_a_non_flag_value_as_on_with_a_warning(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": "enabled"}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is True
+        )
+    assert "LITELLM_MODIFY_PARAMS='enabled' is not a flag value, treating it as on" in caplog.text
+
+
+def test_env_flag_is_off_when_unset():
+    assert env_flag({}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test")) is False
 
 
 class TestIsExpectedClientError:
@@ -845,3 +962,256 @@ def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bil
     stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
     assert unreported.usage.cost == 0.0015
     assert billed_usage_cost(unreported, "openai") is None
+
+
+def test_subscript_reads_keys_and_indexes_and_rejects_values_without_item_access() -> None:
+    assert subscript({"role": "user"}, "role") == "user"
+    assert subscript(["system", "user"], 1) == "user"
+    with pytest.raises(TypeError, match="'int' object is not subscriptable"):
+        subscript(5, "role")
+
+
+class _IterOnly:
+    def __iter__(self) -> Iterator[object]:
+        return iter(("error",))
+
+
+class _GetItemOnly:
+    def __getitem__(self, index: int) -> object:
+        return ("error",)[index]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [{"error": 1}, {"data": 1}, ["error"], "an error", "", _IterOnly(), _GetItemOnly()],
+)
+def test_json_contains_answers_what_the_in_operator_answers(value: Container[object]) -> None:
+    assert json_contains(value, "error") is ("error" in value)
+
+
+@pytest.mark.parametrize("value", [5, 1.5, None, True, object()])
+def test_json_contains_raises_the_in_operators_own_error(value: Container[object]) -> None:
+    with pytest.raises(TypeError) as native:
+        _ = "error" in value
+    with pytest.raises(TypeError) as ours:
+        json_contains(value, "error")
+    assert str(ours.value) == str(native.value)
+
+
+_DATE: Final = datetime.date(2024, 1, 1)
+_MAPPING: Final = {"a": 1}
+
+
+def _outcome(operation: Callable[[], object]) -> tuple[object, ...]:
+    try:
+        returned: Final = operation()
+    except Exception as error:
+        return ("raised", type(error), str(error), getattr(error, "__notes__", None), getattr(error, "name", None))
+    return ("returned", type(returned), returned)
+
+
+def _spread_by_star(value: object) -> object:
+    return (*value,)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # the builtin under test
+
+
+def _unpacked_by_double_star(value: object) -> object:
+    return {**value}  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # the builtin under test
+
+
+def _called(value: object) -> object:
+    return value()  # pyright: ignore[reportCallIssue]  # the builtin under test
+
+
+def _called_with_unpacked(value: object, target: Callable[..., object]) -> object:
+    return target(**value)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # the builtin under test
+
+
+def _dict_of(value: object) -> object:
+    return dict[object, object](value)  # pyright: ignore[reportCallIssue, reportArgumentType]  # the builtin under test
+
+
+def _iterated_by_helper(value: object) -> object:
+    return tuple(iter_items(value))
+
+
+def _required_keys(value: object) -> object:
+    return require_attributes(value, KeywordArguments, "keys")
+
+
+@pytest.mark.parametrize(
+    ("ours", "builtin", "arguments"),
+    [
+        pytest.param(int_of, int, ("12",), id="int_of-str"),
+        pytest.param(int_of, int, (3.9,), id="int_of-float"),
+        pytest.param(int_of, int, (b"7",), id="int_of-bytes"),
+        pytest.param(int_of, int, (True,), id="int_of-bool"),
+        pytest.param(int_of, int, (_DATE,), id="int_of-date"),
+        pytest.param(int_of, int, (None,), id="int_of-none"),
+        pytest.param(int_of, int, ("x",), id="int_of-not-a-number"),
+        pytest.param(float_of, float, ("1.5",), id="float_of-str"),
+        pytest.param(float_of, float, (2,), id="float_of-int"),
+        pytest.param(float_of, float, (_DATE,), id="float_of-date"),
+        pytest.param(float_of, float, (None,), id="float_of-none"),
+        pytest.param(float_of, float, ("x",), id="float_of-not-a-number"),
+        pytest.param(length_of, len, ([1, 2],), id="length_of-list"),
+        pytest.param(length_of, len, ("abc",), id="length_of-str"),
+        pytest.param(length_of, len, (_DATE,), id="length_of-date"),
+        pytest.param(length_of, len, (5,), id="length_of-int"),
+        pytest.param(joined, str.join, (", ", ["a", "b"]), id="joined-list"),
+        pytest.param(joined, str.join, (", ", "ab"), id="joined-str"),
+        pytest.param(joined, str.join, (", ", _DATE), id="joined-date"),
+        pytest.param(joined, str.join, (", ", ["a", _DATE]), id="joined-date-item"),
+        pytest.param(json_loaded, json.loads, ('{"a": 1}',), id="json_loaded-str"),
+        pytest.param(json_loaded, json.loads, (b"[1]",), id="json_loaded-bytes"),
+        pytest.param(json_loaded, json.loads, (_DATE,), id="json_loaded-date"),
+        pytest.param(json_loaded, json.loads, ("{",), id="json_loaded-malformed"),
+        pytest.param(set_item, operator.setitem, (_DATE, "key", "value"), id="set_item-date"),
+        pytest.param(set_item, operator.setitem, ((), "key", "value"), id="set_item-tuple"),
+        pytest.param(set_item, operator.setitem, (list[object](), "key", "value"), id="set_item-list-with-a-str-key"),
+        pytest.param(sum_of, operator.add, (1, 2), id="sum_of-int"),
+        pytest.param(sum_of, operator.add, ("a", "b"), id="sum_of-str"),
+        pytest.param(sum_of, operator.add, (_DATE, 1), id="sum_of-date-left"),
+        pytest.param(sum_of, operator.add, (1, _DATE), id="sum_of-date-right"),
+        pytest.param(concatenated, operator.add, ("a", "b"), id="concatenated-str"),
+        pytest.param(concatenated, operator.add, ("a", _DATE), id="concatenated-date"),
+        pytest.param(concatenated, operator.add, ("a", 1), id="concatenated-int"),
+        pytest.param(spread, _spread_by_star, ([1, 2],), id="spread-list"),
+        pytest.param(spread, _spread_by_star, ("ab",), id="spread-str"),
+        pytest.param(spread, _spread_by_star, (_DATE,), id="spread-date"),
+        pytest.param(spread, _spread_by_star, (None,), id="spread-none"),
+        pytest.param(callable_of, _called, (_DATE,), id="callable_of-date"),
+        pytest.param(keyword_arguments, _called_with_unpacked, (_DATE, dict), id="keyword_arguments-date"),
+        pytest.param(keyword_arguments, _called_with_unpacked, ([("a", 1)], dict), id="keyword_arguments-pairs"),
+        pytest.param(unpackable_mapping, _unpacked_by_double_star, (_DATE,), id="unpackable_mapping-date"),
+        pytest.param(unpackable_mapping, _unpacked_by_double_star, ([("a", 1)],), id="unpackable_mapping-pairs"),
+        pytest.param(_iterated_by_helper, tuple, ([1, 2],), id="iter_items-list"),
+        pytest.param(_iterated_by_helper, tuple, ("ab",), id="iter_items-str"),
+        pytest.param(_iterated_by_helper, tuple, (_DATE,), id="iter_items-date"),
+        pytest.param(_iterated_by_helper, tuple, (5,), id="iter_items-int"),
+        pytest.param(subscript, operator.getitem, ({"a": 1}, "a"), id="subscript-key"),
+        pytest.param(subscript, operator.getitem, ("abc", slice(None, 2)), id="subscript-slice"),
+        pytest.param(subscript, operator.getitem, (_DATE, "a"), id="subscript-date"),
+        pytest.param(subscript, operator.getitem, (dict[str, object](), "missing"), id="subscript-missing-key"),
+        pytest.param(json_contains, operator.contains, (_DATE, "a"), id="json_contains-date"),
+        pytest.param(_required_keys, operator.attrgetter("keys"), (_DATE,), id="require_attributes-date"),
+        pytest.param(require_get, operator.attrgetter("get"), (_DATE,), id="require_get-date"),
+        pytest.param(require_get, operator.attrgetter("get"), (list[object](),), id="require_get-list"),
+    ],
+)
+def test_helper_returns_or_raises_exactly_what_the_builtin_operation_does(
+    ours: Callable[..., object], builtin: Callable[..., object], arguments: tuple[object, ...]
+) -> None:
+    assert _outcome(lambda: ours(*arguments)) == _outcome(lambda: builtin(*arguments))
+
+
+def test_set_item_assigns_the_key_in_place() -> None:
+    container: Final[dict[str, object]] = {"kept": 1}
+
+    set_item(container, "key", "value")
+
+    assert container == {"kept": 1, "key": "value"}
+
+
+def _keyword_arguments_for_a_dict(value: object) -> object:
+    return keyword_arguments(value, dict[str, object])
+
+
+class _ServesEveryAttribute:
+    def __getattr__(self, name: str) -> object:
+        return name
+
+
+@pytest.mark.parametrize(
+    "narrow",
+    [
+        pytest.param(_required_keys, id="require_attributes"),
+        pytest.param(_keyword_arguments_for_a_dict, id="keyword_arguments"),
+        pytest.param(unpackable_mapping, id="unpackable_mapping"),
+        pytest.param(require_get, id="require_get"),
+    ],
+)
+@pytest.mark.parametrize("value", [_MAPPING, _ServesEveryAttribute()], ids=["dict", "served-by-getattr"])
+def test_narrowing_helpers_return_a_value_that_has_the_attributes_unchanged(
+    narrow: Callable[[object], object], value: object
+) -> None:
+    assert narrow(value) is value
+
+
+def test_callable_of_returns_a_callable_unchanged() -> None:
+    assert callable_of(len) is len
+
+
+class _AnswersEveryOtherLookup:
+    def __init__(self) -> None:
+        self.lookups = 0
+
+    def __getattr__(self, name: str) -> object:
+        self.lookups += 1
+        if self.lookups % 2:
+            raise AttributeError(name)
+        return name
+
+
+def test_require_attributes_raises_instead_of_retrying_when_an_attribute_answers_only_every_other_lookup() -> None:
+    flickering: Final = _AnswersEveryOtherLookup()
+
+    with pytest.raises(AttributeError):
+        _required_keys(flickering)
+
+    assert flickering.lookups == 2
+
+
+@pytest.mark.parametrize("value", [_DATE, [("a", 1)], None], ids=["date", "pairs", "none"])
+def test_keyword_arguments_never_calls_the_target_with_a_value_that_is_not_a_mapping(value: object) -> None:
+    calls: Final[list[object]] = []
+
+    with pytest.raises(TypeError, match=r"argument after \*\* must be a mapping"):
+        keyword_arguments(value, calls.append)
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"ab": 1}, id="dict-with-a-two-letter-key"),
+        pytest.param(MappingProxyType({"a": 1}), id="mappingproxy"),
+        pytest.param([("a", 1), ("b", 2)], id="list-of-pairs"),
+        pytest.param(["ab"], id="two-letter-string-element"),
+        pytest.param([("a", "b", "c")], id="element-of-the-wrong-length"),
+        pytest.param([_DATE], id="element-that-cannot-be-iterated"),
+        pytest.param(_DATE, id="date"),
+        pytest.param(5, id="int"),
+    ],
+)
+def test_dict_from_pairs_builds_or_rejects_exactly_what_dict_does(value: object) -> None:
+    assert _outcome(lambda: dict_from_pairs(value)) == _outcome(lambda: _dict_of(value))
+
+
+def test_without_drops_the_named_keys_and_keeps_the_rest_in_order() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    assert list(without(source, "b", "d").items()) == [("a", 1), ("c", 3)]
+    assert without(source, "missing") == source
+    assert without(source) == source
+
+
+def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2}
+
+    result: Final = without(source, "a")
+    result["c"] = 3
+
+    assert source == {"a": 1, "b": 2}
+    assert result == {"b": 2, "c": 3}
+
+
+def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    result: Final = only(source, "d", "b", "missing")
+    result["e"] = 5
+
+    assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
+    assert only(source) == {}
+    assert source == {"a": 1, "b": 2, "c": 3, "d": 4}

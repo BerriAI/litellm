@@ -89,7 +89,7 @@ _NAMES: Final = MappingProxyType(
         "bedrock/*": "bedrock/*",
     }
 )
-_MODEL_INFO: Final = MappingProxyType({"arn-yaml-flagged": {"supports_prompt_cache_breakpoint": False}})
+_MODEL_INFO: Final = MappingProxyType({"arn-yaml-flagged": {"supports_bedrock_converse_cache_point": False}})
 _INJECTION: Final = MappingProxyType(
     {
         "kimi-inject-message": [{"location": "message", "role": "system"}],
@@ -456,7 +456,7 @@ def _inner_response_id(identity: str) -> str:
 
 def _completed_response_id(events: Iterable[dict[str, JsonValue]]) -> str:
     (completed,) = tuple(event for event in events if event.get("type") == "response.completed")
-    return _inner_response_id(str(_JSON.validate_python(completed["response"])["id"]))
+    return str(_JSON.validate_python(completed["response"])["id"])
 
 
 def _chat_text(body: Mapping[str, JsonValue]) -> str:
@@ -911,7 +911,7 @@ async def test_k06_openai_sdk_async_responses_stream_reaches_kimi_without_a_cach
     received: Final = _only_received(rig.wire)
     assert received.model == _KIMI_US and received.streaming, received
     assert received.cache_points == 0, received.body
-    _success_row(_inner_response_id(completed[0].id))
+    _success_row(completed[0].id)
 
 
 _LOCATIONS: Final = (
@@ -1177,7 +1177,7 @@ def test_m05_to_m07_a_deployment_flag_false_on_an_arn_strips_cache_points_on_eve
     arn: Final = _arn("flagged")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{route}{arn}", {"supports_prompt_cache_breakpoint": False}
+            gateway, scenario, wire, f"bedrock/{route}{arn}", {"supports_bedrock_converse_cache_point": False}
         )
         expected_model: Final = _CONVERSE_LIKE if route == "converse_like/" else arn
         for endpoint in ("chat", "messages", "responses"):
@@ -1204,7 +1204,7 @@ def test_m08_an_arn_without_the_flag_still_gets_cache_points(gateway: Gateway) -
 def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: Gateway) -> None:
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{_KIMI_BASE}", {"supports_prompt_cache_breakpoint": True}
+            gateway, scenario, wire, f"bedrock/{_KIMI_BASE}", {"supports_bedrock_converse_cache_point": True}
         )
         outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(outcome)
@@ -1217,7 +1217,7 @@ def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: 
 def test_m13_a_null_deployment_flag_on_kimi_falls_back_to_the_cost_map_row(gateway: Gateway) -> None:
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{_KIMI_US}", {"supports_prompt_cache_breakpoint": None}
+            gateway, scenario, wire, f"bedrock/{_KIMI_US}", {"supports_bedrock_converse_cache_point": None}
         )
         outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(outcome)
@@ -1243,7 +1243,9 @@ def test_s01_to_s06_an_odd_typed_flag_is_read_as_false_never_as_true(
 ) -> None:
     arn: Final = _arn(label)
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
-        name: Final = _deployment(gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": flag})
+        name: Final = _deployment(
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": flag}
+        )
         outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(outcome)
         assert received.cache_points == 0, (label, received.body)
@@ -1251,17 +1253,19 @@ def test_s01_to_s06_an_odd_typed_flag_is_read_as_false_never_as_true(
 
 
 @pytest.mark.timeout(600)
-def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_it_in_place(gateway: Gateway) -> None:
+def test_s10_s11_two_deployments_of_one_arn_keep_their_own_flags_and_a_delete_changes_neither(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("shared")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         flagged: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}, cleanup=False
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": False}, cleanup=False
         )
         plain: Final = _deployment(gateway, scenario, wire, f"bedrock/{arn}")
-        for name in (flagged, plain):
+        for name, cache_points in ((flagged, 0), (plain, 2)):
             outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
             _assert_answered(outcome)
-            assert received.cache_points == 0, (name, received.body)
+            assert received.cache_points == cache_points, (name, received.body)
             _success_row(outcome.response_id)
         flagged_identity: Final = _model_id(flagged)
         gateway.post("/model/delete", {"id": flagged_identity})
@@ -1276,7 +1280,7 @@ def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_i
         wire.drain()
         after, after_received = _observe_at(gateway, wire, "chat", _chat_body(plain, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(after)
-        assert after_received.cache_points == 0, after_received.body
+        assert after_received.cache_points == 2, after_received.body
         _success_row(after.response_id)
 
 
@@ -1289,7 +1293,7 @@ def _stored_flag(identity: str) -> JsonValue:
     (row,) = read_rows('SELECT model_info FROM "LiteLLM_ProxyModelTable" WHERE model_id=%s', (identity,))
     stored: Final = row["model_info"]
     info: Final = _JSON.validate_python(stored if isinstance(stored, dict) else json.loads(str(stored)))
-    return info.get("supports_prompt_cache_breakpoint")
+    return info.get("supports_bedrock_converse_cache_point")
 
 
 def _six_cache_point_counts(gateway: Gateway, wire: Wire, name: str) -> tuple[int, ...]:
@@ -1304,14 +1308,14 @@ def test_x01_flipping_the_flag_to_true_through_a_patch_update_turns_cache_points
     arn: Final = _arn("flip")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": False}
         )
         before, before_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(before)
         assert before_received.cache_points == 0, before_received.body
         identity: Final = _model_id(name)
         patched: Final = gateway.request(
-            "PATCH", f"/model/{identity}/update", {"model_info": {"supports_prompt_cache_breakpoint": True}}
+            "PATCH", f"/model/{identity}/update", {"model_info": {"supports_bedrock_converse_cache_point": True}}
         )
         assert patched.status_code == 200, patched.text
         assert _stored_flag(identity) is True
@@ -1331,7 +1335,7 @@ def test_x06_flipping_the_flag_to_true_through_the_legacy_post_update_turns_cach
     arn: Final = _arn("legacy")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": False}
         )
         before, before_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(before)
@@ -1343,7 +1347,7 @@ def test_x06_flipping_the_flag_to_true_through_the_legacy_post_update_turns_cach
             {
                 "model_name": name,
                 "litellm_params": {"model": f"bedrock/{arn}", "api_base": wire.url, "num_retries": 0, **_AWS},
-                "model_info": {"id": identity, "supports_prompt_cache_breakpoint": True},
+                "model_info": {"id": identity, "supports_bedrock_converse_cache_point": True},
             },
         )
         assert updated.status_code == 200, updated.text
@@ -1547,7 +1551,7 @@ def test_c03_a_restart_re_registers_a_stored_deployment_flag_from_the_database(
                 scenario,
                 wire,
                 f"bedrock/{arn}",
-                {"supports_prompt_cache_breakpoint": False},
+                {"supports_bedrock_converse_cache_point": False},
                 cleanup=False,
             )
             before, before_received = _observe_at(

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from itertools import chain, groupby
 from typing import Final, TypedDict
 
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
@@ -40,6 +40,7 @@ class WindowSpendTransaction(TypedDict):
     window_start: ReadOnly[str]
     spend: ReadOnly[float]
     started_at: ReadOnly[str | None]
+    reset_at: ReadOnly[NotRequired[str]]
 
 
 class WindowSpendWirePayload(WindowSpendTransaction):
@@ -59,15 +60,7 @@ class WindowSpendWirePayload(WindowSpendTransaction):
 
 
 def to_wire_payload(transaction: WindowSpendTransaction) -> WindowSpendWirePayload:
-    return WindowSpendWirePayload(
-        entity_type=transaction["entity_type"],
-        entity_id=transaction["entity_id"],
-        window_duration=transaction["window_duration"],
-        window_start=transaction["window_start"],
-        spend=transaction["spend"],
-        started_at=transaction.get("started_at"),
-        request_ids=(),
-    )
+    return {**transaction, "started_at": transaction.get("started_at"), "request_ids": ()}
 
 
 def to_naive_utc(value: datetime) -> datetime:
@@ -95,6 +88,7 @@ def build_window_spend_transaction(
     window_start: datetime,
     spend: float,
     started_at: datetime | None = None,
+    reset_at: datetime | str | None = None,
 ) -> WindowSpendTransaction:
     return WindowSpendTransaction(
         entity_type=entity_type,
@@ -105,6 +99,7 @@ def build_window_spend_transaction(
         started_at=None
         if started_at is None
         else to_naive_utc(started_at.astimezone(timezone.utc)).isoformat(timespec="microseconds"),
+        **({"reset_at": reset_at.isoformat() if isinstance(reset_at, datetime) else reset_at} if reset_at else {}),
     )
 
 
@@ -115,7 +110,8 @@ def _merge_window_spend_transactions(
     started_ats: Final = tuple(
         started_at for payload in payloads if (started_at := payload.get("started_at")) is not None
     )
-    return WindowSpendTransaction(
+    reset: Final = next((value for payload in payloads if (value := payload.get("reset_at")) is not None), None)
+    merged: Final = WindowSpendTransaction(
         entity_type=first["entity_type"],
         entity_id=first["entity_id"],
         window_duration=first["window_duration"],
@@ -123,6 +119,7 @@ def _merge_window_spend_transactions(
         spend=math.fsum(payload["spend"] for payload in payloads),
         started_at=min(started_ats) if started_ats else None,
     )
+    return {**merged, "reset_at": reset} if reset is not None else merged
 
 
 class WindowSpendUpdateQueue(BaseUpdateQueue):
@@ -167,7 +164,7 @@ class WindowSpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> tuple[WindowSpendTransaction, ...]:
         """Drain the queue and return the increments aggregated per window."""
-        updates: Final = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final[list[tuple[WindowSpendTransaction, ...]]] = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d budget window spend update batches from in-memory queue",

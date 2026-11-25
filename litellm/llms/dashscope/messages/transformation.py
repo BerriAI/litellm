@@ -2,7 +2,8 @@
 DashScope Anthropic-compatible Messages transformation config.
 """
 
-from typing import ClassVar, Final
+from collections.abc import Sequence
+from typing import Final
 
 import litellm
 from litellm.exceptions import AuthenticationError
@@ -24,8 +25,6 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     ``{origin}/apps/anthropic`` for every DashScope domain, including
     ``dashscope.aliyuncs.com`` and ``{workspace}.{region}.maas.aliyuncs.com``.
     """
-
-    _workload_identity_eligible: ClassVar[bool] = False
 
     @property
     def custom_llm_provider(self) -> str | None:
@@ -56,7 +55,7 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],  # mutable-ok: mirrors the legacy base override signature
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the legacy base override signature
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         litellm_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,

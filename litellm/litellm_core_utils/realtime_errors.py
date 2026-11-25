@@ -23,6 +23,17 @@ class _ClientWebSocket(Protocol):
     async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
 
 
+_HANDSHAKE_REFUSAL_PREFIX: Final = "Upstream realtime handshake rejected with HTTP "
+
+
+def refused_handshake_status(error_message: object) -> int | None:
+    """The HTTP status the provider refused the WebSocket handshake with, read from the error event's message."""
+    if not isinstance(error_message, str) or not error_message.startswith(_HANDSHAKE_REFUSAL_PREFIX):
+        return None
+    status: Final = error_message.removeprefix(_HANDSHAKE_REFUSAL_PREFIX)
+    return int(status) if status.isdecimal() else None
+
+
 def realtime_error_event(message: str, error_type: str) -> str:
     detail: Final[RealtimeErrorDetail] = {"type": error_type, "message": message}
     event: Final[RealtimeErrorEvent] = {"type": "error", "error": detail}
@@ -60,7 +71,7 @@ def upstream_handshake_close_code(status_code: int) -> int:
 
 
 async def close_after_upstream_handshake_refusal(websocket: _ClientWebSocket, status_code: int) -> None:
-    message: Final = f"Upstream realtime handshake rejected with HTTP {status_code}"
+    message: Final = f"{_HANDSHAKE_REFUSAL_PREFIX}{status_code}"
     try:
         await websocket.send_text(realtime_error_event(message, error_type="server_error"))
     except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below

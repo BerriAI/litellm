@@ -21,6 +21,7 @@ The API uses these endpoints:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -74,7 +75,7 @@ class AzureAIAgentsConfig(BaseConfig):
     MAX_POLL_ATTEMPTS = 60
     POLL_INTERVAL_SECONDS = 1.0
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     @staticmethod
@@ -127,11 +128,11 @@ class AzureAIAgentsConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to Azure Agents params.
         """
@@ -146,8 +147,8 @@ class AzureAIAgentsConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -195,10 +196,10 @@ class AzureAIAgentsConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request for Azure Agents.
 
@@ -208,7 +209,7 @@ class AzureAIAgentsConfig(BaseConfig):
         agent_id: Final = self._get_agent_id(model, optional_params)
 
         # Convert messages to a format we can use
-        converted_messages: Final = []
+        converted_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -242,14 +243,14 @@ class AzureAIAgentsConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate and set up environment for Azure Foundry Agents requests.
 
@@ -267,7 +268,9 @@ class AzureAIAgentsConfig(BaseConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return AzureAIAgentsError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
@@ -299,10 +302,10 @@ class AzureAIAgentsConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -316,14 +319,14 @@ class AzureAIAgentsConfig(BaseConfig):
     @staticmethod
     def completion(
         model: str,
-        messages: list,
+        messages: list[dict[str, object]],
         api_base: str,
         api_key: str | None,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
-        timeout: float | Any,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,
         headers: dict | None = None,

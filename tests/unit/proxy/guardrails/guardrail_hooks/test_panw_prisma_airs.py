@@ -2370,6 +2370,70 @@ class TestPanwAirsStreamingBytesScan:
                 assert "guardrail_violation" in error_data["error"]["type"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "padding",
+        [b'"pad": ' + b"9" * 5000, b'"pad": ' + b"[" * 100_000 + b"]" * 100_000],
+        ids=["huge-number", "deep-nesting"],
+    )
+    async def test_streaming_bytes_blocks_a_text_event_it_cannot_decode(self, padding: bytes):
+        handler = make_handler()
+        hidden_event = (
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"text_delta","text":"4111 1111 1111 1111"},' + padding + b"}\n\n"
+        )
+        sse_bytes = [
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+            hidden_event,
+        ]
+
+        async def mock_response_iter():
+            for chunk in sse_bytes:
+                yield chunk
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+            chunks_received: Final[list[object]] = [
+                chunk
+                async for chunk in handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    response=mock_response_iter(),
+                    request_data={"messages": [{"role": "user", "content": "test"}], "model": "claude-3-5-sonnet"},
+                )
+            ]
+
+        assert len(chunks_received) == 1
+        error_event: Final = chunks_received[0]
+        assert isinstance(error_event, str)
+        assert "4111" not in error_event
+        assert json.loads(error_event.removeprefix("data: "))["error"]["type"] == "guardrail_scan_error"
+
+    @pytest.mark.asyncio
+    async def test_streaming_bytes_skips_a_deeply_nested_array_line_and_scans_the_text(self):
+        handler = make_handler()
+        sse_bytes: Final = [
+            b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+        ]
+
+        async def mock_response_iter():
+            for chunk in sse_bytes:
+                yield chunk
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+            chunks_received: Final[list[object]] = [
+                chunk
+                async for chunk in handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    response=mock_response_iter(),
+                    request_data={"messages": [{"role": "user", "content": "test"}], "model": "claude-3-5-sonnet"},
+                )
+            ]
+
+        assert chunks_received == sse_bytes
+        assert mock_api.call_args.kwargs["content"] == "Hello"
+
+    @pytest.mark.asyncio
     async def test_bytes_streaming_success_adds_observability_header(self):
         """Test that raw-streaming success path calls both observability functions."""
         handler = make_handler()
@@ -6511,6 +6575,91 @@ class TestPanwAirsToolCallBlockMaskedDataRouting:
 
         assert error["prompt_masked_data"] == {"data": self.MODEL_ARGS}
         assert error["scan_id"] == "scan-tool-2"
+
+
+class TestPanwAirsServerToolCalls:
+    SERVER_TOOL_CALL: Final = {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+    }
+
+    @classmethod
+    def _response(cls, *client_tool_calls: ChatCompletionMessageToolCall) -> ModelResponse:
+        return ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=list(client_tool_calls) or None,
+                        provider_specific_fields={"server_tool_calls": [copy.deepcopy(cls.SERVER_TOOL_CALL)]},
+                    ),
+                )
+            ],
+            model="claude-opus-4-1",
+        )
+
+    @staticmethod
+    def _airs(scan_result: Mapping[str, object]) -> tuple[PanwPrismaAirsHandler, MagicMock]:
+        transport: Final = MagicMock(side_effect=lambda request: httpx.Response(200, json=scan_result))
+        handler: Final = make_handler(
+            mask_response_content=True,
+            http_client=AsyncHTTPHandler(transport=httpx.MockTransport(transport)),
+        )
+        return handler, transport
+
+    @pytest.mark.asyncio
+    async def test_post_call_scan_sends_server_tool_call_query_to_airs(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        handler, transport = self._airs({"action": "allow", "category": "benign", "scan_id": "s1"})
+        response: Final = self._response(
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(name="get_weather", arguments='{"city": "Paris"}'),
+            )
+        )
+
+        await handler.async_post_call_success_hook(
+            data={"model": "claude-opus-4-1", "litellm_call_id": "call-srv", "metadata": {}},
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+
+        sent_contents: Final = [json.loads(call.args[0].content)["contents"] for call in transport.call_args_list]
+        assert sent_contents == [[{"response": '{"query": "persimmon"} {"city": "Paris"}'}]]
+
+    @pytest.mark.asyncio
+    async def test_post_call_masking_rewrites_server_tool_call_arguments(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        masked: Final = '{"query": "*********"}'
+        handler, _ = self._airs(
+            {
+                "action": "block",
+                "category": "sensitive_data",
+                "scan_id": "s1",
+                "response_masked_data": {"data": masked},
+            }
+        )
+
+        result: Final = await handler.async_post_call_success_hook(
+            data={"model": "claude-opus-4-1", "litellm_call_id": "call-srv-mask", "metadata": {}},
+            user_api_key_dict=user_api_key_dict,
+            response=self._response(),
+        )
+
+        message: Final = result.choices[0].message
+        assert message.provider_specific_fields == {
+            "server_tool_calls": [
+                {"id": "srvtoolu_01", "type": "function", "function": {"name": "web_search", "arguments": masked}}
+            ]
+        }
+        assert message.tool_calls is None
 
 
 if __name__ == "__main__":

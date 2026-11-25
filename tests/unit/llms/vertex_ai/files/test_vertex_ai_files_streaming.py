@@ -288,7 +288,7 @@ def _tts_batch_row(**body_extra: object) -> bytes:
     return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions", "body": body}).encode()
 
 
-def _upload_tts_batch_row(row: bytes, litellm_params: dict[str, object]) -> bytes:
+def _upload_batch_row(row: bytes, litellm_params: dict[str, object]) -> bytes:
     request: Final[CreateFileRequest] = {"file": ("batch.jsonl", row + b"\n", "application/jsonl"), "purpose": "batch"}
     return _join_upload_body(
         VertexAIFilesConfig().transform_create_file_request(
@@ -300,7 +300,7 @@ def _upload_tts_batch_row(row: bytes, litellm_params: dict[str, object]) -> byte
 class TestBatchRowUnknownVoiceKeys:
     def test_unknown_voice_keys_are_a_400_without_drop_params(self) -> None:
         with pytest.raises(VertexAIError, match="voice keys style") as exc_info:
-            _upload_tts_batch_row(_tts_batch_row(), {})
+            _upload_batch_row(_tts_batch_row(), {})
         assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize(
@@ -311,11 +311,62 @@ class TestBatchRowUnknownVoiceKeys:
     def test_drop_params_on_the_row_or_deployment_drops_unknown_voice_keys(
         self, row: bytes, litellm_params: dict[str, object]
     ) -> None:
-        uploaded: Final = json.loads(_upload_tts_batch_row(row, litellm_params))
+        uploaded: Final = json.loads(_upload_batch_row(row, litellm_params))
 
         assert uploaded["request"]["generationConfig"]["speechConfig"] == {
             "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
         }
+
+
+def _chat_batch_row(**body_extra: object) -> bytes:
+    body: Final = {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "Say hi"}], **body_extra}
+    return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions", "body": body}).encode()
+
+
+def _responses_batch_row(**body_extra: object) -> bytes:
+    body: Final = {"model": "gemini-2.5-flash", "input": "Say hi", **body_extra}
+    return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/responses", "body": body}).encode()
+
+
+class TestBatchRowServiceTier:
+    @pytest.mark.parametrize("row_builder", [_chat_batch_row, _responses_batch_row], ids=["chat", "responses"])
+    @pytest.mark.parametrize("service_tier", ["priority", "flex", "SERVICE_TIER_FLEX"])
+    def test_a_sent_tier_is_a_400_without_drop_params(
+        self, row_builder: Callable[..., bytes], service_tier: str
+    ) -> None:
+        with pytest.raises(VertexAIError, match="do not support `service_tier`") as exc_info:
+            _upload_batch_row(row_builder(service_tier=service_tier), {})
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        "row, litellm_params",
+        [
+            (_chat_batch_row(service_tier="priority", drop_params=True), {}),
+            (_chat_batch_row(service_tier="priority"), {"drop_params": True}),
+            (_responses_batch_row(service_tier="priority", drop_params=True), {}),
+            (_responses_batch_row(service_tier="priority", drop_params=None), {"drop_params": True}),
+        ],
+        ids=["row", "deployment", "responses-row", "responses-row-null"],
+    )
+    def test_drop_params_on_the_row_or_deployment_uploads_the_row_without_a_tier(
+        self, row: bytes, litellm_params: dict[str, object]
+    ) -> None:
+        uploaded: Final = json.loads(_upload_batch_row(row, litellm_params))
+
+        assert "serviceTier" not in uploaded["request"]
+        assert uploaded["request"]["contents"] == [{"role": "user", "parts": [{"text": "Say hi"}]}]
+
+    @pytest.mark.parametrize("row_builder", [_chat_batch_row, _responses_batch_row], ids=["chat", "responses"])
+    def test_drop_params_false_on_the_row_wins_over_the_deployment(self, row_builder: Callable[..., bytes]) -> None:
+        with pytest.raises(VertexAIError, match="do not support `service_tier`"):
+            _upload_batch_row(row_builder(service_tier="priority", drop_params=False), {"drop_params": True})
+
+    @pytest.mark.parametrize("service_tier", ["auto", "default", "standard", "SERVICE_TIER_STANDARD"])
+    def test_a_tier_without_a_vertex_header_uploads_the_row(self, service_tier: str) -> None:
+        uploaded: Final = json.loads(_upload_batch_row(_chat_batch_row(service_tier=service_tier), {}))
+
+        assert "serviceTier" not in uploaded["request"]
+        assert uploaded["request"]["contents"] == [{"role": "user", "parts": [{"text": "Say hi"}]}]
 
 
 class TestStreamingLaziness:

@@ -11,12 +11,14 @@ Endpoint
 Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 """
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Protocol, runtime_checkable
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,6 +30,19 @@ from litellm.types.utils import EmbeddingResponse, Usage
 from ..common_utils import DashScopeError, resolve_dashscope_openai_api_base
 
 DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _subscript(value: object, key: str) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -66,11 +81,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if v is None:
@@ -95,14 +110,14 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
@@ -114,8 +129,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return ensure_api_route(self._resolve_embedding_api_base(api_base), "embeddings")
@@ -124,10 +139,10 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
-        data: Final[dict] = {
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
+        data: Final[dict[str, object]] = {
             "model": model,
             "input": input,
         }
@@ -144,12 +159,12 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise DashScopeError(
                 status_code=raw_response.status_code,
@@ -163,8 +178,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             original_response=response_json,
         )
 
-        if "error" in response_json:
-            error: Final[object] = response_json["error"]
+        if json_contains(response_json, "error"):
+            error: Final = _subscript(response_json, "error")
             message: Final = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise DashScopeError(
                 status_code=raw_response.status_code,

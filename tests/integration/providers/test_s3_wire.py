@@ -37,13 +37,25 @@ def test_sigv4_verifier_matches_published_put_and_rejects_corruption() -> None:
 
 
 @pytest.mark.covers("other.provider_wire.s3.sync_async_reserved_keys_are_signed_and_accepted")
-async def test_s3_sync_and_async_uploads_pass_independent_wire_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_s3_sync_and_async_uploads_pass_independent_wire_verification() -> None:
     from litellm.integrations.s3_v2 import S3Logger
-    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+    from litellm.types.utils import StandardBatchLineItem, StandardBatchLineItemMetadata, StandardBatchLineItemsPayload
 
-    monkeypatch.setattr("botocore.auth.get_current_datetime", lambda: datetime(2026, 9, 14))
-    payload: Final = {"id": "synthetic-event", "content": "synthetic snow 雪"}
+    metadata: Final = StandardBatchLineItemMetadata(
+        user_api_key_hash=None, user_api_key_alias=None, user_api_key_team_id=None,
+        user_api_key_team_alias=None, user_api_key_user_id=None, user_api_key_org_id=None,
+    )
+    lines: Final = (
+        StandardBatchLineItem(
+            batch_id="synthetic-batch", custom_id="synthetic-event", status="success",
+            request={"content": "synthetic snow 雪"}, response=None, usage=None, response_cost=0.0,
+            model="synthetic-model", custom_llm_provider=None, metadata=metadata,
+        ),
+    )
     expected_path = ""
+
+    def scope_of(request: Request) -> str:
+        return f"{request.headers.get('x-amz-date', '')[:8]}/us-east-1/s3/aws4_request"
 
     def verify(request: Request) -> Reply:
         if request.method != "PUT" or request.target != expected_path:
@@ -53,8 +65,8 @@ async def test_s3_sync_and_async_uploads_pass_independent_wire_verification(monk
             assert authorization.startswith("AWS4-HMAC-SHA256 ")
             fields: Final = dict(part.split("=", 1) for part in authorization.removeprefix("AWS4-HMAC-SHA256 ").split(", "))
             access, scope = fields["Credential"].split("/", 1)
-            assert access == ACCESS and scope == "20260914/us-east-1/s3/aws4_request"
-            assert request.headers["x-amz-date"] == "20260914T000000Z"
+            assert access == ACCESS and scope == scope_of(request)
+            assert datetime.strptime(request.headers["x-amz-date"], "%Y%m%dT%H%M%SZ")
             signed: Final = fields["SignedHeaders"].split(";")
             assert signed == sorted(set(signed))
             assert {"host", "content-md5", "x-amz-date"}.issubset(signed)
@@ -69,40 +81,37 @@ async def test_s3_sync_and_async_uploads_pass_independent_wire_verification(monk
     with wire_server(verify) as wire:
         prior: Final = asyncio.all_tasks()
         logger: Final = S3Logger(s3_bucket_name="integration-bucket", s3_region_name="us-east-1", s3_endpoint_url=wire.url,
-                                s3_aws_access_key_id=ACCESS, s3_aws_secret_access_key=SECRET, s3_callback_params_override={})
-        owned: Final = {task for task in asyncio.all_tasks() - prior if task.get_coro().__qualname__ == "CustomBatchLogger.periodic_flush"}
-        assert len(owned) == 1
+                                s3_aws_access_key_id=ACCESS, s3_aws_secret_access_key=SECRET, s3_callback_params_override={},
+                                s3_path="a=b+c/d e/雪")
+        owned: Final = asyncio.all_tasks() - prior
+        assert owned == {logger.periodic_flush_task}
         try:
-            for mode in ("sync", "async"):
-                for key in ("plain.json", "a=b+c/d e/雪.json", "percent%2Fplus+.json"):
-                    expected_path = encoded_path(f"/integration-bucket/{key}")
-                    element: Final = s3BatchLoggingElement(payload=payload, s3_object_key=key, s3_object_download_filename="event.json")
-                    if mode == "sync":
-                        await asyncio.to_thread(logger.upload_data_to_s3, element)
-                    else:
-                        await logger.async_upload_data_to_s3(element)
-                    requests: Final = wire.drain()
-                    assert len(requests) == 1, "Upload must be accepted on its first actual PUT"
-                    request: Final = requests[0]
-                    assert request.target == expected_path
-                    assert json.loads(request.body) == payload
-                    assert verify(request).status == 200
-                    with httpx.Client(timeout=5, trust_env=False) as client:
-                        corrupt: Final = {**request.headers, "authorization": request.headers["authorization"][:-1] + ("0" if request.headers["authorization"][-1] != "0" else "1")}
-                        assert client.put(wire.url + expected_path, content=request.body, headers=corrupt).status_code == 403
-                        assert client.put(wire.url + expected_path + "-wrong", content=request.body, headers=request.headers).status_code == 403
-                        assert client.put(wire.url + expected_path, content=request.body + b" ", headers={name: value for name, value in request.headers.items() if name != "content-length"}).status_code == 403
-                        fields: Final = dict(part.split("=", 1) for part in request.headers["authorization"].removeprefix("AWS4-HMAC-SHA256 ").split(", "))
-                        for signed, scope, md5 in (
-                            (fields["SignedHeaders"].replace("host;", ""), "20260914/us-east-1/s3/aws4_request", request.headers["content-md5"]),
-                            (fields["SignedHeaders"], "20260914/us-west-2/s3/aws4_request", request.headers["content-md5"]),
-                            (fields["SignedHeaders"], "20260914/us-east-1/s3/aws4_request", "AAAAAAAAAAAAAAAAAAAAAA=="),
-                        ):
-                            candidate_headers: Final = {**request.headers, "content-md5": md5}
-                            digest: Final = signature("PUT", request.target, candidate_headers, signed, request.body, SECRET, scope)[1]
-                            candidate_headers["authorization"] = f"AWS4-HMAC-SHA256 Credential={ACCESS}/{scope}, SignedHeaders={signed}, Signature={digest}"
-                            assert client.put(wire.url + expected_path, content=request.body, headers=candidate_headers).status_code == 403
-                    assert len(wire.drain()) == 6
+            for batch_id in ("plain", "a=b+c d e", "percent%2Fplus+"):
+                expected_path = encoded_path(f"/integration-bucket/a=b+c/d e/雪/batch_line_items/2026-09-14/{batch_id}/part-00001.jsonl")
+                await logger.async_log_batch_line_items(StandardBatchLineItemsPayload(batch_id=batch_id, finished_at=1789344000, part=1, lines=lines))
+                requests: Final = wire.drain()
+                assert len(requests) == 1, "Upload must be accepted on its first actual PUT"
+                request: Final = requests[0]
+                assert request.target == expected_path
+                assert tuple(json.loads(line) for line in request.body.decode().splitlines()) == lines
+                assert verify(request).status == 200
+                day: Final = scope_of(request).split("/", 1)[0]
+                with httpx.Client(timeout=5, trust_env=False) as client:
+                    corrupt: Final = {**request.headers, "authorization": request.headers["authorization"][:-1] + ("0" if request.headers["authorization"][-1] != "0" else "1")}
+                    assert client.put(wire.url + expected_path, content=request.body, headers=corrupt).status_code == 403
+                    assert client.put(wire.url + expected_path + "-wrong", content=request.body, headers=request.headers).status_code == 403
+                    assert client.put(wire.url + expected_path, content=request.body + b" ", headers={name: value for name, value in request.headers.items() if name != "content-length"}).status_code == 403
+                    fields: Final = dict(part.split("=", 1) for part in request.headers["authorization"].removeprefix("AWS4-HMAC-SHA256 ").split(", "))
+                    for signed, scope, md5 in (
+                        (fields["SignedHeaders"].replace("host;", ""), f"{day}/us-east-1/s3/aws4_request", request.headers["content-md5"]),
+                        (fields["SignedHeaders"], f"{day}/us-west-2/s3/aws4_request", request.headers["content-md5"]),
+                        (fields["SignedHeaders"], f"{day}/us-east-1/s3/aws4_request", "AAAAAAAAAAAAAAAAAAAAAA=="),
+                    ):
+                        candidate_headers: Final = {**request.headers, "content-md5": md5}
+                        digest: Final = signature("PUT", request.target, candidate_headers, signed, request.body, SECRET, scope)[1]
+                        candidate_headers["authorization"] = f"AWS4-HMAC-SHA256 Credential={ACCESS}/{scope}, SignedHeaders={signed}, Signature={digest}"
+                        assert client.put(wire.url + expected_path, content=request.body, headers=candidate_headers).status_code == 403
+                assert len(wire.drain()) == 6
 
         finally:
             for task in owned:

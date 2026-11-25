@@ -1,5 +1,6 @@
 """Constants for the in-gateway context-management polyfill."""
 
+import re
 from typing import Final
 
 CLEAR_TOOL_USES_EDIT_TYPE: Final = "clear_tool_uses_20250919"
@@ -43,3 +44,13 @@ COMPACT_DEFAULT_INSTRUCTIONS: Final = (
 # did not supply custom ``instructions``. Matches the guidance in the
 # Anthropic docs under "Compaction might fail when tools are defined".
 COMPACT_NO_TOOL_CALLS_SUFFIX: Final = " Do not call any tools while writing this summary; respond with text only."
+
+_SUMMARY_OPEN_TAG_RE: Final = re.compile(r"<summary>", re.IGNORECASE)
+_SUMMARY_CLOSE_TAG_RE: Final = re.compile(r"</summary>", re.IGNORECASE)
+
+
+def text_in_summary_tags(raw: str) -> str | None:
+    """The text between the first ``<summary>`` and the next ``</summary>``, found in linear time"""
+    opening: Final = _SUMMARY_OPEN_TAG_RE.search(raw)
+    closing: Final = None if opening is None else _SUMMARY_CLOSE_TAG_RE.search(raw, opening.end())
+    return None if opening is None or closing is None else raw[opening.end() : closing.start()]

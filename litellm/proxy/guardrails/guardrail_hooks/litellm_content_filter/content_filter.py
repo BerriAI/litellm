@@ -6,17 +6,19 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import bisect
 import contextvars
 import itertools
 import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from re import Pattern
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypedDict, TypeVar, cast
 
 import yaml
 from fastapi import HTTPException
@@ -30,6 +32,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.path_utils import is_within, try_safe_join
 from litellm.proxy.guardrails.content_filter_data import (
@@ -78,11 +81,11 @@ from .competitor_intent import (
     AirlineCompetitorIntentChecker,
     BaseCompetitorIntentChecker,
 )
-from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
+from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
-_StreamItemT: Final = TypeVar("_StreamItemT")
+_StreamItemT = TypeVar("_StreamItemT")
 _JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
@@ -144,14 +147,26 @@ class _CategoryConfigView(TypedDict):
     category_file: str | None
 
 
-def _streamed_choice_content(choice: StreamingChoices | TextChoices) -> str | None:
+_STREAMED_DELTA_FIELDS: Final = ("content", "refusal")
+
+
+def _as_text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _streamed_choice_texts(choice: StreamingChoices | TextChoices) -> tuple[tuple[str, str], ...]:
     if isinstance(choice, TextChoices):
-        return choice.text if isinstance(choice.text, str) else ""
-    delta: Final = getattr(choice, "delta", None)
+        return (("text", _as_text(attribute_or_none(choice, "text"))),)
+    delta: Final = attribute_or_none(choice, "delta")
     if not delta:
-        return None
-    content: Final = getattr(delta, "content", None)
-    return content if isinstance(content, str) else ""
+        return ()
+    return tuple((field, _as_text(attribute_or_none(delta, field))) for field in _STREAMED_DELTA_FIELDS)
+
+
+def _streamed_texts(item: object) -> Iterator[tuple[StreamingChoices | TextChoices, str, str]]:
+    for choice in _streamed_choices(item):
+        for field, text in _streamed_choice_texts(choice):
+            yield choice, field, text
 
 
 def _streamed_choices(item: object) -> Sequence[StreamingChoices | TextChoices]:
@@ -175,9 +190,11 @@ class _StreamedChoiceState:
 
 
 def _end_of_stream_chunk(
-    last_item: object, state_by_choice: Mapping[int, _StreamedChoiceState]
+    last_item: object, state_by_choice: Mapping[tuple[int, str], _StreamedChoiceState]
 ) -> ModelResponseStream | TextCompletionResponse | None:
-    unfinished: Final = tuple(index for index, state in state_by_choice.items() if not state.finished)
+    unfinished: Final = tuple(
+        dict.fromkeys(index for (index, _field), state in state_by_choice.items() if not state.finished)
+    )
     if not unfinished:
         return None
     if isinstance(last_item, TextCompletionResponse):
@@ -222,8 +239,68 @@ async def _stream_then_end_of_stream_chunk(
 @dataclass(frozen=True, slots=True)
 class _StreamedScanPlan:
     context_chars: int
+    holdback_chars: int
     exception_phrases: tuple[str, ...]
     conditional_words: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RedactionSpan:
+    start: int
+    end: int
+    pattern_index: int
+    pattern_name: str
+
+
+def _merge_redaction_spans(spans: Iterable[_RedactionSpan]) -> tuple[_RedactionSpan, ...]:
+    ordered: Final = sorted(spans, key=lambda span: (span.start, -span.end))
+    reach: Final = tuple(itertools.accumulate((span.end for span in ordered), max))
+    first_indices: Final = tuple(
+        index for index, span in enumerate(ordered) if index == 0 or span.start >= reach[index - 1]
+    )
+    last_indices: Final = (*(index - 1 for index in first_indices[1:]), len(ordered) - 1)
+    return tuple(replace(ordered[first], end=reach[last]) for first, last in zip(first_indices, last_indices))
+
+
+@dataclass(frozen=True, slots=True)
+class _RedactedText:
+    spans: tuple[_RedactionSpan, ...]
+    tags: tuple[str, ...]
+    tag_starts: tuple[int, ...]
+
+    def render(self, text: str) -> str:
+        previous_ends: Final = (0, *(span.end for span in self.spans))
+        kept_parts: Final = (
+            text[previous_end : span.start] + tag
+            for previous_end, span, tag in zip(previous_ends, self.spans, self.tags)
+        )
+        return "".join((*kept_parts, text[previous_ends[-1] :]))
+
+    def original_start(self, position: int) -> int:
+        index: Final = bisect.bisect_right(self.tag_starts, position) - 1
+        if index < 0:
+            return position
+        tag_end: Final = self.tag_starts[index] + len(self.tags[index])
+        if position < tag_end:
+            return self.spans[index].start
+        return position - tag_end + self.spans[index].end
+
+    def original_end(self, position: int) -> int:
+        index: Final = bisect.bisect_left(self.tag_starts, position) - 1
+        if index < 0:
+            return position
+        tag_end: Final = self.tag_starts[index] + len(self.tags[index])
+        if position <= tag_end:
+            return self.spans[index].end
+        return position - tag_end + self.spans[index].end
+
+
+def _redacted_text(spans: tuple[_RedactionSpan, ...], redaction_format: str) -> _RedactedText:
+    tags: Final = tuple(redaction_format.format(pattern_name=span.pattern_name.upper()) for span in spans)
+    shifts: Final = itertools.accumulate(
+        (len(tag) - (span.end - span.start) for span, tag in zip(spans, tags)), initial=0
+    )
+    return _RedactedText(spans, tags, tuple(span.start + shift for span, shift in zip(spans, shifts)))
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -267,7 +344,7 @@ class CategoryConfig:
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
         # Phrase patterns: regex patterns for catching paraphrases
-        self.phrase_patterns: list[tuple[str, Pattern]] = []
+        self.phrase_patterns: list[tuple[str, Pattern[str]]] = []
         for p in phrase_patterns or []:
             try:
                 self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
@@ -986,21 +1063,6 @@ class ContentFilterGuardrail(CustomGuardrail):
                 merged.append((start, end))
         return merged
 
-    def _mask_spans(self, text: str, spans: list[tuple[int, int]], redaction: str) -> str:
-        """Apply masking for the provided spans using the given redaction tag."""
-
-        if not spans:
-            return text
-
-        result_parts: Final[list[str]] = []
-        previous_end = 0
-        for start, end in spans:
-            result_parts.append(text[previous_end:start])
-            result_parts.append(redaction)
-            previous_end = end
-        result_parts.append(text[previous_end:])
-        return "".join(result_parts)
-
     def _convert_word_number_sequence(self, sequence: str) -> str | None:
         """Convert a spelled-out digit sequence (e.g., 'One-Two') into digits."""
 
@@ -1391,10 +1453,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         pattern_name: str,
         action: ContentFilterAction,
-        text: str,
-        spans: list[tuple[int, int]],
         detections: list[ContentFilterDetection] | None,
-    ) -> str:
+    ) -> None:
         """Handle regex pattern match detection and action."""
         if detections is not None:
             pattern_detection: Final[PatternDetection] = {
@@ -1412,11 +1472,49 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detail={"error": error_msg, "pattern": pattern_name},
             )
         elif action == ContentFilterAction.MASK:
-            redaction_tag: Final = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
-            text = self._mask_spans(text, spans, redaction_tag)
             verbose_proxy_logger.info("Masked all %s matches in content", pattern_name)
 
-        return text
+    def _mask_step(
+        self,
+        text: str,
+        spans: tuple[_RedactionSpan, ...],
+        indexed_entry: tuple[int, CompiledPatternEntry],
+    ) -> tuple[_RedactionSpan, ...]:
+        index, pattern_entry = indexed_entry
+        if pattern_entry["action"] != ContentFilterAction.MASK:
+            return spans
+        original_matches: Final = self._find_pattern_spans(text, pattern_entry)
+        redacted_matches: Final = self._redacted_text_matches(text, spans, pattern_entry) if spans else ()
+        return _merge_redaction_spans(
+            (
+                *spans,
+                *(
+                    _RedactionSpan(start, end, index, pattern_entry["pattern_name"])
+                    for start, end in (*original_matches, *redacted_matches)
+                ),
+            )
+        )
+
+    def _redacted_text_matches(
+        self, text: str, spans: tuple[_RedactionSpan, ...], pattern_entry: CompiledPatternEntry
+    ) -> tuple[tuple[int, int], ...]:
+        redacted: Final = _redacted_text(spans, self.pattern_redaction_format)
+        return tuple(
+            (redacted.original_start(start), redacted.original_end(end))
+            for start, end in self._find_pattern_spans(redacted.render(text), pattern_entry)
+        )
+
+    def _pattern_detected(
+        self,
+        text: str,
+        index: int,
+        pattern_entry: CompiledPatternEntry,
+        span_states: Sequence[tuple[_RedactionSpan, ...]],
+    ) -> bool:
+        if pattern_entry["action"] == ContentFilterAction.MASK:
+            return any(span.pattern_index == index for span in span_states[-1])
+        text_after_earlier_masks: Final = _redacted_text(span_states[index], self.pattern_redaction_format).render(text)
+        return bool(self._find_pattern_spans(text_after_earlier_masks, pattern_entry))
 
     def _handle_blocked_word_match(
         self,
@@ -1505,13 +1603,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword, category_name, severity, action = category_keyword_match
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
 
-        # Check regex patterns - process ALL patterns, not just first match
-        for pattern_entry in self.compiled_patterns:
-            spans = self._find_pattern_spans(text, pattern_entry)
-            if spans:
-                pattern_name = pattern_entry["pattern_name"]
-                action = pattern_entry["action"]
-                text = self._handle_pattern_match(pattern_name, action, text, spans, detections)
+        no_spans: Final[tuple[_RedactionSpan, ...]] = ()
+        span_states: Final = tuple(
+            itertools.accumulate(enumerate(self.compiled_patterns), partial(self._mask_step, text), initial=no_spans)
+        )
+        for index, pattern_entry in enumerate(self.compiled_patterns):
+            if self._pattern_detected(text, index, pattern_entry, span_states):
+                self._handle_pattern_match(pattern_entry["pattern_name"], pattern_entry["action"], detections)
+        text = _redacted_text(span_states[-1], self.pattern_redaction_format).render(text)
 
         # Check blocked words - iterate through ALL blocked words
         text_lower = text.lower()
@@ -1735,7 +1834,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _apply_competitor_intent_policy(
         self,
         intent_result: CompetitorIntentResult,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
     ) -> None:
         """
@@ -1798,7 +1897,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _log_guardrail_information(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
         status: "GuardrailStatus",
         start_time: datetime,
@@ -1819,7 +1918,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             duration: Seconds spent inside the guardrail; defaults to the wall clock since start_time
         """
         # Convert TypedDict detections to regular dicts for JSON serialization
-        guardrail_json_response: Exception | str | dict | list[dict] = [dict(detection) for detection in detections]
+        guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = [
+            dict(detection) for detection in detections
+        ]
         if status != "success":
             guardrail_json_response = exception_str if exception_str else [dict(detection) for detection in detections]
 
@@ -1851,7 +1952,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _get_mcp_tool_name(request_data: dict) -> str | None:
+    def _get_mcp_tool_name(request_data: dict[str, object]) -> str | None:
         raw_name: Final[object] = request_data.get("mcp_tool_name")
         if isinstance(raw_name, str) and raw_name:
             return raw_name
@@ -1899,7 +2000,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _scan_mcp_tool_call_arguments(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> None:
@@ -1984,7 +2085,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "GenericGuardrailAPIInputs":
@@ -2070,7 +2171,9 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _streamed_scan_plan(self) -> _StreamedScanPlan:
         """
         Per-stream inputs for buffer trimming: the retained tail length (the default
-        context, widened to the longest configured keyword), the category exception
+        context, widened to the longest configured keyword), the unreleased tail length
+        (widened to the longest holdback a configured prebuilt pattern declares, since
+        provider keys run longer than the default), the category exception
         phrases, which suppress matches anywhere in the scanned text, and the conditional
         category words, which only match when paired inside one sentence.
         """
@@ -2080,6 +2183,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         return _StreamedScanPlan(
             context_chars=max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword),
+            holdback_chars=max(
+                (
+                    PATTERN_STREAMING_HOLDBACK_CHARS.get(entry["pattern_name"], CONTENT_FILTER_STREAMING_HOLDBACK_CHARS)
+                    for entry in self.compiled_patterns
+                ),
+                default=CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
+            ),
             exception_phrases=tuple(
                 phrase for category in self.loaded_categories.values() for phrase in category.exceptions
             ),
@@ -2145,9 +2255,9 @@ class ContentFilterGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+        response: AsyncIterable[object],
+        request_data: dict[str, object],
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and check for blocked content.
 
@@ -2160,7 +2270,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
         contract.
         """
-        state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
+        state_by_choice: Final[dict[tuple[int, str], _StreamedChoiceState]] = {}
         plan: Final = self._streamed_scan_plan()
 
         start_time: Final = datetime.now()
@@ -2178,20 +2288,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             async for item, stream_ended in _stream_then_end_of_stream_chunk(
                 response, lambda last_item: _end_of_stream_chunk(last_item, state_by_choice)
             ):
-                for choice in _streamed_choices(item):
-                    new_content = _streamed_choice_content(choice)
-                    if new_content is None:
-                        continue
-
+                for choice, field, new_content in _streamed_texts(item):
                     choice_index = getattr(choice, "index", 0)
                     if not isinstance(choice_index, int):
                         choice_index = 0
+                    state_key = (choice_index, field)
 
                     is_final = stream_ended or bool(getattr(choice, "finish_reason", None))
                     if not new_content and not is_final:
                         continue
 
-                    previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
+                    previous_state = state_by_choice.get(state_key, _StreamedChoiceState())
                     buffered_text = previous_state.buffered_text + new_content
                     if not buffered_text:
                         continue
@@ -2207,9 +2314,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                             masked_text = masked_text[:-1]
                         latest_detections = tuple(choice_detections)
                     except HTTPException:
-                        state_by_choice[choice_index] = replace(
-                            previous_state, latest_detections=tuple(choice_detections)
-                        )
+                        state_by_choice[state_key] = replace(previous_state, latest_detections=tuple(choice_detections))
                         raise
                     except Exception as e:
                         verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
@@ -2220,13 +2325,13 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                     safe_to_yield_len = max(
                         previous_state.yielded_masked_text_len,
-                        len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                        len(masked_text) - (0 if is_final else plan.holdback_chars),
                     )
                     released_text = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
                     if isinstance(choice, TextChoices):
                         choice.text = released_text
                     else:
-                        choice.delta.content = released_text
+                        setattr(choice.delta, field, released_text)
                     next_state = replace(
                         previous_state,
                         buffered_text=buffered_text,
@@ -2234,14 +2339,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                         latest_detections=latest_detections,
                     )
                     if is_final:
-                        state_by_choice[choice_index] = replace(next_state, finished=True)
+                        state_by_choice[state_key] = replace(next_state, finished=True)
                         continue
 
                     trim_started = time.perf_counter()
-                    state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
+                    state_by_choice[state_key] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
                     scan_seconds += time.perf_counter() - trim_started
 
-                if stream_ended and not any(_streamed_choice_content(choice) for choice in _streamed_choices(item)):
+                if stream_ended and not any(text for _, _, text in _streamed_texts(item)):
                     continue
                 yield item
         except HTTPException:

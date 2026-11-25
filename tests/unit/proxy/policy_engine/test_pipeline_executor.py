@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
@@ -1405,6 +1406,217 @@ async def test_streaming_step_discards_tool_call_rewrite_when_translation_lacks_
     assert chunks == [_chunk()]
 
 
+class _ToolCallRefusingTranslation(_WritingTranslation):
+    """Writes the text back and refuses a rewritten tool call, as the handlers do when no event of the stream holds it."""
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: list[dict[str, object]],
+        guardrail_to_apply: CustomGuardrail,
+        litellm_logging_obj: object = None,
+        user_api_key_dict: object = None,
+        request_data: dict[str, object] | None = None,
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> list[dict[str, object]]:
+        sent: Final = copy.deepcopy(responses_so_far[0]["tool_call"])
+        await super().process_output_streaming_response(
+            responses_so_far,
+            guardrail_to_apply,
+            litellm_logging_obj,
+            user_api_key_dict,
+            request_data,
+            deliver_ended_stream_rewrites,
+        )
+        if responses_so_far[0]["tool_call"] != sent:
+            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name, "no event holds the tool call")
+        return responses_so_far
+
+
+class _InPlaceToolCallMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        for tool_call in inputs["tool_calls"]:
+            tool_call["function"]["arguments"] = '{"ssn": "[MASKED]"}'
+        inputs["texts"] = ["hello [MASKED]"]
+        return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail",
+    [_TextAndToolCallRewritingGuardrail(rewrite_tool_call=True), _InPlaceToolCallMaskingGuardrail()],
+    ids=["returned", "in-place"],
+)
+async def test_streaming_step_delivers_the_text_rewrite_when_only_the_tool_call_rewrite_is_refused(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, guardrail: CustomGuardrail
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunks: Final = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result: Final = await _run_streaming_step(_ToolCallRefusingTranslation(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert chunks == [{**_chunk(), "text": "hello [MASKED]"}]
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+    warnings: Final = [record.getMessage() for record in caplog.records if "discarded" in record.getMessage()]
+    assert len(warnings) == 1
+    assert "'masker'" in warnings[0] and "no event holds the tool call" in warnings[0]
+    assert "text rewrites, if any, were delivered" in warnings[0]
+
+
+class _AlwaysRefusingTranslation(_WritingTranslation):
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: list[dict[str, object]],
+        guardrail_to_apply: CustomGuardrail,
+        litellm_logging_obj: object = None,
+        user_api_key_dict: object = None,
+        request_data: dict[str, object] | None = None,
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> list[dict[str, object]]:
+        await super().process_output_streaming_response(
+            responses_so_far,
+            guardrail_to_apply,
+            litellm_logging_obj,
+            user_api_key_dict,
+            request_data,
+            deliver_ended_stream_rewrites,
+        )
+        raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name, "the text cannot be placed either")
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_the_whole_rewrite_when_its_text_is_refused_without_the_tool_calls(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_TextAndToolCallRewritingGuardrail(rewrite_tool_call=True)])
+    chunks: Final = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result: Final = await _run_streaming_step(_AlwaysRefusingTranslation(), chunks)
+
+    _assert_passed_with_discard_warning(result, caplog, "the text cannot be placed either")
+    assert chunks == [_chunk()]
+
+
+class _CountingTextMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.calls = 0
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls += 1
+        return {**inputs, "texts": ["hello [MASKED]"]}
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_runs_the_guardrail_once_when_it_rewrote_no_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _CountingTextMaskingGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunks: Final = [_chunk()]
+
+    result: Final = await _run_streaming_step(_AlwaysRefusingTranslation(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert chunks == [_chunk()]
+    assert guardrail.calls == 1
+
+
+class _PhoneMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return json.loads(json.dumps(inputs).replace("212-555-0147", "[MASKED]"))
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_masks_responses_text_beside_a_tool_call_its_stream_cannot_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_PhoneMaskingGuardrail()])
+    text: Final = "Call 212-555-0147 now"
+    arguments: Final = '{"to": "212-555-0147"}'
+    message: Final = {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+    unmatched_call: Final = {
+        "type": "function_call",
+        "id": "fc_1",
+        "name": "save",
+        "arguments": arguments,
+        "status": "completed",
+    }
+    chunks: Final = [
+        {"type": "response.output_item.added", "output_index": 0, "item": {**message, "content": []}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        },
+        {"type": "response.output_text.done", "item_id": "msg_1", "output_index": 0, "content_index": 0, "text": text},
+        {"type": "response.output_item.done", "output_index": 0, "item": message},
+        {"type": "response.output_item.added", "output_index": 1, "item": {**unmatched_call, "arguments": ""}},
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_1",
+            "output_index": 1,
+            "delta": arguments,
+        },
+        {"type": "response.output_item.done", "output_index": 1, "item": unmatched_call},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "model": "m",
+                "status": "completed",
+                "output": [message, unmatched_call],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+        },
+    ]
+
+    result: Final = await _run_streaming_step(OpenAIResponsesHandler(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert chunks[1]["delta"] == chunks[2]["text"] == "Call [MASKED] now"
+    assert chunks[3]["item"]["content"][0]["text"] == "Call [MASKED] now"
+    assert chunks[5]["delta"] == arguments
+
+
 class _BlockingStreamGuardrail(CustomGuardrail):
     def __init__(self):
         super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
@@ -1817,8 +2029,282 @@ async def test_streaming_step_passes_a_tool_only_stream_the_legacy_hook_left_alo
     assert not any("discarded" in record.getMessage() for record in caplog.records)
 
 
+class _EmailMaskingLegacyHook(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        return {
+            **response,
+            "content": [
+                {**block, "text": block["text"].replace("bob@example.com", "[EMAIL]")}
+                if block["type"] == "text"
+                else block
+                for block in response["content"]
+            ],
+        }
+
+
+def _sse_frame(event, data):
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def _claude_refusal_sse_stream(text):
+    return [
+        _sse_frame(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_refused",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-model",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                },
+            },
+        ),
+        _sse_frame(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _sse_frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+        _sse_frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _sse_frame(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "refusal",
+                    "stop_sequence": None,
+                    "stop_details": {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."},
+                },
+                "usage": {"output_tokens": 2},
+            },
+        ),
+        _sse_frame("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _streamed_texts(chunks):
+    payloads = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in chunks]
+    return [
+        payload["delta"]["text"]
+        for payload in payloads
+        if payload["type"] == "content_block_delta" and payload["delta"]["type"] == "text_delta"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_mask_of_a_streamed_claude_refusal(monkeypatch, caplog):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    chunks = _claude_refusal_sse_stream("Partial answer for bob@example.com")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(
+            monkeypatch, _EmailMaskingLegacyHook(), chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert result.terminal_action == "allow"
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+    assert _streamed_texts(chunks) == ["Partial answer for [EMAIL]"]
+
+
 class _NoHooksGuardrail(CustomGuardrail):
     pass
+
+
+class _PersimmonMaskingLegacyHook(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> object:
+        self.calls.append(response)
+        return json.loads(json.dumps(response).replace("persimmon", "[MASKED]"))
+
+
+class _TextRecorder(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.texts_per_call: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.texts_per_call.append(list(inputs.get("texts", [])))
+        return inputs
+
+
+class _AllTextsInOneCallRecorder(_TextRecorder):
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
+
+
+def _reasoning_stream_event(thought: str) -> dict[str, object]:
+    return {
+        "type": "response.reasoning_summary_text.delta",
+        "item_id": "rs_1",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": thought,
+    }
+
+
+def _reasoning_output_item(*thoughts: str) -> dict[str, object]:
+    return {
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": thought} for thought in thoughts],
+    }
+
+
+def _answer_stream_event(answer: str) -> dict[str, object]:
+    return {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": answer,
+    }
+
+
+def _answer_output_item(answer: str) -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": answer}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_runs_a_legacy_hook_once_over_a_response_with_reasoning(monkeypatch):
+    guardrail = _PersimmonMaskingLegacyHook()
+    chunks = [
+        _reasoning_stream_event("I think of a persimmon"),
+        _answer_stream_event("the fruit is a persimmon"),
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    _reasoning_output_item("I think of a persimmon", "a persimmon is orange"),
+                    _answer_output_item("the fruit is a persimmon"),
+                ]
+            },
+        },
+    ]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler())
+
+    output = chunks[-1]["response"]["output"]
+    assert result.terminal_action == "allow"
+    assert len(guardrail.calls) == 1
+    assert chunks[0]["delta"] == "I think of a [MASKED]"
+    assert chunks[1]["delta"] == "the fruit is a [MASKED]"
+    assert [part["text"] for part in output[0]["summary"]] == ["I think of a [MASKED]", "a [MASKED] is orange"]
+    assert output[1]["content"][0]["text"] == "the fruit is a [MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_keeps_a_legacy_hook_reasoning_out_of_an_answer_the_envelope_lacks(monkeypatch):
+    guardrail = _PersimmonMaskingLegacyHook()
+    chunks = [
+        _answer_stream_event("the fruit is a persimmon"),
+        {"type": "response.completed", "response": {"output": [_reasoning_output_item("I think of a persimmon")]}},
+    ]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler())
+
+    assert result.terminal_action == "allow"
+    assert chunks[0]["delta"] == "the fruit is a persimmon"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_keeps_a_legacy_hook_mask_when_reasoning_streamed_past_a_cut_short_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _PersimmonMaskingLegacyHook()
+    chunks: Final = [
+        _reasoning_stream_event("I think of a persimmon"),
+        _answer_stream_event("the fruit is a persimmon"),
+        {**_reasoning_stream_event("later a persimmon"), "item_id": "rs_2", "output_index": 2},
+        {
+            "type": "response.incomplete",
+            "response": {
+                "status": "incomplete",
+                "output": [
+                    _reasoning_output_item("I think of a persimmon"),
+                    _answer_output_item("the fruit is a persimmon"),
+                ],
+            },
+        },
+    ]
+
+    result: Final = await _run_legacy_streaming_step(
+        monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler()
+    )
+
+    assert result.terminal_action == "allow"
+    assert len(guardrail.calls) == 1
+    assert chunks[0]["delta"] == "I think of a [MASKED]"
+    assert chunks[1]["delta"] == "the fruit is a [MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_sends_all_reasoning_in_one_call_after_the_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _TextRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunks: Final = [
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    _reasoning_output_item("I think of a fig", "a fig is purple"),
+                    _answer_output_item("the fruit is a fig"),
+                ]
+            },
+        },
+    ]
+
+    await _run_streaming_step(OpenAIResponsesHandler(), chunks)
+
+    assert guardrail.texts_per_call == [["the fruit is a fig"], ["I think of a fig", "a fig is purple"]]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_puts_reasoning_in_the_answer_call_of_a_guardrail_that_takes_all_texts_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _AllTextsInOneCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    chunks: Final = [
+        _reasoning_stream_event("I think of a fig"),
+        {**_reasoning_stream_event("later a fig"), "item_id": "rs_2", "output_index": 2},
+        {
+            "type": "response.incomplete",
+            "response": {
+                "status": "incomplete",
+                "output": [_reasoning_output_item("I think of a fig"), _answer_output_item("the fruit is a fig")],
+            },
+        },
+    ]
+
+    await _run_streaming_step(OpenAIResponsesHandler(), chunks)
+
+    assert guardrail.texts_per_call == [["the fruit is a fig", "I think of a fig"]]
 
 
 class _IteratorAndLegacyHookGuardrail(_LegacyHookGuardrail):

@@ -8,7 +8,7 @@ def cost_calculator(
     model: str,
     image_response: ImageResponse,
     size: str | None = None,
-    optional_params: dict | None = None,
+    optional_params: dict[str, object] | None = None,
 ) -> float:
     """
     Bedrock image generation cost calculator

@@ -1,9 +1,23 @@
 import ast
 import os
+from itertools import filterfalse
+from typing import Final
+
+NON_SDK_SOURCE_DIRS: Final = frozenset(
+    {"cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"}
+)
 
 IGNORE_FUNCTIONS = [
+    "_with_original_numbers",  # DEFAULT_MAX_RECURSE_DEPTH bound, deeper values keep the guardrail's decoded JSON.
+    "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
+    "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
+    "_ids_to_walk",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
+    "_level_holds_large_str",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
+    "_compact_actor_value",
+    "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
+    "_count_anthropic_content",  # Nested server result mappings are bounded by DEFAULT_MAX_RECURSE_DEPTH.
     "remove_additional_properties",
     "remove_strict_from_schema",
     "filter_schema_fields",
@@ -26,6 +40,9 @@ IGNORE_FUNCTIONS = [
     "filter_value_from_dict",  # max depth set.
     "normalize_json_schema_types",  # max depth set.
     "_extract_fields_recursive",  # max depth set.
+    "_node_blocks",  # bedrock tool call arguments, bounded by MAX_STRUCTURED_CONTENT_SCAN_DEPTH.
+    "_json_text_with_masks",  # walks a tree _node_blocks already admitted within the depth bound.
+    "_value_with_masks",  # walks a tree _node_blocks already admitted within the depth bound.
     "remove_json_schema_refs",  # max depth set.,
     "_convert_schema_types",  # max depth set.,
     "_fix_enum_empty_strings",  # max depth set.,
@@ -34,6 +51,7 @@ IGNORE_FUNCTIONS = [
     "_contains_vision_content",  # max depth set.
     "_read_all_bytes",  # max depth set.
     "_fix_enum_types",  # max depth set.
+    "_pin_scalar_consts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); leaves the subtree past the cap untouched.
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.
@@ -41,12 +59,14 @@ IGNORE_FUNCTIONS = [
     "_decrypted_param",  # max depth set.
     "contains_encrypted_marker",  # max depth set.
     "_rotate_guardrail_row",  # bounded by attempts_left.
+    "_responses_dropping_refused_fields",  # bounded by _REFUSED_FIELDS, each retry drops a field it sent.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "_filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
     "_validate_inheritance_chain",  # max depth set (default 100) to prevent infinite recursion in policy inheritance validation.
     "_basic_json_schema_validate",  # max depth set.
     "extract_text_from_a2a_message",  # max depth set (default 10) to prevent infinite recursion in A2A message parsing.
+    "_request_body",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH) and circular reference protection to prevent infinite recursion.
     "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
     "_read_image_bytes",  # max depth set.
@@ -56,6 +76,8 @@ IGNORE_FUNCTIONS = [
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
+    "_opensearch_filter",  # OpenSearch: runs only on a filter pydantic validated, whose recursion guard stops at depth 255.
+    "_exact_filter",  # OpenSearch: runs only on a filter pydantic validated, whose recursion guard stops at depth 255.
     "_freeze_for_dedupe",  # OTEL: max depth set (default 16, _FREEZE_MAX_DEPTH); fails closed by returning repr(value) at the cap.
     "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
     "_inlined",  # max depth set (_MAX_INLINE_DEPTH=32); passes the schema node through untouched at the cap. Walks a Pydantic JSON schema once at import time.
@@ -80,12 +102,23 @@ IGNORE_FUNCTIONS = [
     "with_id_fields_replaced",  # harness/opencode: bounded by the nesting depth of the JsonValue that validate_json parsed from `opencode export`, which refuses nesting past ~200 levels.
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
+    "_compact_actor_value",  # OCSF actors have schema-bounded depth.
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
-    "_redacted_client_field",  # bounded by the nesting depth of a JSON-decoded error body (a finite JSON tree, no cycles possible).
+    "_redacted_client_field",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning REDACTED for anything nested past the cap.
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
     "_merge_session_fields",  # max depth set (_SESSION_MERGE_MAX_DEPTH); deeper mappings are replaced wholesale by the later session.update.
+    "_json",  # router_rust index views: max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by raising ValueError at the cap.
+    "to_wire",  # router_rust model info: bounded by the nesting depth of a stored deployment or cost-map entry (finite JSON trees: pydantic refuses a cycle when it dumps a deployment).
+    "from_wire",  # router_rust model info: walks only what router-core merged from to_wire's output, so it never goes deeper than to_wire did.
+    "_aws_group_members",  # bedrock vector store filters: walks only a pydantic-validated filter, which pydantic-core stops at 255 levels of nesting.
+    "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
+    "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
+    "_cause_chain",  # openai common_utils: max depth set (_LONGEST_CAUSE_CHAIN links of __cause__ / __context__).
+    "_context_chain",  # router_rust core: max depth set (_LONGEST_CONTEXT_CHAIN links of __context__).
+    "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
+    "_without_token_data",  # guardrail fingerprint: max depth set (DEFAULT_MAX_RECURSE_DEPTH); hashes the subtree as is at the cap.
 ]
 
 
@@ -135,7 +168,9 @@ def find_recursive_functions_in_file(file_path):
 def find_recursive_functions_in_directory(directory):
     recursive_functions = {}
     ignored_recursive_functions = {}
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        if os.path.normpath(root) == os.path.normpath(directory):
+            dirs[:] = filterfalse(NON_SDK_SOURCE_DIRS.__contains__, dirs)
         for file in files:
             print("file: ", file)
             if file.endswith(".py"):

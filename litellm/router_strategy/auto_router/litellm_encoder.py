@@ -14,13 +14,13 @@ else:
     RoutingContext = Any
 
 
-def litellm_to_list(embeds: litellm.EmbeddingResponse) -> list[list[float]]:
+def litellm_to_list(embeds: object) -> list[list[float]]:
     """Convert a LiteLLM embedding response to a list of embeddings.
 
     :param embeds: The LiteLLM embedding response.
     :return: A list of embeddings.
     """
-    if not embeds or not embeds.data:
+    if not embeds or not isinstance(embeds, litellm.EmbeddingResponse) or not embeds.data:
         raise ValueError("No embeddings found in LiteLLM embedding response.")
     return [x["embedding"] for x in embeds.data]
 
@@ -30,7 +30,7 @@ class CustomDenseEncoder(DenseEncoder):
     litellm_router_instance: ClassVar = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
 
     @renamed_router_param("litellm_router_instance")
-    def __init__(self, ctx: Optional["RoutingContext"] = None, **kwargs):
+    def __init__(self, ctx: Optional["RoutingContext"] = None, **kwargs) -> None:
         if "ctx" in kwargs:
             ctx = kwargs.pop("ctx")
 
@@ -55,7 +55,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         model_name: str,
         score_threshold: float | None = None,
         max_input_chars: int = 0,
-    ):
+    ) -> None:
         """Initialize the LiteLLMEncoder.
 
         :param ctx: The routing context of the owning router.
@@ -97,21 +97,21 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             )
         return clamped
 
-    def __call__(self, docs: list[str], **kwargs) -> list[list[float]]:
+    def __call__(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         """Encode a list of text documents into embeddings using LiteLLM.
 
         :param docs: List of text documents to encode.
         :return: List of embeddings for each document."""
         return self.encode_queries(docs, **kwargs)
 
-    async def acall(self, docs: list[str], **kwargs) -> list[list[float]]:
+    async def acall(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         """Encode a list of documents into embeddings using LiteLLM asynchronously.
 
         :param docs: List of documents to encode.
         :return: List of embeddings for each document."""
         return await self.aencode_queries(docs, **kwargs)
 
-    def encode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
+    def encode_queries(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
@@ -120,7 +120,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
-    def encode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
+    def encode_documents(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
@@ -129,7 +129,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
-    async def aencode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
+    async def aencode_queries(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
@@ -138,7 +138,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
-    async def aencode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
+    async def aencode_documents(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
