@@ -11693,7 +11693,7 @@ def test_gemini_context_caching_with_ttl():
         },
     ]
 
-    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed, lambda _: True)
+    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed, lambda _: True, lambda _: True)
     assert len(cached_messages) > 0
     assert len(non_cached_messages) > 0
 
@@ -11750,7 +11750,7 @@ def test_gemini_context_caching_separate_messages():
             ],
         },
     ]
-    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: True)
+    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: True, lambda _: True)
     print(cached_messages)
     print(non_cached_messages)
     assert len(cached_messages) > 0, "Cached messages should be present"

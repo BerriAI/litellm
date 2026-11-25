@@ -217,6 +217,16 @@ def _clears_the_cache_floor(
     )
 
 
+def _cached_contents_accepts(
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> bool:
+    return cached_messages_end_on_supported_turn(cached_messages) and not _links_web_media_gemini_fetches(
+        cached_messages, model, custom_llm_provider
+    )
+
+
 def _context_caching_skip_reason(
     cached_messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
@@ -561,6 +571,9 @@ class ContextCachingEndpoints(VertexBase):
                 cache_model=target.model,
                 custom_llm_provider=custom_llm_provider,
             ),
+            cache_accepts=partial(
+                _cached_contents_accepts, model=target.model, custom_llm_provider=custom_llm_provider
+            ),
             supports_system_message=supports_system_message,
         )
 
@@ -730,6 +743,9 @@ class ContextCachingEndpoints(VertexBase):
                 deployment_model=model,
                 cache_model=target.model,
                 custom_llm_provider=custom_llm_provider,
+            ),
+            cache_accepts=partial(
+                _cached_contents_accepts, model=target.model, custom_llm_provider=custom_llm_provider
             ),
             supports_system_message=supports_system_message,
         )
