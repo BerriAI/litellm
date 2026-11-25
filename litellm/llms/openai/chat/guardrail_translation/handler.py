@@ -60,6 +60,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    tool_calls_in_guardrail_scope,
     unappliable_request_rewrite,
 )
 from litellm.types.llms.openai import (
@@ -139,6 +140,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+        include_tool_calls: Final = tool_calls_in_guardrail_scope(guardrail_to_apply)
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -159,6 +161,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                include_tool_calls=include_tool_calls,
             )
 
         structured_messages: Final = self.get_structured_messages(data)
@@ -167,17 +170,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 structured_messages or [],
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
-                scan_only_tool_results=scan_only_tool_results,
+                scan_only_tool_results=not include_tool_calls,
             )
+        )
+        legacy_function_call_tasks: Final = (
+            _legacy_function_call_tasks(cast("Iterable[object]", messages))  # cast-ok: request messages arrive untyped
+            if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            else ()
         )
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
-            *(
-                _legacy_function_calls(cast("Iterable[object]", messages))  # cast-ok: request messages arrive untyped
-                if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply) and not scan_only_tool_results
-                else ()
-            ),
+            *(call for _, call in legacy_function_call_tasks),
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -213,7 +217,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
+            returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+            guardrailed_tool_calls: Final = returned_tool_calls or []
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = (
@@ -252,6 +257,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
 
                 # Step 4: Apply guardrailed tool calls back to messages
+                has_server_or_legacy_calls: Final = bool(server_tool_call_tasks or legacy_function_call_tasks)
+                if (
+                    has_server_or_legacy_calls
+                    and returned_tool_calls is not None
+                    and len(returned_tool_calls) != len(tool_calls_with_server_calls)
+                ):
+                    raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                 if guardrailed_tool_calls:
                     await self._apply_guardrail_responses_to_input_tool_calls(
                         messages=messages,
@@ -263,6 +275,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         messages=structured_messages or [],
                         guardrailed_tool_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
                         task_mappings=tuple(mapping for mapping, _ in server_tool_call_tasks),
+                    )
+                    _write_back_legacy_function_calls(
+                        messages=cast("Sequence[object]", messages),  # cast-ok: request messages arrive untyped
+                        legacy_function_call_tasks=legacy_function_call_tasks,
+                        guardrailed_tool_calls=guardrailed_tool_calls[
+                            len(tool_calls_with_server_calls) - len(legacy_function_call_tasks) :
+                        ],
+                        guardrail_to_apply=guardrail_to_apply,
                     )
 
         elif (
@@ -331,21 +351,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        include_tool_calls: bool = True,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
 
         Override this method to customize text/image/tool call extraction logic.
         """
-        if role_out_of_guardrail_scope(
-            str(message.get("role") or "").lower(),
+        role: Final = str(message.get("role") or "").lower()
+        text_in_scope: Final = not role_out_of_guardrail_scope(
+            role,
             skip_system_message=skip_system_message,
             skip_tool_message=skip_tool_message,
             scan_only_tool_results=scan_only_tool_results,
-        ):
-            return
+        )
+        tool_calls_in_scope: Final = include_tool_calls and not role_out_of_guardrail_scope(
+            role, skip_system_message=skip_system_message, skip_tool_message=skip_tool_message
+        )
 
-        content: Final = message.get("content", None)
+        content: Final = message.get("content", None) if text_in_scope else None
         if content is not None:
             if isinstance(content, str):
                 # Simple string content
@@ -372,7 +396,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             images_to_check.append(image_url)
 
         # Extract tool calls (typically in assistant messages)
-        tool_calls: Final = message.get("tool_calls", None)
+        tool_calls: Final = message.get("tool_calls", None) if tool_calls_in_scope else None
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
                 if isinstance(tool_call, dict):
@@ -475,7 +499,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 0: Check if response has any text content to process
         legacy_function_calls: Final = (
-            _legacy_function_calls(choice.message for choice in response.choices)
+            tuple(call for _, call in _legacy_function_call_tasks(choice.message for choice in response.choices))
             if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
             else ()
         )
@@ -1601,12 +1625,30 @@ def _function_call_of(message: object) -> object:
     return getattr(message, "function_call", None)
 
 
-def _legacy_function_calls(
+def _legacy_function_call_tasks(
     messages: Iterable[object],
-) -> tuple[dict[str, object], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
-    """The deprecated `function_call` of each message, shaped as a tool call. Scanned only, never written back."""
-    calls: Final = (_function_call_of(message) for message in messages)
-    return tuple({"type": "function", "function": call} for call in calls if call)
+) -> tuple[tuple[int, dict[str, object]], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
+    calls: Final = ((msg_idx, _function_call_of(message)) for msg_idx, message in enumerate(messages))
+    return tuple((msg_idx, {"type": "function", "function": call}) for msg_idx, call in calls if call)
+
+
+def _write_back_legacy_function_calls(
+    messages: Sequence[object],
+    legacy_function_call_tasks: Sequence[tuple[int, Mapping[str, object]]],
+    guardrailed_tool_calls: Sequence[object],
+    guardrail_to_apply: "CustomGuardrail",
+) -> None:
+    writes: Final = (
+        (messages[msg_idx], stream_item_field(guardrailed_tool_call, "function"))
+        for (msg_idx, sent), guardrailed_tool_call in zip(
+            legacy_function_call_tasks, guardrailed_tool_calls, strict=True
+        )
+        if stream_item_field(guardrailed_tool_call, "function") != sent.get("function")
+    )
+    for message, function in writes:
+        if not isinstance(message, dict) or not isinstance(function, Mapping):
+            raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
+        message["function_call"] = function
 
 
 def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:

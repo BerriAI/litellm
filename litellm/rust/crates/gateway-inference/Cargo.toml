@@ -40,7 +40,9 @@ strum.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
 tower-http = { version = "0.6.11", features = ["request-id", "set-header"] }
+regex.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-redis-client.workspace = true

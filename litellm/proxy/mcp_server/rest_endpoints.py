@@ -1028,7 +1028,7 @@ if MCP_AVAILABLE:
             ),
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         List all available tools with information about the server they belong to.
 

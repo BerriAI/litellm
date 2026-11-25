@@ -50,6 +50,7 @@ litellm-starlette = { path = "crates/starlette" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-secret-value = { path = "crates/secret-value" }
+litellm-at-rest = { path = "crates/at-rest" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
@@ -99,7 +100,7 @@ litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
-arc-swap = "1.9.2"
+arc-swap = "1.9.5"
 async-trait = "0.1.91"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
@@ -137,6 +138,7 @@ serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
 sha1 = "0.10"
+zeroize = "1.9.0"
 syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-aws-lc-rs"] }
 # sqlx-core directly so its rustls-native-certs feature puts the OS trust store under sqlx's aws-lc TLS; the feature is an undocumented optional dep, hence the exact pin

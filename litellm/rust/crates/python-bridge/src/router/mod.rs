@@ -1400,6 +1400,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     failure.recorded = item::<bool>(outcome, "recorded")?.unwrap_or(false);
     failure.names_provider = item::<bool>(outcome, "llm_provider")?.unwrap_or(false);
     failure.agentic_followup = item::<bool>(outcome, "agentic_followup")?.unwrap_or(false);
+    failure.create_may_exist = item::<bool>(outcome, "create_may_exist")?.unwrap_or(false);
     failure.outside_deployment = item::<bool>(outcome, "outside_deployment")?.unwrap_or(false);
     failure.status_absent = item::<bool>(outcome, "status_absent")?.unwrap_or(false);
     failure.uncounted_request = item::<bool>(outcome, "uncounted_request")?.unwrap_or(false);
@@ -1457,7 +1458,7 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::MultipleModelGroups { model }
         | Error::DefaultDeploymentRaises { model }
         | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
-        Error::ContextWindowExceeded { model, detail } => {
+        Error::ContextWindowExceeded { model, detail, .. } => {
             dict.set_item("error_model", model)?;
             dict.set_item("error_detail", detail)
         }

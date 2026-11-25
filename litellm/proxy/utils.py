@@ -2736,7 +2736,9 @@ class ProxyLogging:
                 return user_api_key_auth_obj.__dict__
         return {}
 
-    def _convert_mcp_to_llm_format(self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]) -> dict:
+    def _convert_mcp_to_llm_format(
+        self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]
+    ) -> dict[str, object]:
         """
         Convert MCP tool call to LLM message format for existing guardrail validation.
         """
@@ -10167,8 +10169,8 @@ def check_and_merge_model_level_guardrails(
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
         deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
-        seen: Final[set] = set()
-        union: Final[list] = []
+        seen: Final[set[str]] = set()
+        union: Final[list[object]] = []
         for dep in deployments:
             litellm_params_dep = dep.get("litellm_params") or {}
             guardrails = litellm_params_dep.get("guardrails")

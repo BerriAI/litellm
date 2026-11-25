@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 from base64 import urlsafe_b64encode
 from collections.abc import Mapping, Sequence
@@ -28,13 +29,16 @@ from litellm.proxy.mcp_server.gateway_dcr_flow import (
     SUBJECT_TOKEN_TYPES,
     TOKEN_EXCHANGE_GRANT_TYPE,
     AssertionIdentity,
+    ClaimOutcome,
     ConsentTeam,
     LookupServerReachability,
     MintedProxyCredential,
     SubjectIdentity,
     SubjectTokenRefusal,
+    _claim_refusal,
     _ConnectFlow,
     _GatewayAuthCode,
+    _oauth_error,
     _open_sealed,
     _seal,
     aggregate_authorize,
@@ -3832,3 +3836,82 @@ async def test_a_picked_code_redeems_only_for_the_resource_it_was_authorized_for
     assert (redeemed.status_code, json.loads(redeemed.body).get("error")) == (
         (200, None) if error is None else (400, error)
     )
+
+
+def test_an_oauth_error_response_is_logged_with_its_code_and_description(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    response: Final = _oauth_error(400, "invalid_grant", "the refresh token was already used")
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_grant",
+        "error_description": "the refresh token was already used",
+    }
+    assert "400 invalid_grant: the refresh token was already used" in caplog.text
+
+
+@pytest.mark.parametrize("outcome", ["first", "unavailable"])
+def test_a_replay_error_is_not_built_when_no_replay_happened(
+    caplog: pytest.LogCaptureFixture, outcome: ClaimOutcome
+) -> None:
+    def replayed() -> Response:
+        raise AssertionError("the replay body must not be built")
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    refusal: Final = _claim_refusal(outcome, replayed)
+    assert (refusal.status_code if refusal is not None else None) == (None if outcome == "first" else 503)
+    assert "invalid_grant" not in caplog.text
+
+
+def _oauth_error_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "MCP OAuth error response" in record.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_the_token_endpoint_logs_only_refused_requests(caplog: pytest.LogCaptureFixture) -> None:
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1"))
+    completed: Final = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=DualCache(),
+    )
+    code: Final = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    cache: Final = DualCache()
+
+    async def token(**overrides: object) -> Response:
+        arguments: dict[str, object] = {
+            "request": _request("/token", method="POST"),
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "client_id": client_id,
+            "code_verifier": CODE_VERIFIER,
+            "refresh_token": None,
+            "master_key": MASTER_KEY,
+            "reload_user": _reload_user_active,
+            "cache": cache,
+        }
+        return await aggregate_token(**{**arguments, **overrides})
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    issued: Final = await token()
+    refresh_token: Final = json.loads(issued.body)["refresh_token"]
+    refreshed: Final = await token(grant_type="refresh_token", code=None, refresh_token=refresh_token)
+    assert (issued.status_code, refreshed.status_code, _oauth_error_log_lines(caplog)) == (200, 200, [])
+
+    replayed: Final = await token(grant_type="refresh_token", code=None, refresh_token=refresh_token)
+    assert replayed.status_code == 400
+    assert _oauth_error_log_lines(caplog) == [
+        f"MCP OAuth error response: 400 invalid_grant: {json.loads(replayed.body)['error_description']}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_register_endpoint_logs_a_rejected_registration(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    rejected: Final = await _register([])
+    assert rejected["error"] == "invalid_redirect_uri"
+    assert _oauth_error_log_lines(caplog) == [
+        f"MCP OAuth error response: 400 invalid_redirect_uri: {rejected['error_description']}"
+    ]

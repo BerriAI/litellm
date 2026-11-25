@@ -9,11 +9,11 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Set
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import chain
 from queue import SimpleQueue
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 import anyio.to_thread
@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.token_counter import (
     is_openai_model,
     messages_reach_token_count,
     offload_token_count,
+    openai_tokenizer_encoding,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -132,6 +133,29 @@ def test_token_counter_default_encoding_matches_cl100k():
     expected: Final = len(encoding.encode("hello world", disallowed_special=()))
 
     assert token_counter_new(model=None, text="hello world") == expected
+
+
+def test_token_counter_counts_with_a_custom_openai_tokenizer_encoding():
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    o200k: Final = tiktoken.get_encoding("o200k_base")
+    assert len(o200k.encode(japanese)) != len(tiktoken.get_encoding("cl100k_base").encode(japanese))
+
+    assert token_counter_new(custom_tokenizer={"type": "openai_tokenizer", "tokenizer": o200k}, text=japanese) == len(
+        o200k.encode(japanese)
+    )
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "openai/gpt-5.6-luna", "azure/gpt-5.6-luna"])
+def test_a_selected_tokenizer_never_overrides_an_openai_models_own_encoding(model: str):
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    own_encoding: Final = openai_tokenizer_encoding(model)
+    selected: Final = litellm.utils.select_tokenizer(model)
+    assert selected["type"] == "openai_tokenizer"
+    assert len(own_encoding.encode(japanese)) != len(selected["tokenizer"].encode(japanese))
+
+    assert token_counter_new(model=model, custom_tokenizer=selected, text=japanese) == token_counter_new(
+        model=model, text=japanese
+    )
 
 
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
@@ -3443,6 +3467,24 @@ def test_repricing_inline_pdfs_as_single_images_matches_sending_the_same_bytes_a
     ) == token_counter_new(model="", messages=[{"role": "user", "content": image_content}])
 
 
+def test_repricing_with_a_custom_tokenizer_moves_the_count_that_tokenizer_made():
+    accented: Final = _pdf_base64(("naïve café déjà vu résumé " * 3,))
+    o200k: Final[SelectTokenizerResponse] = {
+        "type": "openai_tokenizer",
+        "tokenizer": tiktoken.get_encoding("o200k_base"),
+    }
+    pdf_messages: Final = [{"role": "user", "content": [_document(accented)]}]
+    image_messages: Final = [{"role": "user", "content": [_image(accented)]}]
+    repriced: Final = inline_pdf_token_deltas("", pdf_messages, ("single_image",), custom_tokenizer=o200k)
+
+    assert token_counter_new(model="", messages=pdf_messages, custom_tokenizer=o200k) != token_counter_new(
+        model="", messages=pdf_messages
+    )
+    assert token_counter_new(model="", messages=pdf_messages, custom_tokenizer=o200k) + repriced[
+        "single_image"
+    ] == token_counter_new(model="", messages=image_messages, custom_tokenizer=o200k)
+
+
 def test_repricing_inline_pdfs_for_openai_moves_each_occurrence_by_its_page_price_difference():
     encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
     document: Final = _document(encoded)
@@ -4201,6 +4243,39 @@ def test_memoized_counts_match_uncached_counts_for_each_model_sharing_the_memo()
 
     assert len(set(uncached)) == len(models)
     assert tuple(token_counter_new(model=model, text=text) for model in models * 2) == uncached * 2
+
+
+class _CallCountingByteEncoding(tiktoken.Encoding):
+    def __init__(self) -> None:
+        super().__init__(
+            "call-counting-bytes",
+            pat_str=r"\S+|\s+",
+            mergeable_ranks={bytes([byte]): byte for byte in range(256)},
+            special_tokens={},
+        )
+        self.calls = 0
+
+    def encode(
+        self,
+        text: str,
+        *,
+        allowed_special: Literal["all"] | Set[str] = frozenset(),
+        disallowed_special: Literal["all"] | Collection[str] = "all",
+    ) -> list[int]:
+        self.calls += 1
+        return super().encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+
+
+def test_openai_encoding_custom_tokenizer_counts_are_memoized():
+    encoding: Final = _CallCountingByteEncoding()
+    custom_tokenizer: Final = {"type": "openai_tokenizer", "tokenizer": encoding}
+
+    first: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+    calls_for_one_count: Final = encoding.calls
+    second: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+
+    assert first == second == len(_MEMOIZED_TEXT)
+    assert encoding.calls == calls_for_one_count > 0
 
 
 def test_custom_tokenizer_counts_are_not_memoized():
