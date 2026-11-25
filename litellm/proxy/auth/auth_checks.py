@@ -5113,23 +5113,62 @@ def _underlying_models(deployments: Iterable[Mapping[str, object]] | None) -> It
             yield name, underlying
 
 
-def _latest_alias_target_models(model: str, llm_router: RegistryReader | None, team_id: str | None) -> tuple[str, ...]:
-    """The versioned model the cost map points `model`'s latest alias at, and every model group that serves it."""
+def _latest_alias_targets(model: str, llm_router: RegistryReader, team_id: str | None) -> frozenset[str]:
+    requested: Final = (
+        model,
+        *(name for _, name in _underlying_models(llm_router.registry().deployments(model, team_id=team_id))),
+    )
+    return frozenset(target for name in requested for target in expand_model_latest_alias(name)[1:])
+
+
+def _is_shared_deployment(deployment: Mapping[str, object]) -> bool:
+    info: Final = deployment.get("model_info")
+    return not (isinstance(info, Mapping) and info.get("team_id"))
+
+
+def latest_alias_versioned_model_group(model: str, llm_router: RegistryReader, team_id: str | None) -> str | None:
+    targets: Final = frozenset(
+        target
+        for _, name in _underlying_models(llm_router.registry().deployments(model, team_id=team_id))
+        for target in expand_model_latest_alias(name)[1:]
+    )
+    if len(targets) != 1:
+        return None
+    return next(
+        (
+            name
+            for name, underlying in _underlying_models(
+                deployment for deployment in llm_router.registry().deployments() if _is_shared_deployment(deployment)
+            )
+            if underlying in targets and name != model
+        ),
+        None,
+    )
+
+
+def _latest_alias_equivalent_models(
+    model: str, llm_router: RegistryReader | None, team_id: str | None
+) -> tuple[str, ...]:
     if llm_router is None:
         return expand_model_latest_alias(model)[1:]
     registry: Final = llm_router.registry()
-    requested: Final = (
-        model,
-        *(underlying for _, underlying in _underlying_models(registry.deployments(model, team_id=team_id))),
+    targets: Final = _latest_alias_targets(model, llm_router, team_id)
+    served: Final = frozenset(
+        (model, *(name for _, name in _underlying_models(registry.deployments(model, team_id=team_id))))
     )
-    targets: Final = frozenset(target for name in requested for target in expand_model_latest_alias(name)[1:])
-    if not targets:
-        return ()
+    shared: Final = tuple(
+        _underlying_models(deployment for deployment in registry.deployments() if _is_shared_deployment(deployment))
+    )
     return tuple(
         dict.fromkeys(
             (
                 *sorted(targets),
-                *(name for name, underlying in _underlying_models(registry.deployments()) if underlying in targets),
+                *(name for name, underlying in shared if underlying in targets),
+                *(
+                    name
+                    for name, underlying in shared
+                    if served.intersection(expand_model_latest_alias(underlying)[1:])
+                ),
             )
         )
     )
@@ -5204,7 +5243,7 @@ def _can_object_call_model(
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
-            *_latest_alias_target_models(model, llm_router, team_id),
+            *_latest_alias_equivalent_models(model, llm_router, team_id),
         )
     )
     owning_team_names: Final = (
