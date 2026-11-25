@@ -6986,6 +6986,10 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_datadog_metrics_logger)
         return _datadog_metrics_logger
     elif logging_integration == "datadog_llm_observability":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, DataDogLLMObsLogger):
+                return callback
+
         _datadog_llm_obs_logger: Final = DataDogLLMObsLogger()
         _in_memory_loggers.append(_datadog_llm_obs_logger)
         return _datadog_llm_obs_logger

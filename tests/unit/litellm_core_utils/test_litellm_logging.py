@@ -3318,6 +3318,42 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_datadog_llm_obs_logger_reuses_cached_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure datadog_llm_observability reuses the cached DataDogLLMObsLogger instance."""
+
+    monkeypatch.setenv("DD_API_KEY", "test")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+
+    from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+
+    try:
+        first_logger: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="datadog_llm_observability",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        second_logger: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="datadog_llm_observability",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        assert isinstance(first_logger, DataDogLLMObsLogger)
+        assert second_logger is first_logger
+        cached_llm_obs_loggers: Final = tuple(
+            cb for cb in logging_module._in_memory_loggers if isinstance(cb, DataDogLLMObsLogger)
+        )
+        assert len(cached_llm_obs_loggers) == 1
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.asyncio
 async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     """Ensure Logfire logger uses LOGFIRE_BASE_URL to build the OTLP HTTP endpoint (/v1/traces)."""
 
