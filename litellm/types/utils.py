@@ -4959,6 +4959,7 @@ class LlmProviders(str, Enum):
     STREAMLAKE = "streamlake"
     WALLY = "wally"
     HUAWEI_MAAS = "huawei_maas"
+    HIAPI = "hiapi"
     SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
