@@ -99,9 +99,15 @@ impl From<NotACaller> for Error {
     }
 }
 
+impl Error {
+    pub fn response(&self) -> Response {
+        (self.status(), self.to_string()).into_response()
+    }
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        (self.status(), self.to_string()).into_response()
+        self.response()
     }
 }
 

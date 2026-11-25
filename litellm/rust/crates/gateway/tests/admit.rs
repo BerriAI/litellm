@@ -1,6 +1,8 @@
 //! Each file in `tests/admit/` is one config and the requests sent to the gateway built from it,
 //! each with who answers it, `rust` or `python`. A request for Python names the `reason` the client
-//! sees in `x-litellm-gateway`, and may name the setting or trait it goes to Python `over`.
+//! sees in `x-litellm-gateway`, and may name the setting or trait it goes to Python `over`. One
+//! the native app refuses too says `denied: true`, and with nothing behind the gateway the native
+//! app answers it.
 
 mod keys;
 
@@ -121,6 +123,8 @@ struct Sent {
     expect: Who,
     reason: Option<String>,
     over: Option<String>,
+    #[serde(default)]
+    denied: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -226,12 +230,13 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {
         let admit = admit.clone();
         async move {
-            let (who, reason, over) = match admit.admit(sent.request()).await {
-                Ok(_) => (Who::Rust, None, None),
+            let (who, reason, over, denied) = match admit.admit(sent.request()).await {
+                Ok(_) => (Who::Rust, None, None, false),
                 Err((_, reason)) => (
                     Who::Python,
                     Some(<&str>::from(reason.why).to_owned()),
                     Some(String::from(reason.over)),
+                    reason.refusal == litellm_gateway::Refusal::Denied,
                 ),
             };
             (
@@ -239,6 +244,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
                 who,
                 reason,
                 over.filter(|_| sent.over.is_some()),
+                denied,
             )
         }
     }))
@@ -254,6 +260,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
                 sent.expect,
                 sent.reason.clone(),
                 sent.over.clone(),
+                sent.denied,
             )
         })
         .collect();
