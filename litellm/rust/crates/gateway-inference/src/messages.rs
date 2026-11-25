@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    Error, Gateway, JsonObject,
+    Checked, Error, Gateway, JsonObject,
     caching::CacheHeaders,
     error::ErrorFormat,
     hooks::CallType,
@@ -46,7 +46,7 @@ const TOOLS: &str = "tools";
 /// and never sends them on.
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
 
-pub async fn create<H: Host>(call: Call<H>, body: Result<JsonObject, Error>) -> Response {
+pub async fn create<H: Host>(Checked { call, body }: Checked<H, JsonObject>) -> Response {
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
         MessagesAttempt::new(&call, body)
     })

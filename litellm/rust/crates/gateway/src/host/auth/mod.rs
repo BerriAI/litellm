@@ -66,6 +66,16 @@ pub struct NativeAuthHost {
     master: Option<KeyHash>,
 }
 
+impl NativeAuthHost {
+    /// The host the request body check reads stored credentials through, which reads no key.
+    pub(crate) fn credential_store() -> Self {
+        Self {
+            keys: None,
+            master: None,
+        }
+    }
+}
+
 /// The request needs `step`, which this host does not answer yet.
 fn declined<T>(step: &'static str) -> Result<T, Error> {
     tracing::debug!(
