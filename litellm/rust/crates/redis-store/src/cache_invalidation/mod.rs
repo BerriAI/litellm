@@ -132,20 +132,31 @@ impl CacheInvalidation {
 }
 
 /// What a message does to this worker's native caches: an eviction drops the auth cache's copy, and
-/// both kinds reach the spend counters, which own only the `spend:*` keys.
+/// both kinds reach the spend counters, which own the `spend:*` keys and the `spend_db_floor:`
+/// marker a spend reset sets beside each, as main's subscriber writes both into
+/// `spend_counter_cache`'s memory.
 pub fn apply(invalidation: &Invalidation, auth_cache: &AuthCache, spend_counters: &SpendCounters) {
+    let cache_key = invalidation.cache_key();
+    let counter = SpendCounter::parse(cache_key).ok();
+    let floor = SpendCounter::parse_floor(cache_key).ok();
     let applied = match invalidation {
-        Invalidation::Evict(cache_key) => auth_cache.delete_local(cache_key).and_then(|()| {
-            SpendCounter::parse(cache_key)
-                .map_or(Ok(()), |counter| spend_counters.delete_local(&counter))
-        }),
-        Invalidation::Set {
-            cache_key,
-            value,
-            ttl,
-        } => SpendCounter::parse(cache_key).map_or(Ok(()), |counter| {
-            spend_counters.set_local(&counter, *value, Invalidation::memory_ttl(*ttl))
-        }),
+        Invalidation::Evict(_) => {
+            auth_cache
+                .delete_local(cache_key)
+                .and_then(|()| match (&counter, &floor) {
+                    (Some(counter), _) => spend_counters.delete_local(counter),
+                    (None, Some(floor)) => spend_counters.delete_floor(floor),
+                    (None, None) => Ok(()),
+                })
+        }
+        Invalidation::Set { value, ttl, .. } => {
+            let ttl = Invalidation::memory_ttl(*ttl);
+            match (&counter, &floor) {
+                (Some(counter), _) => spend_counters.set_local(counter, *value, ttl),
+                (None, Some(floor)) => spend_counters.set_floor(floor, *value, ttl),
+                (None, None) => Ok(()),
+            }
+        }
     };
     if let Err(error) = applied {
         tracing::warn!(%error, cache_key = invalidation.cache_key(), "applying an auth cache invalidation failed");

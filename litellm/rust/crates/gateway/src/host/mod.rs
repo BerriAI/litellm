@@ -23,7 +23,7 @@ pub(crate) use hold::test_prices;
 pub use hold::{Hold, HoldPrices, Unheld};
 pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
-pub use spend_log::RustSpendLogHost;
+pub use spend_log::{Rows, RustSpendLogHost};
 
 use std::{collections::BTreeSet, sync::Arc};
 

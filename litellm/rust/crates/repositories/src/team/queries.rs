@@ -49,6 +49,13 @@ pub struct Team {
     litellm_model_table: Option<RawJson>,
 }
 
+impl Team {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
+}
+
 /// The team `team_id`, or `None` when no row has that id.
 pub(super) async fn find_team(
     executor: impl PgExecutor<'_>,

@@ -20,6 +20,8 @@ pub enum CustomerScope {
     AppGroupOrganization,
 }
 
+const FLOOR_PREFIX: &str = "spend_db_floor:";
+
 /// One budget's spend counter. `parse` and `key` round-trip `main`'s `spend:*` keys exactly.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SpendCounter {
@@ -121,6 +123,19 @@ impl SpendCounter {
                 | Self::EndUser(_)
         )
         .then(|| Self::Committed(Box::new(self)))
+    }
+
+    /// `spend_db_floor:{key}`, where a process keeps the spend it last read from the counter's
+    /// row for a few seconds.
+    pub fn floor_key(&self) -> String {
+        format!("{FLOOR_PREFIX}{}", self.key())
+    }
+
+    /// The counter a `spend_db_floor:` key keeps the row's spend for.
+    pub fn parse_floor(key: &str) -> Result<Self, NotASpendCounter> {
+        key.strip_prefix(FLOOR_PREFIX)
+            .ok_or_else(|| NotASpendCounter(key.to_owned()))
+            .and_then(Self::parse)
     }
 
     pub fn parse(key: &str) -> Result<Self, NotASpendCounter> {

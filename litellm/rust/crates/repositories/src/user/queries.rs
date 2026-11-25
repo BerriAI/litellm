@@ -53,6 +53,13 @@ pub struct User {
     pub(super) organization_memberships: Json<Vec<OrganizationMembership>>,
 }
 
+impl User {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
+}
+
 /// One `LiteLLM_OrganizationMembership` row, as a user row includes it
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Deserialize, Serialize)]

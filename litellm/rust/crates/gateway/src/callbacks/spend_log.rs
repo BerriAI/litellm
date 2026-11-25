@@ -19,7 +19,7 @@ use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_config::Environment;
 use litellm_redaction::TokenRedactor;
 use litellm_redis_store::{Remote, spend_counters::SpendCounters};
-use litellm_repositories::{Database, KeyRepository, SpendLogRepository};
+use litellm_repositories::{Database, SpendLogRepository};
 use litellm_spend_log_writer::{
     LedgerStore, PgLedgerStore, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
@@ -29,7 +29,10 @@ use tokio::sync::Notify;
 use super::{
     Registered, budget_reservation::Reserver, parallel_request_limiter::REDIS_DEFAULT_TTL,
 };
-use crate::{RedisClients, host::RustSpendLogHost};
+use crate::{
+    RedisClients,
+    host::{Rows, RustSpendLogHost},
+};
 
 /// `PROXY_BATCH_WRITE_AT` when unset.
 const BATCH_WRITE_AT: Duration = Duration::from_secs(10);
@@ -108,17 +111,21 @@ impl SpendLog {
         Self {
             logs,
             callback: Arc::new(callback),
-            host: Arc::new(RustSpendLogHost::new(Some(Arc::new(KeyRepository::new(
-                database.clone(),
-            ))))),
+            host: Arc::new(RustSpendLogHost::new(Some(Rows::new(database.clone())))),
             budgets,
         }
     }
 
     /// The budget reservation over the counters this callback charges, so what it holds is what
-    /// the callback settles, with a cold key counter started from the key row's spend.
+    /// the callback settles, with a cold counter started from its row's spend.
     pub(crate) fn reserver(&self) -> Arc<Reserver> {
         Reserver::new(self.budgets.clone(), self.host.clone())
+    }
+
+    /// The spend counters the callback charges and a reservation holds against, which a spend
+    /// reset another pod announces is applied to.
+    pub(crate) fn spend_counters(&self) -> &Arc<SpendCounters> {
+        self.budgets.store()
     }
 
     /// The callback as one config's callback stage runs it.

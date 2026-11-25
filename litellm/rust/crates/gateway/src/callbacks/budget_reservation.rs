@@ -10,10 +10,11 @@
 //! did, as Python's failure hook and `release_budget_reservation_on_cancel` do. Accepted
 //! difference: the provider counts as reached once the pre-call hook ends, before routing.
 //!
-//! A cold counter starts from the spend its row holds, as `ensure_spend_counter_initialized`
-//! reseeds it. What the call holds is what `admit` priced from the body the client sent, as
-//! Python prices it when it authenticates, and `admit` hands any call it cannot price to Python,
-//! so one reaching here unpriced is refused, never let through unbudgeted.
+//! Each counter is read through `SpendReader`, as `get_current_spend` reads it: a cold one starts
+//! from the spend its row holds, and one that reads below its row is raised to it. What the call
+//! holds is what `admit` priced from the body the client sent, as Python prices it when it
+//! authenticates, and `admit` hands any call it cannot price to Python, so one reaching here
+//! unpriced is refused, never let through unbudgeted.
 
 use std::sync::Arc;
 
@@ -25,17 +26,14 @@ use litellm_callbacks::{
     Verdict,
 };
 use litellm_callbacks_budgets::{
-    Admission, BudgetCounterSpend, Budgets, PlannedCounter, post_call,
+    Admission, BudgetCounterSpend, Budgets, PlannedCounter, RowSpend, SpendReader, post_call,
 };
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_inference::{
     Refusal,
     record::{self, CallState, Ended},
 };
-use litellm_redis_store::{
-    Number,
-    spend_counters::{LostSeed, SpendCounter, SpendCounters},
-};
+use litellm_redis_store::spend_counters::SpendCounter;
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
@@ -54,17 +52,12 @@ const AUTH_ERROR: &str = "auth_error";
 const BUDGET_EXCEEDED_STATUS: u16 = 422;
 const UNHELD: &str = "the gateway cannot hold this call against its budget";
 
-/// The spend a counter's row holds, which a cold counter starts from.
-pub trait RowSpend: Send + Sync {
-    fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>>;
-}
-
 /// Holds what a native `/v1/messages` call may cost against every budget its caller holds,
 /// before the call runs.
 pub struct Reserver {
     manifest: Manifest,
     budgets: Arc<Budgets>,
-    stored: Arc<dyn RowSpend>,
+    spend: SpendReader,
 }
 
 /// The counters one request's caller reserves against, and what it holds on them, which it gives
@@ -201,8 +194,8 @@ impl Reserver {
     pub fn new(budgets: Arc<Budgets>, stored: Arc<dyn RowSpend>) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
+            spend: SpendReader::new(budgets.store().clone(), stored),
             budgets,
-            stored,
         })
     }
 
@@ -226,8 +219,8 @@ impl Reserver {
         }
     }
 
-    /// What each counter holds, a cold one first seeded from its row's spend, else from the
-    /// spend the plan read.
+    /// What each counter holds, checked against its budget as the proxy's authentication checks
+    /// it before the reservation.
     async fn observed(&self, counters: &[PlannedCounter]) -> Vec<BudgetCounterSpend> {
         join_all(counters.iter().map(async |planned| BudgetCounterSpend {
             counter_key: Some(planned.counter_key.clone()),
@@ -238,25 +231,11 @@ impl Reserver {
 
     async fn current(&self, planned: &PlannedCounter) -> Option<f64> {
         let counter = SpendCounter::parse(&planned.counter_key).ok()?;
-        let store: &SpendCounters = self.budgets.store();
-        if let Some(held) = store
-            .read(&counter)
-            .await
-            .ok()
-            .and_then(|read| read.value())
-        {
-            return Some(held.as_f64());
-        }
-        let spend = self
-            .stored
-            .stored(&counter)
-            .await
-            .unwrap_or(planned.fallback_spend);
-        store
-            .seed(&counter, Number::Float(spend), LostSeed::Answer)
-            .await
-            .ok()
-            .map(|seeded| seeded.as_f64())
+        Some(
+            self.spend
+                .current(&counter, planned.fallback_spend, Some(planned.max_budget))
+                .await,
+        )
     }
 
     async fn pre_call(&self, holding: &Holding) -> HookOutput {
@@ -334,6 +313,7 @@ mod tests {
         record::{Budget, EndUserRecord},
     };
     use litellm_gateway_inference::{CallHooks, record::CallRecord};
+    use litellm_redis_store::{Number, spend_counters::SpendCounters};
     use rstest::rstest;
     use serde_json::json;
     use tower::ServiceExt;
