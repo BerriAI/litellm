@@ -297,6 +297,62 @@ assert os.waitstatus_to_exitcode(status) == 0
     assert result.returncode == 0, result.stderr
 
 
+def test_importing_litellm_exits_cleanly_while_the_boot_load_retry_is_pending():
+    """A process that exits right after `import litellm` must not abort while the background retry still runs.
+
+    The retry thread is a daemon inside native code. When it reattaches to the interpreter during
+    finalization, CPython before 3.14 ends it with `pthread_exit`, whose unwind through the native
+    frames aborts the whole process (exit status 134).
+    """
+    environment: Final = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"}
+    }
+    with _serving(_Reply(status=503, body=b"busy")) as server:
+        result: Final = run_child_interpreter(
+            "import litellm\n", env={**environment, "LITELLM_MODEL_COST_MAP_URL": server.url}, timeout=120
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert server.requests >= 1
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="fork is the default start method only on Linux")
+def test_a_child_forked_while_the_retry_calls_native_code_exits_cleanly():
+    """The child has no retry thread, so the exit hook must not wait on the lock the parent's retry held."""
+    script: Final = """
+import os, signal, sys, threading, time
+from litellm.litellm_core_utils import get_model_cost_map
+held, release = threading.Event(), threading.Event()
+def retry():
+    with get_model_cost_map._retry_native_call:
+        held.set()
+        release.wait()
+holder = threading.Thread(target=retry)
+holder.start()
+held.wait()
+pid = os.fork()
+if pid == 0:
+    sys.exit(0)
+deadline = time.monotonic() + 20
+while (waited := os.waitpid(pid, os.WNOHANG)) == (0, 0) and time.monotonic() < deadline:
+    time.sleep(0.05)
+release.set()
+holder.join()
+if waited == (0, 0):
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    sys.exit("the forked child hung at exit")
+assert os.waitstatus_to_exitcode(waited[1]) == 0
+"""
+    result: Final = run_child_interpreter(
+        script, env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"}, timeout=120
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_register_model_leaves_the_native_runtime_unstarted() -> None:
     script: Final = """
 import litellm

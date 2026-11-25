@@ -9,9 +9,11 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 ```
 """
 
+import atexit
 import hashlib
 import json
 import os
+import random
 import sys
 import threading
 import warnings
@@ -60,6 +62,30 @@ MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
 MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 MODEL_COST_MAP_FETCH_MIN_DELAY_SECONDS: Final = 2.0
 _litellm_import_complete = threading.Event()
+# The boot load's retry runs on a daemon thread. Before Python 3.14, a daemon thread that reattaches to the
+# interpreter while it finalizes is ended with pthread_exit, and that unwind through native frames aborts the
+# process. So the retry calls native code only while holding this lock, and an exit hook takes it, which waits out
+# a call in flight and stops any later one, before the interpreter starts to finalize. A forked child has no retry
+# thread, so it frees the lock it inherits.
+_retry_native_call: Final = threading.Lock()
+_interpreter_exiting: Final = threading.Event()
+
+
+def _stop_background_retry() -> None:
+    _interpreter_exiting.set()
+    with _retry_native_call:
+        pass
+
+
+def _free_retry_lock_in_forked_child() -> None:
+    # A forked child has no retry thread, so a lock the parent's retry held is free in the child.
+    if _retry_native_call.locked():
+        _retry_native_call.release()
+
+
+atexit.register(_stop_background_retry)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_free_retry_lock_in_forked_child)
 
 model_cost_inputs: Final = NativeModelCostMap.bundled(
     min_model_count=MODEL_COST_MAP_MIN_MODEL_COUNT, max_shrink_ratio=MODEL_COST_MAP_MAX_SHRINK_RATIO
@@ -388,27 +414,56 @@ async def refetch_model_cost_map(
     return ModelCostMapReloaded(model_count=_install(installed))
 
 
+def _retry_delay(retry: int, retry_after: float | None) -> float:
+    """The wait before retry number ``retry``, as the native fetch policy waits between its own attempts."""
+    if retry_after is not None:
+        return min(retry_after, MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
+    backoff: Final = min(
+        MODEL_COST_MAP_FETCH_MIN_DELAY_SECONDS * 2.0 ** (retry - 1), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS
+    )
+    return backoff * (1 + random.random())
+
+
 def _retry_remote_fetch_in_background(
     url: str, timeout: int, max_attempts: int, first_failure: NativeFetchFailed
 ) -> None:
     try:
-        fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(
-            fetch_policy(timeout, max_attempts), first_failure
+        failed = first_failure  # rebind-ok: each retry that fails replaces it, and its Retry-After sets the next wait
+        for attempt in range(2, max_attempts + 1):
+            if _interpreter_exiting.wait(_retry_delay(attempt - 1, failed.retry_after)):
+                return
+            with _retry_native_call:
+                if _interpreter_exiting.is_set():
+                    return
+                fetched = cost_map_source(url, use_http_settings=False).fetch_blocking(fetch_policy(timeout, 1))
+            if isinstance(fetched, NativeFetchFailed):
+                if not fetched.retryable:
+                    break
+                if attempt < max_attempts:
+                    verbose_logger.warning(
+                        "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying",
+                        attempt,
+                        max_attempts,
+                        fetched.reason,
+                    )
+                failed = fetched
+                continue
+            _litellm_import_complete.wait()
+            with _retry_native_call:
+                if _interpreter_exiting.is_set():
+                    return
+                installed = model_cost_inputs.install(fetched.body, fetched.etag)
+                if isinstance(installed, NativeRejected):
+                    _warn_rejected(installed, url)
+                    return
+                _mark_rows_with_rules_set("remote", url, False, None, datetime.now(timezone.utc))
+                _install(installed)
+            return
+        verbose_logger.warning(
+            "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
+            url,
+            max_attempts,
         )
-        if isinstance(fetched, NativeFetchFailed):
-            verbose_logger.warning(
-                "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
-                url,
-                max_attempts,
-            )
-            return
-        _litellm_import_complete.wait()
-        installed: Final = model_cost_inputs.install(fetched.body, fetched.etag)
-        if isinstance(installed, NativeRejected):
-            _warn_rejected(installed, url)
-            return
-        _mark_rows_with_rules_set("remote", url, False, None, datetime.now(timezone.utc))
-        _install(installed)
     except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
         verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
 
