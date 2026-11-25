@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import loads_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -354,9 +355,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in text.splitlines():
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 if not isinstance(data, dict):
                     continue
@@ -394,9 +394,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in reversed(text.splitlines()):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":

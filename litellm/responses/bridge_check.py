@@ -19,6 +19,7 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute, get_vertex_ai_model_route
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ChatCompletionUserMessage, OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
@@ -87,6 +88,10 @@ def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: st
             return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
 
 
+def serves_only_responses(model: str, custom_llm_provider: str) -> bool:
+    return custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model)
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -123,6 +128,9 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    if serves_only_responses(model, custom_llm_provider):
+        model_info["mode"] = "responses"
 
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"

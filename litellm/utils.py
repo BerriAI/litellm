@@ -2035,7 +2035,10 @@ def client(original_function):
 
                 is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_responses_litellm_router_call and not is_resent_failure(e)
+                    num_retries
+                    and not is_responses_litellm_router_call
+                    and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2355,6 +2358,7 @@ def client(original_function):
                     and not is_aresponses_litellm_router_call
                     and not isinstance(e, ImportError)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -4915,6 +4919,16 @@ def _map_params_with_provider_config(
     base_model: str | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(model_info),
+        )
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
             non_default_params=non_default_params,
@@ -6976,6 +6990,7 @@ def get_model_info_helper(
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_per_turn_control=_model_info.get("supports_per_turn_control", None),
+                supports_server_side_fallback=_model_info.get("supports_server_side_fallback", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
@@ -9916,6 +9931,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.responses.transformation import VertexAIMuseResponsesAPIConfig
+
+            return VertexAIMuseResponsesAPIConfig.for_model(model)
         elif litellm.LlmProviders.SAIL == provider:
             from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
 
@@ -10539,6 +10558,8 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        drop_params: bool = False,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -10548,6 +10569,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod

@@ -89,6 +89,12 @@ def _declared_levels(raw: object) -> tuple[str, ...] | None:
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
 
 
+def deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    if model_info is None:
+        return None
+    return declared_reasoning_efforts(MappingProxyType({_DECLARED_EFFORTS_KEY: model_info.get(_DECLARED_EFFORTS_KEY)}))
+
+
 def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
     """The levels an entry declares, resolved from the model string a provider config holds rather
     than from a router deployment's model_info.

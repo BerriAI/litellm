@@ -1,5 +1,4 @@
 import copy
-import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,7 +10,9 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.tool_fields import truncate_tool_name
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
+from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.pass_through.utils import (
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
@@ -26,11 +27,6 @@ from litellm.llms.anthropic.pass_through.utils import (
     thinking_off_switch,
 )
 
-# OpenAI has a 64-character limit for function/tool names
-# Anthropic does not have this limit, so we need to truncate long names
-OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
-TOOL_NAME_HASH_LENGTH: Final = 8
-TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 _COMPACTION_BLOCK: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -81,27 +77,6 @@ def is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
         return False
     key, value = next(iter(tool.items()))
     return key not in _ANTHROPIC_TOOL_SCHEMA_KEYS and isinstance(value, dict)
-
-
-def truncate_tool_name(name: str) -> str:
-    """
-    Truncate tool names that exceed OpenAI's 64-character limit.
-
-    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
-    when multiple tools have similar long names.
-
-    Args:
-        name: The original tool name
-
-    Returns:
-        The original name if <= 64 chars, otherwise truncated with hash
-    """
-    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
-        return name
-
-    # Create deterministic hash from full name to avoid collisions
-    name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
-    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
 
 
 def is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
@@ -306,13 +281,20 @@ def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]
     return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
 
 
-def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+def _chat_tool_param(
+    function_chunk: ChatCompletionToolParamFunctionChunk, tool: object, keeps_deferral: bool = False
+) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
-    if eager_input_streaming is None:
-        return ChatCompletionToolParam(type="function", function=function_chunk)
-    return ChatCompletionToolParam(
-        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    tool_param: Final = (
+        ChatCompletionToolParam(type="function", function=function_chunk)
+        if eager_input_streaming is None
+        else ChatCompletionToolParam(
+            type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+        )
     )
+    if keeps_deferral and is_deferred(as_str_mapping(tool) or {}):
+        return {**tool_param, "defer_loading": True}
+    return tool_param
 
 
 class AnthropicAdapter:
@@ -893,7 +875,7 @@ class LiteLLMAnthropicMessagesAdapter:
             raise ValueError(f"Incompatible tool choice param submitted - {tool_choice}")
 
     def translate_anthropic_tools_to_openai(
-        self, tools: list[AllAnthropicToolsValues], model: str | None = None
+        self, tools: list[AllAnthropicToolsValues], model: str | None = None, keeps_deferral: bool = False
     ) -> tuple[list[ChatCompletionToolParam], dict[str, str]]:
         """
         Translate Anthropic tools to OpenAI format.
@@ -917,6 +899,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "strict",
             "type",
             "eager_input_streaming",
+            "defer_loading",
         ]
 
         for idx, tool in enumerate(json_copy_or_original(tool) for tool in tools):
@@ -955,7 +938,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = _chat_tool_param(function_chunk, tool)
+            tool_param = _chat_tool_param(function_chunk, tool, keeps_deferral)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 
@@ -1181,6 +1164,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        keeps_deferral: bool = False,
     ) -> dict[str, str]:
         """Translate tools and extract web_search_options when needed."""
         if "tools" not in anthropic_message_request:
@@ -1208,6 +1192,7 @@ class LiteLLMAnthropicMessagesAdapter:
         translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
             tools=regular_tools,
             model=new_kwargs.get("model"),
+            keeps_deferral=keeps_deferral,
         )
         new_kwargs["tools"] = translated_tools
         return tool_name_mapping
@@ -1409,9 +1394,16 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
         )
         ## CONVERT TOOLS
+        deferral_model_info: Final = (
+            {**(deployment_model_info or {}), "base_model": base_model} if base_model else deployment_model_info
+        )
         tool_name_mapping = self._translate_tools_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            keeps_deferral=routed_deferred_tools_mode(
+                deferral_model_info, custom_llm_provider, anthropic_message_request["model"], api_base
+            )
+            == "passthrough",
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(

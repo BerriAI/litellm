@@ -21,11 +21,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
@@ -6236,6 +6236,24 @@ async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("blank_text", ("", " "), ids=("empty", "blank"))
+async def test_a_request_with_only_blank_user_text_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, blank_text: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": [{"type": "text", "text": blank_text}]}],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [{"role": "user", "parts": [{"text": " "}]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
 @pytest.mark.parametrize("dropped_user_message", _DROPPED_USER_MESSAGES)
 async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_that_accepts_a_model_turn_end(
     respx_mock: respx.MockRouter, dropped_user_message: dict[str, object]
@@ -6401,3 +6419,70 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+
+def _deferred_tool_request(model: str = "claude-sonnet-5-5") -> AnthropicMessagesRequest:
+    return AnthropicMessagesRequest(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+        tools=[
+            {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "mcp__weather__get_forecast",
+                "description": "Get a forecast",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "defer_loading": True,
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize("deployment_model_info", [None, {"deferred_tools": "drop"}, {"deferred_tools": "native"}])
+def test_chat_route_sends_deferred_tools_as_plain_functions_unless_passthrough(
+    deployment_model_info: Mapping[str, object] | None,
+):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info=deployment_model_info
+    )
+
+    tools: Final = openai_request["tools"]
+    assert [tool["function"]["name"] for tool in tools] == ["Read", "mcp__weather__get_forecast"]
+    assert not any("defer_loading" in tool for tool in tools)
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/1234567890", "1234567890"], ids=["prefixed", "bare"])
+def test_chat_route_passthrough_sends_plain_functions_to_a_vertex_psc_endpoint(model: str):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(model),
+        custom_llm_provider="vertex_ai",
+        api_base="https://psc-endpoint.example.internal",
+        deployment_model_info={"deferred_tools": "passthrough"},
+    )
+
+    assert not any("defer_loading" in tool for tool in openai_request["tools"])
+
+
+def test_chat_route_passthrough_sends_plain_functions_when_the_request_base_model_is_gemini():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request("vertex_ai/1234567890"),
+        custom_llm_provider="vertex_ai",
+        base_model="gemini-pro-latest",
+        deployment_model_info={"deferred_tools": "passthrough"},
+    )
+
+    assert not any("defer_loading" in tool for tool in openai_request["tools"])
+
+
+def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
+    )
+
+    tools: Final = openai_request["tools"]
+    assert {tool["function"]["name"]: tool.get("defer_loading") for tool in tools} == {
+        "Read": None,
+        "mcp__weather__get_forecast": True,
+    }
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
