@@ -5,9 +5,9 @@ use std::sync::{
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Candidate, Code, Descriptor, Engine, LimiterState, ModelFacts, ParallelRequestLimiter,
-    PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel, Settings, SocketClose,
-    SuccessFacts, TargetFacts,
+    Candidate, Code, Descriptor, Engine, FailureFacts, LimiterState, ModelFacts,
+    ParallelRequestLimiter, PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel,
+    Settings, SocketClose, SuccessFacts, TargetFacts, Usage,
 };
 use litellm_redis_store::{
     Number,
@@ -206,6 +206,64 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
     assert_eq!(
         count(&store, "api_key", "k", Kind::Tokens),
         Some(Local::Number(Number::Int(120)))
+    );
+}
+
+#[rstest]
+#[case::outage_then_refusal(0, false, 0)]
+#[case::refusal_then_refusal(777, true, 777)]
+#[tokio::test]
+async fn a_billed_refusal_after_an_earlier_hop_settled_the_reservation_still_counts_toward_key_tpm(
+    #[case] first_hop_tokens: i64,
+    #[case] first_hop_billed: bool,
+    #[case] first_hop_charged: i64,
+) {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 10_000}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
+        None
+    );
+    let refusal = |tokens: i64, billed: bool| FailureFacts {
+        call_id: Some("call".into()),
+        tpm_actual: tokens,
+        partial_usage: billed.then_some(Usage {
+            prompt_tokens: tokens,
+            completion_tokens: 0,
+            cached_tokens: 0,
+        }),
+        provider_billed: billed,
+        ..FailureFacts::default()
+    };
+
+    limiter
+        .settle_failure(&state, refusal(first_hop_tokens, first_hop_billed), None)
+        .await;
+    limiter
+        .settle_failure(&state, refusal(900, true), None)
+        .await;
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 1000,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(first_hop_charged + 900 + 1000)))
     );
 }
 

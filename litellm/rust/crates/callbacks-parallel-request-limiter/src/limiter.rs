@@ -262,6 +262,8 @@ pub struct FailureFacts {
     pub cached_tokens_left_out: i64,
     #[serde(default)]
     pub partial_usage: Option<Usage>,
+    #[serde(default)]
+    pub provider_billed: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -1173,7 +1175,7 @@ impl ParallelRequestLimiter {
                 Vec::new()
             };
             let ptu = if refunds_ptu && reserved > 0 {
-                self.ptu_failure_ops(&stash, 0, None)
+                self.ptu_failure_ops(&stash, 0, None, stash.ptu_reserved_tokens)
             } else {
                 Vec::new()
             };
@@ -1209,6 +1211,15 @@ impl ParallelRequestLimiter {
         (reserved, itpm, otpm)
     }
 
+    fn tpm_settlement_targets(stash: &Stash) -> (Scopes, Scopes) {
+        stash
+            .reserved_scopes
+            .iter()
+            .filter(|scope| scope.0 != PTU_TEAM)
+            .cloned()
+            .partition(|scope| stash.cached_counting_scopes.contains(scope))
+    }
+
     fn failure_settlements(
         &self,
         stash: &Stash,
@@ -1217,12 +1228,7 @@ impl ParallelRequestLimiter {
         (reserved, itpm, otpm): (i64, i64, i64),
     ) -> Vec<Settlement> {
         let combined = if reserved > 0 {
-            let (with_cached, targets): (Scopes, Scopes) = stash
-                .reserved_scopes
-                .iter()
-                .filter(|scope| scope.0 != PTU_TEAM)
-                .cloned()
-                .partition(|scope| stash.cached_counting_scopes.contains(scope));
+            let (with_cached, targets) = Self::tpm_settlement_targets(stash);
             self.engine
                 .reservation_ops(&targets, &stash.reserved_scopes, tpm_actual, reserved)
                 .into_iter()
@@ -1237,7 +1243,7 @@ impl ParallelRequestLimiter {
             Vec::new()
         };
         let ptu = if reserved > 0 {
-            self.ptu_failure_ops(stash, tpm_actual, partial_usage)
+            self.ptu_failure_ops(stash, tpm_actual, partial_usage, stash.ptu_reserved_tokens)
         } else {
             Vec::new()
         };
@@ -1253,6 +1259,60 @@ impl ParallelRequestLimiter {
                 partial_usage.map_or(0, |usage| usage.completion_tokens),
                 otpm,
             ),
+            Settlement::Project(ptu),
+        ]
+    }
+
+    fn billed_failure_after_settlement(
+        &self,
+        stash: &Stash,
+        (tpm_actual, cached_tokens_left_out): (i64, i64),
+        partial_usage: Option<&Usage>,
+    ) -> Vec<Settlement> {
+        let nothing_held = BTreeSet::new();
+        let tpm: Vec<Increment> = if stash.reservation_released {
+            let (with_cached, targets) = Self::tpm_settlement_targets(stash);
+            self.engine
+                .reservation_ops(&targets, &nothing_held, tpm_actual, 0)
+                .into_iter()
+                .chain(self.engine.reservation_ops(
+                    &with_cached,
+                    &nothing_held,
+                    tpm_actual.saturating_add(cached_tokens_left_out.max(0)),
+                    0,
+                ))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let io: Vec<Increment> = if stash.io_reservation_released {
+            [
+                (
+                    &stash.itpm,
+                    partial_usage.map_or(0, Usage::billable_input_tokens),
+                ),
+                (
+                    &stash.otpm,
+                    partial_usage.map_or(0, |usage| usage.completion_tokens),
+                ),
+            ]
+            .into_iter()
+            .flat_map(|(reservation, actual)| {
+                let targets: Scopes = reservation.scopes.iter().cloned().collect();
+                self.engine
+                    .reservation_ops(&targets, &nothing_held, actual, 0)
+            })
+            .collect()
+        } else {
+            Vec::new()
+        };
+        let ptu = if stash.reservation_released {
+            self.ptu_failure_ops(stash, tpm_actual, partial_usage, 0)
+        } else {
+            Vec::new()
+        };
+        vec![
+            Settlement::Plain(tpm.into_iter().chain(io).collect()),
             Settlement::Project(ptu),
         ]
     }
@@ -1284,7 +1344,13 @@ impl ParallelRequestLimiter {
         ))
     }
 
-    fn ptu_failure_ops(&self, stash: &Stash, tpm_actual: i64, usage: Option<&Usage>) -> Vec<Op> {
+    fn ptu_failure_ops(
+        &self,
+        stash: &Stash,
+        tpm_actual: i64,
+        usage: Option<&Usage>,
+        reserved: i64,
+    ) -> Vec<Op> {
         let targets: Vec<(String, String)> = stash
             .reserved_scopes
             .iter()
@@ -1298,7 +1364,7 @@ impl ParallelRequestLimiter {
             &targets,
             &stash.reserved_scopes,
             settlement_tokens(stash.ptu_ceiling.as_ref(), usage, tpm_actual),
-            stash.ptu_reserved_tokens,
+            reserved,
             &stash.ptu_windows,
         )
     }
@@ -1350,6 +1416,15 @@ impl ParallelRequestLimiter {
         let settlements = {
             let mut stash = state.stash();
             let open = Self::open_reservations(&stash);
+            let billed_after_settlement = if facts.provider_billed {
+                self.billed_failure_after_settlement(
+                    &stash,
+                    (facts.tpm_actual, facts.cached_tokens_left_out),
+                    facts.partial_usage.as_ref(),
+                )
+            } else {
+                Vec::new()
+            };
             let settlements = self.failure_settlements(
                 &stash,
                 (facts.tpm_actual, facts.cached_tokens_left_out),
@@ -1360,6 +1435,9 @@ impl ParallelRequestLimiter {
                 stash.mark_reservation_released();
             }
             settlements
+                .into_iter()
+                .chain(billed_after_settlement)
+                .collect::<Vec<_>>()
         };
         for settlement in settlements {
             self.engine.settle(settlement, ctx, true).await;

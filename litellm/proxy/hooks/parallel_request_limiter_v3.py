@@ -1436,6 +1436,9 @@ class ParallelRequestLimiterHook(CustomLogger):
         )
         return kwargs, result
 
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_failure_event(
         self, kwargs: object, response_obj: object, start_time: object, end_time: object
