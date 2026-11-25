@@ -79,6 +79,18 @@ pub(crate) trait Endpoint: RouteAttempt {
     /// The provider's id for a stream's answer, when the event whose `data` this is names it.
     fn stream_response_id(data: &str) -> Option<String>;
 
+    /// Keeps in the call's record what its logging payload's `response` is built from of the
+    /// complete output that served it. A route whose payload logs no response keeps nothing.
+    fn keep_output(output: &Self::Output) {
+        let _ = output;
+    }
+
+    /// Keeps in the call's record what its logging payload's `response` is built from of one
+    /// event of the stream that served it, the event's `data` as sent.
+    fn keep_event(data: &str) {
+        let _ = data;
+    }
+
     /// Whether a call of this route with `body` runs under a deployment's stream timeout.
     fn streamed(body: &Map<String, Value>) -> bool {
         routing::streamed(body)
