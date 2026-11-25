@@ -107,3 +107,15 @@ def unconvertible_blocks_error(
             )
         case _:
             assert_never(messages_format)
+
+
+def tool_result_text_part(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str(text)}:
+            return text
+        case {"type": "text", "text": object()}:
+            return None
+        case {"type": "text"}:
+            return ""
+        case _:
+            return None

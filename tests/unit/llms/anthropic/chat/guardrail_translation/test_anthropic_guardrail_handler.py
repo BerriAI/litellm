@@ -6,7 +6,8 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-from typing import Any, Literal, Optional, Final
+from copy import deepcopy
+from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1959,6 +1960,52 @@ class TestAnthropicMessagesToolResultScanning:
         assert messages[1]["content"][0]["content"] == "skip me POISON"
         assert messages[0]["content"] == "keep me [BLOCKED]"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scan_only_tool_results", [False, True], ids=["all_messages", "scan_only_tool_results"])
+    @pytest.mark.parametrize(
+        ("mcp_result_content", "masked_content"),
+        [
+            ("ticket says POISON here", "ticket says [BLOCKED] here"),
+            (
+                [{"type": "text", "text": "ticket says POISON here"}],
+                [{"type": "text", "text": "ticket says [BLOCKED] here"}],
+            ),
+        ],
+        ids=["string_form", "list_form"],
+    )
+    async def test_replayed_mcp_tool_result_is_scanned_and_written_back(
+        self, scan_only_tool_results, mcp_result_content, masked_content
+    ):
+        guardrail = MockCanaryMaskingGuardrail()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        messages = [
+            {"role": "user", "content": "look up ticket T-1"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "mcp_tool_use",
+                        "id": "mcptoolu_1",
+                        "name": "get_ticket",
+                        "server_name": "tracker",
+                        "input": {"id": "T-1"},
+                    },
+                    {
+                        "type": "mcp_tool_result",
+                        "tool_use_id": "mcptoolu_1",
+                        "is_error": False,
+                        "content": deepcopy(mcp_result_content),
+                    },
+                ],
+            },
+            {"role": "user", "content": "summarize it"},
+        ]
+
+        await AnthropicMessagesHandler().process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert "ticket says POISON here" in guardrail.seen_texts, "an MCP server's replayed output must be scanned"
+        assert messages[1]["content"][1]["content"] == masked_content
+
 
 class InputsRecordingGuardrail(MockCanaryMaskingGuardrail):
     def __init__(self):
@@ -2368,6 +2415,41 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
             "input": {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"},
         }
         assert data["messages"][2]["content"][0]["tool_use_id"] == "toolu_01"
+
+    @pytest.mark.asyncio
+    async def test_replayed_mcp_tool_use_input_is_scanned_and_masked_in_place(self):
+        guardrail = ToolCallArgumentsMaskingGuardrail()
+        data = {
+            "model": "gpt-6.2-sol",
+            "messages": [
+                {"role": "user", "content": "look up the ticket"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "mcp_tool_use",
+                            "id": "mcptoolu_1",
+                            "name": "get_ticket",
+                            "server_name": "tracker",
+                            "input": {"id": "POISON-123"},
+                        },
+                        {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "content": "open"},
+                    ],
+                },
+                {"role": "user", "content": "thanks"},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [tool_call["function"]["name"] for tool_call in guardrail.seen_tool_calls] == ["get_ticket"]
+        assert data["messages"][1]["content"][0] == {
+            "type": "mcp_tool_use",
+            "id": "mcptoolu_1",
+            "name": "get_ticket",
+            "server_name": "tracker",
+            "input": {"id": "[BLOCKED]-123"},
+        }
 
     @pytest.mark.asyncio
     async def test_non_json_rewritten_arguments_are_rejected_by_name(self):
@@ -2824,6 +2906,79 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+def _mcp_connector_response(mcp_result_content: object) -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [
+            {"type": "text", "text": "Looking it up"},
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_1",
+                "name": "get_ticket",
+                "server_name": "tracker",
+                "input": {"id": "POISON-123"},
+            },
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcptoolu_1",
+                "is_error": False,
+                "content": deepcopy(mcp_result_content),
+            },
+            {"type": "tool_use", "id": "toolu_1", "name": "run_shell", "input": {"cmd": "echo POISON"}},
+            {"type": "text", "text": "Done with POISON"},
+        ],
+        "stop_reason": "tool_use",
+    }
+
+
+class TestOutputMcpConnectorBlocks:
+    @pytest.mark.asyncio
+    async def test_mcp_tool_use_reaches_the_guardrail_as_a_tool_call(self) -> None:
+        guardrail: Final = ToolCallArgumentsMaskingGuardrail()
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, _mcp_connector_response("ticket owner")),
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert [
+            (tool_call["function"]["name"], json.loads(tool_call["function"]["arguments"]))
+            for tool_call in guardrail.seen_tool_calls
+        ] == [("get_ticket", {"id": "POISON-123"}), ("run_shell", {"cmd": "echo POISON"})]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("mcp_result_content", "masked_content"),
+        [
+            ("owner is POISON", "owner is [BLOCKED]"),
+            (
+                [{"type": "text", "text": "owner is POISON"}, {"type": "text", "text": "backup is POISON"}],
+                [{"type": "text", "text": "owner is [BLOCKED]"}, {"type": "text", "text": "backup is [BLOCKED]"}],
+            ),
+        ],
+        ids=["string_form", "list_form"],
+    )
+    async def test_mcp_tool_result_text_is_scanned_and_masked_in_place(
+        self, mcp_result_content: object, masked_content: object
+    ) -> None:
+        response: Final = _mcp_connector_response(mcp_result_content)
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=MockCanaryMaskingGuardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        content: Final = response["content"]
+        assert isinstance(content, list)
+        assert content[2]["content"] == masked_content
+        assert content[4]["text"] == "Done with [BLOCKED]"
 
 
 @pytest.mark.asyncio

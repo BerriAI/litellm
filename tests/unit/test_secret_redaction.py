@@ -115,6 +115,19 @@ def test_a_responses_mcp_tool_authorization_is_redacted_by_its_key_name(
 
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize(
+    "body",
+    ('{"requires_authorization": true, "x_authorization": "on"}', '{"authorization": null}', "{'authorization': None}"),
+)
+def test_an_authorization_key_inside_another_name_or_holding_a_literal_is_kept(
+    monkeypatch: pytest.MonkeyPatch, native: bool, body: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+
+    assert redact_string(body) == body
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 @pytest.mark.parametrize("masked", ("Bearer sk-p****abcd", "Bearer sk-***", "sk-p****abcd"))
 def test_an_authorization_value_litellm_already_masked_keeps_its_hint(
     monkeypatch: pytest.MonkeyPatch, native: bool, masked: str

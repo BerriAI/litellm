@@ -1,7 +1,7 @@
 """
 Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 
-Used when the target model is an OpenAI or Azure model.
+Used when the target model is an OpenAI model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence

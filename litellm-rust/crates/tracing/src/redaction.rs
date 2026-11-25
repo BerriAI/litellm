@@ -37,7 +37,8 @@ fn secret_patterns(minimum_custom_key_length: usize) -> String {
             r#"['"]?\s*[:=]\s*['"]?(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]+"#,
         ),
         concat!(
-            r#"authorization['"]\s*[:=]\s*['"]?(?!(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]*\*{3})"#,
+            r#"\bauthorization['"]\s*[:=]\s*['"]?"#,
+            r#"(?!(?:null|None|true|false)\b|(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]*\*{3})"#,
             r#"(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]+"#,
         ),
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
@@ -147,6 +148,14 @@ mod tests {
     #[case::masked_authorization_value_is_kept(
         r#"{"Authorization": "Bearer sk-p****abcd"}"#,
         r#"{"Authorization": "Bearer sk-p****abcd"}"#
+    )]
+    #[case::authorization_inside_another_key_name_is_kept(
+        r#"{"requires_authorization": true, "x_authorization": "on"}"#,
+        r#"{"requires_authorization": true, "x_authorization": "on"}"#
+    )]
+    #[case::literal_authorization_value_is_kept(
+        r#"{"authorization": null}"#,
+        r#"{"authorization": null}"#
     )]
     #[case::bearer_mcp_tool_authorization(
         r#"{"authorization": "Bearer opaque-mcp-credential"}"#,
