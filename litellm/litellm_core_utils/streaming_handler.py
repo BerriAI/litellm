@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import copy
 import datetime
 import inspect
 import json
@@ -107,6 +108,20 @@ _GCHUNK_VALUE_FIELDS: Final[tuple[str, ...]] = (
 )
 _ABSENT_FIELD: Final = object()
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def _deep_model_copy(model: _ModelT) -> _ModelT:
+    try:
+        return model.model_copy(deep=True)
+    except RuntimeError:
+        return model.model_copy()
+
+
+def _copy_usage_value(usage: object) -> object:
+    if isinstance(usage, BaseModel):
+        return _deep_model_copy(usage)
+    return copy.deepcopy(usage)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.OPENCODE_GO.value}
 )
@@ -645,6 +660,7 @@ class CustomStreamWrapper:
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        self._complete_streaming_response: _CompleteStreamingResponse = None
         self.caller_requested_stream_usage: Final = (
             self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
             and getattr(logging_obj, "stream_usage_injected", False) is not True
@@ -2539,6 +2555,22 @@ class CustomStreamWrapper:
         except Exception:
             return None
 
+    def _populate_usage_chunk(
+        self,
+        response: ModelResponseStream,
+        complete_streaming_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
+    ) -> None:
+        self._propagate_usage_cost_to_hidden_params(
+            complete_streaming_response, self.custom_llm_provider, self.chunks
+        )
+        setattr(
+            response,
+            "usage",
+            _copy_usage_value(getattr(complete_streaming_response, "usage", None)),
+        )
+        _stamp_served_service_tier(response, complete_streaming_response)
+        _stamp_usage_cost(response, complete_streaming_response)
+
     def _build_complete_streaming_response(self) -> _CompleteStreamingResponse:
         try:
             return litellm.stream_chunk_builder(
@@ -2673,35 +2705,28 @@ class CustomStreamWrapper:
                 self.close()
                 self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
+                if self.sent_stream_usage:
+                    self.close()
+                    raise
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
-                logs_stream_end: Final = not self.sent_stream_usage
                 if complete_streaming_response is not None:
-                    self._propagate_usage_cost_to_hidden_params(
-                        complete_streaming_response, self.custom_llm_provider, self.chunks
-                    )
-
-                    setattr(
-                        response,
-                        "usage",
-                        getattr(complete_streaming_response, "usage"),
-                    )
-                    _stamp_served_service_tier(response, complete_streaming_response)
-                    _stamp_usage_cost(response, complete_streaming_response)
-                    try:
-                        _cache_copy = complete_streaming_response.model_copy(deep=True)
-                        _log_copy = complete_streaming_response.model_copy(deep=True)
-                    except RuntimeError:
-                        _cache_copy = complete_streaming_response.model_copy()
-                        _log_copy = complete_streaming_response.model_copy()
+                    self._populate_usage_chunk(response, complete_streaming_response)
                     self.cache_streaming_response(
-                        processed_chunk=_cache_copy,
+                        processed_chunk=_deep_model_copy(complete_streaming_response),
                         cache_hit=cache_hit,
                     )
-                    if logs_stream_end:
-                        executor.submit(self.logging_obj.stream_end_success_handler, _log_copy, cache_hit)
-                elif logs_stream_end:
-                    executor.submit(self.logging_obj.stream_end_success_handler, response, cache_hit)
+                    executor.submit(
+                        self.logging_obj.stream_end_success_handler,
+                        _deep_model_copy(complete_streaming_response),
+                        cache_hit,
+                    )
+                else:
+                    executor.submit(
+                        self.logging_obj.stream_end_success_handler,
+                        _deep_model_copy(response),
+                        cache_hit,
+                    )
                 # Update hidden_params with final usage from
                 # stream_chunk_builder.  Some providers (e.g. OpenRouter)
                 # send usage in a chunk after finish_reason, which arrives
@@ -2890,45 +2915,34 @@ class CustomStreamWrapper:
         from litellm.responses.streaming_iterator import spawn_logging_task
 
         if self.sent_last_chunk is True:
-            complete_streaming_response: Final = await self._async_build_complete_streaming_response()
-            response: Final = self._new_usage_chunk()
-            if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(
-                    complete_streaming_response, self.custom_llm_provider, self.chunks
-                )
-
-                setattr(
-                    response,
-                    "usage",
-                    getattr(complete_streaming_response, "usage"),
-                )
-                _stamp_served_service_tier(response, complete_streaming_response)
-                _stamp_usage_cost(response, complete_streaming_response)
-                try:
-                    _copy = complete_streaming_response.model_copy(deep=True)
-                except RuntimeError:
-                    _copy = complete_streaming_response.model_copy()
-                asyncio.create_task(
-                    self.async_cache_streaming_response(
-                        processed_chunk=_copy,
-                        cache_hit=cache_hit,
+            if not self.sent_stream_usage:
+                complete_streaming_response: Final = await self._async_build_complete_streaming_response()
+                self._complete_streaming_response = complete_streaming_response
+                response: Final = self._new_usage_chunk()
+                if complete_streaming_response is not None:
+                    self._populate_usage_chunk(response, complete_streaming_response)
+                    asyncio.create_task(
+                        self.async_cache_streaming_response(
+                            processed_chunk=_deep_model_copy(complete_streaming_response),
+                            cache_hit=cache_hit,
+                        )
                     )
-                )
-            # Update hidden_params with final usage from
-            # stream_chunk_builder (see sync __next__ for full comment).
-            if (
-                not self.send_stream_usage
-                and complete_streaming_response is not None
-                and self._last_returned_hidden_params is not None
-            ):
-                final_usage: Final = getattr(complete_streaming_response, "usage", None)
-                if final_usage is not None:
-                    self._last_returned_hidden_params["usage"] = final_usage
+                # Update hidden_params with final usage from
+                # stream_chunk_builder (see sync __next__ for full comment).
+                if (
+                    not self.send_stream_usage
+                    and complete_streaming_response is not None
+                    and self._last_returned_hidden_params is not None
+                ):
+                    final_usage: Final = getattr(complete_streaming_response, "usage", None)
+                    if final_usage is not None:
+                        self._last_returned_hidden_params["usage"] = final_usage
 
-            if self.sent_stream_usage is False and self.send_stream_usage is True:
-                self.sent_stream_usage = True
-                return response
+                if self.send_stream_usage is True:
+                    self.sent_stream_usage = True
+                    return response
 
+            _complete_response: Final = self._complete_streaming_response
             _deferred_cb: Final = getattr(
                 self.logging_obj,
                 "_on_deferred_stream_complete",
@@ -2943,7 +2957,7 @@ class CustomStreamWrapper:
                 # create_task would race with unified_guardrail's
                 # end-of-stream block for short-stream providers.
                 self.logging_obj._deferred_stream_complete_args = (
-                    complete_streaming_response,
+                    _complete_response,
                     cache_hit,
                 )
             else:
@@ -2953,7 +2967,7 @@ class CustomStreamWrapper:
                 spawn_logging_task(
                     asyncio.get_running_loop(),
                     self.logging_obj.dispatch_success_handlers(
-                        complete_streaming_response,
+                        _complete_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,

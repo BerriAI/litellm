@@ -11466,3 +11466,111 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+def test_sync_completion_include_usage_builds_caches_and_logs_once() -> None:
+    class _FakeCachingHandler:
+        def __init__(self) -> None:
+            self.cached_responses: list[object] = []
+
+        def sync_add_streaming_response_to_cache(self, processed_chunk: object) -> None:
+            self.cached_responses.append(processed_chunk)
+
+    caching_handler: Final = _FakeCachingHandler()
+    logged_responses: Final[list[object]] = []
+
+    with patch("litellm.stream_chunk_builder", wraps=litellm.stream_chunk_builder) as builder_spy:
+        stream: Final = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+            stream_options={"include_usage": True},
+            num_retries=0,
+        )
+        stream.logging_obj.llm_caching_handler = caching_handler
+        stream.logging_obj.stream_end_success_handler = lambda response_obj, cache_hit=False: logged_responses.append(
+            response_obj
+        )
+
+        chunks: Final[list[ModelResponseStream]] = []
+        for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                chunk.usage.prompt_tokens = 999999
+            chunks.append(chunk)
+
+        assert builder_spy.call_count == 1
+        assert len(caching_handler.cached_responses) == 1
+        cached: Final = caching_handler.cached_responses[0]
+        assert isinstance(cached, ModelResponse)
+        assert cached.usage is not None
+        assert cached.usage.prompt_tokens != 999999
+        assert len(chunks) >= 2
+        assert chunks[-1].usage is not None
+        assert chunks[-1].usage.prompt_tokens == 999999
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_logging", [False, True])
+async def test_async_acompletion_include_usage_builds_and_caches_once(deferred_logging: bool) -> None:
+    class _FakeAsyncCachingHandler:
+        def __init__(self) -> None:
+            self.cached_responses: list[object] = []
+
+        async def add_streaming_response_to_cache(self, processed_chunk: object) -> None:
+            self.cached_responses.append(processed_chunk)
+
+    caching_handler: Final = _FakeAsyncCachingHandler()
+    dispatched_responses: Final[list[object]] = []
+
+    async def _fake_dispatch_success_handlers(
+        response_obj: object,
+        cache_hit: bool = False,
+        start_time: object = None,
+        end_time: object = None,
+        prefer_async_handlers: bool = False,
+    ) -> None:
+        dispatched_responses.append(response_obj)
+
+    with patch("litellm.stream_chunk_builder", wraps=litellm.stream_chunk_builder) as builder_spy:
+        stream: Final = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+            stream_options={"include_usage": True},
+            num_retries=0,
+        )
+        stream.logging_obj.llm_caching_handler = caching_handler
+        if deferred_logging:
+            stream.logging_obj._on_deferred_stream_complete = lambda *_args: None
+        else:
+            stream.logging_obj.dispatch_success_handlers = _fake_dispatch_success_handlers
+
+        chunks: Final[list[ModelResponseStream]] = []
+        async for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                chunk.usage.prompt_tokens = 999999
+            chunks.append(chunk)
+
+        await drain_logging_tasks()
+        await asyncio.sleep(0)
+
+        assert builder_spy.call_count == 1
+        assert len(caching_handler.cached_responses) == 1
+        cached: Final = caching_handler.cached_responses[0]
+        assert isinstance(cached, ModelResponse)
+        assert cached.usage is not None
+        assert cached.usage.prompt_tokens != 999999
+
+        if deferred_logging:
+            deferred_response: Final = stream.logging_obj._deferred_stream_complete_args[0]
+            assert isinstance(deferred_response, ModelResponse)
+            assert deferred_response.usage is not None
+            assert deferred_response.usage.prompt_tokens != 999999
+        else:
+            assert len(dispatched_responses) == 1
+            logged: Final = dispatched_responses[0]
+            assert isinstance(logged, ModelResponse)
+            assert logged.usage is not None
+            assert logged.usage.prompt_tokens != 999999
