@@ -673,14 +673,18 @@ def _spawn_detached_stream_drain(drain: Coroutine[object, object, None]) -> bool
     return True
 
 
-async def _read_stream_to_end(stream: CustomStreamWrapper) -> bool:
+async def _read_stream_to_end(stream: CustomStreamWrapper, owner: CustomStreamWrapper) -> bool:
+    """Read ``stream`` to its end and tell ``owner``, the wrapper the request was served through, how it ended."""
+    last: object = None  # rebind-ok: the newest item
     try:
         while True:
-            await stream.__anext__()
+            last = await stream.__anext__()
     except StopAsyncIteration:
+        owner.report_disconnect_drain(last)
         return True
     except Exception as e:  # noqa: BLE001  # the stream already logged its own failure; the drain must still clean up
         verbose_proxy_logger.debug("Draining a stream after client disconnect failed: %s", e)
+        owner.report_disconnect_drain(last, e)
         return False
 
 
@@ -704,9 +708,11 @@ async def _bill_drained_stream_after_disconnect(stream: CustomStreamWrapper, dis
     A drain still running at the time limit bills the chunks it has read and
     closes the provider stream instead.
     """
+    unwrapped: Final = _unwrapped_stream(disconnected.response)
+    owner: Final = unwrapped if isinstance(unwrapped, CustomStreamWrapper) else stream
     try:
         drained: Final = await asyncio.wait_for(
-            _read_stream_to_end(stream), timeout=CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS
+            _read_stream_to_end(stream, owner), timeout=CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS
         )
     except asyncio.TimeoutError:
         verbose_proxy_logger.warning(
@@ -715,33 +721,45 @@ async def _bill_drained_stream_after_disconnect(stream: CustomStreamWrapper, dis
             len(stream.chunks),
         )
         with anyio.CancelScope(shield=True):
-            await disconnected.bill_partial_spend()
-            await _settle_detached_stream(disconnected, drained=False)
+            await _settle_detached_stream(disconnected, drained=False, bills_partial_spend=True)
         return
     except BaseException:
         with anyio.CancelScope(shield=True):
-            await disconnected.bill_partial_spend()
-            await _settle_detached_stream(disconnected, drained=False)
+            await _settle_detached_stream(disconnected, drained=False, bills_partial_spend=True)
         raise
     with anyio.CancelScope(shield=True):
         await _settle_detached_stream(disconnected, drained=drained)
 
 
-async def bill_detached_stream_drains_on_shutdown() -> None:
+async def bill_detached_stream_drains_on_shutdown(timeout: float) -> None:
     """Stop the drains still running at shutdown, so each bills the chunks it has read before the spend flush."""
     drains: Final = tuple(_DETACHED_STREAM_DRAINS)
+    if not drains:
+        return
     await asyncio.sleep(0)  # a drain cancelled before its first step would never bill
     for drain in drains:
         drain.cancel()
-    await asyncio.gather(*drains, return_exceptions=True)
+    unfinished: Final = (await asyncio.wait(drains, timeout=timeout))[1]
+    if unfinished:
+        verbose_proxy_logger.warning(
+            "%d detached stream drains did not bill within %.3fs of shutdown; their spend may be lost",
+            len(unfinished),
+            timeout,
+        )
 
 
-async def _settle_detached_stream(disconnected: _DisconnectedStream, drained: bool) -> None:
-    if drained:
-        disconnected.fire_deferred_logging()
-    if disconnected.proxy_logging_obj is not None and disconnected.user_api_key_dict is not None:
-        await disconnected.proxy_logging_obj.arelease_max_parallel_requests(disconnected.user_api_key_dict)
-    await _close_stream_and_settle_cache_estimate(disconnected.response, disconnected.logging_obj, drained)
+async def _settle_detached_stream(
+    disconnected: _DisconnectedStream, drained: bool, *, bills_partial_spend: bool = False
+) -> None:
+    try:
+        if bills_partial_spend:
+            await disconnected.bill_partial_spend()
+        if drained:
+            disconnected.fire_deferred_logging()
+        if disconnected.proxy_logging_obj is not None and disconnected.user_api_key_dict is not None:
+            await disconnected.proxy_logging_obj.arelease_max_parallel_requests(disconnected.user_api_key_dict)
+    finally:
+        await _close_stream_and_settle_cache_estimate(disconnected.response, disconnected.logging_obj, drained)
 
 
 async def _close_stream_and_settle_cache_estimate(

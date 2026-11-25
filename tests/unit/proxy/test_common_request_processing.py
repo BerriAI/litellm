@@ -12,6 +12,7 @@ import traceback
 import weakref
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
+from functools import partial
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, TypeAlias, TypeVar
@@ -12424,25 +12425,29 @@ class TestStreamingDisconnectDrainsProviderUsage:
         monkeypatch: pytest.MonkeyPatch,
         provider: _ProviderWithLateUsage,
         recorder: _RecordingSuccessLogger,
-        use_router: bool,
+        use_router: bool = False,
         release_tail: bool = True,
         settle: Callable[[], Awaitable[None]] | None = None,
-    ) -> list[object]:
+    ) -> Router | None:
         from litellm.proxy.common_request_processing import arm_disconnect_drain
 
         monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "late", "custom_handler": provider}])
         monkeypatch.setattr(litellm, "callbacks", [recorder])
         messages: Final = [{"role": "user", "content": "tell me a long story"}]
-        response: Final = (
-            await Router(model_list=[{"model_name": "m", "litellm_params": {"model": "late/m"}}]).acompletion(
-                model="m", messages=messages, stream=True
-            )
+        router: Final = (
+            Router(model_list=[{"model_name": "m", "litellm_params": {"model": "late/m", "tpm": 100000}}])
             if use_router
+            else None
+        )
+        response: Final = (
+            await router.acompletion(model="m", messages=messages, stream=True)
+            if router is not None
             else await litellm.acompletion(model="late/m", messages=messages, stream=True)
         )
         arm_disconnect_drain(response)
         stream: Final = response.__aiter__()
-        delivered: Final = [await stream.__anext__() for _ in range(3)]
+        for _ in range(3):
+            await stream.__anext__()
         waiting_for_tail: Final = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0.05)
         waiting_for_tail.cancel()
@@ -12461,7 +12466,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
             await settle()
         await asyncio.wait_for(recorder.logged.wait(), timeout=5)
         await asyncio.sleep(0.2)
-        return delivered
+        return router
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("use_router", [False, True])
@@ -12471,12 +12476,13 @@ class TestStreamingDisconnectDrainsProviderUsage:
         provider: Final = _ProviderWithLateUsage()
         recorder: Final = _RecordingSuccessLogger()
 
-        delivered: Final = await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router)
+        router: Final = await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router)
 
-        assert len(delivered) == 3
         assert len(recorder.success_events) == 1, recorder.success_events
         logged: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
         assert (logged["prompt_tokens"], logged["completion_tokens"]) == (50, 2000)
+        if router is not None:
+            assert await router.get_model_group_usage("m") == (2050, 1)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("drain_cap", [0, 1])
@@ -12491,7 +12497,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
         provider: Final = _ProviderWithLateUsage()
         recorder: Final = _RecordingSuccessLogger()
         try:
-            await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router=False)
+            await self._disconnect_mid_read(monkeypatch, provider, recorder)
         finally:
             running_drain.cancel()
 
@@ -12511,7 +12517,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
         provider: Final = _ProviderWithLateUsage()
         recorder: Final = _RecordingSuccessLogger()
 
-        await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router=False, release_tail=False)
+        await self._disconnect_mid_read(monkeypatch, provider, recorder, release_tail=False)
 
         assert len(recorder.success_events) == 1
         logged: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
@@ -12534,9 +12540,8 @@ class TestStreamingDisconnectDrainsProviderUsage:
             monkeypatch,
             provider,
             recorder,
-            use_router=False,
             release_tail=False,
-            settle=common_request_processing.bill_detached_stream_drains_on_shutdown,
+            settle=partial(common_request_processing.bill_detached_stream_drains_on_shutdown, 5.0),
         )
 
         assert len(recorder.success_events) == 1
@@ -12553,7 +12558,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
         provider: Final = _ProviderWithLateUsage(fail_after_tail=True)
         recorder: Final = _RecordingFailureLogger()
 
-        await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router=False)
+        await self._disconnect_mid_read(monkeypatch, provider, recorder)
 
         assert recorder.success_events == []
         assert len(recorder.failure_events) == 1

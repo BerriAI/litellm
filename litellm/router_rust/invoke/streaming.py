@@ -1004,11 +1004,13 @@ class _AsyncChatStream(FallbackAwareStreamWrapper):
         self,
         generator: AsyncGenerator[object, None],
         model_response: CustomStreamWrapper,
+        attempt: StreamAttempt,
         close_attempt: Callable[[], Awaitable[None]],
     ) -> None:
         _chat_wrapper_init(self, generator, model_response)
         self._source_stream = model_response
         self._async_generator: Final = generator
+        self._attempt: Final = attempt
         self._close_attempt: Final = close_attempt
 
     def arm_disconnect_drain(self) -> None:
@@ -1017,6 +1019,12 @@ class _AsyncChatStream(FallbackAwareStreamWrapper):
 
     def disconnect_drain_target(self) -> CustomStreamWrapper | None:
         return None if self.fallback_headers_adopted else self._source_stream.disconnect_drain_target()
+
+    def report_disconnect_drain(self, last: object, error: Exception | None = None) -> None:
+        if error is not None:
+            self._attempt.report_failure(error)
+        else:
+            self._attempt.report_success(_chat_total_tokens(last), last)
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -1157,7 +1165,7 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
                             "stream_with_fallbacks: error closing fallback_response: %s", close_error
                         )
 
-    wrapped_response: Final = _AsyncChatStream(stream_with_fallbacks(), model_response, close_attempt)
+    wrapped_response: Final = _AsyncChatStream(stream_with_fallbacks(), model_response, attempt, close_attempt)
     # weak, so the generator closing over it does not keep the wrapper alive
     wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
     return wrapped_response

@@ -2216,7 +2216,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
-            await bill_detached_stream_drains_on_shutdown()
+            await bill_detached_stream_drains_on_shutdown(GracefulShutdownManager.remaining(5.0))
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:

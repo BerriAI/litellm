@@ -862,11 +862,14 @@ class CustomStreamWrapper:
 
     def disconnect_drain_target(self) -> "CustomStreamWrapper | None":
         """The stream to read to its end after the consumer left, or None when there is nothing to drain."""
-        if not self._drains_upstream_on_disconnect or self._closed or self.completion_stream is None:
+        if not self._drains_upstream_on_disconnect or self._closed or not is_async_iterable(self.completion_stream):
             return None
         if not self.chunks or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
             return None
         return self
+
+    def report_disconnect_drain(self, last: object, error: Exception | None = None) -> None:
+        """Called once a disconnect drain read this stream to its end (``last`` is its final item) or to ``error``."""
 
     async def _anext_upstream_chunk(self) -> object:
         stream: Final[object] = self.completion_stream
