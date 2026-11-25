@@ -1408,6 +1408,12 @@ def _estimated_input_cost(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _is_refused_stream(litellm_logging_obj: object) -> bool:
+    return isinstance(litellm_logging_obj, Logging) and (
+        litellm_logging_obj.stream_success_refused or litellm_logging_obj.stream_success_claimed
+    )
+
+
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
     """A provider handoff or a cached response both mean the router selected a deployment."""
     caching_details: Final = litellm_logging_obj.caching_details
@@ -3899,7 +3905,7 @@ class ProxyLogging:
             error_type=error_type,
             route=user_api_key_dict.request_route,
             team_id=user_api_key_dict.team_id,
-            stream_refused=isinstance(logging_obj, Logging) and logging_obj.stream_success_refused,
+            stream_refused=_is_refused_stream(logging_obj),
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -4130,6 +4136,8 @@ class ProxyLogging:
                 input=input,
                 api_key="",
             )
+            if _is_refused_stream(litellm_logging_obj):
+                await litellm_logging_obj.mask_refused_stream_failure_log()
 
             await self._dispatch_proxy_only_failure_handlers(
                 litellm_logging_obj=litellm_logging_obj,
@@ -5067,7 +5075,16 @@ class ProxyLogging:
         stop_provider_stream: Final = logging_obj.on_stream_refused
         logging_obj.on_stream_refused = None
         if stop_provider_stream is not None:
-            await stop_provider_stream()
+            stopping: Final = asyncio.ensure_future(stop_provider_stream())
+            try:
+                await asyncio.shield(stopping)
+            except asyncio.CancelledError:
+                from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                    async_coroutine=ProxyLogging._log_refused_stream_after_disconnect(logging_obj, stopping, error)
+                )
+                raise
             return True
         try:
             await read_tap.aclose()
@@ -5083,6 +5100,16 @@ class ProxyLogging:
             litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
         )
         return True
+
+    @staticmethod
+    async def _log_refused_stream_after_disconnect(
+        logging_obj: Logging, stopping: "asyncio.Future[None]", error: Exception
+    ) -> None:
+        await asyncio.wait((stopping,))
+        await logging_obj.mask_refused_stream_failure_log()
+        await ProxyLogging._dispatch_proxy_only_failure_handlers(
+            litellm_logging_obj=logging_obj, original_exception=error
+        )
 
     async def arelease_max_parallel_requests_on_disconnect(
         self,

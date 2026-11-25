@@ -3706,23 +3706,7 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    if (
-                        callback.should_run_guardrail(
-                            data=self.model_call_details,
-                            event_type=GuardrailEventHooks.logging_only,
-                        )
-                        is not True
-                    ):
-                        continue
-
-                    self.shadow_eval_request_snapshot = None
-                    self.model_call_details, result = await callback.async_logging_hook(
-                        kwargs=self.model_call_details,
-                        result=result,
-                        call_type=self.call_type,
-                    )
+                    result = await self._run_guardrail_logging_hook(callback, result)
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(
                         result=result, litellm_logging_obj=self, custom_logger=callback
@@ -3881,6 +3865,43 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
         await flush_post_call_redis_batches()
+
+    async def _run_guardrail_logging_hook(self, callback: CustomGuardrail, result: object) -> object:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        if (
+            callback.should_run_guardrail(data=self.model_call_details, event_type=GuardrailEventHooks.logging_only)
+            is not True
+        ):
+            return result
+        self.shadow_eval_request_snapshot = None
+        self.model_call_details, hooked_result = await callback.async_logging_hook(
+            kwargs=self.model_call_details,
+            result=result,
+            call_type=self.call_type,
+        )
+        return hooked_result
+
+    async def mask_refused_stream_failure_log(self) -> None:
+        for callback in self._async_failure_callbacks():
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            try:
+                await self._run_guardrail_logging_hook(callback, None)
+            except Exception:  # noqa: BLE001  # one failing hook must not skip the failure log
+                verbose_logger.error(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred in async_logging_hook %s",
+                    traceback.format_exc(),
+                )
+                self._handle_callback_failure(callback=callback)
+
+    def _async_failure_callbacks(self) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        return tuple(
+            self.get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+                global_callbacks=litellm._async_failure_callback,
+            )
+        )
 
     def _handle_callback_failure(self, callback: object):
         """
@@ -4221,10 +4242,7 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time=end_time,
         )
 
-        callbacks: Final = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-            global_callbacks=litellm._async_failure_callback,
-        )
+        callbacks: Final = self._async_failure_callbacks()
 
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 

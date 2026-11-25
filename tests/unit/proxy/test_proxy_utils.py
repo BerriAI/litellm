@@ -3703,8 +3703,9 @@ async def test_native_messages_stream_ending_in_a_callback_crash_still_logs_its_
     [
         GuardrailRaisedException(guardrail_name="output-check", message="Blocked by callback"),
         HTTPException(status_code=400, detail="Blocked by callback"),
+        BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output"),
     ],
-    ids=["guardrail_raised", "http_exception"],
+    ids=["guardrail_raised", "http_exception", "presidio_blocked_entity"],
 )
 async def test_stream_refused_after_its_success_was_logged_is_billed_once_and_still_logs_the_refusal(
     monkeypatch, refusal_error, served_as, request_route: str
@@ -3795,6 +3796,72 @@ async def test_refused_native_messages_stream_bills_every_frame_the_provider_sen
 
     assert [row[:3] for row in rows] == [("failure", 30, 20)]
     assert rows[0][3] > 0
+
+
+@pytest.mark.asyncio
+async def test_refused_native_messages_stream_still_bills_its_failure_when_the_client_disconnects_during_the_stop(
+    monkeypatch,
+):
+    from litellm.caching.caching import DualCache
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+        BaseAnthropicMessagesStreamingIterator,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    class RefusingHook(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            read = 0
+            async for _ in response:
+                read += 1
+                if read == 4:
+                    break
+            raise BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+            yield
+
+    monkeypatch.setattr(litellm, "callbacks", [RefusingHook()])
+    spend_rows: Final = _SpendRows()
+    logging_obj: Final = _refused_stream_logging_obj(spend_rows)
+
+    async def run_parked(parked) -> None:
+        await parked
+
+    logging_obj._on_deferred_stream_complete = run_parked
+    client: Final[list[asyncio.Task[object]]] = []
+
+    async def provider():
+        try:
+            for sent, frame in enumerate(_native_messages_sse(input_tokens=30, output_tokens=20)):
+                if sent == 4:
+                    await asyncio.Event().wait()
+                yield frame
+        finally:
+            client[0].cancel()
+
+    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=AnthropicMessagesStreamingResponse(
+            completion_stream=BaseAnthropicMessagesStreamingIterator(
+                litellm_logging_obj=logging_obj, request_body={"model": "claude-sonnet-4-5"}
+            ).async_sse_wrapper(provider()),
+            hidden_params={},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+    )
+
+    async def read_all() -> list[object]:
+        return [chunk async for chunk in guarded]
+
+    client.append(asyncio.ensure_future(read_all()))
+    with pytest.raises(asyncio.CancelledError):
+        await client[0]
+    for _ in range(100):
+        if spend_rows.rows:
+            break
+        await asyncio.sleep(0.05)
+
+    assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
+    assert spend_rows.rows[0][3] > 0
 
 
 @pytest.mark.asyncio
