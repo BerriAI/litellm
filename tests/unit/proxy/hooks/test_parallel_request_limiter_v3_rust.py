@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 
@@ -40,6 +41,7 @@ from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired, total_deadline
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -58,6 +60,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     enforce_mcp_server_rate_limits,
     estimate_input_and_output_tokens,
     estimate_precise_input_tokens,
+    fallback_target_allowed,
     get_or_create_request_stash,
     increment_reservation_aware_tokens,
     no_max_tokens_output_floor,
@@ -2529,7 +2532,7 @@ async def test_stash_applies_when_owner_or_callback_call_id_missing():
     assert int(_local(handler, tokens_key) or 0) == 0
 
 
-async def _reserve_tpm_for_owner_call(handler, local_cache, api_key: str, call_id: str) -> int:
+async def _admit_owner_call(handler, local_cache, api_key: str, call_id: str) -> None:
     await handler.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key=api_key, tpm_limit=10_000),
         cache=local_cache,
@@ -2541,6 +2544,10 @@ async def _reserve_tpm_for_owner_call(handler, local_cache, api_key: str, call_i
         },
         call_type="completion",
     )
+
+
+async def _reserve_tpm_for_owner_call(handler, local_cache, api_key: str, call_id: str) -> int:
+    await _admit_owner_call(handler, local_cache, api_key, call_id)
     stash = get_request_stash()
     assert stash is not None and stash.reserved_tokens > 0
     return stash.reserved_tokens
@@ -2602,6 +2609,216 @@ async def test_failure_event_refunds_reservation_for_input_only_estimate_v3():
     )
 
     assert int(_local(handler, tokens_key) or 0) == 0
+
+
+def _billed_refusal() -> ImageRefusalError:
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://generativelanguage.googleapis.com")),
+        provider_specific_fields={},
+        billed_answer=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_failure_event_settles_tpm_reservation_at_a_billed_image_refusal_without_output_v3():
+    _api_key = hash_token("sk-billed-image-refusal")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = _counter("api_key", _api_key)
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refusal-call")
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "refusal-call",
+            "exception": _billed_refusal(),
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(_local(handler, tokens_key) or 0) == 777
+
+
+_IMAGE_REFUSAL: Final = {
+    "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16},
+}
+
+
+async def _key_tpm_after_refusals(monkeypatch, deployments: int, reservation: bool) -> int:
+    api_key: Final = hash_token(f"sk-refused-by-{deployments}-deployments")
+    call_id: Final = f"key-tpm-refusals-{deployments}"
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", str(reservation).lower())
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [handler])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    await _admit_owner_call(handler, local_cache, api_key, call_id)
+    groups: Final = tuple(f"image-{index}" for index in range(deployments))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+            }
+            for group in groups
+        ],
+        fallbacks=[{groups[0]: list(groups[1:])}],
+        num_retries=0,
+    )
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model=groups[0],
+        prompt="a single small red dot",
+        litellm_call_id=call_id,
+        metadata={"user_api_key_hash": api_key},
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__regex=r"https://image-\d+\.invalid/").mock(
+            return_value=httpx.Response(200, json=_IMAGE_REFUSAL)
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+    return int(_local(handler, _counter("api_key", api_key)) or 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reservation", (True, False))
+async def test_every_billed_image_refusal_of_a_fallback_chain_counts_toward_key_tpm_v3(monkeypatch, reservation):
+    admitted: Final = 0 if reservation else 1
+    one_refusal: Final = await _key_tpm_after_refusals(monkeypatch, deployments=1, reservation=reservation)
+    refused_by_every_fallback: Final = await _key_tpm_after_refusals(
+        monkeypatch, deployments=3, reservation=reservation
+    )
+
+    assert one_refusal > admitted
+    assert refused_by_every_fallback - admitted == 3 * (one_refusal - admitted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reservation", (True, False))
+async def test_a_billed_refusal_on_a_fallback_hop_counts_toward_the_hops_model_tpm_on_the_key_v3(
+    reservation: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", str(reservation).lower())
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(
+        api_key="refused-hop-key",
+        tpm_limit=10_000,
+        metadata={"model_tpm_limit": {"image-primary": 10_000, "image-hop": 10_000}},
+    )
+    request: Final = {"model": "image-primary", "prompt": "a red dot", "litellm_call_id": "refused-hop"}
+    await handler.async_pre_call_hook(auth, cache, dict(request), "aimage_generation")
+    assert await fallback_target_allowed(handler, auth, "image-hop", request)
+
+    async def model_tokens(model: str) -> int:
+        return int(await handler.rate_limits.get(_counter("model_per_key", f"{auth.api_key}:{model}")) or 0)
+
+    primary_before: Final = await model_tokens("image-primary")
+    hop_before: Final = await model_tokens("image-hop")
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "refused-hop",
+            "exception": _billed_refusal(),
+            "standard_logging_object": {"model_group": "image-hop", "metadata": {"user_api_key_hash": auth.api_key}},
+            "litellm_params": {"metadata": {"model_group": "image-hop", "user_api_key_metadata": auth.metadata}},
+            "combined_usage_object": Usage(prompt_tokens=900, completion_tokens=0, total_tokens=900),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await model_tokens("image-hop") - hop_before == 900
+    assert await model_tokens("image-primary") <= primary_before
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_settles_reservation_at_a_billed_image_refusal_without_output_v3():
+    _api_key = hash_token("sk-billed-image-refusal-post-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = _counter("api_key", _api_key)
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refusal-post-call")
+
+    await handler.async_post_call_failure_hook(
+        request_data={
+            "model": "gemini-3.1-flash-image",
+            "litellm_call_id": "refusal-post-call",
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        original_exception=_billed_refusal(),
+        user_api_key_dict=UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000),
+    )
+
+    assert int(_local(handler, tokens_key) or 0) == 777
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_hop_error", "first_hop_usage", "first_hop_tokens"),
+    [
+        (
+            litellm.InternalServerError(message="upstream outage", llm_provider="gemini", model="gemini-3.1-flash-image"),
+            None,
+            0,
+        ),
+        (_billed_refusal(), Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777), 777),
+    ],
+    ids=["5xx-then-refusal", "refusal-then-refusal"],
+)
+async def test_a_billed_refusal_after_an_earlier_hop_settled_the_reservation_still_counts_toward_key_tpm_v3(
+    first_hop_error: Exception, first_hop_usage: Usage | None, first_hop_tokens: int
+):
+    _api_key: Final = hash_token("sk-billed-refusal-after-a-settled-hop")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key: Final = _counter("api_key", _api_key)
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "settled-then-refused")
+    hop_kwargs: Final = {
+        "litellm_call_id": "settled-then-refused",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+    }
+
+    await handler.async_log_failure_event(
+        kwargs={**hop_kwargs, "exception": first_hop_error, "combined_usage_object": first_hop_usage},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await handler.async_log_failure_event(
+        kwargs={
+            **hop_kwargs,
+            "exception": _billed_refusal(),
+            "combined_usage_object": Usage(prompt_tokens=900, completion_tokens=0, total_tokens=900),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await handler.async_log_success_event(
+        kwargs=dict(hop_kwargs),
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=400, completion_tokens=600, total_tokens=1000)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert int(_local(handler, tokens_key) or 0) == first_hop_tokens + 900 + 1000
 
 
 @pytest.mark.asyncio
@@ -3604,6 +3821,103 @@ async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usag
 
     assert int(_local(handler, itpm_key) or 0) == 20
     assert int(_local(handler, otpm_key) or 0) == 7
+
+
+@pytest.mark.asyncio
+async def test_a_billed_refusal_after_a_5xx_settled_the_reservation_still_counts_toward_project_itpm_otpm_v3():
+    _api_key: Final = hash_token("sk-project-io-5xx-then-refusal")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=_api_key,
+            project_id="proj-refused",
+            project_metadata={
+                "model_itpm_limit": {"gpt-4o-mini": 10_000},
+                "model_otpm_limit": {"gpt-4o-mini": 10_000},
+            },
+        ),
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "project-refused-call",
+        },
+        call_type="completion",
+    )
+    itpm_key: Final = _counter("model_per_project_itpm", "proj-refused:gpt-4o-mini")
+    otpm_key: Final = _counter("model_per_project_otpm", "proj-refused:gpt-4o-mini")
+    hop_kwargs: Final = {
+        "litellm_call_id": "project-refused-call",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+    }
+
+    await handler.async_log_failure_event(
+        kwargs={
+            **hop_kwargs,
+            "exception": litellm.InternalServerError(
+                message="upstream outage", llm_provider="gemini", model="gemini-3.1-flash-image"
+            ),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await handler.async_log_failure_event(
+        kwargs={
+            **hop_kwargs,
+            "exception": _billed_refusal(),
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(_local(handler, itpm_key) or 0) == 20
+    assert int(_local(handler, otpm_key) or 0) == 7
+
+
+@pytest.mark.asyncio
+async def test_an_unbilled_image_refusal_gives_back_its_project_itpm_otpm_reservation_v3():
+    _api_key: Final = hash_token("sk-project-io-recitation")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=_api_key,
+            project_id="proj-recited",
+            project_metadata={
+                "model_itpm_limit": {"gpt-4o-mini": 10_000},
+                "model_otpm_limit": {"gpt-4o-mini": 10_000},
+            },
+        ),
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "project-recited-call",
+        },
+        call_type="completion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.itpm_reserved_tokens > 0 and stash.otpm_reserved_tokens > 0
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "project-recited-call",
+            "exception": _billed_refusal(),
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(_local(handler, _counter("model_per_project_itpm", "proj-recited:gpt-4o-mini")) or 0) == 0
+    assert int(_local(handler, _counter("model_per_project_otpm", "proj-recited:gpt-4o-mini")) or 0) == 0
 
 
 @pytest.mark.asyncio
@@ -7455,6 +7769,42 @@ async def test_a_failed_stream_settles_the_ptu_counter_in_normalized_tokens():
             "standard_logging_object": {
                 "metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}
             },
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(_local(handler, ptu_key) or 0) == 20 + 4 * 7
+
+
+@pytest.mark.asyncio
+async def test_a_billed_refusal_after_a_5xx_settled_the_ptu_reservation_still_counts_in_normalized_tokens():
+    cache: Final = DualCache()
+    handler, ptu_key = await _reserve_a_ptu_minute(cache, "ptu-5xx-then-refusal")
+    hop_kwargs: Final = {
+        "litellm_call_id": "ptu-5xx-then-refusal",
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}
+        },
+    }
+
+    await handler.async_log_failure_event(
+        kwargs={
+            **hop_kwargs,
+            "exception": litellm.InternalServerError(
+                message="upstream outage", llm_provider="gemini", model="gemini-3.1-flash-image"
+            ),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await handler.async_log_failure_event(
+        kwargs={
+            **hop_kwargs,
+            "exception": _billed_refusal(),
             "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
         },
         response_obj=None,

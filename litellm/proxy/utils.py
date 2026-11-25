@@ -60,6 +60,7 @@ from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
+    IMAGE_CALL_TYPES,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -82,6 +83,7 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError, is_answer_without_an_image
 from litellm.proxy._types import (
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -713,7 +715,9 @@ class _BudgetAlertEmailer(Protocol):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
-    if isinstance(exc, (MissingMessageRoleError, UnresolvablePreviousResponseError)):
+    if isinstance(
+        exc, (MissingMessageRoleError, UnresolvablePreviousResponseError, ImageRefusalError, UnservedImageError)
+    ):
         return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
@@ -1347,6 +1351,7 @@ _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.a
 _RERANK_CALL_TYPES: Final = frozenset((CallTypes.rerank.value, CallTypes.arerank.value))
 
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
+_CARRIED_ATTEMPTS: Final = TypeAdapter(tuple[object, ...])
 
 
 def _billed_across_attempts(
@@ -1757,20 +1762,32 @@ def _failure_usage_to_lift(
     base_model: str | None = None,
     dispatched_call_type: str | None = None,
 ) -> tuple[object, object] | None:
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    unbilled_after_billed_image: Final = (
+        bool(failed_attempts) and not provider_billed and model_call_details.get("call_type") in IMAGE_CALL_TYPES
+    )
     current_attempt: Final = _current_failure_usage_to_lift(
         model_call_details,
         request_body,
-        dispatched,
+        dispatched and not unbilled_after_billed_image,
         provider_billed,
         deployment_id,
         base_model,
         dispatched_call_type=dispatched_call_type,
     )
-    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
     if not failed_attempts:
         return current_attempt
     current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)
     return _billed_across_attempts(failed_attempts, current_usage, current_cost)
+
+
+def _usage_the_success_left_unbilled(logging_obj: Logging) -> tuple[Usage, float] | None:
+    owed: Final = frozenset(id(attempt) for attempt in logging_obj.failed_attempts_owed_on_success)
+    carried: Final = _CARRIED_ATTEMPTS.validate_python(logging_obj.model_call_details.get("failed_attempts_usage", ()))
+    unbilled: Final = _FAILED_ATTEMPTS_USAGE.validate_python(
+        tuple(attempt for attempt in carried if id(attempt) not in owed)
+    )
+    return _billed_across_attempts(unbilled, None, None) if unbilled else None
 
 
 _EMPTY_LIFT: Final[Mapping[str, object]] = MappingProxyType({})
@@ -2064,11 +2081,41 @@ def _proxy_only_error_log_fields(
     )
 
 
+def _attribution_to_the_fallback_that_answered_without_an_image(
+    request_data: Mapping[str, object], standard_logging_object: object, client_seen: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    from litellm.proxy.hooks.proxy_track_cost_callback import deployment_attribution
+    from litellm.proxy.proxy_server import llm_router
+
+    logged: Final = _as_str_mapping(standard_logging_object)
+    answered_id: Final = None if client_seen is None else _record_deployment_id(client_seen)
+    if llm_router is None or answered_id is None:
+        return _EMPTY_LIFT
+    if not logged or answered_id == logged.get("model_id"):
+        return _EMPTY_LIFT
+    deployment: Final = llm_router.registry().deployment(answered_id)
+    if deployment is None:
+        return _EMPTY_LIFT
+    attribution: Final = deployment_attribution(deployment)
+    metadata: Final = _as_str_mapping(request_data.get("metadata"))
+    return MappingProxyType(
+        {
+            "standard_logging_object": {**logged, **attribution, "model_id": answered_id},
+            "metadata": {
+                **metadata,
+                "model_group": attribution["model_group"],
+                "model_info": {**_as_str_mapping(metadata.get("model_info")), "id": answered_id},
+            },
+        }
+    )
+
+
 def _failure_fields_to_lift(
     request_data: Mapping[str, object],
     provider_billed: bool = False,
     dispatched_call_type: str | None = None,
     route_call_type: str | None = None,
+    answered_without_an_image: bool = False,
 ) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -2093,14 +2140,18 @@ def _failure_fields_to_lift(
         if _client_seen is None
         else _record_pricing(_model_call_details, _client_seen, _base_model)
     )
-    _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_row_pricing_details,
-        request_body=request_data,
-        dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
-        provider_billed=_billed,
-        deployment_id=_deployment_id if _client_seen is None else _record_deployment_id(_client_seen),
-        base_model=_row_base_model,
-        dispatched_call_type=_estimate_call_type,
+    _usage_to_lift: Final = (
+        _usage_the_success_left_unbilled(_logging_obj)
+        if isinstance(_logging_obj, Logging) and _success_already_logged
+        else _failure_usage_to_lift(
+            model_call_details=_row_pricing_details,
+            request_body=request_data,
+            dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+            provider_billed=_billed,
+            deployment_id=_deployment_id if _client_seen is None else _record_deployment_id(_client_seen),
+            base_model=_row_base_model,
+            dispatched_call_type=_estimate_call_type,
+        )
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data, _estimate_call_type)
@@ -2127,7 +2178,14 @@ def _failure_fields_to_lift(
             _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
         ),
     )
-    return MappingProxyType({key: value for key, value in _entries if value is not None})
+    _attribution: Final = (
+        _attribution_to_the_fallback_that_answered_without_an_image(
+            request_data, _model_call_details.get("standard_logging_object"), _client_seen
+        )
+        if answered_without_an_image
+        else _EMPTY_LIFT
+    )
+    return MappingProxyType({**{key: value for key, value in _entries if value is not None}, **_attribution})
 
 
 @dataclass(frozen=True)
@@ -4616,6 +4674,7 @@ class ProxyLogging:
                 provider_billed=_provider_billed_the_failure(original_exception),
                 dispatched_call_type=dispatched_call_type,
                 route_call_type=_call_type_for_route(user_api_key_dict.request_route),
+                answered_without_an_image=is_answer_without_an_image(original_exception),
             )
         )
 

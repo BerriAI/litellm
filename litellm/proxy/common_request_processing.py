@@ -55,6 +55,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    IMAGE_CALL_TYPES,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
@@ -377,6 +378,7 @@ from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
     CallTypes,
     Choices,
+    ImageResponse,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
@@ -2369,6 +2371,35 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
     return response_cost if isinstance(response_cost, int | float) and finite_cost(response_cost) else ""
 
 
+def response_cost_with_failed_attempts(response_cost: object, logging_obj: object) -> float | str:
+    if isinstance(response_cost, str):
+        return response_cost
+    own_cost: Final = response_cost if isinstance(response_cost, int | float) else 0.0
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return own_cost or ""
+    return logging_obj.with_failed_attempts_owed(own_cost) or ""
+
+
+def stream_response_cost_header_value(
+    served_image: bool, hidden_params: Mapping[str, object], logging_obj: object
+) -> float | str:
+    if served_image and hidden_params.get("cache_hit") is not True:
+        return response_cost_with_failed_attempts(hidden_params.get("response_cost"), logging_obj)
+    return _response_cost_header_value(hidden_params)
+
+
+def _failed_request_response_cost(
+    request_data: Mapping[str, object],
+    logging_obj: LiteLLMLoggingObj | None,
+    failed_in_agentic_follow_up: bool,
+) -> float:
+    if failed_in_agentic_follow_up:
+        return failure_row_response_cost(request_data)
+    if logging_obj is not None and logging_obj.finalized_cost is not None:
+        return logging_obj.finalized_cost.amount
+    return (failure_row_response_cost(request_data) or 0) if request_data.get("call_type") in IMAGE_CALL_TYPES else 0
+
+
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:
@@ -3741,6 +3772,7 @@ class ProxyBaseLLMRequestProcessing:
     def _stream_response_headers(
         self,
         *,
+        served_image: bool,
         hidden_params: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
@@ -3757,7 +3789,7 @@ class ProxyBaseLLMRequestProcessing:
                     cache_key=hidden_params.get("cache_key") or "",
                     api_base=hidden_params.get("api_base") or "",
                     version=version,
-                    response_cost=_response_cost_header_value(hidden_params),
+                    response_cost=stream_response_cost_header_value(served_image, hidden_params, logging_obj),
                     model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                     fastest_response_batch_completion=hidden_params.get("fastest_response_batch_completion"),
                     request_data=self.data,
@@ -4119,7 +4151,9 @@ class ProxyBaseLLMRequestProcessing:
                     response=response,
                     request_headers=dict(request.headers),
                 )
+                served_image: Final = isinstance(response, ImageResponse)
                 custom_headers: Final = self._stream_response_headers(
+                    served_image=served_image,
                     hidden_params=hidden_params,
                     user_api_key_dict=user_api_key_dict,
                     logging_obj=logging_obj,
@@ -4130,6 +4164,7 @@ class ProxyBaseLLMRequestProcessing:
                 async def refresh_stream_headers() -> Mapping[str, str]:
                     """`custom_headers` rebuilt for whichever deployment served the stream."""
                     return self._stream_response_headers(
+                        served_image=served_image,
                         hidden_params=(
                             get_hidden_params_dict(response)
                             if getattr(response, "fallback_headers_adopted", False)
@@ -5387,13 +5422,8 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=(
-                failure_row_response_cost(self.data)
-                if failed_in_agentic_follow_up
-                else _litellm_logging_obj.finalized_cost.amount
-                if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
-                and _litellm_logging_obj.finalized_cost is not None
-                else 0
+            response_cost=_failed_request_response_cost(
+                _REQUEST_FIELDS.validate_python(self.data), _litellm_logging_obj, failed_in_agentic_follow_up
             ),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
