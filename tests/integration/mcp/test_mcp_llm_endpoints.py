@@ -524,10 +524,19 @@ class Rig:
         return f"{self.alias}-add"
 
     def send(
-        self, key: str, tools: Sequence[Mapping[str, object]], prompt: str | None = None, **extra: object
+        self,
+        key: str,
+        tools: Sequence[Mapping[str, object]],
+        prompt: str | None = None,
+        upstream_bearer: str | None = None,
+        **extra: object,
     ) -> httpx.Response:
         text: Final = prompt or f"add {self.alias}"
-        headers: Final = {"Authorization": f"Bearer {key}"}
+        headers: Final = (
+            {"Authorization": f"Bearer {key}"}
+            if upstream_bearer is None
+            else {"x-litellm-api-key": key, "Authorization": f"Bearer {upstream_bearer}"}
+        )
         if self.surface == "chat":
             body: Final = {"model": self.model, "messages": [{"role": "user", "content": text}], "tools": list(tools)}
             return self.gateway.client.post("/v1/chat/completions", headers=headers, json={**body, **extra}, timeout=90)
@@ -610,6 +619,7 @@ def _rig(
     prices: Mapping[str, JsonValue] | None = None,
     parallel: int = 1,
     slow_tool_seconds: float | None = None,
+    server: Mapping[str, object] | None = None,
 ) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
     plan: Final = (
@@ -620,7 +630,7 @@ def _rig(
         wire_server(_model_double(plan, billing, parallel)) as wire,
         gateway.scenario() as scenario,
     ):
-        server_id: Final = register_mcp(scenario, peer, alias)
+        server_id: Final = register_mcp(scenario, peer, alias, **(server or {}))
         model: Final = scenario.model(
             model=_upstream_model(upstream or surface), api_base=wire.url + "/v1", **(prices or {})
         )
@@ -753,6 +763,54 @@ def test_dashboard_viewer_only_offers_tools_in_the_requested_toolset(gateway: Ga
         assert response.status_code == 200, response.text
         assert rig.upstream_tools() == ((rig.tool,), (rig.tool,))
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+PASSTHROUGH_SERVER: Final[Mapping[str, object]] = {
+    "auth_type": "none",
+    "oauth_passthrough": True,
+    "extra_headers": ["Authorization"],
+}
+
+
+def _authorizations_seen_by(peer: McpPeer) -> frozenset[bytes | None]:
+    return frozenset(
+        TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]).get(b"authorization")
+        for request in peer.drain()
+    )
+
+
+@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
+def test_dashboard_viewer_login_token_never_reaches_a_passthrough_server(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    with _rig(gateway, surface, server=PASSTHROUGH_SERVER) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
+
+        assert response.status_code == 200, response.text
+        assert ANSWER in response.text, response.text
+        assert _authorizations_seen_by(rig.peer) == frozenset({None})
+
+
+@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
+def test_dashboard_viewer_upstream_bearer_reaches_a_passthrough_server(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    with _rig(gateway, surface, server=PASSTHROUGH_SERVER) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        upstream_bearer: Final = "upstream-" + uuid.uuid4().hex
+        response: Final = rig.send(
+            session,
+            [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}],
+            upstream_bearer=upstream_bearer,
+            stream=stream,
+        )
+
+        assert response.status_code == 200, response.text
+        assert ANSWER in response.text, response.text
+        assert _authorizations_seen_by(rig.peer) == frozenset({f"Bearer {upstream_bearer}".encode()})
 
 
 @pytest.mark.parametrize("surface", SURFACES)

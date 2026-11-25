@@ -38,9 +38,14 @@ async def resolve_inference_mcp_auth(auth: "UserAPIKeyAuth | None") -> "UserAPIK
     ):
         return auth
     acting: Final = await acting_user_auth(session)
-    if acting is session or session.end_user_id is None:
+    if acting is session:
         return acting
-    return acting.model_copy(update={"end_user_id": session.end_user_id})
+    return acting.model_copy(
+        update={
+            "end_user_id": session.end_user_id,
+            "mcp_authorization_is_admission_credential": bool(session.api_key),
+        }
+    )
 
 
 class _AuthCarryingMetadata(TypedDict):
