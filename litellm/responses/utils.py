@@ -1198,9 +1198,16 @@ _RESPONSES_API_ID_PREFIX: Final = "resp_"
 
 
 def held_by_a_provider(response_id: str) -> bool:
-    return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-        response_id
-    ).startswith(_RESPONSES_API_ID_PREFIX)
+    from litellm.utils import ProviderConfigManager
+
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    original: Final = decoded.get("response_id", response_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    return original.startswith(_RESPONSES_API_ID_PREFIX) or (
+        provider is not None
+        and not original.startswith(_CHAT_COMPLETION_ID_PREFIX)
+        and ProviderConfigManager.get_provider_responses_api_config(provider=provider) is not None
+    )
 
 
 class ResponseAPILoggingUtils:
