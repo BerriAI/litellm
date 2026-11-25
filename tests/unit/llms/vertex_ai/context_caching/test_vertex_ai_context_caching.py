@@ -3463,7 +3463,10 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
 
 @pytest.mark.parametrize(
     "system_prompt",
-    [pytest.param("You are terse.", id="short_system_prompt"), pytest.param("house rules " * 3000, id="big_system_prompt")],
+    [
+        pytest.param("You are terse.", id="short_system_prompt"),
+        pytest.param("house rules " * 3000, id="big_system_prompt"),
+    ],
 )
 def test_a_cache_mark_on_the_last_reminder_makes_no_gemini_cache_and_keeps_the_reminder_in_place(
     local_model_cost_map, system_prompt: str
@@ -3608,7 +3611,9 @@ async def test_a_ttl_on_a_later_mark_in_the_system_prompt_sets_how_long_the_gemi
             {"role": "system", "content": "Answer in English."},
             {
                 "role": "system",
-                "content": [{"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral", "ttl": "600s"}}],
+                "content": [
+                    {"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral", "ttl": "600s"}}
+                ],
             },
             {"role": "user", "content": "question 1"},
         ],
