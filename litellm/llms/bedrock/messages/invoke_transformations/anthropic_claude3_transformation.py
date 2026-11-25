@@ -27,6 +27,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.anthropic.pass_through.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -86,6 +87,10 @@ _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mappi
 _OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
+def _safeguards_drop_params(drop_params: object, safeguards: object) -> object:
+    return True if proxy_serves_safeguards(safeguards) else drop_params
+
+
 class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
     AmazonInvokeConfig,
@@ -118,7 +123,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return bedrock_drops_safeguards(
             bedrock_capability_model(model, kwargs.get("base_model")),
             _MODEL_INFO.validate_python(kwargs.get("model_info")),
-            kwargs.get("drop_params"),
+            _safeguards_drop_params(kwargs.get("drop_params"), kwargs.get("safeguards")),
             sends_beta=True,
         )
 
@@ -744,7 +749,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         drops_safeguards: Final = SAFEGUARDS in params and drops_safeguards_bedrock_rejects(
             bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
             _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
-            getattr(litellm_params, "drop_params", None),
+            _safeguards_drop_params(getattr(litellm_params, "drop_params", None), params.get(SAFEGUARDS)),
             "bedrock_invoke",
             sends_beta=True,
         )

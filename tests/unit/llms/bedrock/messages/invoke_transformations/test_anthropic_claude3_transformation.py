@@ -1783,6 +1783,37 @@ def test_bedrock_messages_drops_safeguards_and_beta_under_drop_params_only_on_mo
     assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
 
 
+@pytest.mark.parametrize(
+    ("model", "forwarded"),
+    [(_OPUS_4_1, False), (_SONNET_4_5, True)],
+    ids=["old_model_drops_both", "flagged_model_keeps_both"],
+)
+def test_bedrock_messages_drops_safeguards_bedrock_rejects_when_the_proxy_classifier_answers_them(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    forwarded: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"safeguards_classifier_model": "openai/classifier"})
+    safeguards: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": safeguards},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert (result.get("safeguards") == safeguards) is forwarded
+    assert ("dangerous-tool-use-2026-09-03" in result.get("anthropic_beta", [])) is forwarded
+
+
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
     decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")

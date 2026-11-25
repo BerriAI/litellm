@@ -1500,10 +1500,10 @@ def bedrock_supports_safeguards(model: str, model_info: Mapping[str, object] | N
 
 def log_dropped_safeguards(model: str, provider: str) -> None:
     verbose_logger.warning(
-        "Dropped safeguards and the %s beta for model=%s provider=%s because drop_params is on and Bedrock would "
-        "reject safeguards on this request, since the model map does not flag supports_safeguards for the model or "
-        "this route does not send that beta. On Bedrock Invoke a deployment forwards it with model_info "
-        "supports_safeguards true.",
+        "Dropped safeguards and the %s beta for model=%s provider=%s because drop_params is on or the proxy's "
+        "safeguards classifier answers them, and Bedrock would reject safeguards on this request, since the model "
+        "map does not flag supports_safeguards for the model or this route does not send that beta. On Bedrock "
+        "Invoke a deployment forwards it with model_info supports_safeguards true.",
         ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
         model,
         provider,

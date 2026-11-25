@@ -224,11 +224,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model,
             _LITELLM_PARAMS.validate_python(litellm_params),
             sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
-            in get_anthropic_beta_from_headers(headers),
+            in frozenset(get_anthropic_beta_from_headers(headers)) | anthropic_body_betas(params.get("anthropic_beta")),
         )
-        upstream_params: Final = (
-            {key: value for key, value in params.items() if key != SAFEGUARDS} if drops_safeguards else params
-        )
+        upstream_params: Final = dict(without_safeguards(params)) if drops_safeguards else params
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
