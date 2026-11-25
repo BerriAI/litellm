@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import litellm
 import pytest
+import respx
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -995,6 +996,42 @@ async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deplo
     assert headers["x-ratelimit-remaining-tokens"] == 1000 - total_tokens
     assert headers["x-ratelimit-remaining-requests"] == 99
     assert await router.get_model_group_usage("openai/gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_an_image_answer_without_an_image_counts_its_answered_tokens_in_the_model_group_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://image.invalid/v1",
+                    "tpm": 100000,
+                },
+                "model_info": {"id": "image"},
+            }
+        ],
+        num_retries=0,
+    )
+    refusal: Final = {
+        "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+        "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+    }
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://").mock(return_value=httpx.Response(200, json=refusal))
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+        assert await router.get_model_group_usage("image") == (1110, 1)
+    finally:
+        router.discard()
 
 
 @pytest.mark.asyncio

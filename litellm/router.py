@@ -137,7 +137,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
-from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS, billed_deployment_tokens
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -9218,6 +9218,16 @@ class Router:
                 value=1,
                 parent_otel_span=parent_otel_span,
                 ttl=RoutingArgs.ttl.value,
+            )
+        billed: Final = billed_deployment_tokens(cast("dict[str, object]", kwargs))  # cast-ok: untyped kwargs dict
+        if billed is not None:
+            await self._increment_deployment_usage(
+                deployment_id=f"{id}",
+                deployment_name=billed.deployment_name,
+                model_group=f"{model_group}",
+                total_tokens=billed.tokens,
+                rpm_increment=0,
+                parent_otel_span=parent_otel_span,
             )
 
     def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:

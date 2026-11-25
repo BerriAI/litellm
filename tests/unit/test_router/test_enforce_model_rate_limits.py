@@ -7,9 +7,12 @@ regardless of the routing strategy being used.
 
 import asyncio
 from datetime import timedelta
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
@@ -466,3 +469,58 @@ class TestModelRateLimitConcurrency:
 
         assert len(successes) == 2, f"Expected 2 successes, got {len(successes)}"
         assert len(failures) == 2, f"Expected 2 rate limit errors, got {len(failures)}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit,answer",
+    [
+        pytest.param(
+            {"tpm": 1000}, {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="tpm-refusal"
+        ),
+        pytest.param({"tpm": 1000}, {"finishReason": "STOP", "content": {"parts": [{"text": "a dot"}]}}, id="tpm-no_image"),
+        pytest.param(
+            {"itpm": 700}, {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="itpm-refusal"
+        ),
+        pytest.param(
+            {"tpm": 1000, "input_cost_per_token": 0, "output_cost_per_token": 0},
+            {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}},
+            id="tpm-zero_priced_refusal",
+        ),
+    ],
+)
+async def test_an_image_answer_without_an_image_counts_its_answered_tokens_toward_the_deployment_limits(
+    limit: dict[str, int], answer: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://image.invalid/v1",
+                    **limit,
+                },
+                "model_info": {"id": "image"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+    billed: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://").mock(
+                return_value=httpx.Response(200, json={"candidates": [answer], "usageMetadata": billed})
+            )
+            with pytest.raises((litellm.ContentPolicyViolationError, litellm.UnprocessableEntityError)):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+            with pytest.raises(litellm.RateLimitError, match="Model rate limit exceeded"):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert route.call_count == 1

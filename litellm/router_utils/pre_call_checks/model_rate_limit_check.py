@@ -11,6 +11,7 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -21,6 +22,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.gemini.empty_image_response import billed_deployment_tokens
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
@@ -34,7 +36,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterErrors
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -47,6 +49,9 @@ else:
 
 class RoutingArgs:
     ttl: int = 60  # 1min (RPM/TPM expire key)
+
+
+_SETTLED_BY_THE_ASYNC_FAILURE_HOOK: Final = frozenset({CallTypes.aimage_generation.value, CallTypes.aimage_edit.value})
 
 
 class ModelRateLimitingCheck(CustomLogger):
@@ -373,33 +378,32 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
-
-            verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
-
-            await self.dual_cache.async_increment_cache(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=RoutingArgs.ttl,
-            )
+            await self._async_count_tokens(f"{model_id}", f"{model}", int(total_tokens))
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def _async_count_tokens(self, model_id: str, model: str, tokens: int) -> None:
+        tpm_key: Final = f"{model_id}:{model}:tpm:{get_utc_datetime().strftime('%H-%M')}"
+        verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, tokens)
+        await self.dual_cache.async_increment_cache(key=tpm_key, value=tokens, ttl=RoutingArgs.ttl)
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         from litellm.litellm_core_utils.core_helpers import (
             get_parent_otel_span_from_kwargs,
         )
 
-        # Never fail the primary logging pipeline over an io-token refund error.
+        # Never fail the primary logging pipeline over an io-token refund or usage error.
         with contextlib.suppress(Exception):
-            await async_io_token_refund_failure(
-                self.dual_cache,
-                kwargs,
-                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
-            )
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
+            billed: Final = billed_deployment_tokens(kwargs)
+            if billed is None:
+                await async_io_token_refund_failure(self.dual_cache, kwargs, parent_otel_span=parent_otel_span)
+                return
+            await async_io_token_reconcile_success(self.dual_cache, kwargs, None, parent_otel_span=parent_otel_span)
+            await self._async_count_tokens(billed.deployment_id, billed.deployment_name, billed.tokens)
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -447,7 +451,14 @@ class ModelRateLimitingCheck(CustomLogger):
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.log_success_event: %s", e)
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if (
+            kwargs.get("call_type") in _SETTLED_BY_THE_ASYNC_FAILURE_HOOK
+            and billed_deployment_tokens(kwargs) is not None
+        ):
+            return
         with contextlib.suppress(Exception):
             io_token_refund_failure(
                 self.dual_cache,

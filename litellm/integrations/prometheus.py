@@ -2893,6 +2893,7 @@ class PrometheusLogger(CustomLogger):
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
             ) or self._extract_api_provider_from_exception(original_exception)
+            answered_without_an_image: Final = isinstance(original_exception, IMAGE_ANSWER_ERRORS)
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2919,7 +2920,7 @@ class PrometheusLogger(CustomLogger):
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
                 custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
-                    request_data.get("standard_logging_object"), isinstance(original_exception, IMAGE_ANSWER_ERRORS)
+                    request_data.get("standard_logging_object"), answered_without_an_image
                 ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
@@ -2937,13 +2938,13 @@ class PrometheusLogger(CustomLogger):
                 enum_values,
                 label_context=_label_ctx,
             )
-            self._increment_billed_image_failure_metrics(request_data, enum_values)
+            self._increment_billed_image_failure_metrics(request_data, enum_values, answered_without_an_image)
 
         except Exception as e:
             verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
 
     def _increment_billed_image_failure_metrics(
-        self, request_data: Mapping[str, object], enum_values: UserAPIKeyLabelValues
+        self, request_data: Mapping[str, object], enum_values: UserAPIKeyLabelValues, answered_without_an_image: bool
     ) -> None:
         usage: Final = request_data.get("combined_usage_object")
         response_cost: Final = request_data.get("response_cost")
@@ -2962,7 +2963,9 @@ class PrometheusLogger(CustomLogger):
             model=billed_model.removeprefix(f"{provider}/" if isinstance(provider, str) else "")
             if isinstance(billed_model, str)
             else None,
-            requested_model=billed_group if isinstance(billed_group, str) else enum_values.requested_model,
+            requested_model=billed_group
+            if answered_without_an_image and isinstance(billed_group, str)
+            else enum_values.requested_model,
         )
         label_context: Final = PrometheusLabelFactoryContext(billed_values)
 

@@ -526,7 +526,7 @@ def reconstruct_model_name(
 
 # Helper functions used for OTEL logging
 def get_parent_otel_span_from_kwargs(
-    kwargs: dict[str, object] | None = None,
+    kwargs: Mapping[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:

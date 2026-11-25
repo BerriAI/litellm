@@ -919,10 +919,32 @@ async def test_failure_hook_counts_no_spend_for_a_no_log_image_failure(
 
 
 @pytest.mark.asyncio
-async def test_a_billed_fallback_refusal_labels_its_spend_with_the_fallback_group() -> None:
+@pytest.mark.parametrize(
+    ("final_exception", "expected_group"),
+    (
+        pytest.param(_image_refusal(), "backup", id="fallback_refusal"),
+        pytest.param(
+            litellm.ServiceUnavailableError(
+                message="backup is down", llm_provider="gemini", model="gemini-3.1-flash-image"
+            ),
+            "primary",
+            id="refusal_then_fallback_5xx",
+        ),
+    ),
+)
+async def test_a_billed_fallback_refusal_labels_its_spend_with_the_fallback_group(
+    final_exception: Exception, expected_group: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth
 
+    proxy_router: Final = litellm.Router(
+        model_list=[
+            {"model_name": group, "litellm_params": {"model": "gemini/gemini-3.1-flash-image", "api_key": "test-key"}}
+            for group in ("primary", "backup")
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", proxy_router)
     _clear_prometheus_registry()
     try:
         await PrometheusLogger().async_post_call_failure_hook(
@@ -935,15 +957,16 @@ async def test_a_billed_fallback_refusal_labels_its_spend_with_the_fallback_grou
                 },
                 model="primary",
             ),
-            original_exception=_image_refusal(),
+            original_exception=final_exception,
             user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
         )
         assert {
             metric_name: [sample.labels.get("requested_model") for sample in _collected_samples(metric_name)]
             for metric_name in ("litellm_spend_metric_total", "litellm_total_tokens_metric_total")
-        } == {"litellm_spend_metric_total": ["backup"], "litellm_total_tokens_metric_total": ["backup"]}
+        } == {"litellm_spend_metric_total": [expected_group], "litellm_total_tokens_metric_total": [expected_group]}
     finally:
         _clear_prometheus_registry()
+        proxy_router.discard()
 
 
 @pytest.mark.asyncio

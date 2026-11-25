@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final, Protocol
 
 import httpx
@@ -9,7 +10,7 @@ from litellm.exceptions import (
     UnprocessableEntityError,
     error_response_without_credentials,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.utils import ImageResponse, Usage
 
@@ -36,6 +37,27 @@ def image_answer_cost_on_failure(call_details: Mapping[str, object]) -> float:
     if not isinstance(exception, IMAGE_ANSWER_ERRORS) or not isinstance(response_cost, (int, float)):
         return 0.0
     return max(float(response_cost), 0.0)
+
+
+@dataclass(frozen=True, slots=True)
+class BilledDeploymentTokens:
+    deployment_id: str
+    deployment_name: str
+    tokens: int
+
+
+def billed_deployment_tokens(kwargs: Mapping[str, object]) -> BilledDeploymentTokens | None:
+    if not isinstance(kwargs.get("exception"), IMAGE_ANSWER_ERRORS):
+        return None
+    logged: Final = as_str_mapping(kwargs.get("standard_logging_object")) or {}
+    params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    routed: Final = ((as_str_mapping(params.get(c)) or {}).get("deployment") for c in ("litellm_metadata", "metadata"))
+    deployment_name: Final = next((name for name in routed if isinstance(name, str)), None)
+    deployment_id: Final = logged.get("model_id")
+    tokens: Final = logged.get("total_tokens")
+    if deployment_name is None or not isinstance(deployment_id, (str, int)) or not isinstance(tokens, int):
+        return None
+    return BilledDeploymentTokens(str(deployment_id), deployment_name, tokens)
 
 
 def success_cost_without_failed_image_answers(call_details: Mapping[str, object], response_cost: float) -> float:
@@ -92,8 +114,6 @@ def _bill_answer(billing: FailedImageBilling, answer: ImageResponse) -> None:
     if answer.usage is None:
         return
     cost: Final = billing.response_cost_calculator(result=answer) or 0.0
-    if cost <= 0:
-        return
     billing.record_partial_usage_for_failure(
         ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(answer.usage.model_dump()), cost
     )
