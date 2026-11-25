@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
 import anyio
 import fastapi
@@ -40,6 +40,7 @@ from litellm.integrations.otel.runtime import (
     phase_span,
     seed_request_identity,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -220,6 +221,7 @@ from litellm.router_api import (
 )
 from litellm.rust_bridge._native import RustAuth, RustDenial, RustIdentity, RustPlan
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.semantic_cache import semantic_cache_params
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -296,6 +298,7 @@ def get_model_from_request_context(
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
+_FetchedT = TypeVar("_FetchedT")
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -303,7 +306,7 @@ _REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
-    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+    request_data: dict[str, object], valid_token: UserAPIKeyAuth, request: Request | None, route: str
 ) -> None:
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
@@ -1595,7 +1598,7 @@ def get_api_key(
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
+                headers: Mapping[str, object] | None = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
                     if request.headers.get(header_key) is not None:
@@ -2312,7 +2315,7 @@ async def _impersonate_or_raise(
             )
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(label: str, awaitable: Awaitable[_FetchedT]) -> _FetchedT | None:
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError) so they propagate to the caller.
@@ -2766,6 +2769,10 @@ async def run_centralized_common_checks(
         )
 
     user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
+    if user_object is not None:
+        user_api_key_auth_obj.apply_user_semantic_cache_params(
+            semantic_cache_params(attribute_or_none(user_object, "metadata"))
+        )
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -3055,7 +3062,7 @@ async def _apply_key_end_user_default_budget_to_token(
 
 async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     llm_router: litellm.Router | None,
     team_object: LiteLLM_TeamTableCachedObj | None,
@@ -3064,7 +3071,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     end_user_id: str | None = None,
     end_user_object: LiteLLM_EndUserTable | None = None,
     request: Request | None = None,
@@ -3481,6 +3488,31 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
         verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
 
 
+def _seed_request_user_id(
+    user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object], request: Request
+) -> None:
+    """Name the caller for the spans a backend that drops an unlabeled span receives.
+
+    Called inside the ``auth`` phase span so that span carries the id too. Best-effort:
+    trace labels must never fail auth.
+    """
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.integrations.otel.model.metadata import request_user_id
+        from litellm.integrations.otel.plumbing.context import inbound_user_id, set_request_user_id
+
+        if is_otel_v2_enabled():
+            headers: Final = cast(  # cast-ok: the helper returns an unparameterized dict
+                Mapping[str, object], safe_get_request_headers(request)
+            )
+            end_user_id: Final = user_api_key_dict.end_user_id or get_end_user_id_from_request_body(
+                request_data, headers
+            )
+            set_request_user_id(request_user_id(end_user_id, request_data, inbound_user_id()))
+    except Exception as exc:  # noqa: BLE001  # telemetry labels are best-effort and must never break authentication
+        verbose_proxy_logger.debug("OTel V2: request user id resolution failed: %s", exc)
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -3546,6 +3578,11 @@ async def user_api_key_auth(
         request_auth.budget_reservation = None
         request_auth.agent_caller = agent_caller_from_headers(safe_get_request_headers(request), request_auth)
         _seed_request_destinations(request_auth, request)
+        _seed_request_user_id(
+            request_auth,
+            cast(Mapping[str, object], request_data),  # cast-ok: request bodies are dynamically typed
+            request,
+        )
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it
@@ -3637,6 +3674,7 @@ async def return_user_api_key_auth_obj(
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=user_obj.effective_max_budget(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
+            user_semantic_cache_params=semantic_cache_params(attribute_or_none(user_obj, "metadata")),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
@@ -3769,10 +3807,10 @@ async def _lookup_end_user_and_apply_budget(
 async def enforce_key_and_fallback_model_access(
     *,
     valid_token: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
     request: Request | None,
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     llm_router: litellm.Router | None,
 ) -> None:
     """

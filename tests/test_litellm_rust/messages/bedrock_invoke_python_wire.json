@@ -279,8 +279,8 @@
   "chunks": [],
   "raised": [
    [
-    "ChecksumMismatch",
-    null
+    "BedrockError",
+    502
    ]
   ]
  },
@@ -565,17 +565,17 @@
     "usage": {
      "cache_creation_input_tokens": 0,
      "cache_read_input_tokens": 0,
-     "completion_tokens": 4,
+     "completion_tokens": 2,
      "completion_tokens_details": {
       "accepted_prediction_tokens": null,
       "audio_tokens": null,
       "image_tokens": null,
       "reasoning_tokens": 0,
       "rejected_prediction_tokens": null,
-      "text_tokens": 4,
+      "text_tokens": 2,
       "video_tokens": null
      },
-     "cost": 8.25e-05,
+     "cost": 4.9500000000000004e-05,
      "prompt_tokens": 5,
      "prompt_tokens_details": {
       "audio_tokens": null,
@@ -587,7 +587,7 @@
       "text_tokens": 5,
       "video_tokens": null
      },
-     "total_tokens": 9
+     "total_tokens": 7
     }
    },
    null

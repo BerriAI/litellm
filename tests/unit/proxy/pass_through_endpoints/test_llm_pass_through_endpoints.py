@@ -79,7 +79,6 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     openai_proxy_route,
     openrouter_proxy_route,
     relay_nvidia_nim_request,
-    typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -8143,6 +8142,11 @@ class TestPassthroughRouterModelBudgetReservation:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -8246,6 +8250,11 @@ class TestAzureRouterModelStreamingDispatch:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -8309,6 +8318,11 @@ class TestAzureRouterModelStreamingKeepalive:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
         request = MagicMock(spec=Request)
@@ -8380,6 +8394,11 @@ class TestRouterModelRelayUpstreamContract:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
     def _recording_router(self, captured: list[dict]):
@@ -9641,21 +9660,28 @@ async def _azure_relay_json_upstream() -> httpx.Response:
     return httpx.Response(200, json={"id": "resp_1", "model": "gpt-5.4-fallback"}, headers={"x-request-id": "r-1"})
 
 
+_AZURE_RELAY_GROUP_MODELS: Final = (("gpt-5.4", "azure/gpt-5.4-primary"), ("azure-gpt-5.4", "azure/gpt-5.4-fallback"))
+
+
 class _AzureBodyModelGroupRouter:
-    def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
+    def __init__(
+        self,
+        captured: list[dict],
+        upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
+    ) -> None:
         self.captured = captured
         self.upstream = upstream
+        self.rows = [
+            {"model_name": group, "litellm_params": {"model": model, "api_key": "k"}} for group, model in group_models
+        ]
         route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
-        return ["gpt-5.4", "azure-gpt-5.4"]
+        return [row["model_name"] for row in self.rows]
 
     def get_model_list(self, model_name=None, team_id=None):
-        rows = [
-            {"model_name": "gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
-            {"model_name": "azure-gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-fallback", "api_key": "k"}},
-        ]
-        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+        return [row for row in self.rows if model_name is None or row["model_name"] == model_name]
 
     async def allm_passthrough_route(self, **kwargs):
         self.captured.append(kwargs)
@@ -9668,6 +9694,7 @@ class TestAzureBodyModelGroupRelay:
         monkeypatch: pytest.MonkeyPatch,
         body: dict,
         upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
     ) -> list[dict]:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
         from litellm.proxy import proxy_server
@@ -9677,7 +9704,7 @@ class TestAzureBodyModelGroupRelay:
         async def fake_get_request_body(_request: Request) -> dict:
             return body
 
-        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream))
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream, group_models))
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
         return captured
@@ -9845,6 +9872,67 @@ class TestAzureBodyModelGroupRelay:
         assert captured == []
         (route,) = routes
         assert route["target"] == "https://operator.openai.azure.com/openai/v1/fine_tuning/jobs"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "openai/gpt-4o"),), id="openai_group"),
+            pytest.param((("gpt-5.4", "bedrock/anthropic.claude-sonnet-4-5"),), id="bedrock_group"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["openai/v1/responses", "openai/v1/chat/completions", "openai/deployments/gpt-5.4/chat/completions"],
+    )
+    async def test_model_group_not_served_by_azure_goes_to_the_operator_azure_endpoint(
+        self, monkeypatch, group_models, endpoint
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+        monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+        monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+        routes: list[dict] = []
+
+        def fake_create_pass_through_route(**kwargs):
+            routes.append(kwargs)
+            return AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+        monkeypatch.setattr(ep, "create_pass_through_route", fake_create_pass_through_route)
+
+        result = await azure_proxy_route(
+            endpoint=endpoint,
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert captured == []
+        (route,) = routes
+        assert route["target"] == f"https://operator.openai.azure.com/{endpoint}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "azure_ai/gpt-5.4"),), id="azure_ai_group"),
+            pytest.param((("gpt-5.4", "openai/gpt-4o"), ("gpt-5.4", "azure/gpt-5.4-primary")), id="mixed_group"),
+        ],
+    )
+    async def test_model_group_with_an_azure_deployment_is_relayed_through_the_router(self, monkeypatch, group_models):
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+
+        result = await azure_proxy_route(
+            endpoint="openai/v1/responses",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert [relay["model"] for relay in captured] == ["gpt-5.4"]
 
 
 AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"
@@ -10660,78 +10748,21 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert not google.called
 
 
-class TestTypeSafePassthroughRoute:
-    @staticmethod
-    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
-        request = MagicMock(spec=Request)
-        request.method = "POST"
-        request.query_params = query_params or {}
-        request.json = AsyncMock(return_value=body)
-        return request
-
+class TestDecisionPassthroughTokenLimits:
     @pytest.fixture
     def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         from litellm.proxy.proxy_server import app
 
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
         yield TestClient(app)
-
-    @pytest.mark.parametrize(
-        "method, body",
-        [
-            ("GET", None),
-            ("POST", {"state": "x"}),
-            ("PUT", {"state": "x"}),
-            ("DELETE", None),
-            ("PATCH", {"state": "x"}),
-        ],
-    )
-    def test_forwards_every_method_and_body_upstream(
-        self, client: TestClient, method: str, body: dict[str, str] | None
-    ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            response = client.request(method, "/typesafe/v1/systemone", json=body)
-
-            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
-            sent: Final = route.calls.last.request
-            assert sent.headers["authorization"] == "Bearer typesafe-test-key"
-            assert json.loads(sent.content or b"{}") == (body or {})
-
-    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            client.post(
-                "/typesafe/v1/systemone",
-                json={"state": "x"},
-                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
-            )
-
-            sent: Final = route.calls.last.request.headers
-            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
-
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
         (
-            ("typesafe", "systemone", True),
             ("laya", "systemone", True),
             ("bespoke", "systemone", True),
-            ("typesafe", "systemone/", True),
-            ("typesafe", "systemone?trace=1", True),
-            ("typesafe", "systemone/?trace=1", True),
-            ("typesafe", "systemone/other", False),
-            ("typesafe", "systemone/other/", False),
-            ("typesafe", "systemone-other", False),
-            ("typesafe", "chat/completions?next=/typesafe/v1/systemone", False),
             ("openrouter", "systemone", False),
             ("openrouter", "systemone/", False),
             ("openrouter", "chat/completions", False),
@@ -10743,7 +10774,7 @@ class TestTypeSafePassthroughRoute:
         self,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        provider: Literal["typesafe", "openrouter", "laya", "bespoke"],
+        provider: Literal["openrouter", "laya", "bespoke"],
         endpoint: str,
         is_decision_request: bool,
         quota_scope: Literal["key", "project_output"],
@@ -10763,9 +10794,7 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
-        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(
-            provider, "test-generative-model"
-        )
+        model: Final = {"laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
         permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
@@ -10803,43 +10832,6 @@ class TestTypeSafePassthroughRoute:
         assert response.status_code == (429 if token_limit == 0 else 200), response.text
         assert route.call_count == (0 if token_limit == 0 else 1)
 
-    @pytest.mark.asyncio
-    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
-
-        async def fake_upstream(request, *_args):
-            target: Final = create_route.call_args.kwargs["target"]
-            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
-            return {"upstream_query": parse_qs(upstream_url.query.decode())}
-
-        endpoint_func = AsyncMock(side_effect=fake_upstream)
-        create_route = Mock(return_value=endpoint_func)
-        monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            create_route,
-        )
-
-        request = self._request({"state": "x"}, {"trace": "yes"})
-        result = await typesafe_proxy_route(
-            endpoint="v1/systemone",
-            request=request,
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
-        )
-
-        assert result == {"upstream_query": {"trace": ["yes"]}}
-        endpoint_func.assert_awaited_once()
-        create_route.assert_called_once_with(
-            endpoint="v1/systemone",
-            target="https://typesafe.example/base/v1/systemone",
-            custom_headers={
-                "Authorization": "Bearer typesafe-test-key",
-                "Content-Type": "application/json",
-            },
-            custom_llm_provider="typesafe",
-            is_streaming_request=False,
-        )
 
 
 class _RecordsPreCallModel(CustomLogger):

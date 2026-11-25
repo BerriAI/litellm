@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import rate_card
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -183,7 +184,7 @@ from litellm.repositories.verification_token_repository import VerificationToken
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
-from litellm.rust_bridge._native import NativeDatabaseFailure
+from litellm.rust_bridge._native import NativeDatabaseFailure, NativeRateCard
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
@@ -714,14 +715,21 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
     It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
     lands in the cost map under the deployment id.
     """
-    for deployment in deployments:
-        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
-            return True
-    return False
+    return any(
+        (card := _deployment_rate_card(deployment)) is not None and card.token_rate_key for deployment in deployments
+    )
+
+
+def _deployment_rate_card(deployment: DeploymentTypedDict) -> NativeRateCard | None:
+    """The rate card of the cost map row a deployment registered under its id."""
+    model_id: Final = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+    return rate_card(model_id) if isinstance(model_id, str) else None
+
+
+def _prices_tokens_above_zero(card: NativeRateCard | None) -> bool:
+    return card is not None and any(
+        rate is not None and rate > 0 for rate in (card.input_cost_per_token, card.output_cost_per_token)
+    )
 
 
 def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
@@ -737,10 +745,8 @@ def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> b
         if model_id is None:
             continue
         raw_entry = as_str_mapping(litellm.model_cost.get(model_id)) or _EMPTY_COST_ENTRY
-        if (
-            _is_positive_cost(raw_entry.get("input_cost_per_token"))
-            or _is_positive_cost(raw_entry.get("output_cost_per_token"))
-            or _is_positive_cost(_deployment_query_price(deployment["litellm_params"], raw_entry))
+        if _prices_tokens_above_zero(_deployment_rate_card(deployment)) or _is_positive_cost(
+            _deployment_query_price(deployment["litellm_params"], raw_entry)
         ):
             return True
     return False
@@ -1005,7 +1011,7 @@ def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | N
 
 
 async def check_tools_allowlist(
-    request_body: dict,
+    request_body: dict[str, object],
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     route: str,
@@ -1906,7 +1912,7 @@ _get_user_role: Final = get_user_role
 def _is_api_route_allowed(
     route: str,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     valid_token: UserAPIKeyAuth | None,
     user_obj: LiteLLM_UserTable | None = None,
 ) -> bool:
@@ -3697,14 +3703,7 @@ class _TeamNotFoundDetail(TypedDict):
 
 
 class TeamNotFoundError(HTTPException):
-    """The team row is provably absent, as opposed to merely unreadable.
-
-    ``get_team_object`` reports every failure as a 404, so a deleted team and a
-    database that would not answer are indistinguishable to its callers. Callers
-    that must not treat a degraded read as a definitive answer, such as the
-    authorization fallback in ``user_api_key_auth``, key on this subclass. It
-    stays a 404 carrying the same detail, so every other caller is unaffected.
-    """
+    """The team row is provably absent, as opposed to merely unreadable."""
 
     def __init__(self, team_id: str) -> None:
         detail: Final[_TeamNotFoundDetail] = {
@@ -3962,8 +3961,8 @@ async def get_team_object(
     )
     if isinstance(read, TeamReadFailed):
         raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
+            status_code=503,
+            detail="Team policy is unavailable",
         ) from read.error
     return read
 
@@ -8371,7 +8370,8 @@ def _strict_grant_layers(
     has_team: Final = team_object is not None or valid_token.team_id is not None
     if not virtual_key and not has_team:
         return frozenset(("user",))
-    return frozenset(layer for layer, required in (("key", virtual_key), ("team", has_team)) if required)
+    candidates: Final[tuple[tuple[GrantLayer, bool], ...]] = (("key", virtual_key), ("team", has_team))
+    return frozenset(layer for layer, required in candidates if required)
 
 
 async def _identity_grants(

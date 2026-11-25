@@ -4,8 +4,8 @@ from unittest.mock import patch
 import pytest
 
 import litellm
-from litellm.cost_calculator import _apply_cost_margin
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import adjusted_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin,
@@ -57,7 +57,7 @@ def test_the_configured_margin_only_applies_to_requests_with_a_customer() -> Non
 @pytest.mark.parametrize("provider", ["anthropic", "other"])
 def test_customer_margin_composes_after_provider_or_global_margin(provider: str) -> None:
     with patch.dict(litellm.cost_margin_config, {"anthropic": 0.1, "global": 0.2, "customer": 0.02}, clear=True):
-        provider_cost, _, _, _ = _apply_cost_margin(5.0, provider)
+        provider_cost: Final = adjusted_cost(5.0, provider).cost
         cost: Final = apply_customer_cost_margin(finalize_cost(provider_cost, None), customer_cost_margin(True))
     assert provider_cost == pytest.approx(5.0 * (1.1 if provider == "anthropic" else 1.2))
     assert cost.amount == pytest.approx(provider_cost * 1.02)

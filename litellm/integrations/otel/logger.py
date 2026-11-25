@@ -31,7 +31,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config, excluded_db_systems_from
+from litellm.integrations.otel.model.config import (
+    DEFAULT_EMIT_BACKGROUND_SERVICE_SPANS,
+    OpenTelemetryV2Config,
+    excluded_db_systems_from,
+)
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -55,6 +59,7 @@ from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
     active_phase_span,
+    inbound_user_id,
     is_recordable_span,
     mcp_message_transport_span,
     post_response_root,
@@ -63,6 +68,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_root_span,
     resolve_internal_call_span_context,
     resolve_mcp_span_context,
+    resolve_parent_context,
     resolve_request_span_context,
     resolve_service_span_context,
     set_request_baggage,
@@ -212,6 +218,7 @@ class OpenTelemetryV2(CustomLogger):
     ) -> None:
         super().__init__(**kwargs)
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
+        self.background_service_spans_db_override: bool | None = None
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
             tracer_provider
@@ -237,6 +244,9 @@ class OpenTelemetryV2(CustomLogger):
     def tracer_provider(self) -> TracerProvider:
         """The provider this logger emits through, read-only to its callers."""
         return self._tracer_provider
+
+    def restore_background_service_spans_setting(self, value: bool | None) -> None:
+        self.config.emit_background_service_spans = DEFAULT_EMIT_BACKGROUND_SERVICE_SPANS if value is None else value
 
     def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
@@ -277,7 +287,7 @@ class OpenTelemetryV2(CustomLogger):
     #  Proxy global registration
     # ====================================================================== #
 
-    def _register_in_callback_list(self, callbacks: list) -> None:
+    def _register_in_callback_list(self, callbacks: list[str | Callable[..., object] | CustomLogger]) -> None:
         already_otel: Final = any(
             cb.__class__.__module__.startswith(_OTEL_MODULES) for cb in callbacks if hasattr(cb, "__class__")
         )
@@ -626,6 +636,7 @@ class OpenTelemetryV2(CustomLogger):
             trace=call.trace,
             session_id=self._span_session(call),
             metadata_keys=tuple(self.config.baggage_metadata_keys),
+            named_user_id=call.caller_user_id or inbound_user_id(),
             operation=call.operation,
         )
         end_time_ns: Final = to_ns(end_time)
@@ -677,7 +688,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ) -> None:
         self._emit_service(
             payload,
@@ -695,7 +706,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ) -> None:
         self._emit_service(
             payload,
@@ -713,7 +724,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
-        event_metadata: dict | None,
+        event_metadata: Mapping[str, object] | None,
         error_override: str | None,
     ) -> Span | None:
         data = ServiceSpanData.from_payload(payload, event_metadata=event_metadata)
@@ -731,6 +742,10 @@ class OpenTelemetryV2(CustomLogger):
         # (budget/reset jobs, spend flush) passes start/end times and still emits
         # as a root; anything with a parent emits regardless.
         if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
+            return None
+        db_override: Final = self.background_service_spans_db_override
+        emit_background: Final = self.config.emit_background_service_spans if db_override is None else db_override
+        if not emit_background and not is_recordable_span(get_current_span(resolve_parent_context(parent_otel_span))):
             return None
         if error_override is not None and data.error is None:
             data = replace(data, error=SpanError(message=error_override))
@@ -842,9 +857,9 @@ class OpenTelemetryV2(CustomLogger):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
-    ) -> dict:
+    ) -> dict[str, object]:
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
@@ -882,7 +897,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: "str | None" = None,

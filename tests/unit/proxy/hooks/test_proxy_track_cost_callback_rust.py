@@ -521,6 +521,18 @@ async def test_a_billed_customer_failure_row_is_charged_the_surcharge_main_appli
     assert _metadata(rows[0])["cost_breakdown"] == expected.logging_breakdown()
 
 
+@pytest.mark.asyncio
+async def test_a_billed_failure_row_raises_the_spend_counters_through_the_proxy(proxy: Proxy) -> None:
+    await bill_failure_in_rust(
+        _auth(),
+        ValueError("the stream broke"),
+        {"model": "gpt-4o", "metadata": {}, "response_cost": 2.0, "combined_usage_object": litellm.Usage()},
+    )
+
+    assert len(await proxy.rows()) == 1
+    assert ps.spend_counter_store.handle.get_local("spend:user:user-1") == 2.0
+
+
 def _attempt(outcome: Outcome, metadata: Mapping[str, object]) -> HookArgs:
     started: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return HookArgs(

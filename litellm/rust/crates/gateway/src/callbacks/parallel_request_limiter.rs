@@ -16,6 +16,7 @@ use std::{
 };
 
 use futures_util::future::BoxFuture;
+use litellm_call_scope::spawn_in_call;
 use litellm_callbacks::{
     Abort, Activation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Outcome,
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
@@ -50,8 +51,8 @@ pub(crate) const REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
 const MEMORY_TTL: Duration = Duration::from_secs(1);
 /// The api key and the user Python names a master key caller by, `LITELLM_PROXY_MASTER_KEY_ALIAS`
 /// and `LITELLM_PROXY_ADMIN_NAME`.
-const MASTER_KEY_ALIAS: &str = "litellm_proxy_master_key";
-const PROXY_ADMIN_NAME: &str = "default_user_id";
+pub(super) const MASTER_KEY_ALIAS: &str = "litellm_proxy_master_key";
+pub(super) const PROXY_ADMIN_NAME: &str = "default_user_id";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -353,6 +354,11 @@ impl KeyLimiter {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn window_size(&self) -> i64 {
+        self.limiter.engine().settings().window_size
+    }
+
     /// The limiter as the stage registers it, with each request's admission made from its caller.
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
         let limiter = self.clone();
@@ -588,13 +594,13 @@ pub struct Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         let holds = matches!(*self.phase.lock(), Phase::Admitted | Phase::Succeeded);
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        if tokio::runtime::Handle::try_current().is_err() {
             return;
-        };
+        }
         if holds {
             let limiter = self.limiter.clone();
             let state = std::mem::take(&mut self.state);
-            runtime.spawn(async move { limiter.limiter.release_on_disconnect(&state).await });
+            spawn_in_call(async move { limiter.limiter.release_on_disconnect(&state).await });
         }
     }
 }

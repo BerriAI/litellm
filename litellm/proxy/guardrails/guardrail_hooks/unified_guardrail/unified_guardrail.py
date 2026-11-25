@@ -270,7 +270,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -372,7 +372,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: object,
     ) -> object:
         """
         Runs on response from LLM API call
@@ -527,7 +527,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         exc: HTTPException,
         call_type: str | None,
         responses_so_far: Sequence[object],
-        request_data: dict,
+        request_data: Mapping[str, object],
         endpoint_translation: _EndpointTranslation | None = None,
         stream_started: bool = False,
         responses_yielded: Sequence[object] | None = None,
@@ -678,7 +678,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         endpoint_translation: _EndpointTranslation,
         guardrail_to_apply: CustomGuardrail,
-        request_data: dict,
+        request_data: _RequestData,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         reference_chunk: object,
@@ -992,7 +992,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         endpoint_translation: _EndpointTranslation,
         guardrail_to_apply: CustomGuardrail,
-        request_data: dict,
+        request_data: _RequestData,
         user_api_key_dict: UserAPIKeyAuth,
         responses_so_far: Sequence[object],
         responses_yielded: Sequence[object],

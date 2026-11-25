@@ -37,6 +37,10 @@ from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.openai_agents_turn_billing import (
+    agents_turn_start_from_stream,
+    openai_agents_sessions_call,
+)
 from .llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
 )
@@ -50,6 +54,7 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 )
 from .success_handler import PassThroughEndpointLogging
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
@@ -60,7 +65,7 @@ class RouteStreamingLogging(Protocol):
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: list[bytes],
@@ -144,7 +149,10 @@ class PassThroughStreamingHandler:
     ) -> None:
         if endpoint_type == EndpointType.ANTHROPIC:
             AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
-                litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=raw_bytes
+                litellm_logging_obj=litellm_logging_obj,
+                request_body=request_body,
+                all_chunks=raw_bytes,
+                url_route=stream_context.url_route if stream_context is not None else None,
             )
             return
         if stream_context is None or not raw_bytes:
@@ -179,7 +187,7 @@ class PassThroughStreamingHandler:
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,
-        request_body: dict | None,
+        request_body: dict[str, object] | None,
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         start_time: datetime,
@@ -428,7 +436,7 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
@@ -443,6 +451,8 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
+        if not litellm_logging_obj.claim_stream_success():
+            return
         from litellm.llms.anthropic.messages.native.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
             is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
@@ -520,6 +530,38 @@ class PassThroughStreamingHandler:
                 model=model,
                 background_response_settled_before=leaves_the_caller_unbilled(settlement),
             )
+            agents_call: Final = (
+                openai_agents_sessions_call(
+                    url_route, litellm_logging_obj.model_call_details.get("custom_llm_provider")
+                )
+                if endpoint_type == EndpointType.OPENAI
+                else None
+            )
+            agents_turn_start: Final = (
+                None
+                if agents_call is None
+                else agents_turn_start_from_stream(
+                    call=agents_call,
+                    request_body=_JSON_OBJECT.validate_python(request_body),
+                    request_headers=proxy_request_headers(
+                        as_str_mapping(litellm_logging_obj.model_call_details.get("litellm_params"))
+                    ),
+                    raw_bytes=raw_bytes,
+                    start_time=start_time,
+                )
+            )
+            if agents_turn_start is not None:
+                passthrough_success_handler_obj.defer_agents_turn_logging(
+                    turn_start=agents_turn_start,
+                    logging_obj=litellm_logging_obj,
+                    standard_logging_response_object=standard_logging_response_object,
+                    result="",
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
+                    kwargs=_JSON_OBJECT.validate_python(kwargs),
+                )
+                return
             # Always reached from an async context (anthropic_messages,
             # google_genai, and proxy pass-through stream tasks). prefer_async_handlers
             # keeps async-only loggers running even when call_type isn't pass_through
@@ -568,14 +610,14 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
         end_time: datetime,
         model: str | None,
         background_response_settled_before: bool = False,
-    ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
+    ) -> tuple[PassThroughEndpointLoggingResultValues, dict[str, object]]:
         """
         Synchronous, CPU-bound reconstruction of the standard logging payload
         from collected raw SSE bytes. Extracted from
@@ -585,7 +627,7 @@ class PassThroughStreamingHandler:
         """
         all_chunks: Final = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
-        kwargs: dict = {}
+        kwargs: dict[str, object] = {}
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result: Final = (
                 AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(

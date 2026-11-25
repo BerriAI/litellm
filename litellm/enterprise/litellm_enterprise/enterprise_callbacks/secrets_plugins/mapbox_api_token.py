@@ -15,7 +15,7 @@ class MapBoxApiTokenDetector(RegexBasedDetector):
         return "MapBox API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # MapBox API Token
             re.compile(

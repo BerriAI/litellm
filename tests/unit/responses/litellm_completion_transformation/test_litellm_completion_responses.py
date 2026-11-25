@@ -22,7 +22,7 @@ import litellm
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
-from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.litellm_core_utils.tool_fields import DeferredTopLevelTool, NamespaceMember, chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
@@ -3644,8 +3644,8 @@ class TestToolTransformation:
 
         assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset({"lookup"})
         assert dict(LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)) == {
-            "search__search": ("search", "search"),
-            "lookup": ("lookup", "lookup"),
+            "search__search": NamespaceMember("search", "search"),
+            "lookup": DeferredTopLevelTool("lookup"),
         }
         messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=[
@@ -3766,8 +3766,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map([namespace_tool])
 
-        assert result["collaboration__wait_agent"] == ("collaboration", "wait_agent")
-        assert result["wait_agent"] == ("collaboration", "wait_agent")
+        assert result["collaboration__wait_agent"] == NamespaceMember("collaboration", "wait_agent")
+        assert result["wait_agent"] == NamespaceMember("collaboration", "wait_agent")
 
     def test_namespace_tool_name_map_drops_ambiguous_unqualified_names(self):
         tools = [
@@ -3810,9 +3810,9 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["alpha__run"] == ("alpha", "run")
-        assert result["beta__run"] == ("beta", "run")
-        assert result["gamma__run"] == ("gamma", "run")
+        assert result["alpha__run"] == NamespaceMember("alpha", "run")
+        assert result["beta__run"] == NamespaceMember("beta", "run")
+        assert result["gamma__run"] == NamespaceMember("gamma", "run")
         assert "run" not in result
 
     def test_namespace_tool_name_map_keeps_the_object_tools_beside_a_malformed_entry(self):
@@ -3831,9 +3831,9 @@ class TestToolTransformation:
         )
 
         assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools) == {
-            "ns__a": ("ns", "a"),
-            "a": ("ns", "a"),
-            "top": ("top", "top"),
+            "ns__a": NamespaceMember("ns", "a"),
+            "a": NamespaceMember("ns", "a"),
+            "top": DeferredTopLevelTool("top"),
         }
 
     def test_namespace_tool_name_map_drops_top_level_function_collision(self):
@@ -3854,7 +3854,7 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["admin__run"] == ("admin", "run")
+        assert result["admin__run"] == NamespaceMember("admin", "run")
         assert "run" not in result
 
     def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
@@ -3873,8 +3873,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["x__foo"] == ("x", "foo")
-        assert result["y__x__foo"] == ("y", "x__foo")
+        assert result["x__foo"] == NamespaceMember("x", "foo")
+        assert result["y__x__foo"] == NamespaceMember("y", "x__foo")
 
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [
@@ -7121,7 +7121,7 @@ def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is
         custom_llm_provider="bedrock",
     )
 
-    with pytest.raises(litellm.BadRequestError, match="Unable to create messages"):
+    with pytest.raises(litellm.BadRequestError, match="Previous response with id 'resp_unknown' not found"):
         asyncio.run(
             LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id="resp_unknown",
@@ -8383,6 +8383,7 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
             litellm_completion_request=chat_request,
             instructions=None,
             session_lookup=no_stored_turns,
+            input_replaces_history=True,
         )
     )
 
@@ -8981,3 +8982,254 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+_HELLO: Final = {"role": "assistant", "content": "Hello!"}
+_EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "last_item", "extra_kwargs", "expected_tail"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", None, {"role": "user"}, {}, [_HELLO, _EMPTY_USER_TURN], id="gemini"),
+        pytest.param(
+            "gemini-3.8-flash",
+            "vertex_ai",
+            {"role": "user", "content": None},
+            {},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_gemini",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/gemini-3.8-flash"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model_in_model_info",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/claude-sonnet-4-5", "model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO],
+            id="vertex_ai_endpoint_base_model_param_wins_over_model_info",
+        ),
+        pytest.param(
+            "1234567890",
+            "vertex_ai",
+            {"role": "user"},
+            {"api_base": "http://10.96.32.8"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_private_service_connect_endpoint",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", {"role": "user"}, {}, [_HELLO], id="vertex_ai_claude_accepts_it_as_before"
+        ),
+        pytest.param(
+            "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user"},
+            {"ensure_alternating_roles": True},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="gemini_with_ensure_alternating_roles",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user", "content": "Go on"},
+            {},
+            [_HELLO, {"role": "user", "content": "Go on"}],
+            id="gemini_with_user_text",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "assistant", "content": "Sure,"},
+            {},
+            [_HELLO, {"role": "assistant", "content": "Sure,"}],
+            id="gemini_with_assistant_prefill",
+        ),
+        pytest.param("an-unmapped-model", None, {"role": "user"}, {}, [_HELLO], id="unresolvable_provider"),
+    ],
+)
+def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemini_target(
+    model: str,
+    custom_llm_provider: str | None,
+    last_item: dict[str, object],
+    extra_kwargs: dict[str, object],
+    expected_tail: list[dict[str, object]],
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[{"role": "user", "content": "Hi"}, _HELLO, last_item],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+        **extra_kwargs,
+    )
+
+    assert [
+        {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
+    ] == expected_tail
+
+
+@pytest.mark.parametrize(
+    ("input_items", "expected_roles"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"},
+                {"role": "user"},
+            ],
+            ["user", "assistant", "tool"],
+            id="after_a_tool_result",
+        ),
+        pytest.param([{"role": "user", "content": "Hi"}, {"role": "user"}], ["user"], id="after_a_user_message"),
+    ],
+)
+def test_a_dropped_empty_user_item_gets_no_empty_user_turn_for_gemini_when_a_user_side_turn_ends_the_request(
+    input_items: list[dict[str, object]], expected_roles: list[str]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=input_items,
+        responses_api_request={},
+        custom_llm_provider=None,
+    )
+
+    assert [message_field(message, "role") for message in result["messages"]] == expected_roles
+
+
+@pytest.mark.parametrize("empty_item", [{"role": "user", "content": None}, {"role": "user"}], ids=["null", "missing"])
+def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty_user_turn(
+    empty_item: dict[str, object],
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "Hi"}, Message(role="assistant", content="Hello!")],
+            litellm_session_id=None,
+        )
+
+    bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=[empty_item],
+        responses_api_request={"previous_response_id": "resp_earlier"},
+        custom_llm_provider=None,
+    )
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_earlier",
+            litellm_completion_request=bridged,
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message_field(message, "role"), message_field(message, "content")) for message in request["messages"]] == [
+        ("user", "Hi"),
+        ("assistant", "Hello!"),
+        ("user", ""),
+    ]
+
+
+_RESUMED_NAMESPACE: Final = "mcp__vault"
+_RESUMED_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+_RESUMED_HISTORY: Final = cast(
+    ResponseInputParam,
+    [
+        {"type": "message", "role": "user", "content": "Read the secret"},
+        {
+            "type": "function_call",
+            "call_id": "call_earlier",
+            "name": _RESUMED_TOOL,
+            "namespace": _RESUMED_NAMESPACE,
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "s3cr3t"},
+        {"type": "message", "role": "user", "content": "Read it again"},
+    ],
+)
+
+
+def _replayed_chat_name() -> str:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-sonnet-5-5",
+        input=_RESUMED_HISTORY,
+        responses_api_request=cast(ResponsesAPIOptionalRequestParams, {"tools": []}),
+        custom_llm_provider="bedrock",
+    )
+    names: Final = [
+        str(call["function"]["name"]) for message in request["messages"] for call in message.get("tool_calls") or ()
+    ]
+    assert len(names) == 1 and len(names[0]) <= 64, names
+    return names[0]
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("non_streaming", "streaming"))
+def test_a_resumed_turn_that_repeats_a_shortened_call_from_history_gets_the_original_tool_back(stream: bool) -> None:
+    """Codex can resume before it lists its MCP tools again, so the earlier call is the only trace of the tool."""
+    from unittest.mock import Mock
+
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    chat_name: Final = _replayed_chat_name()
+    request: Final = cast(ResponsesAPIOptionalRequestParams, {"tools": []})
+
+    if stream:
+        wrapper: Final = Mock(spec=litellm.CustomStreamWrapper)
+        wrapper.logging_obj = Mock()
+        iterator: Final = LiteLLMCompletionStreamingIterator(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            litellm_custom_stream_wrapper=wrapper,
+            request_input=_RESUMED_HISTORY,
+            responses_api_request=request,
+        )
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_again", "function": {"name": chat_name, "arguments": "{}"}}]
+        )
+        item: Final = iterator._pending_tool_events[0].item
+        assert (item.name, item.namespace) == (_RESUMED_TOOL, _RESUMED_NAMESPACE)
+        return
+
+    try:
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input=_RESUMED_HISTORY,
+            responses_api_request=request,
+            chat_completion_response=ModelResponse(
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_again", type="function", function=Function(name=chat_name, arguments="{}")
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            ),
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key="call_again")
+    calls: Final = [item for item in response.output if item.type == "function_call"]
+    assert [(call.name, call.namespace) for call in calls] == [(_RESUMED_TOOL, _RESUMED_NAMESPACE)]

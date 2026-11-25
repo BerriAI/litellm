@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from typing import Final
 
+from typing_extensions import ReadOnly, TypedDict
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
@@ -26,6 +28,15 @@ from litellm.types.integrations.datadog_metrics import (
     DatadogMetricsPayload,
 )
 from litellm.types.utils import StandardLoggingPayload
+
+
+class _DatadogMetricsLoggingKwargs(TypedDict, total=False, extra_items=object):
+    """The logging kwargs this logger reads its timings and standard logging payload from."""
+
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+    start_time: ReadOnly[datetime | None]
+    end_time: ReadOnly[datetime | None]
+    api_call_start_time: ReadOnly[datetime | None]
 
 
 class DatadogMetricsLogger(CustomBatchLogger):
@@ -105,7 +116,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
     def _add_metrics_from_log(
         self,
         log: StandardLoggingPayload,
-        kwargs: dict,
+        kwargs: _DatadogMetricsLoggingKwargs,
         status_code: str | int = "200",
     ):
         """
@@ -169,7 +180,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         }
         self.log_queue.append(series_count)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _DatadogMetricsLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -184,7 +197,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("Datadog Metrics: Error in async_log_success_event: %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _DatadogMetricsLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -283,5 +298,5 @@ class DatadogMetricsLogger(CustomBatchLogger):
         request_id: str,
         start_time_utc: datetime | None,
         end_time_utc: datetime | None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         pass

@@ -73,6 +73,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
     let litellm_gateway::Inference {
         gateway: inference,
         key_limiter,
+        ..
     } = litellm_gateway::build_inference(
         &config,
         &Environment::default(),
@@ -82,6 +83,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
             litellm_gateway_inference::RouterTiers::default(),
         ),
         &litellm_gateway::RedisClients::default(),
+        None,
     )
     .await
     .unwrap();
@@ -99,14 +101,20 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
                 keys: None,
+                spend_logs: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                counters: litellm_gateway::parallel_request_limiter::counters(None),
+                variables: Environment::default(),
+                gateway_requests: None,
+                gateway_requests_flush: None,
             },
             &config,
         ),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     ));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -249,14 +257,15 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
-        &Environment::default(),
         &state,
+        litellm_gateway::StoredConfig::Unused,
     ));
     let native = middleware::global(
         litellm_gateway::router(state, &config),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
