@@ -283,6 +283,22 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
             "not found",
         ),
         (
+            "ui://widget/app.html",
+            ("ui://widget/app.html?v=2",),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "ui://widget/app.html?filter=active%20items&v=1",
+            ("ui://widget/app.html?filter=active+items&v=2",),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
             "ui://widget/app.html?version=1",
             ("ui://widget/app.html?version=2",),
             (),
@@ -441,80 +457,95 @@ async def test_resource_read_ui_cache_buster_fallback(
 
 @pytest.mark.asyncio
 async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pytest.MonkeyPatch) -> None:
-    from mcp.types import (
-        ElicitRequest,
-        ElicitRequestFormParams,
-        ElicitResult,
-        InputRequiredResult,
-        ReadResourceRequest,
-        ReadResourceRequestParams,
-        Resource,
-    )
+    from mcp.types import ElicitResult, InputRequiredResult, ReadResourceRequest, ReadResourceRequestParams
 
     from litellm.proxy.mcp_server.contracts import WireCompat
-    from litellm.proxy.mcp_server.interactions import bind_target
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "resource-continuation-salt")
-    owner: Final = MCPServer(
-        server_id="owner-id",
-        name="owner",
-        url="https://owner.example/mcp",
-        transport=MCPTransport.http,
-        allow_all_keys=True,
-    )
-    other: Final = MCPServer(
-        server_id="other-id",
-        name="other",
-        url="https://other.example/mcp",
-        transport=MCPTransport.http,
-        allow_all_keys=True,
-    )
-    manager: Final = MCPServerManager()
-    for server in (owner, other):
+    stale_uri: Final = "ui://widget/app.html?v=1"
+    resolved_uri: Final = "ui://widget/app.html?v=2"
+    list_calls: Final[asyncio.Queue[str]] = asyncio.Queue()
+    read_calls: Final[asyncio.Queue[tuple[str, str, object]]] = asyncio.Queue()
+    messages: Final = TypeAdapter(JSONRPCMessage)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = messages.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        host: Final = request.url.host
+        envelope: Final = {"jsonrpc": "2.0", "id": payload.id}
+        if payload.method == "server/discover":
+            return httpx2.Response(
+                200,
+                json={
+                    **envelope,
+                    "result": {
+                        "supportedVersions": ["2026-07-28"],
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                        "capabilities": {"resources": {}},
+                    },
+                },
+            )
+        if payload.method == "resources/list":
+            list_calls.put_nowait(host)
+            resources: Final = [{"name": "widget", "uri": resolved_uri}] if host == "owner.example" else []
+            return httpx2.Response(
+                200,
+                json={
+                    **envelope,
+                    "result": {"resources": resources, "resultType": "complete", "cacheScope": "private", "ttlMs": 0},
+                },
+            )
+        assert payload.method == "resources/read"
+        params: Final = payload.params or {}
+        uri: Final = str(params.get("uri", ""))
+        request_state: Final = params.get("requestState")
+        read_calls.put_nowait((host, uri, request_state))
+        if request_state is None:
+            return httpx2.Response(
+                200,
+                json={
+                    **envelope,
+                    "result": {
+                        "resultType": "input_required",
+                        "requestState": "upstream-step-1",
+                        "inputRequests": {
+                            "confirm": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "message": "Confirm",
+                                    "requestedSchema": {"type": "object", "properties": {}},
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+        assert params.get("inputResponses") == {"confirm": {"action": "accept"}}
+        return httpx2.Response(
+            200,
+            json={**envelope, "result": {"resultType": "complete", "contents": [{"uri": uri, "text": "resumed-ok"}]}},
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    for name in ("owner", "other"):
+        server: Final = MCPServer(
+            server_id=f"{name}-id",
+            name=name,
+            url=f"https://{name}.example/mcp",
+            transport=MCPTransport.http,
+            protocol_version="2026-07-28",
+            allow_elicitation=True,
+            allow_all_keys=True,
+        )
         monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
-
-    stale_uri: Final = "ui://widget/app.html?v=1"
-    resolved_uri: Final = "ui://widget/app.html?v=2"
-    list_calls: Final[asyncio.Queue[str]] = asyncio.Queue()
-    read_calls: Final[asyncio.Queue[tuple[str, str, str | None]]] = asyncio.Queue()
-
-    async def fake_list_resources(server: MCPServer, **kwargs: object) -> tuple[Resource, ...]:
-        list_calls.put_nowait(server.server_id)
-        if server.server_id == owner.server_id:
-            return (Resource(name="widget", uri=resolved_uri),)
-        return ()
-
-    async def fake_read_resource(
-        server: MCPServer,
-        user_api_key_auth: UserAPIKeyAuth | None,
-        url: object,
-        **kwargs: object,
-    ) -> ReadResourceResult | InputRequiredResult:
-        request_state: Final = kwargs.get("request_state")
-        read_calls.put_nowait((server.server_id, str(url), str(request_state) if request_state is not None else None))
-        if request_state is None:
-            return bind_target(
-                InputRequiredResult(
-                    request_state="upstream-step-1",
-                    input_requests={
-                        "confirm": ElicitRequest(
-                            params=ElicitRequestFormParams(
-                                message="Confirm",
-                                requested_schema={"type": "object", "properties": {}},
-                            )
-                        )
-                    },
-                ),
-                server,
-                resolved_uri=str(url),
-            )
-        return ReadResourceResult(contents=[TextResourceContents(uri=str(url), text="resumed-ok")])
-
-    monkeypatch.setattr(manager, "list_resources_from_server", fake_list_resources)
-    monkeypatch.setattr(manager, "read_resource_from_server", fake_read_resource)
 
     caller: Final = UserAPIKeyAuth(user_id="alice", api_key=hash_token("sk-resource-continuation"))
     context: Final = prepare_context(caller, wire_compat=WireCompat.MODERN)
@@ -523,7 +554,7 @@ async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pyt
     suspended: Final = await GatewayOperations().execute(initial, context)
     assert isinstance(suspended, InputRequiredResult)
     assert suspended.request_state is not None
-    assert read_calls.get_nowait() == (owner.server_id, resolved_uri, None)
+    assert read_calls.get_nowait() == ("owner.example", resolved_uri, None)
     assert list_calls.qsize() == 2
 
     resumed_request: Final = ReadResourceRequest(
@@ -535,7 +566,7 @@ async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pyt
     )
     completed: Final = await GatewayOperations().execute(resumed_request, context)
     assert completed == ReadResourceResult(contents=[TextResourceContents(uri=resolved_uri, text="resumed-ok")])
-    assert read_calls.get_nowait() == (owner.server_id, resolved_uri, "upstream-step-1")
+    assert read_calls.get_nowait() == ("owner.example", resolved_uri, "upstream-step-1")
     assert list_calls.qsize() == 2
 
 

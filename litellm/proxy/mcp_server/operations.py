@@ -12,7 +12,7 @@ from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
 from typing import Final, NoReturn, Protocol, TypeAlias, overload
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 import anyio
 from fastapi import HTTPException
@@ -297,12 +297,12 @@ _ResourceOwnerFailure: TypeAlias = (
 
 def _ui_uri_without_cache_buster(
     uri: str,
-) -> tuple[tuple[str, str, str, tuple[tuple[str, str], ...], str], bool] | None:
+) -> tuple[tuple[str, str, str, tuple[str, ...], str], bool] | None:
     if not uri.lower().startswith("ui://"):
         return None
     parts: Final = urlsplit(uri)
-    query_items: Final = parse_qsl(parts.query, keep_blank_values=True)
-    filtered_query: Final = tuple((key, value) for key, value in query_items if key != "v")
+    query_items: Final = tuple(parts.query.split("&")) if parts.query else ()
+    filtered_query: Final = tuple(item for item in query_items if item.partition("=")[0] != "v")
     has_cache_buster: Final = len(filtered_query) != len(query_items)
     return (parts.scheme, parts.netloc, parts.path, filtered_query, parts.fragment), has_cache_buster
 
@@ -315,6 +315,8 @@ def _resolve_ui_cache_buster_fallback(
     if requested is None:
         return None
     requested_key, requested_has_v = requested
+    if not requested_has_v:
+        return None
     server_matches: Final = tuple(
         (server, unique_uris)
         for server, listing in listings
@@ -325,7 +327,6 @@ def _resolve_ui_cache_buster_fallback(
                     for resource in listing
                     if (candidate := _ui_uri_without_cache_buster(str(resource.uri))) is not None
                     and candidate[0] == requested_key
-                    and (requested_has_v or candidate[1])
                 )
             )
         )
@@ -3412,7 +3413,7 @@ async def mcp_read_resource(
         scope_servers=candidates,
     )
 
-    result: Final = await global_mcp_server_manager.read_resource_from_server(
+    return await global_mcp_server_manager.read_resource_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
         url=target_url,
@@ -3424,9 +3425,6 @@ async def mcp_read_resource(
         request_state=request_state,
         allow_input_required=allow_input_required,
     )
-    if isinstance(result, BoundInputRequiredResult) and result.resolved_uri is None:
-        return result.model_copy(update={"resolved_uri": str(target_url)})
-    return result
 
 
 def _get_standard_logging_mcp_tool_call(
