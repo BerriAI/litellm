@@ -11758,10 +11758,10 @@ class ProviderConfigManager:
             return MinimaxImageGenerationConfig()
         elif LlmProviders.VOLCENGINE == provider:
             from litellm.llms.volcengine.image_generation import (
-                get_volcengine_image_generation_config,
+                VolcEngineImageGenerationConfig,
             )
 
-            return get_volcengine_image_generation_config(model)
+            return VolcEngineImageGenerationConfig()
         return None
 
     @staticmethod

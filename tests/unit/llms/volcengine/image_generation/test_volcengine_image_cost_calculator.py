@@ -138,6 +138,28 @@ def test_a_deployment_per_image_price_replaces_the_shared_tier_prices() -> None:
     assert cost == 3.0
 
 
+def test_a_deployment_per_image_price_also_replaces_the_shared_layer_prices() -> None:
+    cost: Final = cost_calculator(
+        model="doubao-seedream-5-0-pro-260628",
+        image_response=_response(("1024x1024", "1024x1024", "1024x1024"), layers=(0, 1, 2)),
+        model_info={"output_cost_per_image": 3.0},
+    )
+
+    assert cost == 9.0
+
+
+def test_a_deployment_flat_price_covers_the_tier_the_deployment_does_not_price() -> None:
+    model_info: Final[ModelInfo] = {"output_cost_per_image": 3.0, "output_cost_per_image_1K": 2.0}
+
+    cost: Final = cost_calculator(
+        model="doubao-seedream-5-5-261028",
+        image_response=_response(("1024x1024", "2048x2048")),
+        model_info=model_info,
+    )
+
+    assert cost == 5.0
+
+
 @pytest.mark.parametrize("model", ARK_SEEDREAM_MODELS)
 def test_every_ark_seedream_model_is_priced_as_an_image_model(model: str) -> None:
     catalog: Final = GetModelCostMap.load_local_model_cost_map()

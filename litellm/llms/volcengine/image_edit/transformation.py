@@ -16,6 +16,7 @@ from litellm.llms.volcengine.image_generation.transformation import (
     ark_image_request,
     ark_image_request_count,
     ark_image_response,
+    drop_params_requested,
 )
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -82,7 +83,9 @@ class VolcEngineImageEditConfig(BaseImageEditConfig):
     ) -> tuple[dict[str, object], RequestFiles]:  # mutable-ok: inherited contract
         images: Final = _IMAGES.validate_python(image) if isinstance(image, list) else (image,)
         return {
-            **ark_image_request(model, prompt, image_edit_optional_request_params),
+            **ark_image_request(
+                model, prompt, image_edit_optional_request_params, drop_params_requested(litellm_params.drop_params)
+            ),
             "image": [image_to_data_url(item) for item in images if item is not None],
         }, []
 

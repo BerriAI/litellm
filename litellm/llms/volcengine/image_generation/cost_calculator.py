@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
 from openai.types.images_response import Image as OpenAIImage
@@ -9,7 +10,6 @@ from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
 _LOW_TIER_MAX_PIXELS: Final = 2_610_000
 _PROVIDER_ENTRY_KEY: Final = "volcengine_image"
-_TIER_FIELDS: Final = frozenset({"output_cost_per_image_1K", "output_cost_per_image_2K"})
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -54,47 +54,37 @@ def _is_layer(fields: Mapping[str, object]) -> bool:
     return isinstance(z_index, int) and z_index > 0
 
 
+def _provider_entry(prices: Mapping[str, object]) -> Mapping[str, object]:
+    return _mapping(_mapping(prices.get("provider_specific_entry")).get(_PROVIDER_ENTRY_KEY))
+
+
+def _price_lookups(
+    prices: Mapping[str, object], tier_key: str | None, layer_key: str | None
+) -> tuple[tuple[Mapping[str, object], str | None], ...]:
+    return ((_provider_entry(prices), layer_key), (prices, tier_key), (prices, "output_cost_per_image"))
+
+
 def _output_price(
-    pricing: Mapping[str, object],
-    entry: Mapping[str, object],
+    sources: tuple[Mapping[str, object], ...],
     fields: Mapping[str, object],
     layer_decomposition: bool,
 ) -> float:
     tier: Final = _tier(_pixels(fields.get("size")))
-    if layer_decomposition and tier is not None:
-        layer_price: Final = _number(entry, f"layer_output_cost_per_image_{tier}")
-        if layer_price is not None:
-            return layer_price
-    if tier is not None:
-        tier_price: Final = _number(pricing, f"output_cost_per_image_{tier}")
-        if tier_price is not None:
-            return tier_price
-    return _number(pricing, "output_cost_per_image") or 0.0
+    tier_key: Final = f"output_cost_per_image_{tier}" if tier is not None else None
+    layer_key: Final = f"layer_output_cost_per_image_{tier}" if tier is not None and layer_decomposition else None
+    lookups: Final = chain.from_iterable(_price_lookups(prices, tier_key, layer_key) for prices in sources)
+    prices: Final = (_number(table, key) for table, key in lookups if key is not None)
+    return next((price for price in prices if price is not None), 0.0)
 
 
-def _input_cost(pricing: Mapping[str, object], entry: Mapping[str, object], image_response: ImageResponse) -> float:
+def _input_cost(pricing: Mapping[str, object], image_response: ImageResponse) -> float:
     input_price: Final = _number(pricing, "input_cost_per_image")
     if input_price is None:
         return 0.0
     usage: Final = _mapping(image_response.usage.model_dump() if image_response.usage is not None else {})
     input_images: Final = _number(usage, "input_images") or 0.0
-    free_input_images: Final = _number(entry, "free_input_images") or 0.0
+    free_input_images: Final = _number(_provider_entry(pricing), "free_input_images") or 0.0
     return input_price * max(input_images - free_input_images, 0.0)
-
-
-def _pricing(model: str, model_info: ModelInfo | None) -> Mapping[str, object]:
-    shared: Final = resolve_image_model_info(
-        model=model,
-        custom_llm_provider="volcengine",
-        model_info=model_info,
-    )
-    if (
-        model_info is not None
-        and model_info.get("output_cost_per_image") is not None
-        and not any(model_info.get(field) is not None for field in _TIER_FIELDS)
-    ):
-        return {key: value for key, value in shared.items() if key not in _TIER_FIELDS}
-    return shared
 
 
 def cost_calculator(
@@ -102,9 +92,9 @@ def cost_calculator(
     image_response: ImageResponse,
     model_info: ModelInfo | None = None,
 ) -> float:
-    pricing: Final = _pricing(model, model_info)
-    entry: Final = _mapping(_mapping(pricing.get("provider_specific_entry")).get(_PROVIDER_ENTRY_KEY))
+    pricing: Final = resolve_image_model_info(model=model, custom_llm_provider="volcengine", model_info=model_info)
+    sources: Final = (model_info or {}, pricing)
     images: Final = _generated_images(image_response)
     layer_decomposition: Final = any(_is_layer(fields) for fields in images)
-    output_cost: Final = sum(_output_price(pricing, entry, fields, layer_decomposition) for fields in images)
-    return output_cost + _input_cost(pricing, entry, image_response)
+    output_cost: Final = sum(_output_price(sources, fields, layer_decomposition) for fields in images)
+    return output_cost + _input_cost(pricing, image_response)
