@@ -29,6 +29,9 @@ MASKS: Final = "skip-passed-masks"
 BLOCKS: Final = "skip-passed-blocks"
 FLAGS: Final = "skip-passed-flags"
 REWRITES: Final = "skip-passed-rewrites"
+EDITS_IN_PLACE: Final = "skip-passed-edits-in-place"
+REWRITES_RESPONSE: Final = "skip-passed-rewrites-response"
+VENDOR_BLOCKS: Final = "skip-passed-vendor-blocks"
 UNSET: Final = "unset"
 CHAT: Final = "chat"
 CHAT_STREAM: Final = "chat-stream"
@@ -124,7 +127,58 @@ def _rewriting_guardrail(name: str) -> dict[str, object]:
     }
 
 
-def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: str) -> Path:
+_HOOKS_MODULE: Final = "skip_passed_hooks"
+_HOOKS_CODE: Final = f'''from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+
+
+class EditsInPlace(CustomGuardrail):
+    @log_guardrail_information
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        for message in data["messages"]:
+            message["content"] = message["content"].replace("{AWS_KEY}", "[MASKED]")
+
+
+class RewritesResponse(CustomGuardrail):
+    @log_guardrail_information
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        if "{AWS_KEY}" in str(data["messages"]):
+            response.choices[0].message.content = "[MASKED]"
+        return response
+'''
+
+
+def _hook_guardrail(name: str, hook: str, mode: str) -> dict[str, object]:
+    """A guardrail whose hook returns no changed value: it edits what it was handed."""
+    return {
+        "guardrail_name": name,
+        "litellm_params": {"guardrail": f"{_HOOKS_MODULE}.{hook}", "mode": mode, "default_on": False},
+    }
+
+
+def _vendor(request: Request) -> Reply:
+    """The Lakera guard API: it flags a prompt attack on the AWS key and passes everything else."""
+    assert request.target.endswith("/v2/guard"), request.target
+    flagged: Final = AWS_KEY in request.body.decode()
+    breakdown: Final = [{"detector_type": "prompt_attack", "detected": True, "message_id": 0}] if flagged else []
+    return Reply(body=json.dumps({"flagged": flagged, "breakdown": breakdown, "payload": []}).encode())
+
+
+def _vendor_guardrail(name: str, api_base: str) -> dict[str, object]:
+    """A guardrail that logs its verdict with a success status and then rejects the request."""
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "lakera_v2",
+            "mode": "pre_call",
+            "default_on": False,
+            "api_key": "synthetic-lakera-key",
+            "api_base": api_base,
+            "on_flagged": "block",
+        },
+    }
+
+
+def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: str, vendor_url: str) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["general_settings"]["use_spend_logs_ledger"] = spend_log_writer == "rust"
@@ -136,7 +190,11 @@ def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: s
         _content_filter(BLOCKS, "pre_call", "BLOCK"),
         _content_filter(FLAGS, "logging_only", "BLOCK"),
         _rewriting_guardrail(REWRITES),
+        _hook_guardrail(EDITS_IN_PLACE, "EditsInPlace", "pre_call"),
+        _hook_guardrail(REWRITES_RESPONSE, "RewritesResponse", "post_call"),
+        _vendor_guardrail(VENDOR_BLOCKS, vendor_url),
     ]
+    (root / f"{_HOOKS_MODULE}.py").write_text(_HOOKS_CODE)
     path: Final = root / name
     path.write_text(yaml.safe_dump(config))
     return path
@@ -230,11 +288,12 @@ def _rig(root: Path, skip_passed: bool | None, spend_log_writer: str = "rust") -
     with (
         gateway_from_environment() as gateway,
         wire_server(_provider) as provider,
+        wire_server(_vendor) as vendor,
         owned_proxy_process(
             gateway,
             root,
             {},
-            config=_config(root, "guardrail-log-skip-passed.yaml", skip_passed, spend_log_writer),
+            config=_config(root, "guardrail-log-skip-passed.yaml", skip_passed, spend_log_writer, vendor.url),
             workers=2,
         ) as owned,
         owned.gateway.scenario() as scenario,
@@ -284,6 +343,39 @@ def test_a_masked_run_that_reports_no_entity_count_keeps_its_index_row(rig: Rig)
     forwarded: Final = tuple(request.body.decode() for request in rig.provider.drain())
     assert any("the key is [MASKED]" in body for body in forwarded), forwarded
     assert not any(AWS_KEY in body for body in forwarded), forwarded
+
+
+@skips_passed
+def test_a_pre_call_hook_that_edits_the_request_in_place_keeps_its_index_row(rig: Rig) -> None:
+    rig.provider.drain()
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    added: Final = rig.index_rows_added(
+        EDITS_IN_PLACE, texts, (200, 200), Counters(2, 2, 0, 0), logged_as=EDITS_IN_PLACE
+    )
+    assert added == 1
+    forwarded: Final = tuple(request.body.decode() for request in rig.provider.drain())
+    assert any("the key is [MASKED]" in body for body in forwarded), forwarded
+    assert not any(AWS_KEY in body for body in forwarded), forwarded
+
+
+@skips_passed
+def test_a_post_call_hook_that_rewrites_the_response_keeps_its_index_row(rig: Rig) -> None:
+    rewritten: Final = rig.chat(f"the key is {AWS_KEY}", REWRITES_RESPONSE)
+    assert rewritten.status_code == 200, rewritten.text
+    assert "[MASKED]" in rewritten.text, rewritten.text
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    added: Final = rig.index_rows_added(
+        REWRITES_RESPONSE, texts, (200, 200), Counters(2, 2, 0, 0), logged_as=REWRITES_RESPONSE
+    )
+    assert added == 1
+
+
+@skips_passed
+def test_a_vendor_block_logged_with_a_success_status_keeps_its_index_row(rig: Rig) -> None:
+    """The vendor guardrail logs a success status before it rejects, so the daily counters read both runs as passed."""
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    added: Final = rig.index_rows_added(VENDOR_BLOCKS, texts, (200, 400), Counters(2, 2, 0, 0), logged_as=VENDOR_BLOCKS)
+    assert added == 1
 
 
 @skips_passed

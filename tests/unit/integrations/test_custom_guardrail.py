@@ -22,8 +22,10 @@ from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks, LoggingOnlyScope, Mode
 from litellm.types.utils import (
     Choices,
+    EmbeddingResponse,
     GenericGuardrailAPIInputs,
     GuardrailTracingDetail,
+    LLMResponseTypes,
     Message,
     ModelResponse,
 )
@@ -3500,6 +3502,113 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("masked_content", "expected_action"), [("[MASKED]", "mask"), (None, None)])
+    async def test_pre_call_hook_returning_none_logs_a_masking_action_only_when_it_edited_the_request(
+        self, masked_content: str | None, expected_action: str | None
+    ):
+        class InPlaceGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> None:
+                messages: Final = data["messages"]
+                assert isinstance(messages, list)
+                if masked_content is not None:
+                    messages[0]["content"] = masked_content
+
+        data: Final = self._request()
+        await InPlaceGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_action(data) == expected_action
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rewrite", "expected_action"),
+        [("in_place", "mask"), ("in_place_returning_none", "mask"), ("new_response", "mask"), ("untouched", None)],
+    )
+    async def test_post_call_hook_logs_a_masking_action_only_when_it_changed_the_response(
+        self, rewrite: str, expected_action: str | None
+    ):
+        class ResponseRewritingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_post_call_success_hook(
+                self,
+                data: dict[str, object],
+                user_api_key_dict: UserAPIKeyAuth,
+                response: LLMResponseTypes,
+            ) -> LLMResponseTypes | None:
+                assert isinstance(response, ModelResponse)
+                if rewrite == "new_response":
+                    return ModelResponse(id=response.id, choices=[Choices(message=Message(content="[MASKED]"))])
+                choice: Final = response.choices[0]
+                assert isinstance(choice, Choices)
+                if rewrite != "untouched":
+                    choice.message.content = "[MASKED]"
+                return None if rewrite == "in_place_returning_none" else response
+
+        data: Final = self._request()
+        await ResponseRewritingGuardrail(guardrail_name="g").async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=ModelResponse(choices=[Choices(message=Message(content="SECRET_ANSWER"))]),
+        )
+
+        assert self._logged_action(data) == expected_action
+
+    @pytest.mark.asyncio
+    async def test_post_call_hook_rewriting_a_dict_response_logs_a_masking_action(self):
+        class DictRewritingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_post_call_success_hook(
+                self,
+                data: dict[str, object],
+                user_api_key_dict: UserAPIKeyAuth,
+                response: LLMResponseTypes,
+            ) -> LLMResponseTypes:
+                assert isinstance(response, dict)
+                response["content"] = [{"type": "text", "text": "[MASKED]"}]
+                return response
+
+        data: Final = self._request()
+        handed: Final[dict[str, object]] = {"content": [{"type": "text", "text": "SECRET_ANSWER"}]}
+        await DictRewritingGuardrail(guardrail_name="g").async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=handed,  # pyright: ignore[reportArgumentType]  # an Anthropic-shaped response is a plain dict at run time
+        )
+
+        assert self._logged_action(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_post_call_hook_does_not_copy_embedding_vectors_to_detect_a_change(self):
+        class EmbeddingScalingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_post_call_success_hook(
+                self,
+                data: dict[str, object],
+                user_api_key_dict: UserAPIKeyAuth,
+                response: LLMResponseTypes,
+            ) -> LLMResponseTypes:
+                assert isinstance(response, EmbeddingResponse)
+                response.data = [{"object": "embedding", "index": 0, "embedding": [9.0]}]
+                return response
+
+        data: Final = self._request()
+        await EmbeddingScalingGuardrail(guardrail_name="g").async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=EmbeddingResponse(data=[{"object": "embedding", "index": 0, "embedding": [1.0]}]),
+        )
+
+        assert self._logged_action(data) is None
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_returning_rejection_string_logs_that_string(self):

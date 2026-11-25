@@ -784,7 +784,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
 
         # Call Lakera guardrail
-        lakera_guardrail_response, _ = await self.call_v2_guard(
+        lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=post_call_messages,
             request_data=data,
             event_type=GuardrailEventHooks.post_call,
@@ -793,7 +793,6 @@ class LakeraAIGuardrail(CustomGuardrail):
         # Handle flagged content
         if lakera_guardrail_response.get("flagged") is True:
             if self._is_only_pii_violation(lakera_guardrail_response) and self.on_flagged != "block":
-                masked_entity_count: Final[dict[str, int]] = {}
                 masked_messages: Final = self._mask_pii_in_messages(
                     messages=post_call_messages,
                     lakera_response=lakera_guardrail_response,
@@ -848,7 +847,11 @@ class LakeraAIGuardrail(CustomGuardrail):
     def _get_http_exception_for_blocked_guardrail(self, lakera_response: LakeraAIResponse | None) -> HTTPException:
         """
         Get the HTTP exception for a blocked guardrail, similar to Bedrock's implementation.
+
+        ``call_v2_guard`` already logged this run with a success status, so the logged run is
+        marked as blocking here.
         """
+        self.mark_logged_run_as_blocking()
         return HTTPException(
             status_code=400,
             detail={

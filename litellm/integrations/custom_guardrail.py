@@ -9,7 +9,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, Protocol, cast, get_args
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -92,6 +92,12 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
+)
+
+# The run the current hook last logged, so a guardrail that logs its verdict and then rejects
+# the request can mark that run as blocking.
+_last_logged_run: Final[contextvars.ContextVar[StandardLoggingGuardrailInformation | None]] = contextvars.ContextVar(
+    "litellm_guardrail_last_logged_run", default=None
 )
 
 
@@ -1680,6 +1686,7 @@ class CustomGuardrail(CustomLogger):
         _sync_guardrail_info_to_logging_obj(request_data, request_data.get("litellm_logging_obj"))
 
         _guardrail_self_recorded.set(True)
+        _last_logged_run.set(slg)
 
         # Emit the otel guardrail span here, where every guardrail execution lands,
         # rather than relying on a post-call hook that does not fire on every path
@@ -1690,6 +1697,13 @@ class CustomGuardrail(CustomLogger):
             emit_guardrail_span(slg)
         except Exception:
             pass
+
+    def mark_logged_run_as_blocking(self) -> None:
+        """Set ``guardrail_action`` to block on the run this guardrail just logged, for a guardrail
+        that logs its verdict with a success status and then rejects the request."""
+        run: Final = _last_logged_run.get()
+        if run is not None and "guardrail_name" in run and run["guardrail_name"] == self.guardrail_name:
+            run["guardrail_action"] = GUARDRAIL_ACTION_BLOCK
 
     async def apply_guardrail(
         self,
@@ -1736,10 +1750,14 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        # A pre_call hook that returns None keeps the request it was handed, edits included.
+        kept_request: Final = response is None and event_type == GuardrailEventHooks.pre_call
         guardrail_response, changed_content = self._summary_and_change(
-            response=response,
+            response=request_data if kept_request else response,
             original_inputs=original_inputs,
             event_type=event_type,
+            kept_request=kept_request,
+            handed_response=_handed_response.get(),
         )
 
         verbose_logger.debug("Guardrail response: %s", response)
@@ -1790,11 +1808,21 @@ class CustomGuardrail(CustomLogger):
         response: object,
         original_inputs: Mapping[str, object] | None,
         event_type: GuardrailEventHooks | None,
+        kept_request: bool = False,
+        handed_response: "_HandedResponse | None" = None,
     ) -> tuple[object, bool]:
-        """The loggable summary of a hook's return value, and whether that value changed the content."""
+        """The loggable summary of a hook's return value, and whether the hook changed the content.
+
+        With ``kept_request``, ``response`` is the request a pre_call hook returned None for: it is
+        compared for edits made in place and summarized as the None the hook returned. A post_call
+        hook that returns None keeps the response it was handed."""
         return (
-            self._summarize_guardrail_response(response, original_inputs, event_type),
-            self._returned_a_changed_value(response, original_inputs, event_type),
+            self._summarize_guardrail_response(None if kept_request else response, original_inputs, event_type),
+            self._returned_a_changed_value(response, original_inputs, event_type)
+            or (
+                handed_response is not None
+                and handed_response.changed_into(handed_response.response if response is None else response)
+            ),
         )
 
     def _summarize_guardrail_response(
@@ -1986,6 +2014,65 @@ def _holds_another_value(before: object, after: object) -> bool:
     return before != after and bool(before or after)
 
 
+# Where a chat completion, a Responses API response and an Anthropic message hold generated content.
+_RESPONSE_CONTENT_KEYS: Final = frozenset({"choices", "output", "content"})
+
+
+def _comparable_response(response: object) -> object:
+    """A copy of the generated content of a post_call response that later edits to the response
+    cannot reach, or None when the response is not a model or a mapping. Only the content keys
+    are copied, so a large embedding response costs nothing."""
+    if isinstance(response, BaseModel):
+        return response.model_dump(include=set(_RESPONSE_CONTENT_KEYS))
+    mapping: Final = as_str_mapping(response)
+    if mapping is None:
+        return None
+    return {key: copy.deepcopy(value) for key, value in mapping.items() if key in _RESPONSE_CONTENT_KEYS}
+
+
+class _HandedResponse(NamedTuple):
+    """The response a post_call hook was handed, with a copy taken before the hook ran."""
+
+    response: object
+    before: object
+
+    def changed_into(self, after: object) -> bool:
+        """True when the hook edited the response in place or returned another one."""
+        if self.before is None:
+            return False
+        comparable_after: Final = _comparable_response(after)
+        return comparable_after is not None and comparable_after != self.before
+
+
+# The response the running post_call hook was handed. A context variable, since subclasses
+# override _process_response with the signature it had before this was tracked.
+_handed_response: Final[contextvars.ContextVar[_HandedResponse | None]] = contextvars.ContextVar(
+    "litellm_guardrail_handed_response", default=None
+)
+
+
+class _HookBaseline(NamedTuple):
+    """What a hook was handed, kept from before it ran so its changes can be told apart."""
+
+    inputs: dict[str, object] | None  # mutable-ok: matches _process_response(original_inputs=) signature
+    response: _HandedResponse | None
+
+
+def _hook_baseline(
+    func_name: str,
+    kwargs: Mapping[str, object],
+    request_data: Mapping[str, object],
+    event_type: GuardrailEventHooks | None,
+) -> _HookBaseline:
+    handed: Final = kwargs.get("response")
+    return _HookBaseline(
+        inputs=_original_inputs_for(func_name, kwargs, request_data, event_type),
+        response=_HandedResponse(handed, _comparable_response(handed))
+        if event_type == GuardrailEventHooks.post_call
+        else None,
+    )
+
+
 def _original_inputs_for(
     func_name: str,
     kwargs: Mapping[str, object],
@@ -2070,10 +2157,11 @@ def log_guardrail_information(func):
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
-        original_inputs: Final = _original_inputs_for(func.__name__, kwargs, request_data, event_type)
+        baseline: Final = _hook_baseline(func.__name__, kwargs, request_data, event_type)
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        handed_response_token: Final = _handed_response.set(baseline.response)
         try:
             response: Final = await func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -2085,7 +2173,7 @@ def log_guardrail_information(func):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
-                original_inputs=original_inputs,
+                original_inputs=baseline.inputs,
             )
         except Exception as e:
             if _guardrail_self_recorded.get():
@@ -2099,6 +2187,7 @@ def log_guardrail_information(func):
                 event_type=event_type,
             )
         finally:
+            _handed_response.reset(handed_response_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 

@@ -6,16 +6,18 @@ Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
 import importlib, logging, os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.utils import (
     filter_messages_by_skip_flags,
 )
@@ -26,7 +28,8 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     humanize_lakera_block_reasons,
 )
 from litellm.types.guardrails import LitellmParams, Mode
-from litellm.types.utils import ModelResponse
+from litellm.proxy.guardrails.usage_tracking import guardrail_ran_without_acting
+from litellm.types.utils import Choices, Message, ModelResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -335,37 +338,122 @@ PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE = {
 }
 
 
+def _request_without_messages() -> dict[str, object]:
+    return {"messages": [], "model": "gpt-3.5-turbo", "metadata": {}}
+
+
 def _hello_world_request() -> dict[str, object]:
     return {"messages": [{"role": "user", "content": "hello world"}], "model": "gpt-3.5-turbo", "metadata": {}}
 
 
-async def _run_pre_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> dict[str, object]:
-    data: Final = _hello_world_request()
-    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
+def _lakera_api_answering(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]):
+    """Patch the Lakera HTTP call, so ``call_v2_guard`` itself runs and logs the run."""
+    return patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=httpx.Response(200, json={**lakera_response}),
+    )
+
+
+async def _run_pre_call(
+    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object] | None = None
+) -> dict[str, object]:
+    request: Final = _hello_world_request() if data is None else data
+    with _lakera_api_answering(guardrail, lakera_response):
         await guardrail.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), cache=MagicMock(), data=data, call_type="completion"
-        )
-    return data
-
-
-async def _run_during_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> None:
-    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
-        await guardrail.async_moderation_hook(
-            data=_hello_world_request(), user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), call_type="completion"
-        )
-
-
-async def _run_post_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> ModelResponse:
-    llm_response: Final = MagicMock()
-    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hello world"}}]}
-    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
-        response: Final = await guardrail.async_post_call_success_hook(
-            data={"messages": [], "model": "gpt-3.5-turbo", "metadata": {}},
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
-            response=llm_response,
+            cache=MagicMock(),
+            data=request,
+            call_type="completion",
+        )
+    return request
+
+
+async def _run_during_call(
+    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object] | None = None
+) -> None:
+    with _lakera_api_answering(guardrail, lakera_response):
+        await guardrail.async_moderation_hook(
+            data=_hello_world_request() if data is None else data,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            call_type="completion",
+        )
+
+
+async def _run_post_call(
+    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object] | None = None
+) -> ModelResponse:
+    with _lakera_api_answering(guardrail, lakera_response):
+        response: Final = await guardrail.async_post_call_success_hook(
+            data=_request_without_messages() if data is None else data,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            response=ModelResponse(choices=[Choices(message=Message(content="hello world"))]),
         )
     assert isinstance(response, ModelResponse)
     return response
+
+
+_LOGGED_RUNS: Final = TypeAdapter(list[dict[str, object]])
+_RunHook = Callable[[LakeraAIGuardrail, Mapping[str, object], dict[str, object]], Awaitable[object]]
+_NewRequest = Callable[[], dict[str, object]]
+
+
+def _logged_run(data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = as_str_mapping(data["metadata"])
+    assert metadata is not None
+    (entry,) = _LOGGED_RUNS.validate_python(metadata["standard_logging_guardrail_information"])
+    return entry
+
+
+_EVERY_HOOK: Final = pytest.mark.parametrize(
+    ("run_hook", "new_request"),
+    [
+        (_run_pre_call, _hello_world_request),
+        (_run_during_call, _hello_world_request),
+        (_run_post_call, _request_without_messages),
+    ],
+    ids=["pre_call", "during_call", "post_call"],
+)
+
+
+@pytest.mark.asyncio
+class TestLoggedRunKeepsItsRequestLogRow:
+    """``general_settings.guardrail_log_skip_passed`` drops a run that reads as passed, so a Lakera
+    run that blocked or masked has to say so in what it logs."""
+
+    @_EVERY_HOOK
+    async def test_blocked_run_logs_a_blocking_action(self, run_hook: _RunHook, new_request: _NewRequest):
+        data: Final = new_request()
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        with pytest.raises(HTTPException):
+            await run_hook(guardrail, PII_ONLY_LAKERA_RESPONSE, data)
+        entry: Final = _logged_run(data)
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_action"] == "block"
+        assert guardrail_ran_without_acting(entry) is False
+
+    @pytest.mark.parametrize(
+        ("run_hook", "new_request"),
+        [(_run_pre_call, _hello_world_request), (_run_post_call, _request_without_messages)],
+        ids=["pre_call", "post_call"],
+    )
+    async def test_masked_run_logs_its_masked_entity_count(self, run_hook: _RunHook, new_request: _NewRequest):
+        data: Final = new_request()
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
+        await run_hook(guardrail, PII_ONLY_LAKERA_RESPONSE, data)
+        entry: Final = _logged_run(data)
+        assert entry["masked_entity_count"] == {"EMAIL": 1}
+        assert guardrail_ran_without_acting(entry) is False
+
+    @_EVERY_HOOK
+    async def test_passed_run_logs_no_action(self, run_hook: _RunHook, new_request: _NewRequest):
+        data: Final = new_request()
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        await run_hook(guardrail, {"flagged": False, "payload": []}, data)
+        entry: Final = _logged_run(data)
+        assert entry.get("guardrail_action") is None
+        assert guardrail_ran_without_acting(entry) is True
 
 
 @pytest.mark.asyncio
