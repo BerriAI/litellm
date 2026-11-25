@@ -2,6 +2,7 @@ import {
   expect,
   test,
   type APIRequestContext,
+  type Locator,
   type Page as BrowserPage,
 } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
@@ -50,6 +51,11 @@ async function openSettingsTab(page: BrowserPage, tab: string) {
   await page.getByRole("tab", { name: tab }).click();
   return page.getByRole("tabpanel", { name: tab });
 }
+
+const emailCard = (panel: Locator, title: string) =>
+  panel
+    .locator('[data-slot="card"]')
+    .filter({ has: panel.getByText(title, { exact: true }) });
 
 const stubSuccess = (page: BrowserPage, path: string) =>
   page.route(`**${path}`, (route) =>
@@ -183,7 +189,9 @@ test.describe("Alert destinations", () => {
     await portInput.fill(port);
     await panel.locator('input[name="SMTP_SENDER_EMAIL"]').fill(sender);
     const body = await captureWrite(page, "POST", "/config/update", () =>
-      panel.getByRole("button", { name: "Save Changes" }).last().click(),
+      emailCard(panel, "Email Server Settings")
+        .getByRole("button", { name: "Save Changes" })
+        .click(),
     );
     expect(body).toEqual({
       general_settings: { alerting: ["email"] },
@@ -226,7 +234,10 @@ test.describe("Email notification events", () => {
       page,
       "PATCH",
       "/email/event_settings",
-      () => panel.getByRole("button", { name: "Save Changes" }).first().click(),
+      () =>
+        emailCard(panel, "Email Notifications")
+          .getByRole("button", { name: "Save Changes" })
+          .click(),
     );
     expect(body).toEqual({
       settings: before.settings.map((setting) =>
