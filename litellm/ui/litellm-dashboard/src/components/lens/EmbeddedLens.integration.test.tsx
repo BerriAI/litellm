@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider, useTheme } from "next-themes";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { EmbeddedLens } from "./EmbeddedLens";
 import { GatewayLensNavigation, GatewayLensNavigationProvider } from "./GatewayLensNavigation";
@@ -315,42 +315,58 @@ it.each([
   expect(new Request(input, init).headers.get(credentials.headerName)).toBe(`Bearer ${credentials.accessToken}`);
 });
 
-it("bounds a stalled capability probe and opens Lens after retry", async () => {
-  network.mockImplementationOnce(
-    (_input, options) =>
-      new Promise<Response>((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
-          once: true,
-        });
-      }),
-  );
-  render();
+describe("browsers without AbortSignal static helpers", () => {
+  beforeEach(() => {
+    const Signal = Object.defineProperties(class extends AbortSignal {}, {
+      any: { value: undefined },
+      timeout: { value: undefined },
+    });
+    vi.stubGlobal("AbortSignal", Signal);
+  });
 
-  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" }, { timeout: 7000 })).toBeVisible();
-  expect(network).toHaveBeenCalledTimes(1);
-  expect(network.mock.calls[0][1]?.signal?.aborted).toBe(true);
-  ready();
-  fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
-  expect(await screen.findByTitle("Lens")).toBeVisible();
-  expect(network).toHaveBeenCalledTimes(3);
-});
+  it("opens Lens without AbortSignal.any or AbortSignal.timeout", async () => {
+    ready();
+    render();
+    expect(await screen.findByTitle("Lens")).toBeVisible();
+  });
 
-it("cancels the capability probe on unmount without starting protected requests", async () => {
-  network.mockImplementationOnce(
-    (_input, options) =>
-      new Promise<Response>((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
-          once: true,
-        });
-      }),
-  );
-  const { unmount } = render();
-  const signal = network.mock.calls[0][1]?.signal;
-  expect(signal?.aborted).toBe(false);
-  unmount();
-  expect(signal?.aborted).toBe(true);
-  await act(async () => {});
-  expect(network).toHaveBeenCalledTimes(1);
+  it("bounds a stalled capability probe and opens Lens after retry", async () => {
+    network.mockImplementationOnce(
+      (_input, options) =>
+        new Promise<Response>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+            once: true,
+          });
+        }),
+    );
+    render();
+
+    expect(await screen.findByRole("heading", { name: "Could not connect to Lens" }, { timeout: 7000 })).toBeVisible();
+    expect(network).toHaveBeenCalledTimes(1);
+    expect(network.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    ready();
+    fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
+    expect(await screen.findByTitle("Lens")).toBeVisible();
+    expect(network).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancels the capability probe on unmount without starting protected requests", async () => {
+    network.mockImplementationOnce(
+      (_input, options) =>
+        new Promise<Response>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+            once: true,
+          });
+        }),
+    );
+    const { unmount } = render();
+    const signal = network.mock.calls[0][1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {});
+    expect(network).toHaveBeenCalledTimes(1);
+  });
 });
 
 it.each([null, "cookie-v1", "bearer-v2"])(

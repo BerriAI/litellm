@@ -11,10 +11,15 @@ export const lensWorkspaceAvailability = async (
   { accessToken, headerName }: LensCredentials,
   signal: AbortSignal,
 ): Promise<LensWorkspaceAvailability> => {
+  if (signal.aborted) return { state: "unavailable" };
+  const probe = new AbortController();
+  const abortProbe = () => probe.abort();
+  signal.addEventListener("abort", abortProbe, { once: true });
+  const timeout = setTimeout(abortProbe, 5000);
   try {
     const lensUrl = new URL(url, window.location.href);
     const response = await fetch(lensUrl, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+      signal: probe.signal,
       headers: { Accept: "application/json" },
     });
     if (signal.aborted || (!response.ok && response.status !== 404)) return { state: "unavailable" };
@@ -32,5 +37,8 @@ export const lensWorkspaceAvailability = async (
     return supported ? { state: "served" } : { state: "unsupported", browserUrl: connection.browser_url ?? "" };
   } catch {
     return { state: "unavailable" };
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener("abort", abortProbe);
   }
 };
