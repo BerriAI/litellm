@@ -74,7 +74,7 @@ function DestinationPicker({
         onValueChange={(value: unknown) =>
           settings.destination === null
             ? requestEnable()
-            : update.mutate(toTelemetryUpdate(enabledGroups(settings), value))
+            : update.mutate(toTelemetryUpdate(enabledGroups(settings), value as TelemetryDestination))
         }
       >
         {(Object.keys(DESTINATION_LABELS) as TelemetryDestination[]).map((destination) => (

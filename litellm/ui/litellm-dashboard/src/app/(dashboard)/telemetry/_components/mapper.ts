@@ -1,5 +1,9 @@
-import type { TelemetryGroup, TelemetrySettingsUpdate } from "@/app/(dashboard)/hooks/telemetry/useTelemetrySettings";
-import { telemetryUpdateSchema } from "./schema";
+import type { z } from "zod";
+import type { telemetryUpdateSchema } from "./schema";
 
-export const toTelemetryUpdate = (groups: Iterable<TelemetryGroup>, destination: unknown): TelemetrySettingsUpdate =>
-  telemetryUpdateSchema.parse({ groups: [...groups], destination });
+type TelemetryUpdate = z.infer<typeof telemetryUpdateSchema>;
+
+export const toTelemetryUpdate = (
+  groups: Iterable<TelemetryUpdate["groups"][number]>,
+  destination: TelemetryUpdate["destination"],
+): TelemetryUpdate => ({ groups: [...groups], destination });

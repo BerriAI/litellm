@@ -25,7 +25,7 @@ interface UIThemeSettingsProps {
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();
   const { setLogoUrl, setLogoUrlDark, setFaviconUrl } = useTheme();
-  const { control, handleSubmit, reset } = useZodForm(uiThemeSchema, { defaultValues: toUIThemeFields() });
+  const { control, getValues, reset } = useZodForm(uiThemeSchema, { defaultValues: toUIThemeFields() });
   const { field: logoUrl } = useController({ control, name: "logoUrl" });
   const { field: logoUrlDark } = useController({ control, name: "logoUrlDark" });
   const { field: faviconUrl } = useController({ control, name: "faviconUrl" });
@@ -61,8 +61,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
     }
   };
 
-  const handleSave = handleSubmit(async (values) => {
-    const payload = toUIThemeUpdate(values);
+  const handleSave = async () => {
+    const draft = uiThemeSchema.safeParse(getValues());
+    if (!draft.success) return;
+    const payload = toUIThemeUpdate(draft.data);
     setLoading(true);
     try {
       const proxyBaseUrl = getProxyBaseUrl();
@@ -89,7 +91,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
     } finally {
       setLoading(false);
     }
-  });
+  };
 
   const handleReset = async () => {
     const defaults = toUIThemeFields();

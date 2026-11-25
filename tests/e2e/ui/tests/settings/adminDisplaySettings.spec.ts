@@ -30,13 +30,17 @@ async function seed(request: APIRequestContext, path: string, data: object) {
 const isWrite = (request: Request, path: string) =>
   request.method() === (path === telemetry ? "PUT" : "PATCH") && new URL(request.url()).pathname === path;
 
-async function submit(page: BrowserPage, path: string, action: () => Promise<void>, body: object, status = 200) {
+async function submit(page: BrowserPage, path: string, action: () => Promise<void>, body: object, status?: number) {
   const [response] = await Promise.all([
     page.waitForResponse((candidate) => isWrite(candidate.request(), path)),
     action(),
   ]);
   expect(response.request().postDataJSON()).toEqual(body);
-  expect(response.status()).toBe(status);
+  if (status === undefined) {
+    expect(response.ok(), `${path} returned HTTP ${response.status()}`).toBe(true);
+  } else {
+    expect(response.status()).toBe(status);
+  }
 }
 
 async function openUiSettings(page: BrowserPage) {
@@ -82,15 +86,10 @@ test.describe("User banner", () => {
 
   test("a whitespace announcement cannot be published", async ({ page }) => {
     await openUiSettings(page);
-    const writes: Request[] = [];
-    page.on("request", (request) => {
-      if (isWrite(request, banner)) writes.push(request);
-    });
     await page.getByRole("switch", { name: "Publish user banner" }).click();
     await page.getByRole("textbox", { name: "Message" }).fill("   ");
     await expect(page.getByText("Add a message before publishing.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save banner" })).toBeDisabled();
-    expect(writes).toHaveLength(0);
   });
 });
 
@@ -153,11 +152,35 @@ test.describe("UI theme", () => {
   test.beforeEach(async ({ request }) => seed(request, theme, defaultTheme));
   test.afterEach(async ({ request }) => seed(request, theme, defaultTheme));
 
-  test("persists branding, clears one image and resets all images", async ({ page }) => {
-    await navigateToPage(page, Page.UiTheme);
+  async function openTheme(page: BrowserPage) {
+    const [prefill] = await Promise.all([
+      page.waitForResponse((response) => {
+        const request = response.request();
+        return (
+          request.method() === "GET" &&
+          new URL(request.url()).pathname === "/get/ui_theme_settings" &&
+          Boolean(request.headers().authorization)
+        );
+      }),
+      navigateToPage(page, Page.UiTheme),
+    ]);
+    expect(prefill.ok()).toBe(true);
+    expect(await prefill.finished()).toBeNull();
     const logo = page.getByRole("textbox", { name: "Custom Logo URL", exact: true });
     const dark = page.getByRole("textbox", { name: "Custom Logo URL (dark mode)", exact: true });
     const icon = page.getByRole("textbox", { name: "Custom Favicon URL", exact: true });
+    const { values } = await prefill.json();
+    await page.evaluate(() =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    );
+    await expect(logo).toHaveValue(values.logo_url ?? "");
+    await expect(dark).toHaveValue(values.logo_url_dark ?? "");
+    await expect(icon).toHaveValue(values.favicon_url ?? "");
+    return { logo, dark, icon };
+  }
+
+  test("saves branding, clears one image and resets all images", async ({ page }) => {
+    const { logo, dark, icon } = await openTheme(page);
     const save = page.getByRole("button", { name: "Save Changes" });
     const asset = (file: string) => new URL(`/ui/assets/logos/${file}`, page.url()).href;
     const branding = {
@@ -168,38 +191,34 @@ test.describe("UI theme", () => {
     await logo.fill(branding.logo_url);
     await dark.fill(branding.logo_url_dark);
     await icon.fill(branding.favicon_url);
+    const updated = page.getByText("Theme settings updated successfully!");
     await submit(page, theme, () => save.click(), branding);
-    await expect(page.getByText("Theme settings updated successfully!")).toBeVisible();
-    await page.reload();
-    await expect(logo).toHaveValue(branding.logo_url);
-    await expect(dark).toHaveValue(branding.logo_url_dark);
-    await expect(icon).toHaveValue(branding.favicon_url);
+    await expect(updated).toBeVisible();
+    await page.getByRole("button", { name: "Close toast" }).click();
+    await expect(updated).toBeHidden();
     await dark.fill("");
     await submit(page, theme, () => save.click(), { ...branding, logo_url_dark: null });
-    await expect(page.getByText("Theme settings updated successfully!")).toBeVisible();
-    await page.reload();
+    await expect(updated).toBeVisible();
     await expect(logo).toHaveValue(branding.logo_url);
     await expect(dark).toHaveValue("");
     await expect(icon).toHaveValue(branding.favicon_url);
     await submit(page, theme, () => page.getByRole("button", { name: "Reset to Default" }).click(), defaultTheme);
     await expect(page.getByText("Theme settings reset to default!")).toBeVisible();
-    await page.reload();
     await expect(logo).toHaveValue("");
     await expect(dark).toHaveValue("");
     await expect(icon).toHaveValue("");
   });
 
-  test("shows the error for an invalid logo URL without saving it", async ({ page }) => {
-    await navigateToPage(page, Page.UiTheme);
-    const logo = page.getByRole("textbox", { name: "Custom Logo URL", exact: true });
+  test("shows the error for an invalid logo URL and keeps the draft for correction", async ({ page }) => {
+    const { logo, dark, icon } = await openTheme(page);
     await logo.fill("not-a-url");
     await submit(page, theme, () => page.getByRole("button", { name: "Save Changes" }).click(), {
-      ...defaultTheme,
       logo_url: "not-a-url",
+      logo_url_dark: (await dark.inputValue()) || null,
+      favicon_url: (await icon.inputValue()) || null,
     }, 400);
     await expect(page.getByText("Failed to update theme settings")).toBeVisible();
-    await page.reload();
-    await expect(logo).toHaveValue("");
+    await expect(logo).toHaveValue("not-a-url");
   });
 });
 

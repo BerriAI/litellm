@@ -2,7 +2,7 @@
 
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { ChevronDown } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
@@ -44,13 +44,13 @@ export default function PageVisibilitySettings({
     });
     return grouped;
   }, [availablePages]);
-  const { control, getValues, handleSubmit, reset } = useZodForm(pageVisibilitySchema, {
+  const { control, getValues, reset } = useZodForm(pageVisibilitySchema, {
     defaultValues: toPageVisibilityFields(enabledPagesInternalUsers),
   });
   const { field } = useController({ control, name: "selectedPages" });
   const selectedPages = field.value;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     reset(toPageVisibilityFields(enabledPagesInternalUsers));
   }, [enabledPagesInternalUsers, reset]);
 
@@ -59,7 +59,10 @@ export default function PageVisibilitySettings({
     field.onChange(checked ? [...current, page] : current.filter((item) => item !== page));
   };
 
-  const handleSavePageVisibility = handleSubmit((draft) => onUpdate(toPageVisibilityUpdate(draft)));
+  const handleSavePageVisibility = () => {
+    const draft = pageVisibilitySchema.safeParse(getValues());
+    if (draft.success) onUpdate(toPageVisibilityUpdate(draft.data));
+  };
 
   const handleResetToDefault = () => {
     const defaults = toPageVisibilityFields(null);
