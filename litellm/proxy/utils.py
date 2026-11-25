@@ -5538,7 +5538,15 @@ class ProxyLogging:
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
             refused_messages: Final = read_tap is not None and await ProxyLogging._refuse_messages_stream(
-                request_data, e, read_tap
+                request_data,
+                e,
+                read_tap,
+                partial(
+                    self.post_call_failure_hook,  # pyright: ignore[reportUnknownMemberType]  # the hook's request_data parameter is a bare dict
+                    request_data=request_data,
+                    original_exception=e,
+                    user_api_key_dict=user_api_key_dict,
+                ),
             )
             if not refused_messages and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
@@ -5897,18 +5905,16 @@ class ProxyLogging:
 
     @staticmethod
     async def _refuse_messages_stream(
-        request_data: Mapping[str, object], error: Exception, read_tap: "_ReadBytesTap[object]"
+        request_data: Mapping[str, object],
+        error: Exception,
+        read_tap: "_ReadBytesTap[object]",
+        fail_request: Callable[[], Awaitable[object]],
     ) -> bool:
         """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
         as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: the
         provider stream is closed and billed for the bytes the hooks read. Returns False when the error is not one,
         when the stream's success log already ran, or when the stream parked an assembled chat response instead, so
         the caller handles it as a chat stream."""
-        from litellm.litellm_core_utils.asyncify import asyncify
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
-
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging) or not isinstance(error, _STREAM_REFUSAL_ERRORS):
             return False
@@ -5925,6 +5931,29 @@ class ProxyLogging:
         logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
         logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        billing: Final = asyncio.ensure_future(
+            ProxyLogging._bill_read_messages_stream(request_data, logging_obj, read_tap)
+        )
+        try:
+            await asyncio.shield(billing)
+        except asyncio.CancelledError:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=ProxyLogging._fail_refused_stream_after_disconnect(billing, fail_request)
+            )
+            raise
+        return True
+
+    @staticmethod
+    async def _bill_read_messages_stream(
+        request_data: Mapping[str, object], logging_obj: Logging, read_tap: "_ReadBytesTap[object]"
+    ) -> None:
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
         try:
             await read_tap.aclose()
         except Exception as exc:  # noqa: BLE001  # closing is best-effort, so the refusal still reaches the client
@@ -5938,7 +5967,37 @@ class ProxyLogging:
         await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
             litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
         )
-        return True
+
+    @staticmethod
+    async def _fail_refused_stream_after_disconnect(
+        billing: "asyncio.Future[None]", fail_request: Callable[[], Awaitable[object]]
+    ) -> None:
+        await asyncio.wait((billing,))
+        await fail_request()
+
+    @staticmethod
+    async def shield_refused_stream_failure_report(
+        reporting: Awaitable[HTTPException | None], logging_obj: object
+    ) -> HTTPException | None:
+        """Await the ``post_call_failure_hook`` of an error that ended a stream. A refused stream's failure log is its
+        only spend row, so a client disconnect does not cancel it."""
+        if not isinstance(logging_obj, Logging) or not logging_obj.stream_success_refused:
+            return await reporting
+        reported: Final = asyncio.ensure_future(reporting)
+        try:
+            return await asyncio.shield(reported)
+        except asyncio.CancelledError:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=ProxyLogging._finish_detached_failure_report(reported)
+            )
+            raise
+
+    @staticmethod
+    async def _finish_detached_failure_report(reported: "asyncio.Future[HTTPException | None]") -> None:
+        await asyncio.wait((reported,))
+        reported.result()
 
     async def arelease_max_parallel_requests(
         self,

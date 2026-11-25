@@ -4159,6 +4159,72 @@ async def _bridged_stream_refused_after(
 
 
 @pytest.mark.asyncio
+async def test_refused_messages_stream_still_bills_its_failure_when_the_client_disconnects_while_it_is_logged(
+    monkeypatch,
+):
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    class RefusingHook(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for _ in response:
+                pass
+            raise BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+            yield
+
+    masking_started: Final = asyncio.Event()
+    masking_released: Final = asyncio.Event()
+
+    class SlowLogMasking(CustomGuardrail):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            masking_started.set()
+            await masking_released.wait()
+            return kwargs, result
+
+    masking: Final = SlowLogMasking(
+        guardrail_name="log-masking", event_hook=GuardrailEventHooks.logging_only, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [RefusingHook()])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [masking])
+    spend_rows: Final = _SpendRows()
+    logging_obj: Final = _refused_stream_logging_obj(spend_rows)
+
+    async def run_parked(parked) -> None:
+        await parked
+
+    logging_obj._on_deferred_stream_complete = run_parked
+
+    async def provider():
+        for frame in _native_messages_sse(input_tokens=30, output_tokens=20):
+            yield frame
+
+    relayed: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+        response=provider(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    async def read_all() -> list[object]:
+        return [chunk async for chunk in relayed]
+
+    client: Final = asyncio.ensure_future(read_all())
+    await asyncio.wait_for(masking_started.wait(), timeout=10)
+    client.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await client
+    masking_released.set()
+    for _ in range(100):
+        if spend_rows.rows:
+            break
+        await asyncio.sleep(0.05)
+
+    assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
+    assert spend_rows.rows[0][3] > 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("served_as", ["rust_bridge_byte_stream", "rust_bridge_public_stream"])
 async def test_refused_messages_stream_closes_the_provider_stream_still_sending(monkeypatch, served_as):
     rows, provider_closed = await asyncio.wait_for(
@@ -4169,3 +4235,78 @@ async def test_refused_messages_stream_closes_the_provider_stream_still_sending(
     assert provider_closed
     assert [row[:2] for row in rows] == [("failure", 30)]
     assert rows[0][3] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("served_as", ["rust_bridge_byte_stream", "rust_bridge_public_stream"])
+async def test_refused_messages_stream_still_bills_its_failure_when_the_client_disconnects_during_the_close(
+    monkeypatch, served_as
+):
+    from litellm.caching.caching import DualCache
+    from litellm.llms.anthropic.messages.native.streaming_iterator import AnthropicMessagesStreamingResponse
+    from litellm.proxy.utils import ProxyLogging
+
+    class RefusingHook(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            read = 0
+            async for _ in response:
+                read += 1
+                if read == 4:
+                    break
+            raise BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+            yield
+
+    failure_hooks: Final[list[str]] = []
+
+    class FailureHookRecorder(CustomLogger):
+        async def async_post_call_failure_hook(
+            self, request_data, original_exception, user_api_key_dict, traceback_str=None
+        ):
+            failure_hooks.append(type(original_exception).__name__)
+
+    monkeypatch.setattr(litellm, "callbacks", [RefusingHook(), FailureHookRecorder()])
+    spend_rows: Final = _SpendRows()
+    logging_obj: Final = _refused_stream_logging_obj(spend_rows)
+
+    async def run_parked(parked) -> None:
+        await parked
+
+    logging_obj._on_deferred_stream_complete = run_parked
+    client: Final[list[asyncio.Task[object]]] = []
+
+    async def provider():
+        try:
+            for sent, frame in enumerate(_native_messages_sse(input_tokens=30, output_tokens=20)):
+                if sent == 4:
+                    await asyncio.Event().wait()
+                yield frame
+        finally:
+            client[0].cancel()
+
+    provider_stream: Final = provider()
+    served: Final = {
+        "rust_bridge_byte_stream": lambda: provider_stream,
+        "rust_bridge_public_stream": lambda: AnthropicMessagesStreamingResponse(
+            completion_stream=provider_stream, hidden_params={}
+        ),
+    }[served_as]()
+    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=served,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+    )
+
+    async def read_all() -> list[object]:
+        return [chunk async for chunk in guarded]
+
+    client.append(asyncio.ensure_future(read_all()))
+    with pytest.raises(asyncio.CancelledError):
+        await client[0]
+    for _ in range(100):
+        if spend_rows.rows and failure_hooks:
+            break
+        await asyncio.sleep(0.05)
+
+    assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
+    assert spend_rows.rows[0][3] > 0
+    assert failure_hooks == ["BlockedPiiEntityError"]

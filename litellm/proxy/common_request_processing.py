@@ -5768,10 +5768,13 @@ class ProxyBaseLLMRequestProcessing:
             transformed_exception: Final = (
                 None
                 if already_reported
-                else await proxy_logging_obj.post_call_failure_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    original_exception=answered,
-                    request_data=request_data,
+                else await proxy_logging_obj.shield_refused_stream_failure_report(
+                    proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=answered,
+                        request_data=request_data,
+                    ),
+                    stream_logging_obj,  # pyright: ignore[reportUnknownArgumentType]  # legacy request data, narrowed to Logging by the helper
                 )
             )
             failure: Final = answered if transformed_exception is None else transformed_exception
