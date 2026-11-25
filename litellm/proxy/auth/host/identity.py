@@ -15,6 +15,7 @@ from litellm.proxy.auth.auth_checks import cache_key_object
 from litellm.proxy.auth.host.facts import (
     EndUserParams,
     EndUserRow,
+    object_permission_table,
     with_end_user,
     with_owner,
     with_project,
@@ -68,7 +69,7 @@ def _with_team_grant(token: UserAPIKeyAuth, grant: RustTeamGrant) -> UserAPIKeyA
         case RustTeamGrant.Loaded(team=team):
             return with_team(token, team.object_permission, team.metadata)
         case RustTeamGrant.KeyCopy(object_permission=object_permission):
-            return with_team(token, object_permission, token.team_metadata)
+            return with_team(token, object_permission_table(object_permission), token.team_metadata)
         case _:
             return token
 

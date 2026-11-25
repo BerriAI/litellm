@@ -29,7 +29,6 @@ impl Rows for Held {
     type User = ();
     type Team = ();
     type EndUser = ();
-    type ObjectPermission = ();
     type Membership = ();
 }
 

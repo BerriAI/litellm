@@ -1,4 +1,5 @@
 use http::Method;
+use indexmap::IndexMap;
 use jiff::Timestamp;
 use litellm_config::RouteList;
 use litellm_gateway_auth_core::{
@@ -14,7 +15,7 @@ use litellm_gateway_auth_core::{
             ManagedAgent, ModelAccess, Org, Provisioning, RegisteredAgent, Team, TeamRead, User,
             UserRead,
         },
-        key::{KeyContext, KeyOutcome, Owner, ProjectRecord},
+        key::{KeyContext, KeyOutcome, ObjectPermissionRecord, Owner, ProjectRecord},
     },
     plan::Plan,
     routes::passthrough::{ForwardedRoutes, PassthroughGrants},
@@ -24,6 +25,7 @@ use litellm_python_compat::repr::float_repr;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyDict,
 };
 use serde_json::Value;
 
@@ -241,6 +243,96 @@ pub(crate) struct ManagedAgentFacts {
     binding_revision: Option<String>,
     #[pyo3(attribute)]
     subject_oid: Option<String>,
+}
+
+/// `LiteLLM_ObjectPermissionTable`, read as is.
+#[derive(FromPyObject)]
+pub(crate) struct ObjectPermissionFacts {
+    #[pyo3(attribute)]
+    object_permission_id: String,
+    #[pyo3(attribute)]
+    mcp_servers: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    mcp_access_groups: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    mcp_tool_permissions: Option<IndexMap<String, Vec<String>>>,
+    #[pyo3(attribute)]
+    vector_stores: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    agents: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    agent_access_groups: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    models: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    mcp_toolsets: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    blocked_tools: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    search_tools: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    mcp_tool_search_enabled: Option<bool>,
+    #[pyo3(attribute)]
+    skills: Option<Vec<String>>,
+    #[pyo3(attribute)]
+    apps: Option<Vec<String>>,
+}
+
+impl From<ObjectPermissionFacts> for ObjectPermissionRecord {
+    fn from(facts: ObjectPermissionFacts) -> Self {
+        Self {
+            object_permission_id: facts.object_permission_id,
+            mcp_servers: facts.mcp_servers,
+            mcp_access_groups: facts.mcp_access_groups,
+            mcp_tool_permissions: facts
+                .mcp_tool_permissions
+                .map(|tools| tools.into_iter().collect()),
+            vector_stores: facts.vector_stores,
+            agents: facts.agents,
+            agent_access_groups: facts.agent_access_groups,
+            models: facts.models,
+            mcp_toolsets: facts.mcp_toolsets,
+            blocked_tools: facts.blocked_tools,
+            search_tools: facts.search_tools,
+            mcp_tool_search_enabled: facts.mcp_tool_search_enabled,
+            skills: facts.skills,
+            apps: facts.apps,
+        }
+    }
+}
+
+/// An object permission as the core holds it: every column under its own name, which
+/// `facts.object_permission_table` builds a `LiteLLM_ObjectPermissionTable` from.
+fn object_permission_fields(
+    py: Python<'_>,
+    permission: &ObjectPermissionRecord,
+) -> PyResult<Py<PyAny>> {
+    let tools: Option<IndexMap<&str, &Vec<String>>> =
+        permission.mcp_tool_permissions.as_ref().map(|tools| {
+            tools
+                .iter()
+                .map(|(server, names)| (server.as_str(), names))
+                .collect()
+        });
+    let fields = PyDict::new(py);
+    fields.set_item("object_permission_id", &permission.object_permission_id)?;
+    fields.set_item("mcp_servers", &permission.mcp_servers)?;
+    fields.set_item("mcp_access_groups", &permission.mcp_access_groups)?;
+    fields.set_item("mcp_tool_permissions", tools)?;
+    fields.set_item("vector_stores", &permission.vector_stores)?;
+    fields.set_item("agents", &permission.agents)?;
+    fields.set_item("agent_access_groups", &permission.agent_access_groups)?;
+    fields.set_item("models", &permission.models)?;
+    fields.set_item("mcp_toolsets", &permission.mcp_toolsets)?;
+    fields.set_item("blocked_tools", &permission.blocked_tools)?;
+    fields.set_item("search_tools", &permission.search_tools)?;
+    fields.set_item(
+        "mcp_tool_search_enabled",
+        permission.mcp_tool_search_enabled,
+    )?;
+    fields.set_item("skills", &permission.skills)?;
+    fields.set_item("apps", &permission.apps)?;
+    Ok(fields.into_any().unbind())
 }
 
 /// `LiteLLM_ProjectTable`, read as is.
@@ -717,7 +809,10 @@ impl KeyContextView {
                 team: row(py, team),
             },
             TeamGrant::KeyCopy(permission) => TeamGrantView::KeyCopy {
-                object_permission: rows(py, permission.as_ref()),
+                object_permission: permission
+                    .as_ref()
+                    .map(|permission| object_permission_fields(py, permission))
+                    .transpose()?,
             },
         };
         Py::new(
@@ -1664,6 +1759,20 @@ impl AuthCall {
         })
     }
 
+    /// An object permission, or nothing when it has no row.
+    #[pyo3(signature = (permission = None))]
+    fn object_permission(&self, permission: Option<ObjectPermissionFacts>) -> PyResult<()> {
+        let permission = permission.map(ObjectPermissionRecord::from);
+        self.stepper
+            .answer("an object permission", |ask| match ask {
+                Ask::ObjectPermission { reply, .. } => {
+                    reply.send(permission);
+                    Ok(())
+                }
+                other => Err(other),
+            })
+    }
+
     /// A key's project, or nothing when it has no row.
     #[pyo3(signature = (project = None))]
     fn project(&self, py: Python<'_>, project: Option<ProjectFacts>) -> PyResult<()> {
@@ -1693,9 +1802,7 @@ impl AuthCall {
     fn found_row(&self, row: Option<Py<PyAny>>) -> PyResult<()> {
         let row = row.map(PyRow::new);
         self.stepper.answer("a row or nothing", |ask| match ask {
-            Ask::KeyTeam { reply, .. }
-            | Ask::ObjectPermission { reply, .. }
-            | Ask::LoadTeamMembership { reply, .. } => {
+            Ask::KeyTeam { reply, .. } | Ask::LoadTeamMembership { reply, .. } => {
                 reply.send(row);
                 Ok(())
             }

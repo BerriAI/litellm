@@ -57,7 +57,7 @@ mod tests {
             jwt::JwtSettings,
             key::{KeyRecord, Keyed},
         },
-        identity::key::ProjectRecord,
+        identity::key::{ObjectPermissionRecord, ProjectRecord},
         testing::{Labels, ScriptedHost},
     };
 
@@ -756,7 +756,7 @@ mod tests {
     #[case::no_team(None, None, true, TeamGrant::NoTeam)]
     #[case::ui_team(Some("litellm-dashboard"), None, true, TeamGrant::KeyCopy(None))]
     #[case::unresolvable_team(Some("t"), None, false, TeamGrant::KeyCopy(None))]
-    #[case::unresolvable_team_with_permission(Some("t"), Some("op"), false, TeamGrant::KeyCopy(Some("permission op".to_owned())))]
+    #[case::unresolvable_team_with_permission(Some("t"), Some("op"), false, TeamGrant::KeyCopy(Some(Box::new(ObjectPermissionRecord { object_permission_id: "op".to_owned(), ..ObjectPermissionRecord::default() }))))]
     #[case::resolved_team(Some("t"), Some("op"), true, TeamGrant::Loaded("team t".to_owned()))]
     #[tokio::test]
     async fn team_falls_back_to_the_key_copy(

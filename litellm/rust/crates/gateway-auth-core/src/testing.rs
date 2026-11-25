@@ -18,7 +18,7 @@ use crate::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
-        key::{Owner, ProjectRecord},
+        key::{ObjectPermissionRecord, Owner, ProjectRecord},
     },
 };
 
@@ -32,7 +32,6 @@ impl Rows for Labels {
     type User = String;
     type Team = String;
     type EndUser = String;
-    type ObjectPermission = String;
     type Membership = String;
 }
 
@@ -264,9 +263,12 @@ impl AuthHost for ScriptedHost {
         self.step("key_team", format!("key_team {team_id}"))?;
         Ok(self.key_team_found.then(|| format!("team {team_id}")))
     }
-    async fn object_permission(&self, id: &str) -> Result<Option<String>, Error> {
+    async fn object_permission(&self, id: &str) -> Result<Option<ObjectPermissionRecord>, Error> {
         self.step("object_permission", format!("object_permission {id}"))?;
-        Ok(Some(format!("permission {id}")))
+        Ok(Some(ObjectPermissionRecord {
+            object_permission_id: id.to_owned(),
+            ..ObjectPermissionRecord::default()
+        }))
     }
     async fn project(&self, project_id: &str) -> Result<Option<ProjectRecord>, Error> {
         self.step("project", format!("project {project_id}"))?;

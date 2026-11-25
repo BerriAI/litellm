@@ -236,6 +236,29 @@ def key_facts(token: UserAPIKeyAuth) -> KeyFacts:
     )
 
 
+class ObjectPermissionFields(TypedDict):
+    """Every column of an object permission, as the auth core hands one back."""
+
+    object_permission_id: ReadOnly[str]
+    mcp_servers: ReadOnly[list[str] | None]
+    mcp_access_groups: ReadOnly[list[str] | None]
+    mcp_tool_permissions: ReadOnly[dict[str, list[str]] | None]
+    vector_stores: ReadOnly[list[str] | None]
+    agents: ReadOnly[list[str] | None]
+    agent_access_groups: ReadOnly[list[str] | None]
+    models: ReadOnly[list[str] | None]
+    mcp_toolsets: ReadOnly[list[str] | None]
+    blocked_tools: ReadOnly[list[str] | None]
+    search_tools: ReadOnly[list[str] | None]
+    mcp_tool_search_enabled: ReadOnly[bool | None]
+    skills: ReadOnly[list[str] | None]
+    apps: ReadOnly[list[str] | None]
+
+
+def object_permission_table(fields: ObjectPermissionFields | None) -> LiteLLM_ObjectPermissionTable | None:
+    return None if fields is None else LiteLLM_ObjectPermissionTable(**fields)
+
+
 def managed_agent_context(agent: RustManagedAgent) -> ManagedAgentContext:
     return ManagedAgentContext(
         agent_id=agent.agent_id,

@@ -27,8 +27,7 @@ pub use error::{
     RbacDenial, Searched, TeamDenial, TokenError, VerifyDenial,
 };
 pub use host::{
-    AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks, Row, Rows,
-    TeamRow, UserRow,
+    AuthHost, EndUserRow, KeyRow, MembershipRow, OperatorHooks, Row, Rows, TeamRow, UserRow,
 };
 pub use outcome::{Identity, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};

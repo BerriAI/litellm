@@ -18,6 +18,7 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj, Member
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy import proxy_server
@@ -40,7 +41,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity, RustTeamGrant
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -226,6 +227,53 @@ async def test_a_keys_project_reaches_the_identity_with_its_alias_and_every_meta
     project: Final = identity.context.project
     assert project is not None
     assert (project.project_alias, project.metadata) == ("Project A", metadata)
+
+
+@pytest.mark.asyncio
+async def test_the_permission_a_ui_team_key_names_reaches_the_identity_with_every_column() -> None:
+    key: Final = "sk-permission-key-0123456789abcdef"
+    hashed: Final = hashlib.sha256(key.encode()).hexdigest()
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="op-1",
+        mcp_servers=["server-b", "server-a"],
+        mcp_access_groups=["group"],
+        mcp_tool_permissions={"server-b": ["tool-2", "tool-1"], "server-a": []},
+        vector_stores=["store"],
+        agents=["agent"],
+        agent_access_groups=["agents"],
+        models=["model-a"],
+        mcp_toolsets=["toolset"],
+        blocked_tools=["blocked"],
+        search_tools=["search"],
+        mcp_tool_search_enabled=True,
+        skills=["skill"],
+        apps=["app"],
+    )
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(
+        AuthObject.virtual_key(hashed),
+        UserAPIKeyAuth(token=hashed, team_id="litellm-dashboard", team_object_permission_id="op-1", models=[]),
+        model_type=UserAPIKeyAuth,
+    )
+    cache.set_cache(AuthObject.object_permission("op-1"), permission, model_type=LiteLLM_ObjectPermissionTable)
+    settings: Final = RustAuthSettings(
+        {}, JWT_AUTH, core.HostFacts(master_key="sk-master-key-0123456789abcdef", premium=True, has_db=True)
+    )
+
+    outcome: Final = await core.drive(
+        RustAuth.authenticate_key(core.request(key, "/chat/completions", "POST"), key, settings),
+        _host(cache=cache, api_key=key, prisma_client=MagicMock()),
+    )
+
+    identity: Final = outcome.identity
+    assert isinstance(identity, RustIdentity.VirtualKey), outcome.denial
+    grant: Final = identity.context.team
+    assert isinstance(grant, RustTeamGrant.KeyCopy)
+    assert grant.object_permission is not None
+    assert (grant.object_permission, list(grant.object_permission["mcp_tool_permissions"] or {})) == (
+        permission.model_dump(),
+        ["server-b", "server-a"],
+    )
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ use crate::{
     authn::key::KeyRecord,
     identity::{
         jwt::Org,
-        key::{KeyContext, KeyOutcome, ProjectRecord},
+        key::{KeyContext, KeyOutcome, ObjectPermissionRecord, ProjectRecord},
     },
     outcome::Identity,
 };
@@ -23,7 +23,7 @@ pub enum TeamGrant<R: Rows> {
     Loaded(R::Team),
     /// Only a key's: the UI team, or a team `get_team_object` did not report. The key's own copy
     /// of the team values stands, with the object permission it names.
-    KeyCopy(Option<R::ObjectPermission>),
+    KeyCopy(Option<Box<ObjectPermissionRecord>>),
 }
 
 /// The rows a caller belongs to. The key path and the JWT path both fill it, and every struct
@@ -156,7 +156,6 @@ mod tests {
         type User = String;
         type Team = String;
         type EndUser = String;
-        type ObjectPermission = String;
         type Membership = String;
     }
 
