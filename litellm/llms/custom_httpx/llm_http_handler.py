@@ -7167,9 +7167,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Check if provider uses multipart/form-data or JSON
-            if image_edit_provider_config.use_multipart_form_data():
-                # Use form-data (OpenAI style)
+            if not image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params):
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7178,7 +7176,6 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             else:
-                # Use JSON (Gemini style)
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7269,9 +7266,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Check if provider uses multipart/form-data or JSON
-            if image_edit_provider_config.use_multipart_form_data():
-                # Use form-data (OpenAI style)
+            if not image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params):
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7280,7 +7275,6 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             else:
-                # Use JSON (Gemini style)
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
