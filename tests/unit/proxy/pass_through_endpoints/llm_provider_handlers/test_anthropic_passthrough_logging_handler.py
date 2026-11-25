@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from typing import Final
@@ -3325,7 +3326,7 @@ async def test_a_streamed_messages_call_logs_the_rate_limit_the_provider_reporte
     logged_headers: Final = logged["hidden_params"]["additional_headers"]
     assert logged_headers["x_ratelimit_remaining_tokens"] == remaining_tokens
     assert logged_headers["x_ratelimit_remaining_requests"] == remaining_requests
-    assert logged_headers["llm_provider-request-id"] == "req_stream"
+    assert "llm_provider-request-id" not in logged_headers
 
 
 def test_a_streamed_messages_call_keeps_the_reported_cost_beside_the_provider_rate_limit():
@@ -3369,6 +3370,62 @@ def test_a_streamed_messages_call_without_usable_provider_headers_logs_none(
 
     assert isinstance(result["result"], litellm.ModelResponse)
     assert "x-ratelimit-remaining-tokens" not in (result["result"]._hidden_params.get("additional_headers") or {})
+
+
+@pytest.mark.parametrize(
+    ("rate_limit_headers", "logged_headers"),
+    [
+        pytest.param(
+            {"Anthropic-Ratelimit-Tokens-Remaining": "11999000", "anthropic-ratelimit-requests-remaining": "12999"},
+            {
+                "llm_provider-anthropic-ratelimit-tokens-remaining": "11999000",
+                "llm_provider-anthropic-ratelimit-requests-remaining": "12999",
+                "x-ratelimit-remaining-tokens": "11999000",
+                "x-ratelimit-remaining-requests": "12999",
+            },
+            id="anthropic",
+        ),
+        pytest.param(
+            {"X-RateLimit-Remaining-Tokens": "49900", "x-ratelimit-remaining-requests": "49"},
+            {
+                "llm_provider-x-ratelimit-remaining-tokens": "49900",
+                "llm_provider-x-ratelimit-remaining-requests": "49",
+                "x-ratelimit-remaining-tokens": "49900",
+                "x-ratelimit-remaining-requests": "49",
+            },
+            id="azure-ai-foundry",
+        ),
+    ],
+)
+def test_a_streamed_messages_call_logs_only_the_provider_rate_limit_headers(
+    all_chunks: Sequence[str], rate_limit_headers: Mapping[str, str], logged_headers: Mapping[str, str]
+):
+    logging_obj: Final = _go_logging_obj()
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["response_headers"] = {
+        **rate_limit_headers,
+        "set-cookie": "session=secret",
+        "anthropic-organization-id": "org-1",
+        "anthropic-workspace-id": "wrkspc-1",
+        "request-id": "req_stream",
+        "retry-after": "3",
+    }
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=list(all_chunks),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    additional_headers: Final = result["result"]._hidden_params["additional_headers"]
+    assert "llm_provider-set-cookie" not in additional_headers
+    assert "llm_provider-anthropic-organization-id" not in additional_headers
+    assert additional_headers == logged_headers
 
 
 _BEDROCK_TRACE_PRICING: Final = {
