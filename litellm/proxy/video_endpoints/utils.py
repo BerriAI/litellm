@@ -184,21 +184,29 @@ async def video_list_target(
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
     router_settings: Mapping[str, object] | None = None,
+    request_routing: Mapping[str, object] = MappingProxyType({}),
 ) -> VideoListTarget:
+    from litellm.proxy.route_llm_request import per_request_router_settings
+
     provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    request_kwargs: Final = {**per_request_router_settings(router_settings or MappingProxyType({})), **request_routing}
     if requested_model:
         await authorize_model_for_key(
             model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
         )
         group: Final = await _served_list_group(requested_model, user_api_key_dict, llm_router, router_settings)
-        pinned: Final = first_deployment_id_in_group(llm_router, group, user_api_key_dict, provider)
+        pinned: Final = await first_deployment_id_in_group(
+            llm_router, group, user_api_key_dict, provider, request_kwargs
+        )
         if pinned is not None:
             return VideoListTarget(model=pinned, deployment_id=pinned)
         if provider is None:
             return VideoListTarget(model=requested_model)
     if provider is None:
         return VideoListTarget()
-    deployment: Final = await video_deployment_the_caller_may_use(llm_router, user_api_key_dict, provider)
+    deployment: Final = await video_deployment_the_caller_may_use(
+        llm_router, user_api_key_dict, provider, request_kwargs
+    )
     return (
         VideoListTarget() if deployment is None else VideoListTarget(deployment.deployment_id, deployment.deployment_id)
     )

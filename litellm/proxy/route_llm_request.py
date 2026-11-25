@@ -3,7 +3,7 @@ import hashlib
 import json
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
@@ -31,6 +31,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
     deployment_with_credentials,
+    tags_route_to_deployment,
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
@@ -826,16 +827,24 @@ async def _authorized_team_file_deployment(
 _CONNECTION_SETTINGS: Final = frozenset({"extra_headers", "ssl_verify"})
 
 
-def _video_list_deployment(
-    listed_by: object, llm_router: LitellmRouter | None, team_id: str | None, every_team: bool
+async def _video_list_deployment(
+    kwargs: Mapping[str, object], llm_router: LitellmRouter, team_id: str | None, every_team: bool
 ) -> TeamProviderDeployment | None:
+    listed_by: Final = kwargs.get("model")
     if not isinstance(listed_by, str):
         return None
-    return deployment_with_credentials(llm_router, listed_by, team_id, every_team)
+    by_group: Final = deployment_with_credentials(llm_router, listed_by, team_id, every_team)
+    if by_group is None:
+        return None
+    by_id: Final = replace(by_group, public_model_name=listed_by)
+    for named in (by_group, by_id):
+        if await tags_route_to_deployment(llm_router, named, kwargs):
+            return by_group
+    return None
 
 
-def _connection_settings(deployment: TeamProviderDeployment, llm_router: LitellmRouter | None) -> Mapping[str, object]:
-    listed_with: Final = None if llm_router is None else llm_router.registry().deployment(deployment.deployment_id)
+def _connection_settings(deployment: TeamProviderDeployment, llm_router: LitellmRouter) -> Mapping[str, object]:
+    listed_with: Final = llm_router.registry().deployment(deployment.deployment_id)
     if listed_with is None:
         return MappingProxyType({})
     return listed_with.litellm_params.model_dump(include=set(_CONNECTION_SETTINGS), exclude_none=True)
@@ -1102,9 +1111,7 @@ async def _route_request_single_attempt(
                 )
             )
         video_list_deployment: Final = (
-            _video_list_deployment(
-                direct_litellm_kwargs().get("model"), llm_router, team_id, is_proxy_admin_without_team
-            )
+            await _video_list_deployment(direct_litellm_kwargs(), llm_router, team_id, is_proxy_admin_without_team)
             if route_type == "avideo_list"
             else None
         )

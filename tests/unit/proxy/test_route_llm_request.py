@@ -2960,6 +2960,89 @@ async def test_a_video_list_reaches_a_self_signed_backend_whose_deployment_turns
     assert listed["data"] == [], listed
 
 
+def _tagged_seedance_router(
+    *deployments: tuple[str, list[str], dict[str, object]], enable_tag_filtering: bool
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "seedance-video",
+                "litellm_params": {
+                    "model": "volcengine/doubao-seedance-2-0-mini-260615",
+                    "api_key": f"{deployment_id}-key",
+                    "api_base": f"https://{deployment_id}.ark.example",
+                    "tags": tags,
+                },
+                "model_info": {"id": deployment_id, **model_info},
+            }
+            for deployment_id, tags, model_info in deployments
+        ],
+        enable_tag_filtering=enable_tag_filtering,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    ("router_wide", "request_setting"),
+    [
+        pytest.param(True, {}, id="router-wide"),
+        pytest.param(False, {"router_settings_override": {"enable_tag_filtering": True}}, id="key-or-team"),
+    ],
+)
+async def test_a_video_list_naming_a_deployment_its_tags_refuse_never_uses_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+    router_wide: bool,
+    request_setting: dict[str, object],
+    metadata_field: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _tagged_seedance_router(("dep-a", ["paid"], {}), enable_tag_filtering=router_wide)
+    request: Final = {
+        **_video_list_pinned_to("dep-a"),
+        **request_setting,
+        metadata_field: {"tags": ["free"], "inherited_tags": ("free",)},
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.get(url__startswith="https://dep-a.ark.example").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+            await (await route_request(request, router, None, "avideo_list"))
+
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sibling", "tags"),
+    [
+        pytest.param(("dep-b", ["default"], {}), [], id="allowed-by-its-id"),
+        pytest.param(("dep-b", ["gold"], {"allow_fail_open": True}), ["&silver"], id="allowed-by-its-group"),
+    ],
+)
+async def test_a_rate_limited_video_list_on_a_deployment_its_tags_allow_leaves_it_in_rotation(
+    monkeypatch: pytest.MonkeyPatch, sibling: tuple[str, list[str], dict[str, object]], tags: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _tagged_seedance_router(("dep-a", ["paid"], {}), sibling, enable_tag_filtering=True)
+    request: Final = {
+        **_video_list_pinned_to("dep-a"),
+        "litellm_metadata": {"tags": tags, "inherited_tags": ()},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"https://dep-a.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(429, json={"error": {"code": "RateLimitExceeded", "message": "slow down"}})
+        )
+        with pytest.raises(litellm.RateLimitError):
+            await (await route_request(request, router, None, "avideo_list"))
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer dep-a-key"
+    assert router.health().cooldowns.get_active_cooldowns(["dep-a"], None) == []
+
+
 _DIRECT_VECTOR_STORE_FILE_ROUTES: Final = (
     "avector_store_file_content",
     "avector_store_file_delete",

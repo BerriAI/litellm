@@ -1,5 +1,6 @@
 #### Video Endpoints #####
 
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
@@ -167,7 +168,9 @@ async def video_list(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import (
+        caller_routing_kwargs,
         general_settings,
         llm_router,
         prisma_client,
@@ -196,6 +199,9 @@ async def video_list(
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
         router_settings=router_settings,
+        request_routing=caller_routing_kwargs(
+            user_api_key_dict, request_routing_metadata(request, MappingProxyType({}), user_api_key_dict)
+        ),
     )
     data: Final[dict[str, object]] = {
         "query_params": dict(request.query_params),

@@ -16179,9 +16179,7 @@ def _caller_affinity_keys(caller: UserAPIKeyAuth) -> Mapping[str, object]:
     }
 
 
-def _caller_routing_kwargs(
-    caller: UserAPIKeyAuth | None, request_routing: Mapping[str, object]
-) -> Mapping[str, object]:
+def caller_routing_kwargs(caller: UserAPIKeyAuth | None, request_routing: Mapping[str, object]) -> Mapping[str, object]:
     if caller is None:
         return {}
     team_scope: Final = {"user_api_key_team_id": caller.team_id} if caller.team_id else {}
@@ -16535,7 +16533,7 @@ async def route_count(
         "model": served,
         **_responses_routing_kwargs(responses_request),
         **_router_settings_kwargs(settings),
-        **_caller_routing_kwargs(caller, request_routing),
+        **caller_routing_kwargs(caller, request_routing),
     }
     routable: Final = _routable_count_deployments(served, select_request)
     routed: Final = await _routed_count_deployment(served, select_request, routable)

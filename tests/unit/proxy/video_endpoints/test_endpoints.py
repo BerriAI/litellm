@@ -42,7 +42,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -656,11 +655,11 @@ async def test_edit__uploaded_video_file_is_forwarded_not_dropped(harness):
 # =========================================================================== #
 
 
-async def call_list(harness: Harness, *, headers=None, query=None):
+async def call_list(harness: Harness, *, headers=None, query=None, user: UserAPIKeyAuth | None = None):
     return await endpoints.video_list(
         request=FakeRequest(headers=headers, query=query),
         fastapi_response=Response(),
-        user_api_key_dict=_user(),
+        user_api_key_dict=user or _user(),
     )
 
 
@@ -691,8 +690,8 @@ async def test_list__provider_from_header(harness):
     ("headers", "query"),
     [(None, {"model": "seedance-video"}), ({"x-litellm-model": "seedance-video"}, None)],
 )
-async def test_list__named_model_routes_the_list_to_its_deployment(harness, headers, query):
-    harness.router.get_credential_deployment.return_value = _seedance_deployment()
+async def test_list__named_model_routes_the_list_to_its_deployment(harness, monkeypatch, headers, query):
+    monkeypatch.setattr(proxy_server, "llm_router", _seedance_router())
 
     await call_list(harness, headers=headers, query=query)
 
@@ -700,8 +699,8 @@ async def test_list__named_model_routes_the_list_to_its_deployment(harness, head
 
 
 @pytest.mark.asyncio
-async def test_list__listed_ids_name_the_deployment_that_served_them(harness):
-    harness.router.get_credential_deployment.return_value = _seedance_deployment()
+async def test_list__listed_ids_name_the_deployment_that_served_them(harness, monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", _seedance_router())
     listed_id: Final = encode_video_id_with_provider("cgt-1", "volcengine", "doubao-seedance-2-0-mini-260615")
     harness.respond_with({"object": "list", "data": [{"id": listed_id}], "first_id": listed_id, "last_id": listed_id})
 
@@ -714,10 +713,8 @@ async def test_list__listed_ids_name_the_deployment_that_served_them(harness):
 
 
 @pytest.mark.asyncio
-async def test_list__named_model_follows_the_keys_or_teams_router_settings_alias(harness):
-    deployments: Final = {"seedance-video": _seedance_deployment(), "seedance-b": _seedance_deployment("dep-seedance-b")}
-    harness.router.get_credential_deployment.side_effect = lambda model_id, team_id=None: deployments.get(model_id)
-    harness.router.get_model_from_alias.return_value = None
+async def test_list__named_model_follows_the_keys_or_teams_router_settings_alias(harness, monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", _seedance_router())
     proxy_server.proxy_config.get_hierarchical_router_settings.return_value = {
         "model_group_alias": {"seedance-video": "seedance-b"}
     }
@@ -727,12 +724,47 @@ async def test_list__named_model_follows_the_keys_or_teams_router_settings_alias
     assert harness.processor_data()["model"] == "dep-seedance-b"
 
 
-def _seedance_deployment(deployment_id: str = "dep-seedance") -> Deployment:
-    return Deployment(
-        model_name="seedance-video",
-        litellm_params=LiteLLM_Params(model="volcengine/doubao-seedance-2-0-mini-260615"),
-        model_info=ModelInfo(id=deployment_id),
+def _seedance_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "volcengine/doubao-seedance-2-0-mini-260615",
+                    "api_key": "video-key",
+                    "tags": tags,
+                },
+                "model_info": {"id": deployment_id},
+            }
+            for group, deployment_id, tags in (
+                ("seedance-video", "dep-seedance", ["default"]),
+                ("seedance-video", "dep-seedance-free", ["free"]),
+                ("seedance-b", "dep-seedance-b", ["default"]),
+            )
+        ]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "user"),
+    [
+        pytest.param({"x-litellm-tags": "free"}, UserAPIKeyAuth(api_key="hashed"), id="header-tag"),
+        pytest.param({}, UserAPIKeyAuth(api_key="hashed", metadata={"tags": ["free"]}), id="key-tag"),
+        pytest.param({}, UserAPIKeyAuth(api_key="hashed", team_metadata={"tags": ["free"]}), id="team-tag"),
+    ],
+)
+@pytest.mark.parametrize("query", [{"model": "seedance-video"}, {}])
+async def test_list__lists_with_the_deployment_the_callers_tags_route_to(
+    harness, monkeypatch, headers, user, query
+):
+    monkeypatch.setattr(proxy_server, "llm_router", _seedance_router())
+    proxy_server.proxy_config.get_hierarchical_router_settings.return_value = {"enable_tag_filtering": True}
+    harness.provider_from_query.return_value = "volcengine"
+
+    await call_list(harness, headers=headers, query=query, user=user)
+
+    assert harness.processor_data()["model"] == "dep-seedance-free"
 
 
 # =========================================================================== #
