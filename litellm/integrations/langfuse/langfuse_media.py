@@ -21,7 +21,6 @@ from langfuse.api.core.api_error import ApiError
 from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 
 __all__ = ("Media", "MediaField", "MediaUpload", "MediaUploader", "extract_media")
 
@@ -150,7 +149,7 @@ def _retryable_status(status: int) -> bool:
     return status in (408, 429) or status >= 500
 
 
-def _storage_headers(upload_url: str, host: str, media: Media) -> Mapping[str, str]:
+def _storage_headers(upload_url: str, media: Media) -> Mapping[str, str]:
     """Google Cloud Storage rejects the S3 checksum and Azure blob headers, so its URLs get the content type only."""
     return {
         "Content-Type": media.content_type.value,
@@ -159,7 +158,6 @@ def _storage_headers(upload_url: str, host: str, media: Media) -> Mapping[str, s
             if "storage.googleapis.com" in upload_url
             else {"x-ms-blob-type": "BlockBlob", "x-amz-checksum-sha256": media.sha256_hash}
         ),
-        **({"Host": host} if host else {}),
     }
 
 
@@ -177,7 +175,6 @@ class MediaUploader:
         client: Callable[[], httpx.Client],
         timeout: float,
         delays: Sequence[float],
-        validate_upload_url: bool = False,
         max_queued_bytes: int = _MAX_QUEUED_BYTES,
     ) -> None:
         self._api_for: Final = api
@@ -185,7 +182,6 @@ class MediaUploader:
         self._bound: tuple[httpx.Client, LangfuseAPI] | None = None
         self._timeout: Final = timeout
         self._delays: Final = tuple(delays)
-        self._validate_upload_url: Final = validate_upload_url
         self._max_queued_bytes: Final = max_queued_bytes
         self._queue: Final[Queue[MediaUpload]] = Queue()
         self._lock: Final = threading.Lock()
@@ -251,22 +247,17 @@ class MediaUploader:
     def _upload(self, upload: MediaUpload) -> str | None:
         """Registers the media with its trace; Langfuse returns an upload URL only for content it does not hold yet.
 
-        The upload URL is as trusted as the host that returned it. For a Langfuse host that came with the request
-        credentials it goes through ``validate_url``, the PUT never follows a redirect, and Langfuse is told the
-        storage status but never the storage response body.
+        The upload URL is as trusted as the Langfuse host that returned it. The PUT never follows a redirect, and
+        Langfuse is told the storage status but never the storage response body.
         """
         media: Final = upload.media
         client, api = self._connection()
         registered: Final = self._registered(api, upload)
-        upload_url: Final = registered.upload_url or ""
-        try:
-            url, host = validate_url(upload_url) if self._validate_upload_url and upload_url else (upload_url, "")
-        except SSRFError as error:
-            return f"its upload URL was refused: {error}"
-        if not url:
+        upload_url: Final = registered.upload_url
+        if not upload_url:
             return None
         started: Final = monotonic()
-        response: Final = self._put(client, url, _storage_headers(upload_url, host, media), media)
+        response: Final = self._put(client, upload_url, _storage_headers(upload_url, media), media)
         if response is None:
             return "the media storage was not reached"
         api.media.patch(

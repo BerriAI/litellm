@@ -169,7 +169,6 @@ def _uploader(
     *,
     delays: Sequence[float] = (),
     max_queued_bytes: int = 1_000,
-    validate_upload_url: bool = False,
 ) -> MediaUploader:
     client: Final = httpx.Client(transport=httpx.MockTransport(transport))
     return MediaUploader(
@@ -178,7 +177,6 @@ def _uploader(
         timeout=5.0,
         delays=delays,
         max_queued_bytes=max_queued_bytes,
-        validate_upload_url=validate_upload_url,
     )
 
 
@@ -329,23 +327,7 @@ def test_a_storage_redirect_is_not_followed():
     assert uploader.failed_uploads == 1
 
 
-@pytest.mark.parametrize(
-    "upload_url", ["http://169.254.169.254/latest/meta-data", "http://127.0.0.1:8080/admin", "file:///etc/passwd"]
-)
-def test_a_host_from_request_credentials_cannot_send_the_upload_to_an_internal_address(upload_url: str, caplog):
-    requests: list[httpx.Request] = []
-    uploader = _uploader(_langfuse(requests, upload_url=upload_url), validate_upload_url=True)
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        uploader.submit((_upload(),))
-        assert uploader.drain(5_000) is True
-
-    assert [(request.method, request.url.host) for request in requests] == [("POST", "langfuse.example")]
-    assert "its upload URL was refused" in caplog.text
-    assert uploader.failed_uploads == 1
-
-
-def test_an_operator_configured_host_may_keep_its_storage_on_an_internal_address():
+def test_media_storage_on_an_internal_address_is_uploaded_to():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests, upload_url="http://127.0.0.1:9000/bucket/hello"))
 

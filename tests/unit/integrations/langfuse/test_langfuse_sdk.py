@@ -1951,27 +1951,6 @@ def test_retiring_the_channel_lets_queued_uploads_finish_before_the_uploader_sto
     assert uploader.calls == ["drain", "shutdown"]
 
 
-def test_a_host_from_request_credentials_gets_its_own_channel_whose_upload_urls_are_validated(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    built: list[bool] = []
-
-    def record(*, tenant_host: bool, **_: object) -> _RecordingUploader:
-        built.append(tenant_host)
-        return _RecordingUploader()
-
-    monkeypatch.setattr(
-        "litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", lambda **_: _RecordsShutdown()
-    )
-    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_media_uploader", record)
-
-    operator = _acquire(public_key="pk-media-tenant-test", mock_mode=False, flush_interval=600.0)
-    tenant = _acquire(public_key="pk-media-tenant-test", mock_mode=False, flush_interval=600.0, tenant_host=True)
-
-    assert operator is not tenant
-    assert built == [False, True]
-
-
 def test_mock_mode_builds_no_media_uploader(monkeypatch: pytest.MonkeyPatch):
     built: list[object] = []
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_media_uploader", built.append)
@@ -2002,7 +1981,7 @@ def test_media_uploads_continue_after_litellm_closes_the_pooled_http_client(monk
     handler = _Handler()
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.get_httpx_client", lambda: handler)
     uploader = _build_media_uploader(
-        public_key="pk-media-evict-test", secret_key="sk", base_url="https://lf.internal.example", tenant_host=False
+        public_key="pk-media-evict-test", secret_key="sk", base_url="https://lf.internal.example"
     )
     upload = MediaUpload(media=extract_media(IMAGE_URI)[1][0], trace_id="0" * 32, observation_id=None, field="input")
 

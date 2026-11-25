@@ -918,21 +918,17 @@ class _MediaExtractingExporter(SpanExporter):
         return self.exporter.force_flush(timeout_millis)
 
 
-def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str, tenant_host: bool) -> MediaUploader:
+def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str) -> MediaUploader:
     """Uploads go through litellm's HTTP handler, as v2's did, with the export channel's timeout and retry delays.
 
     The client is read from the handler for every upload: litellm closes a pooled client once its cache entry
-    expires, and the handler then opens another.
-
-    A host the operator configured is trusted to name its own storage; one that came with a key's or team's
-    credentials has its upload URLs validated like any other caller-supplied URL."""
+    expires, and the handler then opens another."""
     handler: Final = get_httpx_client()
     return MediaUploader(
         api=lambda client: _rest_api(
             public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=client
         ),
         client=lambda: handler.client,
-        validate_upload_url=tenant_host,
         timeout=configured_timeout(),
         delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),
     )
@@ -979,7 +975,6 @@ class _TracingKey:
     flush_at: int
     flush_interval_millis: int
     mock_mode: bool
-    tenant_host: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1002,7 +997,6 @@ def acquire_langfuse_tracing(
     release: str | None,
     flush_interval: float,
     mock_mode: bool,
-    tenant_host: bool = False,
 ) -> LangfuseTracing:
     """One export channel per credential set, shared by every logger built for it.
 
@@ -1021,7 +1015,6 @@ def acquire_langfuse_tracing(
         flush_at=configured_flush_at(),
         flush_interval_millis=int(flush_interval * 1000),
         mock_mode=mock_mode,
-        tenant_host=tenant_host,
     )
     with _TRACING_LOCK:
         cached: Final = _TRACING.get(key)
@@ -1036,9 +1029,7 @@ def acquire_langfuse_tracing(
             else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url),
             uploader=None
             if mock_mode
-            else _build_media_uploader(
-                public_key=public_key, secret_key=secret_key, base_url=base_url, tenant_host=tenant_host
-            ),
+            else _build_media_uploader(public_key=public_key, secret_key=secret_key, base_url=base_url),
             environment=environment,
             release=release,
             sample_rate=key.sample_rate,
