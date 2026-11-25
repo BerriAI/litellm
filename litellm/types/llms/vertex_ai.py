@@ -63,16 +63,17 @@ class GeminiFileInspectionMetadata(TypedDict, total=False):
     media_resolution: ReadOnly[Mapping[str, str]]
 
 
-class FunctionResponsePartType(GeminiFileInspectionMetadata, total=False):
-    inline_data: BlobType
-    file_data: FileDataType
-
-
 class VideoMetadataType(TypedDict, total=False):
     fps: ReadOnly[float]
     startOffset: ReadOnly[str]
     endOffset: ReadOnly[str]
     contentLayers: ReadOnly[Sequence[str]]
+
+
+class FunctionResponsePartType(GeminiFileInspectionMetadata, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
+    video_metadata: ReadOnly[VideoMetadataType]
 
 
 class PartType(GeminiFileInspectionMetadata, total=False):

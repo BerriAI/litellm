@@ -57,7 +57,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
 )
-from litellm.types.llms.vertex_ai import BlobType, FunctionResponsePartType, GeminiFileInspectionMetadata
+from litellm.types.llms.vertex_ai import BlobType, FunctionResponsePartType
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
@@ -1555,9 +1555,10 @@ def _gemini_tool_file_options(
     model: str | None,
     custom_llm_provider: str | None,
     drop_params: bool,
-) -> tuple[Mapping[str, object], GeminiFileInspectionMetadata]:
+) -> tuple[Mapping[str, object], FunctionResponsePartType]:
     from litellm.llms.vertex_ai.gemini.transformation import (
         encode_gemini_file_inspection_metadata,
+        gemini_part_video_metadata,
         refuse_vertex_ignored_media_fields,
     )
 
@@ -1566,8 +1567,10 @@ def _gemini_tool_file_options(
         refuse_vertex_ignored_media_fields(
             fields, in_tool_result=True, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         )
-        return {}, GeminiFileInspectionMetadata()
-    return fields, encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
+        return {}, {}
+    metadata: Final = encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
+    video_metadata: Final = gemini_part_video_metadata(as_str_mapping(fields.get("video_metadata")), model)
+    return fields, ({**metadata, "video_metadata": video_metadata} if video_metadata else {**metadata})
 
 
 def _gemini_anthropic_tool_image_part(source: object) -> FunctionResponsePartType | None:

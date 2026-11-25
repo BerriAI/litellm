@@ -215,6 +215,11 @@ def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatc
             {"audio_metadata": {"start_offset": "60s", "end_offset": "90s"}},
             {"audio_metadata": {"startOffset": "60s", "endOffset": "90s"}},
         ),
+        (
+            "video/mp4",
+            {"video_metadata": {"start_offset": "5s", "end_offset": "30s", "content_layers": ["FRAMES"]}},
+            {"video_metadata": {"startOffset": "5s", "endOffset": "30s", "contentLayers": ["FRAMES"]}},
+        ),
     ],
 )
 def test_chat_tool_file_inspection_preserves_selection(
@@ -608,6 +613,18 @@ def test_tool_result_audio_slice_reaches_gemini_and_is_dropped_on_vertex_under_d
             {"type": "input_file", "file_data": "data:audio/wav;base64,c291bmQ=", "audio_metadata": _AUDIO_SLICE},
             {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
             id="audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_file",
+                "file_data": "data:video/mp4;base64,AAAAGGZ0eXA=",
+                "video_metadata": {"start_offset": "5s", "end_offset": "30s", "content_layers": ["FRAMES"]},
+            },
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "video_metadata": {"startOffset": "5s", "endOffset": "30s", "contentLayers": ["FRAMES"]},
+            },
+            id="video",
         ),
         pytest.param(
             {

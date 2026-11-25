@@ -72,6 +72,7 @@ from litellm.types.llms.vertex_ai import (
     SystemInstructions,
     ToolConfig,
     Tools,
+    VideoMetadataType,
 )
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
@@ -160,6 +161,12 @@ _VERTEX_AI_PROVIDERS: Final = ("vertex_ai", "vertex_ai_beta")
 _VERTEX_IGNORED_FILE_INSPECTION_FIELDS: Final = ("document_metadata", "spreadsheet_metadata", "audio_metadata")
 
 
+def _vertex_ignored_video_fields(video_metadata: Mapping[str, object], *, in_tool_result: bool) -> tuple[str, ...]:
+    if in_tool_result:
+        return ("video_metadata",) if gemini_video_metadata_from_openai(video_metadata) else ()
+    return ("video_metadata.content_layers",) if video_metadata.get("content_layers") else ()
+
+
 def refuse_vertex_ignored_media_fields(
     fields: Mapping[str, object],
     *,
@@ -170,11 +177,10 @@ def refuse_vertex_ignored_media_fields(
 ) -> None:
     if custom_llm_provider not in _VERTEX_AI_PROVIDERS or drop_params:
         return
-    video_metadata: Final = as_str_mapping(fields.get("video_metadata")) or {}
-    content_layers: Final = (
-        ("video_metadata.content_layers",) if not in_tool_result and video_metadata.get("content_layers") else ()
+    video_fields: Final = _vertex_ignored_video_fields(
+        as_str_mapping(fields.get("video_metadata")) or {}, in_tool_result=in_tool_result
     )
-    ignored: Final = (*content_layers, *(name for name in _VERTEX_IGNORED_FILE_INSPECTION_FIELDS if fields.get(name)))
+    ignored: Final = (*video_fields, *(name for name in _VERTEX_IGNORED_FILE_INSPECTION_FIELDS if fields.get(name)))
     if not ignored:
         return
     location: Final = " inside a tool result" if in_tool_result else ""
@@ -294,6 +300,12 @@ def _apply_gemini_metadata(
             part_dict["video_metadata"] = gemini_video_metadata
 
     return cast(PartType, part_dict)
+
+
+def gemini_part_video_metadata(
+    video_metadata: Mapping[str, object] | None, model: str | None
+) -> VideoMetadataType | None:
+    return _apply_gemini_metadata(PartType(), model, None, video_metadata, "gemini").get("video_metadata")
 
 
 def _parse_gs_uri(gs_uri: str) -> tuple[str, str]:

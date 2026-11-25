@@ -239,7 +239,12 @@ _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _OBJECT_ADAPTER: Final = TypeAdapter(object)
-_RESPONSES_FILE_INSPECTION_KEYS: Final = ("document_metadata", "spreadsheet_metadata", "audio_metadata")
+_RESPONSES_FILE_INSPECTION_KEYS: Final = (
+    "video_metadata",
+    "document_metadata",
+    "spreadsheet_metadata",
+    "audio_metadata",
+)
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 
 

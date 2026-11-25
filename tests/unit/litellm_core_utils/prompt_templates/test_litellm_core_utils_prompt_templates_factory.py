@@ -2095,6 +2095,18 @@ _VERTEX_IGNORED_TOOL_FILE_SETTINGS: Final = pytest.mark.parametrize(
             {
                 "type": "file",
                 "file": {
+                    "file_data": "data:video/mp4;base64,AAAAGGZ0eXA=",
+                    "video_metadata": {"start_offset": "5s", "end_offset": "30s", "content_layers": ["FRAMES"]},
+                },
+            },
+            "video_metadata",
+            {"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}},
+            id="file-video-slice",
+        ),
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
                     "file_data": "data:application/pdf;base64,JVBERg==",
                     "detail": "high",
                     "document_metadata": {"start_page": 2},
