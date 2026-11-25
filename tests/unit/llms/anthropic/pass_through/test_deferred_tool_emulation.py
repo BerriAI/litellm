@@ -166,11 +166,14 @@ def test_the_dispatcher_never_takes_the_name_of_a_tool_the_caller_sent() -> None
     assert emulation.restored(_dispatcher_response(dispatcher, "Grep"))["content"][0]["name"] == "Grep"
 
 
-def test_a_dispatcher_call_to_a_tool_the_request_did_not_defer_is_restored() -> None:
-    bash: Final = {"name": "Bash", "input_schema": {"type": "object"}}
+@pytest.mark.parametrize(("strict", "restored_name"), [(False, "Bash"), (True, "CallLoadedTool")])
+def test_a_dispatcher_call_to_a_tool_the_request_did_not_defer_is_restored_unless_strict(
+    strict: bool, restored_name: str
+) -> None:
+    bash: Final = {"name": "Bash", "input_schema": {"type": "object"}, "strict": strict}
     emulation: Final = _emulation([_TOOL_SEARCH, bash, _GREP_TOOL], None, "Bash")
 
-    assert emulation.restored(_dispatcher_response("CallLoadedTool", "Bash"))["content"][0]["name"] == "Bash"
+    assert emulation.restored(_dispatcher_response("CallLoadedTool", "Bash"))["content"][0]["name"] == restored_name
 
 
 def test_a_dispatcher_call_to_a_deferred_tool_tool_search_never_loaded_is_kept_as_sent() -> None:
