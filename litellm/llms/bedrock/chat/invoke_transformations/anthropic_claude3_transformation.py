@@ -241,6 +241,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             messages=messages,
             optional_params=upstream_params,
             headers=headers,
+            body_betas=anthropic_body_betas(upstream_params.get("anthropic_beta")),
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
@@ -345,6 +346,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict,
+        body_betas: frozenset[str],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
     ) -> list[str]:
@@ -355,7 +357,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
         is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
-        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers)) | body_betas
         beta_set: Final = set(user_beta_set)
         auto_betas: Final = self.get_anthropic_beta_list(
             model=model,
