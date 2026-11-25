@@ -16,7 +16,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.vertex_ai import (
     GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
-    VertexAIBatchEmbeddingsResponseObject,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -276,12 +275,12 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,
-                _predictions=_predictions,
+                _predictions=_json_response,
                 input=input,
+                resolved_files=resolved_files,
             )
 
     async def async_batch_embeddings(
@@ -383,10 +382,10 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,
-                _predictions=_predictions,
+                _predictions=_json_response,
                 input=input,
+                resolved_files=resolved_files,
             )

@@ -15,6 +15,7 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast, runtime_checka
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -47,7 +48,7 @@ from litellm.types.utils import (
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError
-from .core_helpers import as_str_mapping, map_finish_reason, process_response_headers
+from .core_helpers import as_str_mapping, map_finish_reason, process_response_headers, upstream_non_openai_attributes
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -103,10 +104,44 @@ def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, o
         setattr(response, key, value)
 
 
+def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
+    match getattr(upstream_chunk, "choices", None):
+        case [BaseModel() as first_choice, *_]:
+            return first_choice
+        case _:
+            return None
+
+
+def _response_choice_index(response_obj: Mapping[str, object]) -> int:
+    upstream_index: Final[object] = getattr(_upstream_first_choice(response_obj.get("original_chunk")), "index", 0)
+    return upstream_index if isinstance(upstream_index, int) else 0
+
+
 def _carries_payload(choice: StreamingChoices) -> bool:
     return getattr(choice, "logprobs", None) is not None or any(
         choice.delta.model_dump(exclude_none=True, exclude={"role"}).values()
     )
+
+
+_CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH: Final = frozenset({"message", *ChunkChoice.model_fields})
+
+
+def _keep_single_upstream_choice_extras(
+    model_response: ModelResponseStream, response_obj: Mapping[str, object]
+) -> None:
+    original_chunk: Final = response_obj.get("original_chunk")
+    if (
+        not isinstance(original_chunk, (ChatCompletionChunk, ModelResponseStream))
+        or len(original_chunk.choices) != 1
+        or len(model_response.choices) != 1
+        or original_chunk.choices[0].index != model_response.choices[0].index
+    ):
+        return
+    upstream_extras: Final[Mapping[str, object]] = original_chunk.choices[0].model_extra or {}
+    finish_choice: Final = model_response.choices[0]
+    for key, value in upstream_extras.items():
+        if value is not None and key not in _CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH:
+            setattr(finish_choice, key, value)
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -202,6 +237,7 @@ class _VertexChunkLike(Protocol):
 
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
+    anthropic_message_start: bool = False
 
 
 def _provider_response_model(chunk: object) -> str | None:
@@ -233,6 +269,7 @@ def _provider_hidden_params(
             for key, value in (
                 ("provider_response_model", provider_response_model),
                 ("provider_specific_fields", provider_specific_fields),
+                ("anthropic_message_start", True if parsed is not None and parsed.anthropic_message_start else None),
             )
             if value is not None
         }
@@ -259,6 +296,7 @@ class CustomStreamWrapper:
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
+        response_cost: float | None = None,
         replayed_service_tier: str | None = None,
     ):
         self.model = model
@@ -269,7 +307,9 @@ class CustomStreamWrapper:
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
+        self._choice_indexes_given_role: frozenset[int] = frozenset()
         self.sent_last_chunk = False
+        self._attributes_before_first_choice: tuple[tuple[str, object], ...] = ()
         self._closed = False
         self._stream_created_time: float = time.time()
 
@@ -307,6 +347,7 @@ class CustomStreamWrapper:
         self._hidden_params: dict[str, object] = {
             "model_id": (_model_info.get("id", None)),
             "api_base": _api_base,
+            **({} if response_cost is None else {"response_cost": response_cost}),
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
@@ -323,6 +364,9 @@ class CustomStreamWrapper:
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        self.caller_requested_stream_usage: Final = (
+            as_str_mapping(getattr(logging_obj, "stream_options", None)) or {}
+        ).get("include_usage") is True and getattr(logging_obj, "stream_usage_stripped", False) is not True
         self.tool_call = False
         self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
@@ -342,7 +386,7 @@ class CustomStreamWrapper:
         # this cache must be removed.
         self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
-            "response_cost": None,
+            "response_cost": response_cost,
         }
 
         self._post_streaming_hooks: list | None = None
@@ -935,7 +979,7 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.annotations is not None
             )
             or (
-                not self.sent_first_chunk
+                _response_choice_index(response_obj) not in self._choice_indexes_given_role
                 and hasattr(model_response.choices[0].delta, "role")
                 and model_response.choices[0].delta.role is not None
             )
@@ -950,15 +994,25 @@ class CustomStreamWrapper:
         """
         Strip the role from the delta.
         """
-        if self.sent_first_chunk is False:
+        first_choice_claimed: Final = self._claim_role_for_choice(model_response.choices[0].index)
+        for choice in model_response.choices[1:]:
+            choice.delta["role"] = "assistant" if self._claim_role_for_choice(choice.index) else None
+        if first_choice_claimed:
             model_response.choices[0].delta["role"] = "assistant"
-            self.sent_first_chunk = True
-        elif self.sent_first_chunk is True and hasattr(model_response.choices[0].delta, "role"):
+        elif hasattr(model_response.choices[0].delta, "role"):
             _initial_delta: Final = model_response.choices[0].delta.model_dump()
 
             _initial_delta.pop("role", None)
             model_response.choices[0].delta = Delta(**_initial_delta)
         return model_response
+
+    def _claim_role_for_choice(self, choice_index: int | None) -> bool:
+        index: Final = 0 if choice_index is None else choice_index
+        if index in self._choice_indexes_given_role:
+            return False
+        self._choice_indexes_given_role = self._choice_indexes_given_role | {index}
+        self.sent_first_chunk = True
+        return True
 
     def _has_special_delta_content(self, model_response: ModelResponseStream) -> bool:
         """
@@ -1081,13 +1135,12 @@ class CustomStreamWrapper:
                 else:
                     ## else
                     completion_obj["content"] = model_response_str
-                    if self.sent_first_chunk is False:
+                    _index: Final[int | None] = completion_obj.get("index")
+                    if self._claim_role_for_choice(_index if _index is not None else 0):
                         completion_obj["role"] = "assistant"
-                        self.sent_first_chunk = True
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
                     model_response.choices[0].delta = Delta(**completion_obj)
-                    _index: Final[int | None] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
 
@@ -1127,6 +1180,7 @@ class CustomStreamWrapper:
                     model_response=model_response,
                     original_chunk=_original_chunk,
                 )
+                _keep_single_upstream_choice_extras(model_response, response_obj)
 
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=None)  # ensure empty delta chunk returned
@@ -1593,8 +1647,12 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
+                    if not self.sent_first_chunk and isinstance(original_chunk, BaseModel):
+                        self._hold_attributes_before_first_choice(original_chunk)
                     if self.send_stream_usage is True:
                         model_response.choices = []
+                        if self.caller_requested_stream_usage:
+                            self._release_attributes_before_first_choice(model_response)
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
                     return
@@ -1621,6 +1679,8 @@ class CustomStreamWrapper:
                 model_response=model_response,
                 response_obj=response_obj,
             )
+            if result is not None:
+                self._release_attributes_before_first_choice(result)
             return result
 
         except StopIteration:
@@ -1832,6 +1892,24 @@ class CustomStreamWrapper:
         if served_tier is None:
             return model_response
         return model_response.model_copy(update={"service_tier": served_tier})
+
+    def _hold_attributes_before_first_choice(self, original_chunk: BaseModel) -> None:
+        held: Final = tuple(
+            (key, value)
+            for key, value in upstream_non_openai_attributes(ModelResponseStream, original_chunk)
+            if value is not None
+        )
+        self._attributes_before_first_choice = (*self._attributes_before_first_choice, *held)
+
+    def _release_attributes_before_first_choice(self, model_response: ModelResponseStream) -> None:
+        held: Final = self._attributes_before_first_choice
+        if not held:
+            return
+        self._attributes_before_first_choice = ()
+        _apply_provider_fields(
+            model_response,
+            {key: value for key, value in held if getattr(model_response, key, None) is None},
+        )
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """

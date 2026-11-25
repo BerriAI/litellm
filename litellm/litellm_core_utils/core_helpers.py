@@ -1,14 +1,16 @@
 # What is this?
 ## Helper utilities
 import copy
+import json
 import logging
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,6 +30,18 @@ else:
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
+
+
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
 
 
 def is_codex_user_agent(user_agent: str) -> bool:
@@ -59,8 +73,51 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] | None:
+    opens_object: Final = (
+        payload.lstrip().startswith(b"{")
+        if isinstance(payload, (bytes, bytearray))
+        else payload.lstrip().startswith("{")
+    )
+    if not opens_object:
+        return None
+    try:
+        return as_str_mapping(_DECODED_JSON.validate_python(json.loads(payload)))
+    except (ValueError, RecursionError):
+        return None
+
+
+_JSON_NESTING_ALWAYS_DECODABLE: Final = 100
+_DIGIT_RUN_PYTHON_MAY_REFUSE: Final = re.compile(r"[0-9]{640}")
+
+
+def is_undecodable_json_object(payload: str) -> bool:
+    if not payload.lstrip().startswith("{"):
+        return False
+    if (
+        payload.count("{") + payload.count("[") < _JSON_NESTING_ALWAYS_DECODABLE
+        and _DIGIT_RUN_PYTHON_MAY_REFUSE.search(payload) is None
+    ):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    return False
+
+
 def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
+
+
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
 
 
 _OBJECT_ENTRIES: Final = TypeAdapter(list[object])
@@ -94,6 +151,21 @@ class _SupportsGetItem(Protocol):
 
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
+
+
+_HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
+
+
+def http_error_status(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value in _HTTP_ERROR_STATUSES:
+            return value
+        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
+            return int(value)
+        case _:
+            return None
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -589,11 +661,16 @@ def preserve_upstream_non_openai_attributes(
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
-    for key, value in original_chunk.model_dump().items():
-        if key not in expected_keys:
-            setattr(model_response, key, value)
+    for key, value in upstream_non_openai_attributes(type(model_response), original_chunk):
+        setattr(model_response, key, value)
+
+
+def upstream_non_openai_attributes(
+    model_response_type: type[BaseModel], original_chunk: BaseModel
+) -> tuple[tuple[str, object], ...]:
+    expected_keys: Final = frozenset(model_response_type.model_fields) | frozenset({"usage"})
+    dumped: Final[Mapping[str, object]] = original_chunk.model_dump()
+    return tuple((key, value) for key, value in dumped.items() if key not in expected_keys)
 
 
 def safe_deep_copy(data):

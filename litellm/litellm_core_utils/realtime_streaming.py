@@ -16,8 +16,14 @@ from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.realtime.transcription_protocol import (
+    SESSION_UPDATE_EVENT_TYPES,
+    RealtimeTranscriptionProtocolError,
+)
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -448,6 +454,10 @@ class RealTimeStreaming:
         if self.logging_obj:
             if self._usage_meter is not None:
                 self.logging_obj.model_call_details[REALTIME_METERED_USAGE_KEY] = self._usage_meter.snapshot()
+            if self.provider_config is not None:
+                self.logging_obj.model_call_details[REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY] = (
+                    self.provider_config.transcription_addon_pricing_models()
+                )
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
             if self.session_tools or self.tool_calls:
@@ -1014,6 +1024,7 @@ class RealTimeStreaming:
         self.current_delta_type = returned_object["current_delta_type"]
         self.session_configuration_request = returned_object["session_configuration_request"]
         events: Final = transformed_response if isinstance(transformed_response, list) else [transformed_response]
+        self._log_transcriptions_before_sending(events)
         for event in events:
             if self._should_drop_event_from_client(event):
                 continue
@@ -1059,9 +1070,6 @@ class RealTimeStreaming:
             ## GUARDRAIL: run on transcription events in provider_config path too
             if isinstance(event, dict) and event.get("type") == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
-                self._collect_user_input_from_backend_event(cast(dict, event))
-                self.store_message(event_str)
-                self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
@@ -1073,6 +1081,19 @@ class RealTimeStreaming:
             ## LOGGING
             self.store_message(event_str)
             await self._send_event_to_client(event, event_str)
+
+    def _log_transcriptions_before_sending(self, events: Sequence[OpenAIRealtimeEvents]) -> None:
+        transcriptions: Final = tuple(
+            event
+            for event, mapping in zip(events, map(as_str_mapping, events), strict=True)
+            if mapping is not None
+            and mapping.get("type") == "conversation.item.input_audio_transcription.completed"
+            and not self._should_drop_event_from_client(event)
+        )
+        for transcription in transcriptions:
+            self._collect_user_input_from_backend_event(transcription)
+            self.store_message(transcription)
+            self._capture_transcription_usage(transcription)
 
     @staticmethod
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
@@ -1176,23 +1197,28 @@ class RealTimeStreaming:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
-            if self._backend_refused_session(close):
-                await self.log_backend_refusal(e)
-            else:
-                await self.log_messages()
+            await self._log_session_end(e if self._backend_refused_session(close) else None)
             return close
         except asyncio.CancelledError:
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
         return close.code != 1000 and not self._backend_sent_frames
+
+    async def _log_session_end(self, transport_refusal: Exception | None) -> None:
+        provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()
+        refusal: Final = provider_refusal or transport_refusal
+        if refusal is None:
+            await self.log_messages()
+            return
+        await self.log_backend_refusal(refusal)
 
     async def log_backend_refusal(self, error: Exception) -> None:
         if not self.logging_obj:
@@ -1591,7 +1617,7 @@ class RealTimeStreaming:
                     should_send_setup_before_buffered_messages = (
                         not self._backend_setup_complete
                         and not self._flushing_pending_messages_until_setup
-                        and msg_type == "session.update"
+                        and msg_type in SESSION_UPDATE_EVENT_TYPES
                     )
                     if not should_send_setup_before_buffered_messages:
                         self._buffer_pending_message_until_setup(message)
@@ -1609,7 +1635,13 @@ class RealTimeStreaming:
                 # would permanently disable the injection if ``_send_to_backend``
                 # raised — neither this loop nor
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
-                sent = await self._send_to_backend(message)
+                try:
+                    sent = await self._send_to_backend(message)
+                except RealtimeTranscriptionProtocolError as e:
+                    await self.websocket.send_text(realtime_error_event(str(e), error_type="invalid_request_error"))
+                    if self._uses_deferred_backend_setup():
+                        raise
+                    continue
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 
