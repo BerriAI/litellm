@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.model_param_helper import (
     embeds_thought_signature_in_tool_call_id,
     peek_reasoning_summary_aliases,
 )
+from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs, has_request_items
 from litellm.types.caching import *
 from litellm.types.caching import CallerMessageCount
 from litellm.types.semantic_cache import response_cache_policy_ttl, semantic_cache_policy
@@ -361,6 +362,43 @@ def with_caller_message_count(request_kwargs: Mapping[str, object], count: int |
     if fields is None:
         return MappingProxyType({})
     return MappingProxyType({"cache": {**fields, CALLER_MESSAGE_COUNT_KEY: CallerMessageCount(count=count)}})
+
+
+_PER_INPUT_EXTRA_BODY_PROVIDERS: Final = frozenset(("gemini", "vertex_ai", "vertex_ai_beta"))
+
+
+def has_per_input_extra_body(kwargs: Mapping[str, object]) -> bool:
+    """Whether the call's ``extra_body`` holds a list its provider reads as one item per input."""
+    model: Final = kwargs.get("model")
+    if not isinstance(model, str) or not has_request_items(kwargs.get("extra_body")):
+        return False
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    api_base: Final = kwargs.get("api_base")
+    try:
+        provider: Final = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
+        )[1]
+    except litellm.BadRequestError:
+        return False
+    return provider in _PER_INPUT_EXTRA_BODY_PROVIDERS
+
+
+def kwargs_for_input(
+    kwargs: Mapping[str, object], input: object, input_index: int
+) -> dict[str, object]:  # mutable-ok: spread as the cache key kwargs
+    """The call kwargs narrowed to one input and the ``extra_body`` item written for it, so a cached embedding is only
+    reused for the same input under the same item."""
+    return {
+        **kwargs,
+        "input": input,
+        **(
+            {"extra_body": extra_body_for_inputs(kwargs["extra_body"], (input_index,))}
+            if has_per_input_extra_body(kwargs)
+            else {}
+        ),
+    }
 
 
 def _is_positive_finite_ttl(value: object) -> bool:
@@ -1241,7 +1279,7 @@ class Cache:
         kwargs: dict[str, object],
         idx_in_result_data: int = 0,
     ) -> tuple[str, dict[str, object], dict[str, object]]:
-        preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
+        preset_cache_key: Final = self.get_cache_key(**kwargs_for_input(kwargs, input, idx_in_result_data))
         kwargs["cache_key"] = preset_cache_key
         embedding_response: Final = _embedding_item(result, idx_in_result_data)
 
