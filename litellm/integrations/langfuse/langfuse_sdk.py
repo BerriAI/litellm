@@ -894,6 +894,10 @@ class SdkMediaExporter(SpanExporter):
             exporter=self._exporter, media_manager=self._manager, mask_otel_spans=None
         )
 
+    @property
+    def upload_thread(self) -> threading.Thread:
+        return self._consumer
+
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         return self._transforming.export(spans)
 

@@ -47,6 +47,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     SdkMediaExporter,
     _check_storage_url,
     _media_http_handler,
+    _restart_media_uploads_in_child,
     _build_span_exporter,
     _encode,
     _rest_api,
@@ -1942,13 +1943,16 @@ def test_only_a_live_channel_on_an_sdk_with_export_stage_media_handling_uploads_
     assert _acquire(public_key="pk-media-old-sdk", mock_mode=False).media is None
 
 
-def test_media_keeps_uploading_after_the_restart_a_forked_child_runs():
-    """A forked child has none of the parent's threads, so the fork handler starts the upload thread again."""
+def test_the_fork_handler_gives_every_live_channel_an_upload_thread_that_uploads():
+    """A forked child has none of the parent's threads, so the handler registered for it starts them again."""
     langfuse: Final = _LangfuseMediaApi()
     tracing, exporter = _media_channel(langfuse)
     assert tracing.media is not None
+    parent_thread: Final = tracing.media.upload_thread
 
-    tracing.media.start()
+    _restart_media_uploads_in_child()
+
+    assert tracing.media.upload_thread is not parent_thread
 
     assert IMAGE_REFERENCE in _exported_input(tracing, exporter, IMAGE_MESSAGES)
     assert len(langfuse.sent("PUT")) == 1
