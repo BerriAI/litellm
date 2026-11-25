@@ -28,6 +28,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::stream::BoxStream;
 use litellm_at_rest::AtRestKey;
 use litellm_config::{
     Config, Value,
@@ -40,11 +41,13 @@ use litellm_config::{
 use litellm_config_load::Document;
 use litellm_db::Pools;
 use litellm_error::Report;
+use litellm_redis_store::config_sync::{self, Heard};
 use litellm_repositories::{Database, StoredObjects};
-use tokio::{sync::oneshot, task::JoinHandle, time::MissedTickBehavior};
+use tokio::{sync::Mutex, task::JoinHandle, time::MissedTickBehavior};
 
 use crate::{
     Error, Live, Served, StoredConfig,
+    config_sync::{Pacing, listen, uniform},
     stored::{self, Fetched, Secrets, StoredRows, holds},
 };
 
@@ -149,59 +152,126 @@ impl Source {
         }
     }
 
-    /// Reads the stored config again every `every` until [`Poller::stop`], and swaps `live` to
-    /// what `rebuild` builds from each config that changed, given the [`Served`] it replaces.
-    pub fn poll_every<R, F>(self, every: Duration, live: Arc<Live>, rebuild: R) -> Poller
+    /// Reads the stored config again every `every`, and soon after each change the proxy
+    /// announces on the coordination Redis `live` serves with, until [`Poller::stop`], and swaps
+    /// `live` to what `rebuild` builds from each config that changed, given the [`Served`] it
+    /// replaces. Both go through one [`Reloader`], so they never read at once and always agree on
+    /// what is served. Without a coordination Redis only the poll runs, as Python then neither
+    /// publishes nor subscribes.
+    pub fn reload_on<R, F>(self, every: Duration, live: Arc<Live>, rebuild: R) -> Poller
     where
         R: Fn(Config, StoredConfig, Arc<Served>) -> F + Send + Sync + 'static,
-        F: Future<Output = Result<Served, Error>> + Send,
+        F: Future<Output = Result<Served, Error>> + Send + 'static,
     {
+        let heard = live
+            .current()
+            .state
+            .redis
+            .coordination
+            .as_ref()
+            .map(|client| config_sync::subscribe(client, client.namespace().as_str()));
         tracing::info!(
             every_seconds = every.as_secs(),
+            on_redis_changes = heard.is_some(),
             "reading the config the proxy stores in its database again on an interval"
         );
-        let (stop, mut stopped) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            let mut source = self;
-            let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
-            ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            loop {
-                let polled = async {
-                    ticks.tick().await;
-                    // Boxed so the spawned task's type does not nest the whole rebuild: release
-                    // builds overflow the compiler's layout query depth otherwise.
-                    let reload: Pin<Box<dyn Future<Output = Reloaded> + Send + '_>> =
-                        Box::pin(source.reading.reload(&source.database, &live, &rebuild));
-                    reload.await;
-                };
-                tokio::select! {
-                    _ = &mut stopped => return source,
-                    () = polled => (),
-                }
-            }
+        let reloader = Arc::new(Reloader {
+            reading: Mutex::new(self.reading),
+            rows: self.database,
+            live,
+            rebuild,
         });
-        Poller { stop, task }
+        Poller {
+            tasks: reloader.spawn(every, heard),
+            pools: self.pools,
+        }
     }
 }
 
-/// The running poll task.
+/// The running poll task and Redis listener.
 pub struct Poller {
-    stop: oneshot::Sender<()>,
-    task: JoinHandle<Source>,
+    tasks: Vec<JoinHandle<()>>,
+    pools: Pools,
 }
 
 impl Poller {
-    /// Stops polling, dropping a poll that is under way before it swaps, and closes the pool the
-    /// polls read through.
+    /// Stops polling and listening, dropping a read that is under way before it swaps, and closes
+    /// the pool the reads go through.
     pub async fn stop(self) {
-        let _ = self.stop.send(());
-        match self.task.await {
-            Ok(source) => source.pools.close().await,
-            Err(error) => tracing::warn!(
-                error = %Report::new(&error),
-                "the task that reads the stored config again did not stop cleanly"
-            ),
+        for task in &self.tasks {
+            task.abort();
         }
+        for task in self.tasks {
+            match task.await {
+                Err(error) if !error.is_cancelled() => tracing::warn!(
+                    error = %Report::new(&error),
+                    "a task that reads the stored config again did not stop cleanly"
+                ),
+                _ => (),
+            }
+        }
+        self.pools.close().await;
+    }
+}
+
+/// The one [`Reading`] every trigger reads the stored config through, one read at a time.
+pub(crate) struct Reloader<S, R> {
+    reading: Mutex<Reading>,
+    rows: S,
+    live: Arc<Live>,
+    rebuild: R,
+}
+
+impl<S, R, F> Reloader<S, R>
+where
+    S: StoredRows,
+    R: Fn(Config, StoredConfig, Arc<Served>) -> F,
+    F: Future<Output = Result<Served, Error>>,
+{
+    pub(crate) async fn reload(&self) -> Reloaded {
+        self.reading
+            .lock()
+            .await
+            .reload(&self.rows, &self.live, &self.rebuild)
+            .await
+    }
+}
+
+impl<R, F> Reloader<Database, R>
+where
+    R: Fn(Config, StoredConfig, Arc<Served>) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<Served, Error>> + Send + 'static,
+{
+    /// [`Reloader::reload`] on the heap, since its future is too deep for a spawned task to lay
+    /// out inline in a release build.
+    fn boxed_reload(&self) -> Pin<Box<dyn Future<Output = Reloaded> + Send + '_>> {
+        Box::pin(self.reload())
+    }
+
+    /// Starts the poll every `every`, and the listener on `heard` when there is one.
+    fn spawn(
+        self: Arc<Self>,
+        every: Duration,
+        heard: Option<BoxStream<'static, Heard>>,
+    ) -> Vec<JoinHandle<()>> {
+        let polls = self.clone();
+        let poll = tokio::spawn(async move {
+            let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+            ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticks.tick().await;
+                polls.boxed_reload().await;
+            }
+        });
+        let listener = heard.map(|heard| {
+            tokio::spawn(listen(heard, Pacing::PYTHON, uniform, move || {
+                let reloader = self.clone();
+                async move {
+                    reloader.boxed_reload().await;
+                }
+            }))
+        });
+        std::iter::once(poll).chain(listener).collect()
     }
 }
 
@@ -1255,12 +1325,77 @@ mod tests {
             database,
             pools,
         };
-        let poller = source.poll_every(Duration::from_millis(10), live.clone(), rebuild);
+        let poller = source.reload_on(Duration::from_millis(10), live.clone(), rebuild);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let stopped = tokio::time::timeout(Duration::from_secs(5), poller.stop()).await;
 
         assert!(stopped.is_ok());
         assert!(Arc::ptr_eq(&before, &live.current()));
+    }
+
+    /// `rows` whose model read takes a while, counting how many reads are inside it at once.
+    struct Slow {
+        rows: Rows,
+        inside: std::sync::atomic::AtomicUsize,
+        most: std::sync::atomic::AtomicUsize,
+    }
+
+    impl StoredRows for Slow {
+        async fn settings(
+            &self,
+        ) -> Result<Vec<litellm_repositories::ConfigParam>, litellm_db::Error> {
+            self.rows.settings().await
+        }
+
+        async fn models(&self) -> Result<Vec<litellm_repositories::ProxyModel>, litellm_db::Error> {
+            use std::sync::atomic::Ordering;
+            let now = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.inside.fetch_sub(1, Ordering::SeqCst);
+            self.rows.models().await
+        }
+
+        async fn credentials(
+            &self,
+        ) -> Result<Vec<litellm_repositories::Credential>, litellm_db::Error> {
+            self.rows.credentials().await
+        }
+
+        async fn ui_settings(
+            &self,
+        ) -> Result<Option<litellm_repositories::RawJson>, litellm_db::Error> {
+            self.rows.ui_settings().await
+        }
+
+        async fn objects(&self) -> Result<litellm_repositories::StoredObjects, litellm_db::Error> {
+            self.rows.objects().await
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_poll_and_a_redis_change_never_read_at_once_and_agree_on_what_is_served() {
+        let (live, reading) = booted(&serving(&[("a", "key-1")])).await;
+        let reloader = Reloader {
+            reading: Mutex::new(reading),
+            rows: Slow {
+                rows: serving(&[("a", "key-2")]),
+                inside: Default::default(),
+                most: Default::default(),
+            },
+            live: live.clone(),
+            rebuild,
+        };
+
+        let (polled, heard) = tokio::join!(reloader.reload(), reloader.reload());
+
+        assert_eq!(
+            reloader.rows.most.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!((polled, heard), (Reloaded::Swapped, Reloaded::Unchanged));
+        assert_eq!(api_key(&live, "a").as_deref(), Some("key-2"));
     }
 }
