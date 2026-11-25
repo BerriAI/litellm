@@ -19,7 +19,7 @@ import queue
 import re
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -28,6 +28,7 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 import respx
+import time_machine
 
 import litellm
 from litellm import Router
@@ -36,10 +37,12 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.proxy.utils import create_model_info_response
 from litellm.router_api import ChangeSet
 from litellm.types.router import (
     Deployment,
+    DeploymentModelListingInfo,
     DeploymentTypedDict,
     LiteLLM_Params,
     LiteLLMParamsTypedDict,
@@ -48,7 +51,7 @@ from litellm.types.router import (
 from litellm.utils import (
     reapply_runtime_model_cost_registrations,
 )
-from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.litellm_core_utils.model_cost_table import changed_in_place, publish
 
 
 def _simulate_price_data_reload(fetched_catalog):
@@ -409,6 +412,619 @@ async def test_discovery_preserves_input_overrides_and_survives_outages(monkeypa
         assert next(responses, None) is None
         assert responder.call_count == 2
     publish(litellm.model_cost)
+
+
+@pytest.fixture
+def openrouter_settings_cleared(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for env_var in ("OPENROUTER_API_BASE", "OPENROUTER_API_KEY", "OR_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(litellm, "openrouter_key", None)
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    yield
+    changed_in_place()
+
+
+def _openrouter_catalog_response(request: httpx.Request) -> httpx.Response:
+    assert request.url.path.endswith("/models/user")
+    return httpx.Response(
+        200,
+        json={
+            "data": [
+                {"id": "vendor/capped", "context_length": 4096, "top_provider": {"max_completion_tokens": 1024}},
+                {"id": "vendor/uncapped", "context_length": 8192, "top_provider": {"max_completion_tokens": None}},
+            ]
+        },
+    )
+
+
+def _openrouter_deployment(
+    model_name: str, model: str, deployment_id: str, **model_info: int | None
+) -> DeploymentTypedDict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model, "api_key": "openrouter-key"},
+        "model_info": {"id": deployment_id, **model_info},
+    }
+
+
+async def _refresh_against(
+    router: Router, respond: Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+) -> None:
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+
+
+def _group_limits(router: Router, model_group: str) -> tuple[int | None, int | None]:
+    group: Final = router.get_model_group_info(model_group)
+    assert group is not None
+    return group.max_input_tokens, group.max_output_tokens
+
+
+PUBLISHED_OPENROUTER_LIMITS: Final = (
+    ("vendor/capped", (4096, 1024)),
+    ("vendor/capped:nitro", (4096, 1024)),
+    ("vendor/uncapped", (8192, None)),
+    ("vendor/unlisted", (None, None)),
+)
+
+
+@pytest.mark.parametrize(("catalog_id", "expected"), PUBLISHED_OPENROUTER_LIMITS)
+async def test_openrouter_named_deployment_shows_the_limits_the_catalog_publishes(
+    catalog_id: str, expected: tuple[int | None, int | None], openrouter_settings_cleared: None
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("named", f"openrouter/{catalog_id}", "named-id")])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    assert _group_limits(router, "named") == expected
+
+
+@pytest.mark.parametrize(("catalog_id", "expected"), PUBLISHED_OPENROUTER_LIMITS)
+async def test_openrouter_wildcard_deployment_shows_the_limits_of_each_concrete_model(
+    catalog_id: str, expected: tuple[int | None, int | None], openrouter_settings_cleared: None
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id")])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    assert _group_limits(router, f"openrouter/{catalog_id}") == expected
+
+
+async def test_discovered_model_info_without_a_model_keeps_answering_for_the_deployment_itself(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            _openrouter_deployment("named", "openrouter/vendor/capped", "named-id"),
+            _openrouter_deployment("openrouter/*", "openrouter/*", "wild-id"),
+        ]
+    )
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    own_limits: Final = {"max_tokens": 1024, "max_input_tokens": 4096, "max_output_tokens": 1024}
+    registry: Final = router.registry()
+    assert registry.discovered_model_info("named-id") == own_limits
+    assert registry.discovered_model_info("named-id", "openrouter/vendor/uncapped") == own_limits
+    assert registry.discovered_model_info("wild-id") == {}
+    assert registry.discovered_model_info("wild-id", "openrouter/vendor/capped") == own_limits
+
+
+async def test_operator_model_info_beats_the_openrouter_catalog(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[
+            _openrouter_deployment("named", "openrouter/vendor/capped", "named-id", max_input_tokens=100),
+            _openrouter_deployment("openrouter/*", "openrouter/*", "wild-id", max_output_tokens=50),
+        ]
+    )
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    assert _group_limits(router, "named") == (100, 1024)
+    assert _group_limits(router, "openrouter/vendor/capped") == (4096, 50)
+
+
+@pytest.mark.parametrize(
+    ("deployment", "model_group"),
+    (
+        (("named", "openrouter/vendor/capped", "named-id"), "named"),
+        (("openrouter/*", "openrouter/*", "wild-id"), "openrouter/vendor/capped"),
+    ),
+)
+async def test_openrouter_catalog_beats_a_cost_map_row_for_a_listed_model(
+    deployment: tuple[str, str, str], model_group: str, openrouter_settings_cleared: None
+) -> None:
+    litellm.model_cost["openrouter/vendor/capped"] = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "max_input_tokens": 1,
+        "max_output_tokens": 2,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    changed_in_place()
+    router: Final = Router(model_list=[_openrouter_deployment(*deployment)])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    assert _group_limits(router, model_group) == (4096, 1024)
+
+
+async def test_a_wildcard_models_request_time_info_reads_its_catalog_row_over_the_cost_map(
+    openrouter_settings_cleared: None,
+) -> None:
+    litellm.model_cost["openrouter/vendor/capped"] = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "max_input_tokens": 1,
+        "max_output_tokens": 2,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    changed_in_place()
+    router: Final = Router(model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id")])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    registry: Final = router.registry()
+    routed_copies: Final = registry.deployments("openrouter/vendor/capped", source="wildcard")
+    request_time_infos: Final = (
+        *(
+            registry.router_model_info(deployment=dict(routed), received_model_name="openrouter/vendor/capped")
+            for routed in routed_copies
+        ),
+        registry.router_model_info(deployment=None, received_model_name="openrouter/vendor/capped", id="wild-id"),
+    )
+    assert [(info["max_input_tokens"], info["max_output_tokens"]) for info in request_time_infos] == [
+        (4096, 1024),
+        (4096, 1024),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("deployment", "model_group"),
+    (
+        (("named", "openrouter/vendor/unlisted", "named-id"), "named"),
+        (("openrouter/*", "openrouter/*", "wild-id"), "openrouter/vendor/unlisted"),
+    ),
+)
+async def test_openrouter_cost_map_row_stays_for_a_model_the_catalog_does_not_list(
+    deployment: tuple[str, str, str], model_group: str, openrouter_settings_cleared: None
+) -> None:
+    litellm.model_cost["openrouter/vendor/unlisted"] = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "max_input_tokens": 1,
+        "max_output_tokens": 2,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    changed_in_place()
+    router: Final = Router(model_list=[_openrouter_deployment(*deployment)])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    assert _group_limits(router, model_group) == (1, 2)
+
+
+async def test_openrouter_group_takes_the_widest_published_limit_with_no_cost_data(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            _openrouter_deployment("group", "openrouter/vendor/capped", "capped-id"),
+            _openrouter_deployment("group", "openrouter/vendor/uncapped", "uncapped-id"),
+        ]
+    )
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    assert _group_limits(router, "group") == (8192, 1024)
+
+
+async def test_openrouter_deployments_on_one_key_share_one_catalog_fetch(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[
+            _openrouter_deployment("first", "openrouter/vendor/capped", "first-id"),
+            _openrouter_deployment("second", "openrouter/vendor/uncapped", "second-id"),
+            _openrouter_deployment("openrouter/*", "openrouter/*", "wild-id"),
+        ]
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    async def respond_slowly(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        await asyncio.sleep(0.05)
+        return _openrouter_catalog_response(request)
+
+    await _refresh_against(router, respond_slowly)
+
+    assert len(requests) == 1
+    assert _group_limits(router, "first") == (4096, 1024)
+    assert _group_limits(router, "second") == (8192, None)
+    assert _group_limits(router, "openrouter/vendor/capped") == (4096, 1024)
+
+
+@pytest.mark.parametrize(
+    ("deployment", "model_group"),
+    (
+        (("named", "openrouter/vendor/capped", "named-id"), "named"),
+        (("openrouter/*", "openrouter/*", "wild-id"), "openrouter/vendor/capped"),
+    ),
+)
+async def test_an_openrouter_catalog_outage_keeps_the_last_published_limits(
+    deployment: tuple[str, str, str], model_group: str, openrouter_settings_cleared: None
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment(*deployment)])
+
+    with time_machine.travel("2026-07-15T10:17:00Z", tick=False) as traveller:
+        await _refresh_against(router, _openrouter_catalog_response)
+        traveller.shift(MODEL_INFO_REFRESH_SECONDS + 1)
+        await _refresh_against(router, lambda request: httpx.Response(503))
+        traveller.shift(MODEL_INFO_REFRESH_SECONDS + 1)
+        await _refresh_against(router, lambda request: httpx.Response(503))
+
+        assert _group_limits(router, model_group) == (4096, 1024)
+
+
+@pytest.mark.parametrize(
+    ("deployment", "model_group"),
+    (
+        (("named", "openrouter/vendor/capped", "named-id"), "named"),
+        (("openrouter/*", "openrouter/*", "wild-id"), "openrouter/vendor/capped"),
+    ),
+)
+async def test_a_model_dropped_from_the_openrouter_catalog_loses_its_limits(
+    deployment: tuple[str, str, str], model_group: str, openrouter_settings_cleared: None
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment(*deployment)])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+    router.cache.in_memory_cache.flush_cache()
+    await _refresh_against(router, lambda request: httpx.Response(200, json={"data": []}))
+
+    assert _group_limits(router, model_group) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("edited_params", "edited_model_info", "expected"),
+    (
+        ({"tpm": 5000}, {}, (4096, 1024)),
+        ({}, {"max_output_tokens": 512}, (4096, 512)),
+        ({"api_base": "https://relay.test/api/v1"}, {}, (None, None)),
+    ),
+)
+async def test_editing_an_openrouter_deployment_keeps_its_limits_while_it_reaches_the_same_backend(
+    edited_params: Mapping[str, object],
+    edited_model_info: Mapping[str, object],
+    expected: tuple[int | None, int | None],
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("named", "openrouter/vendor/capped", "named-id")])
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    _ = router.upsert_deployment(
+        Deployment.model_validate(
+            {
+                "model_name": "named",
+                "litellm_params": {"model": "openrouter/vendor/capped", "api_key": "openrouter-key", **edited_params},
+                "model_info": {"id": "named-id", **edited_model_info},
+            }
+        )
+    )
+
+    assert _group_limits(router, "named") == expected
+
+
+@pytest.mark.parametrize("edited_id", ("capped-id", "uncapped-id"))
+async def test_editing_one_openrouter_deployment_keeps_the_other_deployments_limits(
+    edited_id: str, openrouter_settings_cleared: None
+) -> None:
+    deployments: Final = (
+        _openrouter_deployment("capped", "openrouter/vendor/capped", "capped-id"),
+        _openrouter_deployment("uncapped", "openrouter/vendor/uncapped", "uncapped-id"),
+    )
+    router: Final = Router(model_list=list(deployments))
+    await _refresh_against(router, _openrouter_catalog_response)
+    edited: Final = next(deployment for deployment in deployments if deployment["model_info"]["id"] == edited_id)
+
+    _ = router.upsert_deployment(
+        Deployment.model_validate({**edited, "litellm_params": {**edited["litellm_params"], "tpm": 5000}})
+    )
+
+    assert (_group_limits(router, "capped"), _group_limits(router, "uncapped")) == ((4096, 1024), (8192, None))
+
+
+async def test_openrouter_discovery_without_a_key_makes_no_call(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "named", "litellm_params": {"model": "openrouter/vendor/capped"}},
+            {"model_name": "openrouter/*", "litellm_params": {"model": "openrouter/*"}},
+        ]
+    )
+    responder: Final = Mock(side_effect=_openrouter_catalog_response)
+
+    await _refresh_against(router, responder)
+
+    assert responder.call_count == 0
+    assert _group_limits(router, "named") == (None, None)
+
+
+async def test_openrouter_discovery_skips_a_caller_credentials_deployment(
+    openrouter_settings_cleared: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "byok",
+                "litellm_params": {"model": "openrouter/vendor/capped", "use_clientside_credentials": True},
+            }
+        ]
+    )
+    responder: Final = Mock(side_effect=_openrouter_catalog_response)
+
+    await _refresh_against(router, responder)
+
+    assert responder.call_count == 0
+    assert _group_limits(router, "byok") == (None, None)
+
+
+async def test_openrouter_discovery_sends_the_secret_behind_an_oidc_key_to_the_configured_base(
+    openrouter_settings_cleared: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("openrouter-secret")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "named",
+                "litellm_params": {
+                    "model": "openrouter/vendor/capped",
+                    "api_base": "https://openrouter.test/tenant/v1",
+                    "api_key": f"oidc/file/{token}",
+                },
+            }
+        ]
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _openrouter_catalog_response(request)
+
+    await _refresh_against(router, respond)
+
+    assert [str(request.url) for request in requests] == ["https://openrouter.test/tenant/v1/models/user"]
+    assert requests[0].headers["authorization"] == "Bearer openrouter-secret"
+    assert _group_limits(router, "named") == (4096, 1024)
+
+
+async def test_openrouter_discovery_uses_the_key_from_the_environment(
+    openrouter_settings_cleared: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
+    router: Final = Router(
+        model_list=[{"model_name": "named", "litellm_params": {"model": "openrouter/vendor/capped"}}]
+    )
+    authorizations: Final[list[str | None]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("Authorization"))
+        return _openrouter_catalog_response(request)
+
+    await _refresh_against(router, respond)
+
+    assert authorizations == ["Bearer environment-key"]
+
+
+def _deployment_reaching_openrouter_through(
+    base_source: str, api_base: str, monkeypatch: pytest.MonkeyPatch
+) -> DeploymentTypedDict:
+    if base_source == "litellm.api_base":
+        monkeypatch.setattr(litellm, "api_base", api_base)
+    if base_source == "OPENROUTER_API_BASE":
+        monkeypatch.setenv("OPENROUTER_API_BASE", api_base)
+    deployment_base: Final = {"api_base": api_base} if base_source == "deployment" else {}
+    return {"model_name": "named", "litellm_params": {"model": "openrouter/vendor/capped", **deployment_base}}
+
+
+@pytest.mark.parametrize("base_source", ("deployment", "litellm.api_base", "OPENROUTER_API_BASE"))
+@pytest.mark.parametrize(
+    ("api_base", "expected_authorizations"),
+    (
+        ("https://openrouter.ai/api/v1", ("Bearer environment-key",)),
+        ("https://elsewhere.test/api/v1", ()),
+    ),
+)
+async def test_openrouter_discovery_sends_the_environment_key_only_to_openrouter(
+    base_source: str,
+    api_base: str,
+    expected_authorizations: tuple[str, ...],
+    openrouter_settings_cleared: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
+    router: Final = Router(model_list=[_deployment_reaching_openrouter_through(base_source, api_base, monkeypatch)])
+    authorizations: Final[list[str | None]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("Authorization"))
+        return _openrouter_catalog_response(request)
+
+    await _refresh_against(router, respond)
+
+    assert tuple(authorizations) == expected_authorizations
+
+
+async def test_a_wildcard_on_another_provider_is_still_not_discovered(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "hosted/*",
+                "litellm_params": {
+                    "model": "hosted_vllm/*",
+                    "api_base": "https://backend.test/v1",
+                    "api_key": "local-key",
+                },
+            }
+        ]
+    )
+    responder: Final = Mock(return_value=httpx.Response(200, json={"data": []}))
+
+    await _refresh_against(router, responder)
+
+    assert responder.call_count == 0
+    assert router.registry().group("hosted/model", field="listing_info") is None
+
+
+async def test_openrouter_wildcard_listing_info_shows_each_concrete_models_limits(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id")])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    listing_info: Final = router.registry().group("openrouter/vendor/capped", field="listing_info")
+    assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
+    assert router.registry().group("openrouter/vendor/unlisted", field="listing_info") is None
+
+
+async def test_openrouter_wildcard_listing_info_skips_a_name_its_requests_do_not_route_to_it(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id")])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o", "context_length": 4096}]})
+
+    await _refresh_against(router, respond)
+
+    assert router.registry().group("openrouter/openai/gpt-4o", field="listing_info") is not None
+    assert router.registry().group("openai/gpt-4o", field="listing_info") is None
+
+
+async def test_a_team_openrouter_wildcard_listing_info_shows_each_concrete_models_limits(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-wild-name",
+                "litellm_params": {"model": "openrouter/*", "api_key": "openrouter-key"},
+                "model_info": {"id": "team-wild-id", "team_id": "team-1", "team_public_model_name": "openrouter/*"},
+            }
+        ]
+    )
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    listing_info: Final = router.registry().group(
+        "openrouter/vendor/capped", field="listing_info", team_id="team-1"
+    )
+    assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
+
+
+def _team_openrouter_wildcard(team_id: str, api_key: str) -> DeploymentTypedDict:
+    return {
+        "model_name": f"{team_id}-wild-name",
+        "litellm_params": {"model": "openrouter/*", "api_key": api_key},
+        "model_info": {"id": f"{team_id}-wild-id", "team_id": team_id, "team_public_model_name": "openrouter/*"},
+    }
+
+
+def _catalog_per_key(request: httpx.Request) -> httpx.Response:
+    context_length, max_completion_tokens = {
+        "Bearer key-one": (4096, 1024),
+        "Bearer key-two": (2048, 512),
+        "Bearer key-global": (1024, 256),
+    }[request.headers["authorization"]]
+    return httpx.Response(
+        200,
+        json={
+            "data": [
+                {
+                    "id": "vendor/capped",
+                    "context_length": context_length,
+                    "top_provider": {"max_completion_tokens": max_completion_tokens},
+                }
+            ]
+        },
+    )
+
+
+async def test_each_team_lists_the_limits_of_its_own_openrouter_wildcard(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[
+            _team_openrouter_wildcard("team-1", "key-one"),
+            _team_openrouter_wildcard("team-2", "key-two"),
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "key-global"},
+                "model_info": {"id": "global-wild-id"},
+            },
+        ]
+    )
+
+    await _refresh_against(router, _catalog_per_key)
+
+    listed: Final = {
+        team_id: router.registry().group("openrouter/vendor/capped", field="listing_info", team_id=team_id)
+        for team_id in ("team-1", "team-2", "team-without-a-wildcard", None)
+    }
+    assert listed == {
+        "team-1": DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024),
+        "team-2": DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=2048, max_output_tokens=512),
+        "team-without-a-wildcard": DeploymentModelListingInfo(
+            cost_map_keys=(), max_input_tokens=1024, max_output_tokens=256
+        ),
+        None: DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=1024, max_output_tokens=256),
+    }
+
+
+async def test_a_team_wildcard_under_the_public_wildcard_name_lists_its_limits_only_to_its_team(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "key-global"},
+                "model_info": {"id": "global-wild-id"},
+            },
+            {**_team_openrouter_wildcard("team-1", "key-one"), "model_name": "openrouter/*"},
+        ]
+    )
+
+    await _refresh_against(router, _catalog_per_key)
+
+    listed: Final = {
+        team_id: router.registry().group("openrouter/vendor/capped", field="listing_info", team_id=team_id)
+        for team_id in ("team-1", "team-2", None)
+    }
+    global_limits: Final = DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=1024, max_output_tokens=256)
+    assert listed == {
+        "team-1": DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024),
+        "team-2": global_limits,
+        None: global_limits,
+    }
+
+
+async def test_openrouter_wildcard_listing_info_keeps_the_operator_limit(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id", max_output_tokens=50)]
+    )
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    listing_info: Final = router.registry().group("openrouter/vendor/capped", field="listing_info")
+    assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=50)
 
 
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():

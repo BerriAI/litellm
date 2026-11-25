@@ -27,7 +27,7 @@ def extract_text_from_pdf(file_content: bytes) -> str | None:
             pdf_file = BytesIO(file_content)
             reader = PypdfReader(pdf_file)
 
-            text_parts = []
+            text_parts: list[str] = []
             for page in reader.pages:
                 text = page.extract_text()
                 if text:

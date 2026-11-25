@@ -8,13 +8,15 @@ the same precedence and the same oddities. Nothing here reads a Python router.
 """
 
 import dataclasses
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from functools import partial
+from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm import exceptions as litellm_exceptions
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
@@ -30,12 +32,21 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, drops_unsupported_params, without
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    as_str_mapping,
+    drops_unsupported_params,
+    without,
+)
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
-from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, metadata_defaults_under_request
+from litellm.litellm_core_utils.routing_common_utils import (
+    deployment_model_id_pin,
+    metadata_defaults_under_request,
+    request_user_api_key_auth,
+)
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import deployment_id as generate_deployment_id
@@ -51,12 +62,19 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
-from litellm.types.router import Deployment, GenericLiteLLMParams, LiteLLM_Params, validate_litellm_params_strictly
+from litellm.types.router import (
+    Deployment,
+    ForwardedClientHeaders,
+    GenericLiteLLMParams,
+    LiteLLM_Params,
+    validate_litellm_params_strictly,
+)
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
     from litellm.redis.stores.router_usage import RouterUsage
+    from litellm.router_api import RegistryReader
     from litellm.router_python_host import PythonHost
 
 # The SDK-client and max_parallel_requests reads of the routing cache: process-local, so the family
@@ -64,6 +82,16 @@ if TYPE_CHECKING:
 ROUTER_CLIENTS_TARGET: Final = "router_clients"
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt", "anthropic"})
+_CALLER_KEY_ORIGIN_PROVIDERS: Final = frozenset({LlmProviders.ANTHROPIC.value})
+_BEDROCK_RUNTIME_DESTINATION: Final = (
+    ("api_base", "base_url", "aws_bedrock_runtime_endpoint"),
+    ("AWS_BEDROCK_RUNTIME_ENDPOINT",),
+)
+_BEDROCK_MANTLE_ROUTE_DESTINATION: Final = (
+    ("api_base", "base_url", "aws_bedrock_runtime_endpoint"),
+    ("BEDROCK_MANTLE_API_BASE",),
+)
+_BEDROCK_MANTLE_DESTINATION: Final = (("api_base", "base_url"), ("BEDROCK_MANTLE_API_BASE",))
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 # Generic handlers whose stream timeout is split from the request timeout.
 STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
@@ -297,24 +325,37 @@ def _resolved_upstream(params: Mapping[str, object], group: str, host: "PythonHo
 
 
 def _deployment_base_model(deployment: Mapping[str, object], params: Mapping[str, object]) -> str | None:
-    base_model: Final = as_dict(deployment.get("model_info")).get("base_model") or params.get("base_model")
+    base_model: Final = params.get("base_model") or as_dict(deployment.get("model_info")).get("base_model")
     return base_model if isinstance(base_model, str) else None
 
 
-def _deployment_supports_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
+def _deployment_supports_param(
+    deployment: Mapping[str, object], group: str, param: str, value: object, host: "PythonHost"
+) -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
     try:
         model, custom_llm_provider = _resolved_upstream(params, group, host)
+        base_model: Final = _deployment_base_model(deployment, params)
         supported: Final = host.invoke("get_supported_openai_params")(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            base_model=_deployment_base_model(deployment, params),
+            base_model=base_model,
+        )
+        if supported is not None and param not in supported:
+            return False
+        return param != "reasoning_effort" or not host.invoke(
+            "litellm_core_utils.reasoning_effort_capability.gpt_5_row_refuses_reasoning_effort"
+        )(
+            value,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
+            deployment_model_info=deployment.get("model_info"),
         )
     except Exception:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
         return True
-    return supported is None or param in supported
 
 
 def _deployment_refuses_reasoning_effort(
@@ -339,7 +380,9 @@ def _deployment_refuses_reasoning_effort(
     )
 
 
-def deployment_accepts_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
+def deployment_accepts_param(
+    deployment: Mapping[str, object], group: str, param: str, value: object, host: "PythonHost"
+) -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
@@ -350,7 +393,7 @@ def deployment_accepts_param(deployment: Mapping[str, object], group: str, param
         str(params.get("model") or ""), provider_param if isinstance(provider_param, str) else None
     ):
         return True
-    return _deployment_supports_param(deployment, group, param, host)
+    return _deployment_supports_param(deployment, group, param, value, host)
 
 
 def drop_unsupported_classifier_reasoning_effort(
@@ -363,7 +406,7 @@ def drop_unsupported_classifier_reasoning_effort(
     reasoning_effort: Final = kwargs.get("reasoning_effort")
     if reasoning_effort is None or not _is_classifier_internal_call(kwargs):
         return
-    if deployment_accepts_param(deployment, model, "reasoning_effort", host) and not (
+    if deployment_accepts_param(deployment, model, "reasoning_effort", reasoning_effort, host) and not (
         _deployment_refuses_reasoning_effort(deployment, model, reasoning_effort, host)
     ):
         return
@@ -463,21 +506,191 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def deployment_provider(deployment_params: Mapping[str, object]) -> str | None:
+    declared: Final = deployment_params.get("custom_llm_provider")
+    if isinstance(declared, str):
+        return declared
+    model: Final = deployment_params.get("model")
+    return inferred_provider(model if isinstance(model, str) else None)
+
+
+def sole_provider(deployments: Iterable[Mapping[str, object]]) -> str | None:
+    """The provider every deployment of a group shares, or None when they differ or there are none."""
+    providers: Final = frozenset(
+        deployment_provider(as_dict(deployment.get("litellm_params"))) for deployment in deployments
+    )
+    return next(iter(providers)) if len(providers) == 1 else None
+
+
+def leaves_caller_key_behind(
+    request: Mapping[str, object],
+    target_params: Mapping[str, object],
+    owner_provider: Callable[[], str | None],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object],
+) -> bool:
+    """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
+    Anthropic and the deployment authenticates with AWS IAM credentials on its default endpoint. A deployment with a
+    bearer of its own (its ``api_key``, a router default one, or the provider's env bearer), a blank caller key (which
+    already turns off the env bearer), a fallback target that sets its own key, an explicit ``Authorization`` header,
+    and a call sent to an endpoint of its own keep today's behavior. The checks read the call as the provider gets it:
+    the request and target over the router's non-None defaults over the deployment's params."""
+    caller_key: Final = request.get("api_key")
+    deployment: Final = {
+        **deployment_params,
+        **{key: value for key, value in router_defaults.items() if value is not None},
+    }
+    destination: Final = _aws_destination(deployment)
+    return (
+        caller_key not in (None, "")
+        and "api_key" not in target_params
+        and destination is not None
+        and not _sets_authorization_header(request, target_params, deployment)
+        and owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
+        and not _targets_a_custom_endpoint({**deployment, **request, **target_params}, destination)
+        and _signs_with_aws_credentials(deployment)
+    )
+
+
+def _aws_destination(
+    deployment_params: Mapping[str, object],
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """The params and env vars that move an AWS deployment off its default endpoint, as its route resolves them, or
+    None for a deployment this fix leaves alone: not bedrock or bedrock_mantle, or the Claude Platform route, which
+    resolves its own endpoint and bearer."""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    provider: Final = deployment_provider(deployment_params)
+    if provider == LlmProviders.BEDROCK_MANTLE.value:
+        return _BEDROCK_MANTLE_DESTINATION
+    if provider != LlmProviders.BEDROCK.value:
+        return None
+    model: Final = deployment_params.get("model")
+    route: Final = BedrockModelInfo.named_bedrock_route(model, None) if isinstance(model, str) else None
+    if route == "claude_platform":
+        return None
+    return _BEDROCK_MANTLE_ROUTE_DESTINATION if route == "mantle" else _BEDROCK_RUNTIME_DESTINATION
+
+
+def _targets_a_custom_endpoint(
+    call: Mapping[str, object], destination: tuple[tuple[str, ...], tuple[str, ...]]
+) -> bool:
+    """Whether the call goes to an endpoint of its own: a non-empty destination param, or the route's endpoint env var.
+    A custom endpoint may be a gateway that takes the caller's bearer, so its auth is left as it is."""
+    from litellm.secret_managers.main import get_secret_str
+
+    params, env_vars = destination
+    return any(call.get(key) for key in params) or any(get_secret_str(name) for name in env_vars)
+
+
+def _sets_authorization_header(*sources: Mapping[str, object]) -> bool:
+    """Whether ``headers`` or ``extra_headers`` set an ``Authorization`` explicitly; the caller's key outranks it on
+    an AWS deployment, so dropping the key would hand the call to that header instead."""
+    carriers: Final = (
+        as_str_mapping(source.get(carrier)) or {} for source, carrier in product(sources, ("headers", "extra_headers"))
+    )
+    return any("authorization" in {name.lower() for name in headers} for headers in carriers)
+
+
+def _signs_with_aws_credentials(deployment_params: Mapping[str, object]) -> bool:
+    """Whether the AWS deployment, left to its own auth, signs with SigV4: its provider's bearer resolver finds no
+    bearer in its ``api_key`` (with that provider's empty and missing key rules) or the provider's env bearer."""
+    from litellm.llms.bedrock.base_aws_llm import bedrock_bearer_token
+    from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_bearer_token
+
+    key: Final = deployment_params.get("api_key")
+    if key is not None and not isinstance(key, str):
+        return False
+    resolve: Final = (
+        resolve_mantle_bearer_token
+        if deployment_provider(deployment_params) == LlmProviders.BEDROCK_MANTLE.value
+        else bedrock_bearer_token
+    )
+    return resolve(key) is None
+
+
+def forwarded_client_headers(request: Mapping[str, object]) -> ForwardedClientHeaders | None:
+    stamp: Final = (as_str_mapping(request.get("proxy_server_request")) or {}).get("forwarded_client_headers")
+    if stamp is None:
+        return None
+    try:
+        return ForwardedClientHeaders.model_validate(stamp)
+    except ValidationError:
+        return None
+
+
+def client_header_forwarding_admits(group: str, request: Mapping[str, object], router: "RegistryReader") -> bool:
+    """Whether ``model_group_settings.forward_client_headers_to_llm_api`` covers ``group``, as the proxy decided it
+    for the requested group."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import check_model_access_helper
+
+    settings: Final = litellm.model_group_settings
+    scope: Final = settings.forward_client_headers_to_llm_api if settings is not None else None
+    if scope is None:
+        return False
+    auth: Final = request_user_api_key_auth(request)
+    caller: Final = auth if isinstance(auth, UserAPIKeyAuth) else None
+    return check_model_access_helper(
+        model=group,
+        llm_router=router,
+        models=scope,
+        team_model_aliases=caller.team_model_aliases if caller is not None else None,
+        team_id=caller.team_id if caller is not None else None,
+    )
+
+
+def _without_forwarded_headers(
+    request: Mapping[str, object], stamp: ForwardedClientHeaders, names: frozenset[str]
+) -> Mapping[str, object]:
+    headers: Final = as_str_mapping(request.get("headers"))
+    if headers is None or not names:
+        return request
+    kept: Final = {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in names or not stamp.still_forwarded(name, value)
+    }
+    rest: Final = without(request, "headers")
+    return {**rest, "headers": kept} if kept else rest
+
+
+def attempt_inherited_request(
+    request: Mapping[str, object],
+    *,
+    target_params: Mapping[str, object],
+    owner_provider: Callable[[], str | None],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object],
+    rechecks_header_scope: bool,
+    header_forwarding_admits: Callable[[], bool],
+) -> Mapping[str, object]:
+    """The caller's request as an attempt inherits it, before a fallback target's own params apply: without a caller
+    key meant for Anthropic on an AWS-signed deployment, and without the client headers the proxy forwarded (still
+    holding the forwarded value) when the attempt's group is outside their forwarding scope, or, for ``x-api-key``,
+    when the key is left behind. A target that sets its own ``headers`` replaces them, so they are left alone."""
+    drops_key: Final = leaves_caller_key_behind(
+        request, target_params, owner_provider, deployment_params, router_defaults
+    )
+    inherited: Final = without(request, "api_key") if drops_key else request
+    stamp: Final = forwarded_client_headers(request)
+    if stamp is None or "headers" in target_params:
+        return inherited
+    forwarded: Final = frozenset(stamp.digests)
+    out_of_scope: Final = rechecks_header_scope and stamp.model_group_scoped and not header_forwarding_admits()
+    removed: Final = forwarded if out_of_scope else (forwarded & {"x-api-key"} if drops_key else frozenset[str]())
+    return _without_forwarded_headers(inherited, stamp, removed)
+
+
 def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:
     """The caller's ``Authorization`` a credential-isolating provider sends instead of the deployment's key."""
     from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 
-    declared_provider: Final = deployment_params.get("custom_llm_provider")
-    declared_model: Final = deployment_params.get("model")
-    deployment_provider: Final = (
-        declared_provider
-        if isinstance(declared_provider, str)
-        else inferred_provider(declared_model if isinstance(declared_model, str) else None)
-    )
-    if deployment_provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
+    provider: Final = deployment_provider(deployment_params)
+    if provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
         return None
     header: Final = kwargs.get("provider_specific_header")
-    return ProviderSpecificHeaderUtils.forwarded_authorization(header, deployment_provider)
+    return ProviderSpecificHeaderUtils.forwarded_authorization(header, provider)
 
 
 def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:

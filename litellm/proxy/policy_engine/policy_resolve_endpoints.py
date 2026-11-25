@@ -287,7 +287,7 @@ async def resolve_policies_for_context(
         )
 
         # Resolve guardrails for each applied policy
-        matched_policies: Final = []
+        matched_policies: Final[list[PolicyMatchDetail]] = []
         all_guardrails: Final[set[str]] = set()
         for result in match_results:
             pname = result["policy_name"]

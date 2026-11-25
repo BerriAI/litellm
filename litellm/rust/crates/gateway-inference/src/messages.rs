@@ -16,6 +16,7 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_router_core::{Attempt, Deployment, Op};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -24,7 +25,7 @@ use crate::{
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
-    routing::{self, Host, RouteAttempt, RouteChunks},
+    routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
     stream_outcome::{self, Streamed},
@@ -105,17 +106,6 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
     const PATH: &'static str = "/v1/messages";
     const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
 
-    fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
-        let usage = match ran {
-            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
-            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
-            CallOutput::Stream { .. } => None,
-        }?;
-        serde_json::from_value::<MessagesStreamUsage>(usage.clone())
-            .ok()
-            .map(Counts::from)
-    }
-
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
         Some(counts.messages_usage())
     }
@@ -131,6 +121,10 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
 
 impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     type Outcome = (Streamed<Messages>, CacheHeaders);
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        Some(Prompt::Messages(&self.body))
+    }
 
     async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
@@ -156,13 +150,8 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
         Ok((ran, cache))
     }
 
-    fn total_tokens((ran, _): &Self::Outcome) -> u64 {
-        let usage = match ran {
-            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
-            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
-            CallOutput::Stream { .. } => None,
-        };
-        routing::total_tokens(usage)
+    fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
+        counts(ran)
     }
 
     fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
@@ -256,6 +245,18 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
     (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
 }
 
+/// What a complete answer's `usage` counts. A stream's is read from its events.
+fn counts(ran: &Streamed<Messages>) -> Option<Counts> {
+    let usage = match ran {
+        CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
+        CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
+        CallOutput::Stream { .. } => None,
+    }?;
+    MessagesStreamUsage::deserialize(usage)
+        .ok()
+        .map(Counts::from)
+}
+
 /// An Anthropic Messages event. `message_start` counts the input and `message_delta` the output,
 /// only a `content_block_delta` carries generated output (`is_anthropic_content_delta_chunk`),
 /// and an `error` event is answered as its error type is before a stream, with the event's own
@@ -299,6 +300,22 @@ mod tests {
 
     use super::*;
 
+    const CACHED_USAGE: &str = r#""usage":{"input_tokens":7,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}"#;
+
+    #[rstest]
+    #[case::a_message(
+        r#"{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":"end_turn","stop_sequence":null,USAGE}"#
+    )]
+    #[case::a_body_that_is_not_a_message(r#"{"type":"message",USAGE}"#)]
+    fn a_complete_answer_counts_the_cache_it_wrote_and_read(#[case] body: &str) {
+        let body: MessagesBody =
+            serde_json::from_str(&body.replace("USAGE", CACHED_USAGE)).unwrap();
+        assert_eq!(
+            counts(&CallOutput::Complete(body)).map(Counts::total),
+            Some(132)
+        );
+    }
+
     #[rstest]
     #[case::message_start(
         r#"{"type":"message_start","index":0,"message":{"id":"msg_1","model":"provider-model","role":"assistant"}}"#,
@@ -341,6 +358,11 @@ mod tests {
         r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#,
         Kind::Lifecycle,
         Some(7)
+    )]
+    #[case::a_start_counts_the_cache_it_wrote_and_read(
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}}}"#,
+        Kind::Lifecycle,
+        Some(127)
     )]
     #[case::a_closing_delta_counts_its_output(
         r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":5}}"#,

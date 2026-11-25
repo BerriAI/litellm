@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Final, Literal
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -512,7 +512,7 @@ class QualifireGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
             QualifireGuardrailConfigModel,
         )

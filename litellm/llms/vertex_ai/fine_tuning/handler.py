@@ -213,7 +213,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
         original_hyperparameters: dict | None = {},
     ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)

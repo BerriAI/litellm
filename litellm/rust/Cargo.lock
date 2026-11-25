@@ -3917,8 +3917,11 @@ dependencies = [
  "litellm-db",
  "litellm-python-compat",
  "litellm-redaction",
+ "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
  "litellm-repositories",
+ "litellm-secret-value",
  "litellm-spend-log-writer",
  "rstest",
  "serde",
@@ -4158,9 +4161,11 @@ dependencies = [
  "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
  "parking_lot",
+ "rand 0.8.7",
  "rstest",
  "rustls 0.23.42",
  "serde",
@@ -4656,6 +4661,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4974,6 +4980,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jiff",
+ "litellm-core-utils",
  "litellm-db",
  "litellm-error",
  "litellm-python-compat",
@@ -5014,7 +5021,9 @@ dependencies = [
 name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "litellm-auth-types",
+ "litellm-python-compat",
  "litellm-secret-value",
  "rstest",
  "serde",

@@ -179,9 +179,9 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: dict[str, object] = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         try:
             response_json: Final = _deepinfra_rerank_body(raw_response)
@@ -246,7 +246,9 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents"]
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         # Deepinfra errors may come as JSON: {"detail": {"error": "..."}}
         import json
 

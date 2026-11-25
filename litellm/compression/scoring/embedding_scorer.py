@@ -17,7 +17,7 @@ def _extract_content(message: Mapping[str, object]) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: Final = []
+        parts: Final[list[str]] = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 parts.append(part.get("text", ""))

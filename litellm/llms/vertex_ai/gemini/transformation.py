@@ -1128,7 +1128,7 @@ def gemini_convert_messages_with_history(
     last_message_with_tool_calls = None
 
     msg_i = 0
-    tool_call_responses = []
+    tool_call_responses: list[PartType] = []
     vertex_credentials = None
     request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
     drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
@@ -1526,7 +1526,7 @@ def transform_request_body(
     model: str,
     optional_params: dict,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     cached_content: str | None,
 ) -> RequestBody:
     """
@@ -1662,11 +1662,11 @@ def sync_transform_request_body(
     model: str,
     client: HTTPHandler | None,
     timeout: float | httpx.Timeout | None,
-    extra_headers: dict | None,
-    optional_params: dict,
+    extra_headers: Mapping[str, str] | None,
+    optional_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
@@ -1802,11 +1802,11 @@ async def async_transform_request_body(
     model: str,
     client: AsyncHTTPHandler | None,
     timeout: float | httpx.Timeout | None,
-    extra_headers: dict | None,
-    optional_params: dict,
+    extra_headers: Mapping[str, str] | None,
+    optional_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,

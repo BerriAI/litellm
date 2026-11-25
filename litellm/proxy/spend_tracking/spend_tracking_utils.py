@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import (
     BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    inherits_parent_session,
     settles_background_response,
 )
 from litellm.litellm_core_utils.litellm_logging import (
@@ -639,7 +640,7 @@ def _snapshotless_cost_breakdown(  # pyright: ignore[reportUnusedFunction]  # sh
 
 
 def get_logging_payload(
-    kwargs: dict | None,
+    kwargs: dict[str, object] | None,
     response_obj: object,
     start_time: datetime,
     end_time: datetime,
@@ -692,16 +693,20 @@ def _get_session_id_for_spend_log(  # pyright: ignore[reportUnusedFunction]  # s
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the conversation id the caller sent (also one an x-litellm-trace-id header
-    displaced from the request's session), then trace ids.
+    """Resolve the session id for the spend log row: `omit` honors metadata.session_id, else the parent session a proxy
+    sub-call inherited, never a trace id; batch sessions outrank everything,
+    then the conversation id the caller sent (also one an x-litellm-trace-id header displaced from the request's
+    session), then trace ids.
 
     A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
     it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole.
     """
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
-        return str(session_id) if session_id else None
+        if session_id:
+            return str(session_id)
+        params: Final = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+        return _caller_session_for_spend_log(kwargs, metadata=None) if inherits_parent_session(params) else None
 
     from litellm._uuid import uuid
 

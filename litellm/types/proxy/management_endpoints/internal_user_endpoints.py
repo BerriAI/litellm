@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -50,9 +50,9 @@ class BulkUpdateUserRequest(LiteLLMBaseModel):
 
     @field_validator("users", "all_users", "user_updates")
     @classmethod
-    def validate_request(cls, v: object, info):
+    def validate_request(cls, v: object, info: ValidationInfo):
         # Get all field values for validation
-        values: Final = info.data if hasattr(info, "data") else {}
+        values: Final[Mapping[str, object]] = info.data if hasattr(info, "data") else {}
 
         # After all fields are set, validate the combination
         if info.field_name == "user_updates":  # This is the last field, do validation here
