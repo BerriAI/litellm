@@ -83,7 +83,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         declared_system_first: Final = declares_system_first(
             model, self.custom_llm_provider.value, deployment_model_info(litellm_params)
         )
-        return "leading_block_into_instructions" if declared_system_first else None
+        return "instruction_items_into_instructions" if declared_system_first else None
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""

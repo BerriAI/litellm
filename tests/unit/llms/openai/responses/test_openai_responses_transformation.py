@@ -5155,6 +5155,7 @@ def _responses_request_sent(
     input: Sequence[Mapping[str, str]],
     previous_response_id: str | None = None,
     instructions: str | None = None,
+    tools: Sequence[Mapping[str, JsonValue]] = (),
 ) -> Mapping[str, JsonValue]:
     with respx.mock() as router:
         route: Final = router.post(f"{api_base}/responses").mock(
@@ -5179,6 +5180,7 @@ def _responses_request_sent(
             model_info=model_info,
             previous_response_id=previous_response_id,
             instructions=instructions,
+            tools=[dict(tool) for tool in tools] or None,
         )
     return TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)
 
@@ -5323,3 +5325,64 @@ def test_a_system_first_openai_compatible_deployment_sends_a_first_turns_leading
             _LATER_SYSTEM_INPUT[3],
         ],
     )
+
+
+_GEOGRAPHY_TUTOR_SYSTEM_ITEM: Final = {"type": "message", "role": "system", "content": "You are a geography tutor."}
+
+
+@pytest.mark.parametrize(
+    ("instructions", "instructions_sent", "leading_items_sent"),
+    [
+        pytest.param(None, None, [_GEOGRAPHY_TUTOR_SYSTEM_ITEM], id="stored-system-item"),
+        pytest.param("Answer in one word.", "Answer in one word.\n\nYou are a geography tutor.", [], id="instructions"),
+    ],
+)
+def test_a_system_first_openai_compatible_deployment_keeps_a_first_turns_later_developer_item_in_place(
+    instructions: str | None, instructions_sent: str | None, leading_items_sent: list[Mapping[str, str]]
+) -> None:
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE,
+        _SYSTEM_FIRST_DEPLOYMENT,
+        (
+            {"role": "system", "content": "You are a geography tutor."},
+            *_LATER_SYSTEM_INPUT[:2],
+            {"role": "developer", "content": "Reply in French."},
+            _LATER_SYSTEM_INPUT[3],
+        ),
+        instructions=instructions,
+    )
+
+    assert (request.get("instructions"), request["input"]) == (
+        instructions_sent,
+        [*leading_items_sent, *_LATER_SYSTEM_INPUT[:2], _LATER_SYSTEM_ITEM_AS_USER, _LATER_SYSTEM_INPUT[3]],
+    )
+
+
+def test_a_system_first_openai_compatible_deployment_folds_a_lone_leading_system_item_into_caller_instructions() -> (
+    None
+):
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE, _SYSTEM_FIRST_DEPLOYMENT, _CONTINUED_TURN_INPUT, instructions="Answer in one word."
+    )
+
+    assert (request["instructions"], request["input"]) == (
+        "Answer in one word.\n\nReply in French.",
+        [_CONTINUED_TURN_INPUT[1]],
+    )
+
+
+def test_a_system_first_openai_compatible_deployment_sends_sanitized_tools_beside_folded_instructions() -> None:
+    lookup_capital: Final = {
+        "type": "function",
+        "name": "lookup_capital",
+        "parameters": {"type": "object", "properties": {}},
+    }
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE,
+        _SYSTEM_FIRST_DEPLOYMENT,
+        _CONTINUED_TURN_INPUT,
+        instructions="Answer in one word.",
+        tools=({**lookup_capital, "cache_control": {"type": "ephemeral"}},),
+    )
+
+    assert (request["instructions"], request["tools"]) == ("Answer in one word.\n\nReply in French.", [lookup_capital])

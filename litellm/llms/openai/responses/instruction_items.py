@@ -16,7 +16,10 @@ from litellm.types.llms.openai import ResponseInputParam
 
 UnfoldedDeveloperRole: TypeAlias = Literal["system", "user"]
 SystemItemPlacement: TypeAlias = Literal[
-    "leading_block_into_instructions", "leading_block_into_system_item", "every_item_in_place"
+    "instruction_items_into_instructions",
+    "leading_block_into_instructions",
+    "leading_block_into_system_item",
+    "every_item_in_place",
 ]
 _ConversationItemKind: TypeAlias = Literal["system", "tool_output", "other"]
 
@@ -171,29 +174,37 @@ def later_system_items_as_user(input: str | ResponseInputParam) -> str | Respons
     return [*items[:conversation_start], *_conversation_with_system_items_as_user(conversation)]
 
 
-def has_later_instruction_items(input: str | ResponseInputParam, continues_conversation: bool) -> bool:
-    conversation_start: Final = 0 if continues_conversation else 1
-    return not isinstance(input, str) and any(_role(item) in _INSTRUCTION_ROLES for item in input[conversation_start:])
+def has_instruction_items(input: str | ResponseInputParam, from_index: int) -> bool:
+    return not isinstance(input, str) and any(_role(item) in _INSTRUCTION_ROLES for item in input[from_index:])
+
+
+def _items_as_user_turns(items: Sequence[ResponseInputItemParam]) -> ResponseInputParam:
+    return [*_conversation_with_system_items_as_user(tuple(_developer_item_as(item, "system") for item in items))]
 
 
 def _instruction_items_as_user_turns(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    return input if isinstance(input, str) else _items_as_user_turns(input)
+
+
+def _leading_block_folded(
+    input: str | ResponseInputParam, params: Mapping[str, object]
+) -> tuple[str | ResponseInputParam, Mapping[str, object]]:
     if isinstance(input, str):
-        return input
-    return [*_conversation_with_system_items_as_user(tuple(_developer_item_as(item, "system") for item in input))]
+        return input, params
+    items: Final = tuple(input)
+    conversation_start: Final = leading_instruction_block_length(tuple(map(_role, items)))
+    leading_block: Final = list(items[:conversation_start])
+    folded_block, folded_params = instruction_items_folded(leading_block, params, "user") or (leading_block, params)
+    return [*folded_block, *_items_as_user_turns(items[conversation_start:])], folded_params
 
 
 def _leading_block_into_system_item(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    folded: Final = instruction_items_folded(input, MappingProxyType({}), "user")
-    if folded is None:
-        return later_system_items_as_user(input)
-    folded_items, folded_params = folded
-    match folded_params.get("instructions"):
-        case str(text):
-            return later_system_items_as_user(
-                [EasyInputMessageParam(role="system", content=text, type="message"), *folded_items]
-            )
+    folded_input, folded_params = _leading_block_folded(input, MappingProxyType({}))
+    match folded_input, folded_params.get("instructions"):
+        case list(conversation), str(text):
+            return [EasyInputMessageParam(role="system", content=text, type="message"), *conversation]
         case _:
-            return later_system_items_as_user(folded_items)
+            return folded_input
 
 
 def system_first_input_and_params(
@@ -205,5 +216,7 @@ def system_first_input_and_params(
         case "leading_block_into_system_item":
             return _leading_block_into_system_item(input), params
         case "leading_block_into_instructions":
+            return _leading_block_folded(input, params)
+        case "instruction_items_into_instructions":
             folded_input, folded_params = instruction_items_folded(input, params, "user") or (input, params)
             return later_system_items_as_user(folded_input), folded_params
