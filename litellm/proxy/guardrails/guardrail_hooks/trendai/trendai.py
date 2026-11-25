@@ -139,7 +139,6 @@ class TrendAIGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail contract
         return [
             GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.logging_only,
         ]
@@ -557,10 +556,13 @@ def _merge_detected_categories(additions: Sequence[tuple[str, float]]) -> tuple[
 
 
 def _window_verdict(scans: Sequence[TrendAIWindowScan]) -> TrendAIScanResult:
-    """Collapse window scans into one verdict: the first non-allow result, else an allow carrying merged findings."""
-    terminal: Final = next((scan.result for scan in scans if not isinstance(scan.result, TrendAIAllow)), None)
-    if terminal is not None:
-        return terminal
+    """Collapse window scans into one verdict: block wins over provider failure, else allow carrying merged findings."""
+    block: Final = next((scan.result for scan in scans if isinstance(scan.result, TrendAIBlock)), None)
+    if block is not None:
+        return block
+    failure: Final = next((scan.result for scan in scans if isinstance(scan.result, TrendAIProviderFailure)), None)
+    if failure is not None:
+        return failure
     allowed_counts: Final = (scan.result.masked_entity_count for scan in scans if isinstance(scan.result, TrendAIAllow))
     counts: Final = tuple(chain.from_iterable(allowed_counts))
     allowed_categories: Final = (

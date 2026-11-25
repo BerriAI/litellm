@@ -324,6 +324,22 @@ def test_registry_rejects_tool_result_only_scanning() -> None:
         )
 
 
+def test_registry_rejects_during_call_mode() -> None:
+    with pytest.raises(ValueError, match="during_call"):
+        InMemoryGuardrailHandler().initialize_guardrail(
+            {
+                "guardrail_name": "trendai-during-call",
+                "litellm_params": {
+                    "guardrail": "trendai",
+                    "mode": "during_call",
+                    "api_key": "test-key",
+                    "api_base": "https://guard.example.com",
+                    "timeout": 5.0,
+                },
+            }
+        )
+
+
 Responder = Callable[[httpx.Request], httpx.Response]
 
 
@@ -654,6 +670,27 @@ async def test_provider_failure_follows_fallback_policy_and_is_never_an_interven
     assert record["guardrail_status"] == "guardrail_failed_to_respond"
     assert record["guardrail_response"]["status_code"] == 503
     assert record["guardrail_response"]["fallback_on_error"] == fallback_on_error
+
+
+@pytest.mark.asyncio
+async def test_response_block_overrides_earlier_choice_provider_failure_under_fail_open() -> None:
+    respond, scanned = _engine(fail_on="transient-error", block_on="forbidden")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        guardrail: Final = _guardrail(async_handler=client, fallback_on_error="allow")
+        request_data: Final[dict[str, object]] = {"metadata": {}}  # mutable-ok: hook mutates metadata in place
+        with pytest.raises(GuardrailRaisedException) as raised:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["transient-error", "forbidden"], "model": "gpt-5.4"},
+                request_data=request_data,
+                input_type="response",
+            )
+
+    assert scanned == ["transient-error", "forbidden"]
+    assert raised.value.status_code == 400
+    assert raised.value.blocked_content is True
+    (record,) = _guardrail_records(request_data)
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert record["guardrail_response"]["action"] == "block"
 
 
 @pytest.mark.asyncio
