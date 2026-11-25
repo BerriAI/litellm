@@ -66,7 +66,7 @@ model_list:
       aws_region_name: us-east-1
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
-  # Fable 5.2 is left out: the stage account has no Marketplace subscription for it, so Bedrock answers 403 "Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions".
+  # TODO: add Fable 5.2 once the stage account has an AWS Marketplace subscription for it. Bedrock answers 403 "Model access is denied" until then
 
   # ---- Bedrock (Converse) ----
   - model_name: claude-haiku-5-5-bedrock-converse
@@ -85,7 +85,7 @@ model_list:
       aws_region_name: us-east-1
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
-  # Fable 5.2 is left out: the stage account has no Marketplace subscription for it, so Bedrock answers 403 "Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions".
+  # TODO: add Fable 5.2 once the stage account has an AWS Marketplace subscription for it. Bedrock answers 403 "Model access is denied" until then
 
   # ---- Vertex AI ----
   # `use_in_pass_through: true` registers each deployment's
