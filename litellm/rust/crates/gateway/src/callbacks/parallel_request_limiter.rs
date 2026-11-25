@@ -817,6 +817,7 @@ mod tests {
                             rpm: Some(3),
                             tpm: Some(30),
                         },
+                        ..MembershipRecord::default()
                     }),
                 },
                 org: Some(Named::Stored(OrgRecord {
@@ -836,6 +837,7 @@ mod tests {
                     rpm: Some(4),
                     tpm: Some(40),
                 },
+                ..EndUserRecord::default()
             },
         )
     }
@@ -893,6 +895,7 @@ mod tests {
                 rpm: Some(4),
                 tpm: Some(40),
             },
+            ..EndUserRecord::default()
         }));
 
         assert_eq!(described(&master), [described_as("end_user", "e1", 4, 40)]);

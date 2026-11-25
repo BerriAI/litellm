@@ -5,6 +5,14 @@
 //! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
 //! yet is never told.
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the budgets callback that reserves against these lands next"
+    )
+)]
+mod budgets;
 mod fields;
 pub mod hosted;
 pub mod model_capacity;
