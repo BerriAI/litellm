@@ -218,6 +218,7 @@ from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import RouterWeights, validate_router_weights
 from litellm.types.semantic_cache import semantic_cache_policy
@@ -365,8 +366,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     bind_v2_request_scope,
     check_customer_request_model_access,
     customer_request_auth,
+    dispatched_to_pinned,
     get_metadata_variable_name,
     global_then_key_alias_target,
+    pinned_the_customer_may_use,
     pre_call_served_model,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
@@ -2935,9 +2938,11 @@ def _metadata_logged_on(logged_on: LiteLLMLoggingObj) -> Mapping[str, object]:
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict, served_model: str | None = None):
+    def __init__(self, data: dict, served_model: str | None = None, pinned: PinnedDeployment | None = None):
         self.data = data
         self.served_model = served_model
+        self.pinned = pinned
+        self.dispatched: PinnedDeployment | None = None
         self.dashboard_fallback_model: str | None = None
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
@@ -3260,6 +3265,7 @@ class ProxyBaseLLMRequestProcessing:
                 _REQUEST_FIELDS.validate_python(general_settings),
                 proxy_logging_obj.get_proxy_hook("managed_files"),
             )
+        pinned: Final = self.pinned if rate_limited_model is None else None
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -3267,6 +3273,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
+            pinned_provider=None if pinned is None else pinned.custom_llm_provider,
         )
         request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
         customer_auth: Final = customer_request_auth(request_fields)
@@ -3464,13 +3471,14 @@ class ProxyBaseLLMRequestProcessing:
                 aliased_model, kind="served", served_model=self.served_model
             )
 
-        check_customer_request_model_access(
-            _REQUEST_FIELDS.validate_python(self.data),  # pyright: ignore[reportUnknownMemberType]  # validate the legacy request carrier at this boundary
-            customer_auth,
-            llm_router,
-        )
+        checked_fields: Final = _REQUEST_FIELDS.validate_python(self.data)  # pyright: ignore[reportUnknownMemberType]  # validate the legacy request carrier at this boundary
+        check_customer_request_model_access(checked_fields, customer_auth, llm_router)
+        dispatched: Final = pinned_the_customer_may_use(pinned, customer_auth, llm_router)
+        if dispatched is None or checked_fields.get("model") != dispatched.served_model:
+            return self.data, logging_obj
 
-        return self.data, logging_obj
+        self.dispatched = dispatched
+        return dispatched_to_pinned(checked_fields, user_api_key_dict, dispatched), logging_obj
 
     async def _pre_call_with_fallbacks(
         self,

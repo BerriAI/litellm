@@ -10,10 +10,12 @@ from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mappi
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    TeamProviderDeployment,
     authorize_model_for_key,
-    first_deployment_id_in_group,
+    video_deployment_in_group,
     video_deployment_the_caller_may_use,
 )
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -156,10 +158,10 @@ async def authorized_video_model(
 @dataclass(frozen=True, slots=True)
 class VideoListTarget:
     model: str | None = None
-    deployment_id: str | None = None
+    pinned: PinnedDeployment | None = None
 
 
-async def _served_list_group(
+async def _pre_call_model(
     requested_model: str,
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: "Router | None",
@@ -174,8 +176,17 @@ async def _served_list_group(
     per_request: Final = await resolve_per_request_model_group_alias(
         prepared, router_settings or MappingProxyType({}), user_api_key_dict, llm_router
     )
-    served: Final = per_request or prepared
-    return llm_router.registry().resolve(served, kind="alias") or served
+    return per_request or prepared
+
+
+def _pinned(deployment: TeamProviderDeployment, served_model: str | None = None) -> PinnedDeployment:
+    provider: Final = deployment.credentials.get("custom_llm_provider")
+    return PinnedDeployment(
+        deployment.deployment_id,
+        deployment.public_model_name,
+        provider if isinstance(provider, str) else None,
+        served_model,
+    )
 
 
 async def video_list_target(
@@ -194,59 +205,60 @@ async def video_list_target(
         await authorize_model_for_key(
             model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
         )
-        group: Final = await _served_list_group(requested_model, user_api_key_dict, llm_router, router_settings)
-        pinned: Final = await first_deployment_id_in_group(
-            llm_router, group, user_api_key_dict, provider, request_kwargs
+        served: Final = await _pre_call_model(requested_model, user_api_key_dict, llm_router, router_settings)
+        group: Final = None if llm_router is None else llm_router.registry().resolve(served, kind="alias")
+        named: Final = await video_deployment_in_group(
+            llm_router, group or served, user_api_key_dict, provider, request_kwargs
         )
-        if pinned is not None:
-            return VideoListTarget(model=pinned, deployment_id=pinned)
+        if named is not None:
+            return VideoListTarget(requested_model, _pinned(named, served))
         if provider is None:
-            return VideoListTarget(model=requested_model)
+            return VideoListTarget(requested_model)
     if provider is None:
         return VideoListTarget()
     deployment: Final = await video_deployment_the_caller_may_use(
         llm_router, user_api_key_dict, provider, request_kwargs
     )
-    return (
-        VideoListTarget() if deployment is None else VideoListTarget(deployment.deployment_id, deployment.deployment_id)
-    )
+    return VideoListTarget() if deployment is None else VideoListTarget(pinned=_pinned(deployment))
 
 
-def _video_id_with_deployment(video_id: object, deployment_id: str) -> object:
-    if not isinstance(video_id, str):
+def _video_id_with_deployment(video_id: object, listed_with: PinnedDeployment) -> object:
+    deployment_id: Final = id_safe_name(listed_with.deployment_id)
+    if not isinstance(video_id, str) or deployment_id is None:
         return video_id
     decoded: Final = decode_video_id_with_provider(video_id)
-    provider: Final = decoded.get("custom_llm_provider")
-    original_video_id: Final = decoded.get("video_id")
-    if not provider or not original_video_id or decoded.get("deployment_id"):
+    encoded_provider: Final = decoded.get("custom_llm_provider")
+    provider: Final = encoded_provider or id_safe_name(listed_with.custom_llm_provider)
+    original_video_id: Final = id_safe_name(decoded.get("video_id"))
+    if not provider or original_video_id is None or decoded.get("deployment_id"):
         return video_id
     return encode_video_id_with_provider(
         video_id=original_video_id,
         provider=provider,
-        model_id=decoded.get("model_id"),
+        model_id=decoded.get("model_id") if encoded_provider else deployment_id,
         served_model=decoded.get("served_model"),
         deployment_id=deployment_id,
         requested_model=decoded.get("requested_model"),
     )
 
 
-def _listed_video_with_deployment(video: object, deployment_id: str) -> object:
+def _listed_video_with_deployment(video: object, listed_with: PinnedDeployment) -> object:
     fields: Final = as_str_mapping(video)
     if fields is None or "id" not in fields:
         return video
-    return {**fields, "id": _video_id_with_deployment(fields["id"], deployment_id)}
+    return {**fields, "id": _video_id_with_deployment(fields["id"], listed_with)}
 
 
-def stamp_listed_video_ids(listed: object, deployment_id: str | None) -> object:
+def stamp_listed_video_ids(listed: object, listed_with: PinnedDeployment | None) -> object:
     fields: Final = as_str_mapping(listed)
-    if deployment_id is None or fields is None:
+    if listed_with is None or fields is None:
         return listed
     videos: Final = as_object_list(fields.get("data"))
     stamped_videos: Final[Mapping[str, object]] = (
-        {} if videos is None else {"data": [_listed_video_with_deployment(video, deployment_id) for video in videos]}
+        {} if videos is None else {"data": [_listed_video_with_deployment(video, listed_with) for video in videos]}
     )
     stamped_cursors: Final = {
-        cursor: _video_id_with_deployment(fields[cursor], deployment_id)
+        cursor: _video_id_with_deployment(fields[cursor], listed_with)
         for cursor in ("first_id", "last_id")
         if cursor in fields
     }

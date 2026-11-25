@@ -825,6 +825,7 @@ async def _authorized_team_file_deployment(
 
 
 _CONNECTION_SETTINGS: Final = frozenset({"extra_headers", "ssl_verify"})
+_CREDENTIAL_OVERRIDES: Final = frozenset({"api_base", "api_key", "api_version"})
 
 
 async def _video_list_deployment(
@@ -843,11 +844,41 @@ async def _video_list_deployment(
     return None
 
 
+async def _video_list_kwargs(
+    kwargs: Mapping[str, object], llm_router: LitellmRouter, team_id: str | None, every_team: bool
+) -> Mapping[str, object] | None:
+    deployment: Final = await _video_list_deployment(kwargs, llm_router, team_id, every_team)
+    if deployment is None:
+        return None
+    return _with_team_deployment_attribution(
+        {
+            **_connection_settings(deployment, llm_router),
+            **{key: value for key, value in kwargs.items() if key != "model"},
+            **deployment.credentials,
+            **{key: kwargs[key] for key in _CREDENTIAL_OVERRIDES if kwargs.get(key) is not None},
+        },
+        deployment,
+        llm_router,
+        "avideo_list",
+    )
+
+
 def _connection_settings(deployment: TeamProviderDeployment, llm_router: LitellmRouter) -> Mapping[str, object]:
+    from litellm.utils import ProviderConfigManager
+
     listed_with: Final = llm_router.registry().deployment(deployment.deployment_id)
     if listed_with is None:
         return MappingProxyType({})
-    return listed_with.litellm_params.model_dump(include=set(_CONNECTION_SETTINGS), exclude_none=True)
+    provider: Final = deployment.credentials.get("custom_llm_provider")
+    custom_settings: Final[Mapping[str, object]] = (
+        listed_with.litellm_params.model_extra or {}
+        if isinstance(provider, str) and ProviderConfigManager.get_custom_provider_video_config(provider) is not None
+        else {}
+    )
+    return {
+        **custom_settings,
+        **listed_with.litellm_params.model_dump(include=set(_CONNECTION_SETTINGS), exclude_none=True),
+    }
 
 
 def _with_team_deployment_attribution(
@@ -997,6 +1028,14 @@ async def _route_request_single_attempt(
         # Map generationConfig to config parameter for Google GenAI compatibility
         if "generationConfig" in data and "config" not in data:
             data["config"] = data.pop("generationConfig")
+    video_list_kwargs: Final = (
+        await _video_list_kwargs(direct_litellm_kwargs(), llm_router, team_id, is_proxy_admin_without_team)
+        if route_type == "avideo_list" and llm_router is not None
+        else None
+    )
+    if video_list_kwargs is not None:
+        return direct_litellm_endpoint()(**video_list_kwargs)
+
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return _named_endpoint(llm_router, route_type)(**data)
@@ -1106,24 +1145,6 @@ async def _route_request_single_attempt(
                 **_with_team_deployment_attribution(
                     {**direct_litellm_kwargs(), **team_file_deployment.credentials},
                     team_file_deployment,
-                    llm_router,
-                    route_type,
-                )
-            )
-        video_list_deployment: Final = (
-            await _video_list_deployment(direct_litellm_kwargs(), llm_router, team_id, is_proxy_admin_without_team)
-            if route_type == "avideo_list"
-            else None
-        )
-        if video_list_deployment is not None:
-            return direct_litellm_endpoint()(
-                **_with_team_deployment_attribution(
-                    {
-                        **_connection_settings(video_list_deployment, llm_router),
-                        **{key: value for key, value in direct_litellm_kwargs().items() if key != "model"},
-                        **video_list_deployment.credentials,
-                    },
-                    video_list_deployment,
                     llm_router,
                     route_type,
                 )

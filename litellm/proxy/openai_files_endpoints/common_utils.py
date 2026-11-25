@@ -706,13 +706,13 @@ async def video_deployment_the_caller_may_use(
 ) -> TeamProviderDeployment | None:
     if llm_router is None:
         return None
-    registry: Final = llm_router.registry()
+    lists_videos: Final = _lists_videos_of_provider(llm_router.registry(), custom_llm_provider)
     team_deployment: Final = await _first_team_deployment_the_caller_may_use(
         tuple(
             [
                 deployment
                 for deployment in _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
-                if _lists_videos_of_provider(registry, deployment.deployment_id, custom_llm_provider)
+                if lists_videos(deployment.deployment_id)
                 and await tags_route_to_deployment(llm_router, deployment, request_kwargs)
             ]
         ),
@@ -723,7 +723,10 @@ async def video_deployment_the_caller_may_use(
     if team_deployment is not None:
         return team_deployment
     for deployment in _accessible_provider_deployments(
-        llm_router, user_api_key_dict, custom_llm_provider, candidates=_video_deployments_in_group
+        llm_router,
+        user_api_key_dict,
+        custom_llm_provider,
+        candidates=functools.partial(_video_deployments_in_group, lists_videos),
     ):
         if await tags_route_to_deployment(llm_router, deployment, request_kwargs) and await caller_may_use_model(
             deployment.public_model_name, llm_router, user_api_key_dict
@@ -763,31 +766,38 @@ async def tags_route_to_deployment(
     return any(_deployment_id(row) == listed_with.deployment_id for row in routed)
 
 
-def _video_fit(registry: "RouterRegistry", deployment_id: str) -> "_VideoFit":
-    deployment: Final = registry.deployment(deployment_id)
-    model_info: Final = (
-        None
-        if deployment is None
-        else registry.deployment_model_info(deployment_id, deployment.litellm_params.model, cached=True)
-    )
-    mode: Final = None if model_info is None else model_info.get("mode")
-    match mode:
-        case "video_generation":
-            return _VideoFit.SERVES_VIDEOS
-        case None:
+def _video_fit(registry: "RouterRegistry") -> "Callable[[str], _VideoFit]":
+    @functools.cache
+    def fit_of_model(described: _DescribedModel) -> _VideoFit:
+        model_info: Final = registry.deployment_model_info(described.deployment_id, described.model, cached=True)
+        match None if model_info is None else model_info.get("mode"):
+            case "video_generation":
+                return _VideoFit.SERVES_VIDEOS
+            case None:
+                return _VideoFit.UNKNOWN
+            case _:
+                return _VideoFit.SERVES_ANOTHER_MODE
+
+    def fit(deployment_id: str) -> _VideoFit:
+        deployment: Final = registry.deployment(deployment_id)
+        if deployment is None:
             return _VideoFit.UNKNOWN
-        case _:
-            return _VideoFit.SERVES_ANOTHER_MODE
+        configured: Final = deployment.model_info.model_dump_json(exclude={"id"}, exclude_none=True)
+        return fit_of_model(_DescribedModel(deployment.litellm_params.model, configured, deployment_id))
+
+    return fit
 
 
-def _lists_videos_of_provider(registry: "RouterRegistry", deployment_id: str, custom_llm_provider: str) -> bool:
+def _lists_videos_of_provider(registry: "RouterRegistry", custom_llm_provider: str) -> Callable[[str], bool]:
     from litellm.utils import ProviderConfigManager
 
-    fit: Final = _video_fit(registry, deployment_id)
-    return fit is _VideoFit.SERVES_VIDEOS or (
-        fit is _VideoFit.UNKNOWN
-        and ProviderConfigManager.get_custom_provider_video_config(custom_llm_provider) is not None
+    fit: Final = _video_fit(registry)
+    listed_fits: Final = (
+        (_VideoFit.SERVES_VIDEOS,)
+        if ProviderConfigManager.get_custom_provider_video_config(custom_llm_provider) is None
+        else (_VideoFit.SERVES_VIDEOS, _VideoFit.UNKNOWN)
     )
+    return lambda deployment_id: fit(deployment_id) in listed_fits
 
 
 def deployment_with_credentials(
@@ -807,13 +817,13 @@ def deployment_with_credentials(
     )
 
 
-async def first_deployment_id_in_group(
+async def video_deployment_in_group(
     llm_router: Optional["Router"],
     model_name: str,
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str | None,
     request_kwargs: Mapping[str, object],
-) -> str | None:
+) -> TeamProviderDeployment | None:
     if llm_router is None:
         return None
     registry: Final = llm_router.registry()
@@ -824,14 +834,10 @@ async def first_deployment_id_in_group(
         for deployment in _provider_deployments_in_group(registry, model_name, team_id, custom_llm_provider)
         if every_team or _usable_by_team(registry, deployment.deployment_id, team_id)
     )
-    preferred: Final = (
-        usable
-        if custom_llm_provider is None
-        else sorted(usable, key=lambda deployment: _video_fit(registry, deployment.deployment_id))
-    )
-    for deployment in preferred:
+    fit: Final = _video_fit(registry)
+    for deployment in sorted(usable, key=lambda deployment: fit(deployment.deployment_id)):
         if await tags_route_to_deployment(llm_router, deployment, request_kwargs):
-            return deployment.deployment_id
+            return deployment
     return None
 
 
@@ -1129,6 +1135,13 @@ class _VideoFit(IntEnum):
     SERVES_ANOTHER_MODE = 2
 
 
+@dataclass(frozen=True, slots=True)
+class _DescribedModel:
+    model: str
+    configured: str
+    deployment_id: str = field(compare=False)
+
+
 class _KeyReach(IntEnum):
     NAMED = 0
     SHARED = 1
@@ -1203,13 +1216,17 @@ def _provider_deployments_in_group(
 
 
 def _video_deployments_in_group(
-    registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str
+    lists_videos: Callable[[str], bool],
+    registry: "RouterRegistry",
+    model_name: str,
+    team_id: str | None,
+    custom_llm_provider: str,
 ) -> Iterator[TeamProviderDeployment]:
+    group: Final = registry.resolve(model_name, kind="alias") or model_name
     return (
-        deployment
-        for deployment in _provider_deployments_in_group(registry, model_name, team_id, custom_llm_provider)
-        if _usable_by_team(registry, deployment.deployment_id, team_id)
-        and _lists_videos_of_provider(registry, deployment.deployment_id, custom_llm_provider)
+        replace(deployment, public_model_name=model_name)
+        for deployment in _provider_deployments_in_group(registry, group, team_id, custom_llm_provider)
+        if _usable_by_team(registry, deployment.deployment_id, team_id) and lists_videos(deployment.deployment_id)
     )
 
 

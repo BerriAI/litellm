@@ -42,6 +42,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -131,6 +132,10 @@ class Harness:
         """The exact `data` dict the processor was constructed with."""
         assert self.base_process.call_count == 1
         return dict(self.base_process.call_args.args[0].data)
+
+    def processor_pinned(self) -> PinnedDeployment | None:
+        assert self.base_process.call_count == 1
+        return self.base_process.call_args.args[0].pinned
 
     def respond_with(self, response: object) -> None:
         self.base_process.return_value = response  # pyright: ignore[reportAny]  # MagicMock subclasses Any in typeshed
@@ -695,21 +700,47 @@ async def test_list__named_model_routes_the_list_to_its_deployment(harness, monk
 
     await call_list(harness, headers=headers, query=query)
 
-    assert harness.processor_data() == {"query_params": query or {}, "model": "dep-seedance"}
+    assert harness.processor_data() == {"query_params": query or {}, "model": "seedance-video"}
+    assert harness.processor_pinned() == PinnedDeployment(
+        "dep-seedance", "seedance-video", "volcengine", "seedance-video"
+    )
 
 
 @pytest.mark.asyncio
-async def test_list__listed_ids_name_the_deployment_that_served_them(harness, monkeypatch):
+async def test_list__provider_only_pins_a_deployment_and_names_no_model(harness, monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", _seedance_router())
+    harness.provider_from_query.return_value = "volcengine"
+
+    await call_list(harness)
+
+    assert harness.processor_data() == {"query_params": {}, "custom_llm_provider": "volcengine"}
+    assert harness.processor_pinned() == PinnedDeployment("dep-seedance", "seedance-video", "volcengine", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dispatched_to",
+    [
+        pytest.param("dep-seedance", id="dispatched-to-the-pinned-deployment"),
+        pytest.param(None, id="a-hook-sent-the-list-to-another-model"),
+    ],
+)
+async def test_list__listed_ids_name_the_deployment_only_when_it_served_them(harness, monkeypatch, dispatched_to):
     monkeypatch.setattr(proxy_server, "llm_router", _seedance_router())
     listed_id: Final = encode_video_id_with_provider("cgt-1", "volcengine", "doubao-seedance-2-0-mini-260615")
-    harness.respond_with({"object": "list", "data": [{"id": listed_id}], "first_id": listed_id, "last_id": listed_id})
+
+    async def dispatch(processor: ProxyBaseLLMRequestProcessing, **_: object) -> dict[str, object]:
+        processor.dispatched = None if dispatched_to is None else processor.pinned
+        return {"object": "list", "data": [{"id": listed_id}], "first_id": listed_id, "last_id": listed_id}
+
+    harness.base_process.side_effect = dispatch
 
     listed: Final = await call_list(harness, query={"model": "seedance-video"})
 
     assert [
         decode_video_id_with_provider(video_id).get("deployment_id")
         for video_id in (listed["data"][0]["id"], listed["first_id"], listed["last_id"])
-    ] == ["dep-seedance"] * 3
+    ] == [dispatched_to] * 3
 
 
 @pytest.mark.asyncio
@@ -721,7 +752,8 @@ async def test_list__named_model_follows_the_keys_or_teams_router_settings_alias
 
     await call_list(harness, query={"model": "seedance-video"})
 
-    assert harness.processor_data()["model"] == "dep-seedance-b"
+    assert harness.processor_data()["model"] == "seedance-video"
+    assert harness.processor_pinned() == PinnedDeployment("dep-seedance-b", "seedance-b", "volcengine", "seedance-b")
 
 
 def _seedance_router() -> Router:
@@ -764,7 +796,9 @@ async def test_list__lists_with_the_deployment_the_callers_tags_route_to(
 
     await call_list(harness, headers=headers, query=query, user=user)
 
-    assert harness.processor_data()["model"] == "dep-seedance-free"
+    assert harness.processor_pinned() == PinnedDeployment(
+        "dep-seedance-free", "seedance-video", "volcengine", query.get("model")
+    )
 
 
 # =========================================================================== #

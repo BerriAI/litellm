@@ -43,7 +43,8 @@ from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
-from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from litellm.types.router import GenericLiteLLMParams, RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from tests.integration._support.custom_video_provider import QueueVideoConfig
 from tests.integration._support.wire import Reply, wire_server
 from tests.unit.integrations.conftest import write_self_signed_cert
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -2945,6 +2946,115 @@ async def test_a_video_list_sends_its_deployments_extra_headers_unless_the_reque
         await (await route_request(request, router, None, "avideo_list"))
 
     assert route.calls.last.request.headers["X-Tenant"] == sent_tenant
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("override", "called_base", "sent_key"),
+    [
+        pytest.param({"api_key": "tenant-key"}, "https://dep-b.ark.example", "tenant-key", id="key"),
+        pytest.param({"api_base": "https://tenant.ark.example"}, "https://tenant.ark.example", "dep-b-key", id="base"),
+        pytest.param(
+            {"api_key": "tenant-key", "api_base": "https://tenant.ark.example"},
+            "https://tenant.ark.example",
+            "tenant-key",
+            id="key-and-base",
+        ),
+        pytest.param({"api_key": None, "api_base": None}, "https://dep-b.ark.example", "dep-b-key", id="unset"),
+    ],
+)
+async def test_a_video_list_lets_the_requests_own_credentials_override_its_deployments(
+    monkeypatch: pytest.MonkeyPatch, override: dict[str, object], called_base: str, sent_key: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        **_video_list_pinned_to("dep-b"),
+        **override,
+        "litellm_metadata": {"user_api_key_team_id": "team-b"},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"{called_base}{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        await (await route_request(request, _team_b_seedance_router(), None, "avideo_list"))
+
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {sent_key}"
+
+
+@pytest.mark.asyncio
+async def test_a_video_list_never_sends_its_deployments_key_to_another_provider_the_request_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        **_video_list_pinned_to("dep-b"),
+        "custom_llm_provider": "openai",
+        "litellm_metadata": {"user_api_key_team_id": "team-b"},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"https://dep-b.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        await (await route_request(request, _team_b_seedance_router(), None, "avideo_list"))
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer dep-b-key"
+
+
+class _WorkspaceVideoConfig(QueueVideoConfig):
+    def transform_video_list_request(
+        self,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, object],
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        return api_base, {"workspace": (litellm_params.model_extra or {}).get("workspace")}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_settings", "sent_workspace"), [({}, "dep-workspace"), ({"workspace": "asked-workspace"}, "asked-workspace")]
+)
+async def test_a_video_list_passes_a_custom_provider_its_deployments_own_settings(
+    monkeypatch: pytest.MonkeyPatch, request_settings: dict[str, object], sent_workspace: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "workspace-queue", "custom_handler": _WorkspaceVideoConfig()}]
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "workspace-video",
+                "litellm_params": {
+                    "model": "workspace-queue/seedance-1",
+                    "api_key": "dep-key",
+                    "api_base": "https://queue.example",
+                    "workspace": "dep-workspace",
+                },
+                "model_info": {"id": "dep-workspace"},
+            }
+        ]
+    )
+    request: Final = {
+        "model": "dep-workspace",
+        "query_params": {},
+        "custom_llm_provider": "workspace-queue",
+        **request_settings,
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith="https://queue.example/jobs").mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": []})
+        )
+        await (await route_request(request, router, None, "avideo_list"))
+
+    assert dict(route.calls.last.request.url.params) == {"workspace": sent_workspace}
 
 
 @pytest.mark.asyncio

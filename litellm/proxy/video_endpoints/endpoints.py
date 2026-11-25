@@ -208,7 +208,7 @@ async def video_list(
         **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
         **({"model": target.model} if target.model else {}),
     }
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned=target.pinned)
     try:
         listed: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -236,7 +236,7 @@ async def video_list(
             version=version,
         )
     else:
-        return stamp_listed_video_ids(listed, target.deployment_id)
+        return stamp_listed_video_ids(listed, processor.dispatched)
 
 
 @router.get(

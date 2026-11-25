@@ -109,8 +109,16 @@ from litellm.router_config import build_router_config
 from litellm.router_python_host import python_host
 from litellm.router_rust.core import RustCore
 from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, SpecialEnums, StreamingChoices
+from litellm.types.utils import (
+    CachingDetails,
+    CredentialItem,
+    Delta,
+    ModelResponseStream,
+    SpecialEnums,
+    StreamingChoices,
+)
 from litellm.utils import ModelResponseListIterator
 from tests._support.clock_loops import AutojumpClockLoop
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -12809,6 +12817,196 @@ async def test_saved_weights_override_caller_input_and_preserve_key_precedence(
 
 def _hook_data(**kwargs: object) -> object:
     return kwargs["data"]
+
+
+_SEEDANCE: Final = "volcengine/doubao-seedance-2-0-mini-260615"
+
+
+def _seedance_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {"model": model, "api_key": "video-key"},
+                "model_info": {"id": deployment_id},
+            }
+            for group, model, deployment_id in (
+                ("seedance-video", "openai/sora-2", "dep-sora"),
+                ("seedance-video", _SEEDANCE, "dep-seedance"),
+                ("other-video", _SEEDANCE, "dep-other"),
+            )
+        ]
+    )
+
+
+def _credential(name: str, api_key: str) -> CredentialItem:
+    return CredentialItem(credential_name=name, credential_info={}, credential_values={"api_key": api_key})
+
+
+def _answering_with_model(hook_model: str | None) -> Callable[..., object]:
+    def pre_call_hook(*, data: dict[str, object], **_: object) -> dict[str, object]:
+        return {
+            **data,
+            "model_the_hook_saw": data.get("model"),
+            **({"model": hook_model} if hook_model else {}),
+        }
+
+    return pre_call_hook
+
+
+async def _pinned_pre_call(
+    caller: ProxyUserAPIKeyAuth,
+    *,
+    named: str | None = "seedance-video",
+    hook_model: str | None = None,
+    rate_limited_model: str | None = None,
+) -> tuple[Mapping[str, object], str | None]:
+    from litellm.proxy import proxy_server
+
+    logging: Final = MagicMock(spec=ProxyLogging)
+    logging.pre_call_hook = AsyncMock(side_effect=_answering_with_model(hook_model))
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={"query_params": {}, **({"model": named} if named else {})},
+        pinned=PinnedDeployment("dep-seedance", "seedance-video", "volcengine", "seedance-video" if named else None),
+    )
+    data, _ = await processor.common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "GET", "path": "/v1/videos", "headers": [], "query_string": b""}),
+        general_settings={},
+        user_api_key_dict=caller,
+        proxy_logging_obj=logging,
+        proxy_config=proxy_server.ProxyConfig(),
+        route_type="avideo_list",
+        llm_router=_seedance_router(),
+        rate_limited_model=rate_limited_model,
+    )
+    return data, None if processor.dispatched is None else processor.dispatched.deployment_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller, named",
+    [
+        (ProxyUserAPIKeyAuth(api_key="hash"), "seedance-video"),
+        (ProxyUserAPIKeyAuth(api_key="hash", aliases={"my-video": "seedance-video"}), "my-video"),
+    ],
+    ids=["by-group", "by-key-alias"],
+)
+async def test_a_pinned_request_is_checked_under_its_group_and_dispatched_to_its_deployment(
+    caller: ProxyUserAPIKeyAuth, named: str
+) -> None:
+    data, dispatched_to = await _pinned_pre_call(caller, named=named)
+
+    assert (data["model_the_hook_saw"], data["model"]) == ("seedance-video", "dep-seedance")
+    assert dispatched_to == "dep-seedance"
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_request_that_names_no_model_names_none_until_it_is_dispatched() -> None:
+    data, dispatched_to = await _pinned_pre_call(ProxyUserAPIKeyAuth(api_key="hash"), named=None)
+
+    assert (data["model_the_hook_saw"], data["model"]) == (None, "dep-seedance")
+    assert dispatched_to == "dep-seedance"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named", ["seedance-video", None])
+async def test_a_pinned_request_goes_where_a_hook_sends_it(named: str | None) -> None:
+    data, dispatched_to = await _pinned_pre_call(
+        ProxyUserAPIKeyAuth(api_key="hash"), named=named, hook_model="other-video"
+    )
+
+    assert (data["model"], dispatched_to) == ("other-video", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named", ["seedance-video", None])
+async def test_a_rate_limit_fallback_never_keeps_the_rate_limited_models_pin(named: str | None) -> None:
+    data, dispatched_to = await _pinned_pre_call(
+        ProxyUserAPIKeyAuth(api_key="hash"), named=named, rate_limited_model="seedance-video"
+    )
+
+    assert (data.get("model"), dispatched_to) == (named, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_config",
+    [
+        pytest.param({"seedance-video": {"volcengine": {"litellm_credentials": "tenant-ark"}}}, id="by-group"),
+        pytest.param({"my-video": {"volcengine": {"litellm_credentials": "tenant-ark"}}}, id="by-alias"),
+        pytest.param(
+            {
+                "defaultconfig": {
+                    "openai": {"litellm_credentials": "tenant-openai"},
+                    "volcengine": {"litellm_credentials": "tenant-ark"},
+                }
+            },
+            id="default-for-the-pinned-provider",
+        ),
+    ],
+)
+async def test_a_pinned_request_gets_the_credential_override_a_create_for_its_group_would(
+    tenant_credentials: None, model_config: dict[str, object]
+) -> None:
+    tenant: Final = ProxyUserAPIKeyAuth(
+        api_key="hash",
+        aliases={"my-video": "seedance-video"},
+        team_metadata={"model_config": model_config},
+    )
+
+    data, dispatched_to = await _pinned_pre_call(tenant, named="my-video")
+
+    assert (data["api_key"], dispatched_to) == ("tenant-ark-key", "dep-seedance")
+
+
+@pytest.fixture
+def tenant_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_model_config_credential_overrides", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [_credential("tenant-ark", "tenant-ark-key"), _credential("tenant-openai", "tenant-openai-key")],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_config",
+    [
+        pytest.param({"seedance-video": {"volcengine": {"litellm_credentials": "tenant-ark"}}}, id="by-group"),
+        pytest.param(
+            {
+                "defaultconfig": {
+                    "openai": {"litellm_credentials": "tenant-openai"},
+                    "volcengine": {"litellm_credentials": "tenant-ark"},
+                }
+            },
+            id="default-for-the-pinned-provider",
+        ),
+    ],
+)
+async def test_a_pinned_request_that_names_no_model_gets_the_credential_override_of_its_group(
+    tenant_credentials: None, model_config: dict[str, object]
+) -> None:
+    tenant: Final = ProxyUserAPIKeyAuth(api_key="hash", team_metadata={"model_config": model_config})
+
+    data, dispatched_to = await _pinned_pre_call(tenant, named=None)
+
+    assert (data["api_key"], dispatched_to) == ("tenant-ark-key", "dep-seedance")
+
+
+@pytest.mark.asyncio
+async def test_a_request_a_hook_sends_elsewhere_never_carries_the_override_of_the_group_it_was_pinned_to(
+    tenant_credentials: None,
+) -> None:
+    tenant: Final = ProxyUserAPIKeyAuth(
+        api_key="hash",
+        team_metadata={"model_config": {"seedance-video": {"volcengine": {"litellm_credentials": "tenant-ark"}}}},
+    )
+
+    data, dispatched_to = await _pinned_pre_call(tenant, named=None, hook_model="other-video")
+
+    assert (data.get("api_key"), dispatched_to) == (None, None)
 
 
 @pytest.mark.asyncio

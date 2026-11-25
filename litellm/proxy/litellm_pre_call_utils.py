@@ -126,6 +126,7 @@ from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_met
 from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.semantic_cache import (
     CachePolicyScope,
     SemanticCacheParams,
@@ -225,6 +226,18 @@ def check_customer_request_model_access(
     names: Final = (requested,) if isinstance(requested, str) else (requested or ())
     for model in (*names, *request_fallback_model_names(data)):
         check_customer_model_access(model=model, valid_token=auth, llm_router=llm_router)
+
+
+def pinned_the_customer_may_use(
+    pinned: PinnedDeployment | None, auth: UserAPIKeyAuth | None, llm_router: "Router | None"
+) -> PinnedDeployment | None:
+    if pinned is None:
+        return None
+    try:
+        check_customer_request_model_access({"model": pinned.model_group}, auth, llm_router)
+    except ProxyException:
+        return None
+    return pinned
 
 
 async def resolve_customer_request_usage(
@@ -3042,6 +3055,7 @@ async def add_litellm_data_to_request(
     general_settings: dict[str, object] | None = None,
     version: str | None = None,
     pricing_rates: ReferenceRateLookup = reference_rates,
+    pinned_provider: str | None = None,
 ):
     """
     Adds LiteLLM-specific data to the request.
@@ -3579,6 +3593,7 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
         pre_alias_model_name=cast("str | None", _pre_alias_model),  # cast-ok: the pre-alias model name arrives as a str
         llm_router=llm_router,
+        pinned_provider=pinned_provider,
     )
 
     await _resolve_user_provider_credentials_for_request(
@@ -4231,11 +4246,27 @@ def request_served_model(
     )
 
 
+def dispatched_to_pinned(
+    request_fields: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, pinned: PinnedDeployment
+) -> dict[str, object]:  # mutable-ok: the request body dict the handlers downstream write into
+    data: Final = {**request_fields}
+    if pinned.served_model is None:
+        _apply_credential_overrides_from_model_config(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            pinned_provider=pinned.custom_llm_provider,
+            pinned_group=pinned.model_group,
+        )
+    return {**data, "model": pinned.deployment_id}
+
+
 def _apply_credential_overrides_from_model_config(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
     pre_alias_model_name: str | None = None,
     llm_router: Router | None = None,
+    pinned_provider: str | None = None,
+    pinned_group: str | None = None,
 ) -> None:
     """
     Walk the model_config precedence chain in team/project metadata.
@@ -4258,7 +4289,7 @@ def _apply_credential_overrides_from_model_config(
     if data.get("api_base") is not None or data.get("api_key") is not None:
         return
 
-    model_name: Final = data.get("model")
+    model_name: Final = data.get("model") or pinned_group
     if not model_name:
         return
 
@@ -4275,10 +4306,10 @@ def _apply_credential_overrides_from_model_config(
     # When the user-facing name has no provider prefix, fall back to the
     # deployment's litellm_params so multi-provider defaultconfig entries
     # don't silently match the first dict key (#27516).
-    provider: str | None = None
-    if "/" in model_name:
+    provider: str | None = pinned_provider
+    if provider is None and "/" in model_name:
         provider = model_name.split("/", 1)[0]
-    elif llm_router is not None:
+    elif provider is None and llm_router is not None:
         provider = _resolve_provider_from_deployment(
             llm_router=llm_router,
             model_name=model_name,

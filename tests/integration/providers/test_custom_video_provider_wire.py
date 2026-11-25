@@ -107,7 +107,7 @@ def test_custom_provider_map_base_video_config_serves_create_status_and_content(
 
 
 @pytest.mark.parametrize("query", ["custom_llm_provider=queue-video", "model=queue-video"])
-def test_custom_provider_lists_videos_with_its_deployments_api_base_and_key(
+def test_custom_provider_lists_videos_with_its_deployments_api_base_and_key_and_reads_them_back(
     gateway: Gateway, tmp_path: Path, query: str
 ) -> None:
     with ExitStack() as stack:
@@ -117,11 +117,24 @@ def test_custom_provider_lists_videos_with_its_deployments_api_base_and_key(
 
         listed: Final = owned.gateway.request("GET", f"/v1/videos?{query}")
         assert listed.status_code == 200, listed.text
-        assert listed.json()["data"] == _JOB_LIST["data"], listed.text
+        videos: Final = listed.json()["data"]
+        assert [(video["object"], video["status"]) for video in videos] == [("video", "completed")], listed.text
 
-        lists: Final = wire.drain()
-        assert [(r.method, r.target) for r in lists] == [("GET", "/jobs")], lists
-        assert _lower_headers(lists[0])["x-api-key"] == "queue-secret"
+        status: Final = owned.gateway.request("GET", f"/v1/videos/{videos[0]['id']}")
+        assert status.status_code == 200, status.text
+        assert status.json()["status"] == "completed", status.text
+
+        content: Final = owned.gateway.request("GET", f"/v1/videos/{videos[0]['id']}/content")
+        assert content.status_code == 200, content.text
+        assert content.content == _MP4
+
+        calls: Final = wire.drain()
+        assert [(r.method, r.target) for r in calls] == [
+            ("GET", "/jobs"),
+            ("GET", "/jobs/job-7"),
+            ("GET", "/jobs/job-7/file"),
+        ], calls
+        assert all(_lower_headers(r)["x-api-key"] == "queue-secret" for r in calls)
 
 
 def test_custom_provider_without_a_video_config_is_refused_with_400(gateway: Gateway, tmp_path: Path) -> None:
