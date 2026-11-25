@@ -54,7 +54,6 @@ impl Rows for NativeRows {
     type Project = Infallible;
     type Membership = Infallible;
     type Org = Infallible;
-    type Agent = Infallible;
 }
 
 pub struct NativeAuthHost {
@@ -230,7 +229,7 @@ impl AuthHost for NativeAuthHost {
         None::<&NoOperatorCode>
     }
 
-    async fn managed_agent(&self, _: &Value) -> Result<Option<ManagedAgent<Infallible>>, Error> {
+    async fn managed_agent(&self, _: &Value) -> Result<Option<ManagedAgent>, Error> {
         declined("managed_agent")
     }
 
@@ -376,9 +375,9 @@ impl AuthHost for NativeAuthHost {
 
     async fn record_agent_authentication(
         &self,
-        agent: &Infallible,
+        _: &ManagedAgent,
     ) -> Result<Option<AgentIdentityFailure>, Error> {
-        match *agent {}
+        declined("record_agent_authentication")
     }
 
     async fn add_team_member(&self, _: &str, _: &str) -> Result<(), Error> {

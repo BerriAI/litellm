@@ -54,14 +54,14 @@ pub enum AgentMode {
     Delegated,
 }
 
-/// The `ManagedAgentContext` `resolve_managed_agent` found for the claims, with the context row
-/// the core hands back to `record_agent_authentication` and in the identity.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ManagedAgent<R> {
+/// The `ManagedAgentContext` `resolve_managed_agent` found for the claims, every field of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedAgent {
     pub mode: AgentMode,
     pub agent_id: String,
     pub user_id: Option<String>,
-    pub row: R,
+    pub binding_revision: Option<String>,
+    pub subject_oid: Option<String>,
 }
 
 /// The agent registered under a JWT's agent claim, by id and then by name.
@@ -155,7 +155,7 @@ pub struct JwtIdentity<R: Rows> {
     pub org_id: Option<String>,
     pub end_user_id: Option<String>,
     pub agent_id: Option<String>,
-    pub managed_agent: Option<ManagedAgent<R::Agent>>,
+    pub managed_agent: Option<ManagedAgent>,
     /// The rows behind the ids. A proxy admin has no membership.
     pub belongs: Belongs<R>,
 }

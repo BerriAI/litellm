@@ -61,7 +61,6 @@ impl Rows for PyRows {
     type Project = PyRow;
     type Membership = PyRow;
     type Org = PyRow;
-    type Agent = PyRow;
 }
 
 /// `UserLookup`, owned so it outlives the core's borrow.
@@ -353,10 +352,10 @@ pub(crate) enum Ask {
 
     ManagedAgent {
         claims: Value,
-        reply: Reply<Option<ManagedAgent<PyRow>>>,
+        reply: Reply<Option<ManagedAgent>>,
     },
     RecordAgentAuthentication {
-        agent: PyRow,
+        agent: ManagedAgent,
         reply: Reply<Option<AgentIdentityFailure>>,
     },
     RegisteredAgent {
@@ -740,13 +739,13 @@ impl AuthHost for PythonAuthHost {
         self.ask(|reply| Ask::CreateKeyMapping { row, reply }).await
     }
 
-    async fn managed_agent(&self, claims: &Value) -> Result<Option<ManagedAgent<PyRow>>, Error> {
+    async fn managed_agent(&self, claims: &Value) -> Result<Option<ManagedAgent>, Error> {
         let claims = claims.clone();
         self.ask(|reply| Ask::ManagedAgent { claims, reply }).await
     }
     async fn record_agent_authentication(
         &self,
-        agent: &PyRow,
+        agent: &ManagedAgent,
     ) -> Result<Option<AgentIdentityFailure>, Error> {
         let agent = agent.clone();
         self.ask(|reply| Ask::RecordAgentAuthentication { agent, reply })

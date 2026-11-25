@@ -40,7 +40,7 @@ pub(crate) async fn claimant<H: AuthHost>(
     host: &H,
     claims: &Claims,
     settings: &JwtSettings,
-) -> Result<Claimant<H::Rows>, Error> {
+) -> Result<Claimant, Error> {
     let issuer = claims.0.get("iss").cloned().unwrap_or(Value::Null);
     let agent = host.managed_agent(&Value::Object(claims.0.clone())).await?;
     if let Some(agent) = agent {

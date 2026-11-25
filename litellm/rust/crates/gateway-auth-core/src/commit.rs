@@ -2,31 +2,26 @@
 //! them as [`Grants`], and [`apply`] is the only caller of the host's grant writes.
 
 use crate::{
-    AuthHost, Error, JwtDenial, Rows,
+    AuthHost, Error, JwtDenial,
     authn::jwt::{KeyMappingWrite, mapping::Registration},
+    identity::jwt::ManagedAgent,
 };
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Grant<R: Rows> {
+pub(crate) enum Grant {
     /// `AgentIdentityStore.record_authentication` for a managed agent.
-    RecordAgentAuthentication(R::Agent),
+    RecordAgentAuthentication(ManagedAgent),
     /// `team_member_add` for a provisioned user who is not yet in the team the JWT selected.
     AddTeamMember { user_id: String, team_id: String },
     /// A JWT's virtual key mapping under `auto_register` or `link_only`.
     CreateKeyMapping(Registration),
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Grants<R: Rows>(Vec<Grant<R>>);
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Grants(Vec<Grant>);
 
-impl<R: Rows> Default for Grants<R> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
-
-impl<R: Rows> Grants<R> {
-    pub(crate) fn with(self, grant: Grant<R>) -> Self {
+impl Grants {
+    pub(crate) fn with(self, grant: Grant) -> Self {
         Self(self.0.into_iter().chain([grant]).collect())
     }
 }
@@ -38,10 +33,7 @@ pub(crate) struct Applied {
 }
 
 /// Writes every grant in the order identity collected them.
-pub(crate) async fn apply<H: AuthHost>(
-    host: &H,
-    grants: Grants<H::Rows>,
-) -> Result<Applied, Error> {
+pub(crate) async fn apply<H: AuthHost>(host: &H, grants: Grants) -> Result<Applied, Error> {
     let mut applied = Applied::default();
     for grant in grants.0 {
         match grant {

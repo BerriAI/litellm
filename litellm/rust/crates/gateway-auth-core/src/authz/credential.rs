@@ -2,7 +2,7 @@ use litellm_config::{RbacRole, RolePermissions, ScopeMapping};
 
 use super::{RoutePolicy, Target};
 use crate::{
-    Error, JwtDenial, RbacDenial, Rows,
+    Error, JwtDenial, RbacDenial,
     authn::jwt::{JwtSettings, managed_issuer_is_trusted},
     identity::{
         Claimant, ClaimantKind,
@@ -168,11 +168,7 @@ pub fn check_admin_route(route: &str, settings: &JwtSettings) -> Result<(), Rbac
 impl RoutePolicy<'_> {
     /// What the credential alone may call: a managed agent's issuer and routes, then the RBAC
     /// role's models and routes, the scope mappings and a proxy admin's routes.
-    pub(crate) fn credential<R: Rows>(
-        &self,
-        claimant: &Claimant<R>,
-        target: &Target<'_>,
-    ) -> Result<(), Error> {
+    pub(crate) fn credential(&self, claimant: &Claimant, target: &Target<'_>) -> Result<(), Error> {
         if claimant.agent.is_some() {
             if !managed_issuer_is_trusted(&claimant.issuer, self.jwt) {
                 return Err(JwtDenial::ManagedIssuerUntrusted.into());
@@ -211,9 +207,9 @@ impl RoutePolicy<'_> {
 
     /// The email domain rule where `auth_builder` runs it, which never applies to a proxy admin or
     /// a managed agent.
-    pub(crate) fn email_domain<R: Rows>(
+    pub(crate) fn email_domain(
         &self,
-        claimant: &Claimant<R>,
+        claimant: &Claimant,
         info: &UserInfo,
     ) -> Result<(), JwtDenial> {
         match claimant.kind {

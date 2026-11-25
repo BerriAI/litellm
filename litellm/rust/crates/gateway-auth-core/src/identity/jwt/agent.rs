@@ -1,13 +1,10 @@
 use serde_json::Value;
 
 use super::{DelegatedTeam, JwtIdentity, ManagedAgent, team::ClaimedTeam};
-use crate::{AuthHost, Belongs, Error, Rows, authn::jwt::JwtSettings, host::AgentRow};
+use crate::{AuthHost, Belongs, Error, Rows, authn::jwt::JwtSettings};
 
 /// An autonomous managed agent acts as itself, with no user, team or organization.
-pub(crate) fn autonomous_identity<R: Rows>(
-    claims: Value,
-    agent: ManagedAgent<R::Agent>,
-) -> JwtIdentity<R> {
+pub(crate) fn autonomous_identity<R: Rows>(claims: Value, agent: ManagedAgent) -> JwtIdentity<R> {
     JwtIdentity {
         claims,
         is_proxy_admin: false,
@@ -25,7 +22,7 @@ pub(crate) fn autonomous_identity<R: Rows>(
 /// `resolve_delegated_agent_team` for a managed agent. Any other token keeps the team it claimed.
 pub(crate) async fn delegated_team<H: AuthHost>(
     host: &H,
-    agent: Option<&ManagedAgent<AgentRow<H>>>,
+    agent: Option<&ManagedAgent>,
     claimed: &ClaimedTeam<H>,
     settings: &JwtSettings,
 ) -> Result<Option<String>, Error> {

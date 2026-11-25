@@ -7,7 +7,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth
 from litellm.proxy.auth import core
 from litellm.proxy.auth.host.answer import answer
 from litellm.proxy.auth.host.python import PythonAuthHost
-from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustAuthStep
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustAuthStep, RustManagedAgent
 
 _FIELD_VALUES: Final = {
     "upsert": True,
@@ -19,6 +19,7 @@ _FIELD_VALUES: Final = {
     "membership": None,
     "owner": None,
     "runs_inference_checks": True,
+    "agent": RustManagedAgent(mode="autonomous", agent_id="a"),
 }
 
 

@@ -228,7 +228,7 @@ pub(crate) struct UserFacts {
     deactivated: bool,
 }
 
-/// `ManagedAgentContext`, read as is. The context itself is the row.
+/// `ManagedAgentContext`, read as is.
 #[derive(FromPyObject)]
 pub(crate) struct ManagedAgentFacts {
     #[pyo3(attribute)]
@@ -237,6 +237,69 @@ pub(crate) struct ManagedAgentFacts {
     agent_id: String,
     #[pyo3(attribute)]
     user_id: Option<String>,
+    #[pyo3(attribute)]
+    binding_revision: Option<String>,
+    #[pyo3(attribute)]
+    subject_oid: Option<String>,
+}
+
+/// A managed agent as the core holds it, which `identity.managed_agent_context` turns back into
+/// a `ManagedAgentContext`.
+#[pyclass(
+    frozen,
+    get_all,
+    name = "RustManagedAgent",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct ManagedAgentView {
+    mode: &'static str,
+    agent_id: String,
+    user_id: Option<String>,
+    binding_revision: Option<String>,
+    subject_oid: Option<String>,
+}
+
+#[pymethods]
+impl ManagedAgentView {
+    #[new]
+    #[pyo3(signature = (*, mode, agent_id, user_id = None, binding_revision = None, subject_oid = None))]
+    fn py_new(
+        mode: &str,
+        agent_id: String,
+        user_id: Option<String>,
+        binding_revision: Option<String>,
+        subject_oid: Option<String>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            mode: mode_text(agent_mode(mode)?),
+            agent_id,
+            user_id,
+            binding_revision,
+            subject_oid,
+        })
+    }
+}
+
+fn mode_text(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Autonomous => "autonomous",
+        AgentMode::Delegated => "delegated",
+    }
+}
+
+impl ManagedAgentView {
+    fn new(py: Python<'_>, agent: &ManagedAgent) -> PyResult<Py<Self>> {
+        Py::new(
+            py,
+            Self {
+                mode: mode_text(agent.mode),
+                agent_id: agent.agent_id.clone(),
+                user_id: agent.user_id.clone(),
+                binding_revision: agent.binding_revision.clone(),
+                subject_oid: agent.subject_oid.clone(),
+            },
+        )
+    }
 }
 
 /// `AgentIdentityFailure`, read as is.
@@ -464,7 +527,7 @@ pub(crate) enum AuthStep {
         claims: Py<PyAny>,
     },
     RecordAgentAuthentication {
-        agent: Py<PyAny>,
+        agent: Py<ManagedAgentView>,
     },
     RegisteredAgent {
         claim: String,
@@ -671,7 +734,7 @@ pub(crate) enum IdentityView {
         org_id: Option<String>,
         end_user_id: Option<String>,
         agent_id: Option<String>,
-        managed_agent: Option<Py<PyAny>>,
+        managed_agent: Option<Py<ManagedAgentView>>,
         user: Option<Py<PyAny>>,
         team: Option<Py<PyAny>>,
         membership: Option<Py<PyAny>>,
@@ -707,7 +770,11 @@ impl IdentityView {
             org_id: jwt.org_id.clone(),
             end_user_id: jwt.end_user_id.clone(),
             agent_id: jwt.agent_id.clone(),
-            managed_agent: jwt.managed_agent.as_ref().map(|agent| row(py, &agent.row)),
+            managed_agent: jwt
+                .managed_agent
+                .as_ref()
+                .map(|agent| ManagedAgentView::new(py, agent))
+                .transpose()?,
             user: rows(py, belongs.user.as_ref()),
             team,
             membership: rows(py, belongs.membership.as_ref()),
@@ -1245,7 +1312,7 @@ impl AuthStep {
                 claims: to_py(py, claims)?,
             },
             Ask::RecordAgentAuthentication { agent, .. } => Self::RecordAgentAuthentication {
-                agent: row(py, agent),
+                agent: ManagedAgentView::new(py, agent)?,
             },
             Ask::RegisteredAgent { claim, .. } => Self::RegisteredAgent {
                 claim: claim.clone(),
@@ -1823,7 +1890,8 @@ impl AuthCall {
                     mode,
                     agent_id: facts.agent_id,
                     user_id: facts.user_id,
-                    row: PyRow::new(agent.unbind()),
+                    binding_revision: facts.binding_revision,
+                    subject_oid: facts.subject_oid,
                 })
             })
             .transpose()?;

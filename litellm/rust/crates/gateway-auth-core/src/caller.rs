@@ -157,7 +157,6 @@ mod tests {
         type Project = String;
         type Membership = String;
         type Org = String;
-        type Agent = String;
     }
 
     fn stored(hash: &str) -> KeyRecord {

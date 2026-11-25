@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -20,10 +20,14 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.models.user import LiteLLM_UserTable
 from litellm.redis.stores.auth_cache.handle import TeamRoster
+from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.router import AllowedModelRegion
 from litellm.types.semantic_cache import semantic_cache_params
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge._native import RustManagedAgent
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,4 +233,14 @@ def key_facts(token: UserAPIKeyAuth) -> KeyFacts:
         team_object_permission_id=token.team_object_permission_id,
         project_id=token.project_id,
         last_refreshed_at=token.last_refreshed_at,
+    )
+
+
+def managed_agent_context(agent: RustManagedAgent) -> ManagedAgentContext:
+    return ManagedAgentContext(
+        agent_id=agent.agent_id,
+        binding_revision=agent.binding_revision,
+        mode=agent.mode,
+        user_id=agent.user_id,
+        subject_oid=agent.subject_oid,
     )

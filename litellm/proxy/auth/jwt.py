@@ -13,6 +13,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import JWTAuthBuilderResult, LiteLLM_JWTAuth
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
+from litellm.proxy.auth.host.facts import managed_agent_context
 from litellm.proxy.auth.team_grants import team_grants
 from litellm.rust_bridge._native import (
     JWT_ID_JAG_TYP,
@@ -145,6 +146,7 @@ async def authorize(
 def jwt_result(identity: RustIdentity.Jwt, token: str | None) -> JWTAuthBuilderResult:
     """The `JWTAuthBuilderResult` `authorize_jwt` returned for `token`, from the core's ids and rows."""
     end_user: Final = identity.end_user
+    managed_agent: Final = identity.managed_agent
     return JWTAuthBuilderResult(
         is_proxy_admin=identity.is_proxy_admin,
         team_id=identity.team_id,
@@ -160,7 +162,7 @@ def jwt_result(identity: RustIdentity.Jwt, token: str | None) -> JWTAuthBuilderR
         team_membership=identity.membership,
         jwt_claims=dict(identity.claims),
         agent_id=identity.agent_id,
-        managed_agent_context=identity.managed_agent,
+        managed_agent_context=None if managed_agent is None else managed_agent_context(managed_agent),
     )
 
 

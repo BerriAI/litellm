@@ -33,7 +33,6 @@ from litellm.rust_bridge.database import NativeClientIdentity, NativeDatabaseEve
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation
-from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.native_budgets import BudgetCheck
 from litellm.types.proxy.spend_log_rows import LedgerColumns, NativeSpendLogRow
@@ -807,6 +806,10 @@ class _ManagedAgent(Protocol):
     def agent_id(self) -> str: ...
     @property
     def user_id(self) -> str | None: ...
+    @property
+    def binding_revision(self) -> str | None: ...
+    @property
+    def subject_oid(self) -> str | None: ...
 
 class _AgentFailure(Protocol):
     @property
@@ -1058,7 +1061,7 @@ class RustIdentity:
             org_id: str | None,
             end_user_id: str | None,
             agent_id: str | None,
-            managed_agent: ManagedAgentContext | None,
+            managed_agent: RustManagedAgent | None,
             user: LiteLLM_UserTable | None,
             team: LiteLLM_TeamTable | None,
             membership: LiteLLM_TeamMembership | None,
@@ -1082,7 +1085,7 @@ class RustIdentity:
         @property
         def agent_id(self) -> str | None: ...
         @property
-        def managed_agent(self) -> ManagedAgentContext | None: ...
+        def managed_agent(self) -> RustManagedAgent | None: ...
         @property
         def user(self) -> LiteLLM_UserTable | None: ...
         @property
@@ -1105,6 +1108,28 @@ _AuthenticatedIdentity = (
     | RustIdentity.FinishedJwt
     | RustIdentity.Jwt
 )
+
+@final
+class RustManagedAgent:
+    def __new__(
+        cls,
+        *,
+        mode: Literal["autonomous", "delegated"],
+        agent_id: str,
+        user_id: str | None = None,
+        binding_revision: str | None = None,
+        subject_oid: str | None = None,
+    ) -> RustManagedAgent: ...
+    @property
+    def mode(self) -> Literal["autonomous", "delegated"]: ...
+    @property
+    def agent_id(self) -> str: ...
+    @property
+    def user_id(self) -> str | None: ...
+    @property
+    def binding_revision(self) -> str | None: ...
+    @property
+    def subject_oid(self) -> str | None: ...
 
 @disjoint_base
 class RustTeamGrant:
@@ -1838,9 +1863,9 @@ class RustAuthStep:
     @final
     class RecordAgentAuthentication(RustAuthStep):
         __match_args__: tuple[Literal["agent"]] = ("agent",)
-        def __new__(cls, agent: ManagedAgentContext) -> RustAuthStep.RecordAgentAuthentication: ...
+        def __new__(cls, agent: RustManagedAgent) -> RustAuthStep.RecordAgentAuthentication: ...
         @property
-        def agent(self) -> ManagedAgentContext: ...
+        def agent(self) -> RustManagedAgent: ...
 
     @final
     class RegisteredAgent(RustAuthStep):
@@ -2784,6 +2809,7 @@ __all__ = [
     "RustKeyContext",
     "RustKeyOwnersRepository",
     "RustKeyRepository",
+    "RustManagedAgent",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",
     "RustObjectPermissionRepository",
