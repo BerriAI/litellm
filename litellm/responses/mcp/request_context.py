@@ -32,14 +32,15 @@ async def resolve_inference_mcp_auth(auth: "UserAPIKeyAuth | None") -> "UserAPIK
         for scope in (
             session.object_permission,
             session.object_permission_id,
-            session.end_user_id,
             session.mcp_toolset_id,
             session.mcp_session_resource_server_ids,
         )
     ):
         return auth
     acting: Final = await acting_user_auth(session)
-    return auth if acting is session else acting
+    if acting is session or session.end_user_id is None:
+        return acting
+    return acting.model_copy(update={"end_user_id": session.end_user_id})
 
 
 class _AuthCarryingMetadata(TypedDict):

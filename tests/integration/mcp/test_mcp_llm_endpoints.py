@@ -640,21 +640,31 @@ def _peer_add_calls(peer: McpPeer) -> tuple[dict[str, object], ...]:
     )
 
 
-def _viewer_session(scenario: Scenario, *team_ids: str, models: Sequence[str] = ()) -> str:
-    user_id: Final = scenario.user(user_role="internal_user_viewer", teams=list(team_ids), models=list(models))
+def _viewer_session(
+    scenario: Scenario, *team_ids: str, models: Sequence[str] = (), user_role: str = "internal_user_viewer"
+) -> str:
+    user_id: Final = scenario.user(user_role=user_role, teams=list(team_ids), models=list(models))
     with pytest.MonkeyPatch.context() as environment:
         environment.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
         return ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
-            LiteLLM_UserTable(user_id=user_id, user_role="internal_user_viewer", models=list(models))
+            LiteLLM_UserTable(user_id=user_id, user_role=user_role, models=list(models))
         )
 
 
-@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
-def test_dashboard_viewer_runs_a_team_granted_tool(gateway: Gateway, surface: Surface, stream: bool) -> None:
+@pytest.mark.parametrize(
+    ("surface", "stream", "user"),
+    [("responses", True, None), ("responses", False, None), ("chat", False, None), ("chat", False, "mcp-customer")],
+)
+def test_dashboard_viewer_runs_a_team_granted_tool(
+    gateway: Gateway, surface: Surface, stream: bool, user: str | None
+) -> None:
     with _rig(gateway, surface) as rig:
         team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
         session: Final = _viewer_session(rig.scenario, team_id)
-        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
+        extra: Final = {"user": user} if user is not None else {}
+        response: Final = rig.send(
+            session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream, **extra
+        )
 
         assert response.status_code == 200, response.text
         reply: Final = response.text if stream else rig.final_text(response.json())
@@ -662,8 +672,13 @@ def test_dashboard_viewer_runs_a_team_granted_tool(gateway: Gateway, surface: Su
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
-@pytest.mark.parametrize("stream", [False, True])
-def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(gateway: Gateway, stream: bool) -> None:
+@pytest.mark.parametrize(
+    ("user_role", "stream"),
+    [("internal_user_viewer", False), ("internal_user_viewer", True), ("proxy_admin_viewer", True)],
+)
+def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(
+    gateway: Gateway, user_role: str, stream: bool
+) -> None:
     with _rig(gateway, "responses") as rig:
         model_team: Final = rig.scenario.team(
             models=[rig.model],
@@ -672,7 +687,9 @@ def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(g
         tool_team: Final = rig.scenario.team(
             models=["no-default-models"], object_permission={"mcp_servers": [rig.server_id]}
         )
-        session: Final = _viewer_session(rig.scenario, tool_team, model_team, models=("no-default-models",))
+        session: Final = _viewer_session(
+            rig.scenario, tool_team, model_team, models=("no-default-models",), user_role=user_role
+        )
         response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
 
         assert response.status_code == 200, response.text
@@ -687,6 +704,21 @@ def test_dashboard_viewer_without_a_grant_cannot_run_a_tool(gateway: Gateway) ->
     with _rig(gateway, "responses") as rig:
         session: Final = _viewer_session(rig.scenario, rig.scenario.team())
         response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}])
+
+        assert response.status_code == 403 and rig.alias in response.text, response.text
+        assert rig.upstream_tools() == ()
+        assert _peer_add_calls(rig.peer) == ()
+
+
+def test_dashboard_viewer_cannot_exceed_the_end_users_mcp_server_scope(gateway: Gateway) -> None:
+    with _rig(gateway, "chat") as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        other_server: Final = register_mcp(rig.scenario, rig.peer, "other" + uuid.uuid4().hex[:8])
+        customer: Final = "mcp-customer-" + uuid.uuid4().hex
+        gateway.post("/customer/new", {"user_id": customer, "object_permission": {"mcp_servers": [other_server]}})
+        rig.scenario.cleanups.callback(gateway.post, "/customer/delete", {"user_ids": [customer]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], user=customer)
 
         assert response.status_code == 403 and rig.alias in response.text, response.text
         assert rig.upstream_tools() == ()
