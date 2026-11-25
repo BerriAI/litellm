@@ -4,7 +4,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use reqwest::{
@@ -79,7 +79,7 @@ pub struct MediaFetcher {
     allow_private_network: bool,
 }
 
-const FETCH_ATTEMPTS: usize = 3;
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
 
 type AddressResolution<'a> = Pin<Box<dyn Future<Output = io::Result<Vec<SocketAddr>>> + Send + 'a>>;
 
@@ -159,9 +159,12 @@ impl MediaFetcher {
         url: Url,
         policy: DownloadPolicy,
     ) -> Result<DownloadedMedia, Error> {
-        for _ in 1..FETCH_ATTEMPTS {
+        let started = Instant::now();
+        for delay in RETRY_DELAYS {
             match self.fetch_before_deadline(url.clone(), policy).await {
-                Err(error) if matches!(error.repr(), Repr::Download(_)) => continue,
+                Err(error) if may_recover(&error) && started.elapsed() + delay < policy.timeout => {
+                    tokio::time::sleep(delay).await;
+                }
                 result => return result,
             }
         }
@@ -265,6 +268,14 @@ impl MediaFetcher {
             .await
             .map_err(Repr::Resolve)?;
         validate_addresses(&addresses)
+    }
+}
+
+fn may_recover(error: &Error) -> bool {
+    match error.repr() {
+        Repr::Resolve(_) => true,
+        Repr::Download(cause) => !cause.is_timeout(),
+        _ => false,
     }
 }
 
@@ -475,6 +486,12 @@ mod tests {
     const OK_RESPONSE: &[u8] =
         b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
 
+    const PATIENT: DownloadPolicy = DownloadPolicy {
+        timeout: Duration::from_secs(30),
+        max_bytes: 10,
+        max_redirects: 0,
+    };
+
     fn policy(max_bytes: u64, max_redirects: usize) -> DownloadPolicy {
         DownloadPolicy {
             timeout: Duration::from_secs(1),
@@ -631,12 +648,17 @@ mod tests {
     async fn retries_a_download_the_media_host_cut(#[case] answers: Vec<&'static [u8]>) {
         let attempts = answers.len();
         let (url, server, address) = serve_named("public.test", answers).await;
+        let started = Instant::now();
         let media = policy_checked_fetcher(address, HashSet::new())
-            .fetch(url, policy(10, 0))
+            .fetch(url, PATIENT)
             .await
             .expect("a later attempt downloads the media");
         assert_eq!(server.await.expect("server completes").len(), attempts);
         assert_eq!(media.bytes, b"ok");
+        assert!(
+            started.elapsed() >= RETRY_DELAYS[..attempts - 1].iter().sum::<Duration>(),
+            "each retry waits out a brief outage first"
+        );
     }
 
     #[rstest::rstest]
@@ -648,7 +670,7 @@ mod tests {
         )
         .await;
         let error = policy_checked_fetcher(address, HashSet::new())
-            .fetch(url, policy(10, 0))
+            .fetch(url, PATIENT)
             .await
             .expect_err("no fourth attempt is made");
         server.abort();
@@ -656,35 +678,118 @@ mod tests {
         assert!(error.is_request());
     }
 
-    struct UnresolvableHost(AtomicUsize);
+    struct FlakyAddressResolver {
+        failures: usize,
+        lookups: AtomicUsize,
+    }
 
-    impl AddressResolver for UnresolvableHost {
-        fn resolve<'a>(&'a self, _host: &'a str, _port: u16) -> AddressResolution<'a> {
+    impl AddressResolver for FlakyAddressResolver {
+        fn resolve<'a>(&'a self, _host: &'a str, port: u16) -> AddressResolution<'a> {
+            let failed = self.lookups.fetch_add(1, Ordering::Relaxed) < self.failures;
+            Box::pin(async move {
+                if failed {
+                    return Err(io::Error::new(io::ErrorKind::NotFound, "no such host"));
+                }
+                Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))])
+            })
+        }
+    }
+
+    fn flaky_fetcher(
+        address: SocketAddr,
+        failures: usize,
+    ) -> (MediaFetcher, Arc<FlakyAddressResolver>) {
+        let resolver = Arc::new(FlakyAddressResolver {
+            failures,
+            lookups: AtomicUsize::new(0),
+        });
+        let fetcher = MediaFetcher::with_resolution(
+            &HttpClientPool::new(Arc::new(LoopbackDnsResolver(address))),
+            &Resolution::from(&HttpSettings::default()).config,
+            UrlPolicy::default(),
+            Arc::clone(&resolver) as Arc<dyn AddressResolver>,
+            Arc::new(|_| false),
+        )
+        .expect("test fetcher builds");
+        (fetcher, resolver)
+    }
+
+    #[rstest::rstest]
+    #[case::second_lookup(1)]
+    #[case::last_lookup(2)]
+    #[tokio::test]
+    async fn retries_a_host_that_resolves_later(#[case] failures: usize) {
+        let (url, server, address) = serve_named("public.test", vec![OK_RESPONSE]).await;
+        let (fetcher, resolver) = flaky_fetcher(address, failures);
+        let media = fetcher
+            .fetch(url, PATIENT)
+            .await
+            .expect("a later lookup resolves the host");
+        server.await.expect("server completes");
+        assert_eq!(media.bytes, b"ok");
+        assert_eq!(resolver.lookups.load(Ordering::Relaxed), failures + 1);
+    }
+
+    #[rstest::rstest]
+    #[case::time_for_every_retry(PATIENT, RETRY_DELAYS.len() + 1)]
+    #[case::no_time_for_a_retry(
+        DownloadPolicy { timeout: RETRY_DELAYS[0] / 2, ..PATIENT },
+        1
+    )]
+    #[tokio::test]
+    async fn an_unresolvable_host_is_the_callers_fault(
+        #[case] policy: DownloadPolicy,
+        #[case] lookups: usize,
+    ) {
+        let (fetcher, resolver) = flaky_fetcher(UNROUTABLE, usize::MAX);
+        let error = fetcher
+            .fetch(
+                Url::parse("http://missing.test/document").expect("valid test URL"),
+                policy,
+            )
+            .await
+            .expect_err("the host does not resolve");
+        assert!(matches!(error.repr(), Repr::Resolve(_)));
+        assert!(error.is_request());
+        assert_eq!(resolver.lookups.load(Ordering::Relaxed), lookups);
+    }
+
+    #[derive(Default)]
+    struct HangingDnsResolver(AtomicUsize);
+
+    impl Resolve for HangingDnsResolver {
+        fn resolve(&self, _name: Name) -> Resolving {
             self.0.fetch_add(1, Ordering::Relaxed);
-            Box::pin(async { Err(io::Error::new(io::ErrorKind::NotFound, "no such host")) })
+            Box::pin(std::future::pending())
         }
     }
 
     #[rstest::rstest]
     #[tokio::test]
-    async fn an_unresolvable_host_is_the_callers_fault_and_is_not_retried() {
-        let resolver = Arc::new(UnresolvableHost(AtomicUsize::new(0)));
-        let direct = Resolution::from(&HttpSettings::default()).config;
+    async fn a_connect_timeout_is_the_callers_fault_and_is_not_retried() {
+        let resolver = Arc::new(HangingDnsResolver::default());
+        let config = Resolution::from(&HttpSettings {
+            connect_timeout: Duration::from_millis(50),
+            ..HttpSettings::default()
+        })
+        .config;
         let error = MediaFetcher::with_resolution(
-            &HttpClientPool::new(Arc::new(LoopbackDnsResolver(UNROUTABLE))),
-            &direct,
+            &HttpClientPool::new(Arc::clone(&resolver) as Arc<dyn Resolve>),
+            &config,
             UrlPolicy::default(),
-            Arc::clone(&resolver) as Arc<dyn AddressResolver>,
+            Arc::new(TestAddressResolver {
+                blocked_hosts: HashSet::new(),
+            }),
             Arc::new(|_| false),
         )
         .expect("test fetcher builds")
         .fetch(
-            Url::parse("http://missing.test/document").expect("valid test URL"),
-            policy(10, 0),
+            Url::parse("http://public.test/document").expect("valid test URL"),
+            PATIENT,
         )
         .await
-        .expect_err("the host does not resolve");
-        assert!(matches!(error.repr(), Repr::Resolve(_)));
+        .expect_err("the connection never opens");
+        assert!(matches!(error.repr(), Repr::Download(_)));
         assert!(error.is_request());
         assert_eq!(resolver.0.load(Ordering::Relaxed), 1);
     }
