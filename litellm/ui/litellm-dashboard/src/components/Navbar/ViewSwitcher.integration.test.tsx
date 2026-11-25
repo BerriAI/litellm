@@ -112,7 +112,7 @@ describe("ViewSwitcher", () => {
     renderSwitcher();
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
-    await user.click(await screen.findByRole("menuitem", { name: /Customer Management/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Customer Management Customer organizations and usage" }));
     expect(pushMock).toHaveBeenCalledWith("/ui/customers");
     expect(assignSpy).not.toHaveBeenCalled();
     expect(localStorage.getItem("litellm_plugin_mode")).toBeNull();
@@ -123,7 +123,9 @@ describe("ViewSwitcher", () => {
     const user = userEvent.setup();
     renderSwitcher();
 
-    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Customer Management" }));
+    const switcher = await screen.findByRole("button", { name: "Switch workspace, current: Customer Management" });
+    expect(switcher).toHaveTextContent(/^Customer Management$/);
+    await user.click(switcher);
     await user.click(await screen.findByRole("menuitem", { name: /^AI Gateway/ }));
     expect(pushMock).toHaveBeenCalledWith("/ui/api-keys");
   });
