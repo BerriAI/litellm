@@ -46,7 +46,7 @@ from litellm._logging import (
     verbose_proxy_logger,
     verbose_router_logger,
 )
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, MAX_REDACTION_SCAN_CHARS
 from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import secret_redaction
@@ -886,6 +886,97 @@ def test_diagnostic_redaction_precedes_a_credential_cut(monkeypatch, native):
 
     assert len(record.getMessage()) <= 500
     assert "sk-qq" not in record.getMessage()
+
+
+def _oversized_record_text(secret: str) -> str:
+    """1.2 MB of text with a credential in the kept head and one in the kept tail."""
+    filler: Final = _oversized_text(1_200_000)
+    return f"head {secret} {filler} tail {secret} end-marker"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_logging_bounds_an_oversized_record_before_redaction(monkeypatch, native):
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret: Final = "sk-" + "q" * 48
+    record = _make_record(logging.DEBUG, "%s", (_oversized_record_text(secret),))
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    message: Final = record.getMessage()
+    assert len(message) <= MAX_REDACTION_SCAN_CHARS
+    assert "sk-qq" not in message
+    assert message.startswith("head REDACTED")
+    assert message.endswith("tail REDACTED end-marker")
+
+
+def test_python_diagnostic_never_scans_more_than_the_redaction_limit(monkeypatch):
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    scanned: Final[list[int]] = []
+    real_redact: Final = secret_redaction.python_redact_string
+
+    def spy(value: str) -> str:
+        scanned.append(len(value))  # rebind-ok: a test spy records what the regex was given
+        return real_redact(value)
+
+    monkeypatch.setattr("litellm._logging.python_redact_string", spy)
+    monkeypatch.setattr(secret_redaction, "python_redact_string", spy)
+    record = _make_record(logging.ERROR, "%s", (_oversized_text(1_200_000),), exc_info=None)
+    record.stack_info = _oversized_text(1_200_000)
+    record.payload = _oversized_text(1_200_000)
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert scanned
+    assert max(scanned) <= MAX_REDACTION_SCAN_CHARS
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_logging_bounds_an_oversized_traceback_before_redaction(monkeypatch, native):
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    try:
+        raise ValueError(_oversized_record_text("sk-" + "q" * 48))
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.DEBUG, "Exception occured", exc_info=exc_info)
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert len(record.exc_text) <= MAX_REDACTION_SCAN_CHARS
+    assert "sk-qq" not in record.exc_text
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_logging_collapses_a_huge_base64_run_before_the_redaction_bound(monkeypatch, native):
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "4096")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    blob: Final = base64.b64encode(bytes(range(256)) * 12_000).decode()
+    record = _make_record(logging.DEBUG, "%s", (f"image {blob} done",))
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    message: Final = record.getMessage()
+    assert message.count("[base64_data truncated") == 1
+    assert message.startswith("image [base64_data truncated")
+    assert message.endswith(" done")
+
+
+def test_diagnostic_logging_leaves_a_record_within_the_limit_untouched(monkeypatch):
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    text: Final = _oversized_text(MAX_REDACTION_SCAN_CHARS)
+    record = _make_record(logging.DEBUG, "%s", (text,))
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert record.getMessage() == text
 
 
 def test_correlation_id_redacts_before_its_length_bound(monkeypatch):

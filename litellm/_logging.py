@@ -22,6 +22,7 @@ from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
+    MAX_REDACTION_SCAN_CHARS,
     MAX_STRING_LENGTH_STDOUT_LOG,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
@@ -29,6 +30,7 @@ from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, sa
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
     REDACTED,
+    bound_scan_input,
     python_redact_string,
     python_redact_structured_value,
     redact_internal_details,
@@ -460,12 +462,36 @@ def _render_exception(record: logging.LogRecord) -> str | None:
         return "REDACTED"
 
 
+def _bounded_for_redaction(text: str, base64_limit: int, redact: bool) -> str:
+    """Cap *text* at MAX_REDACTION_SCAN_CHARS before either redaction backend scans it.
+
+    A provider error that echoes a large request reaches this pipeline as one huge record, and the
+    secret regex then runs over all of it on the event loop. Base64 runs collapse first, as they do
+    in the backends, so a large payload still shows its size placeholder, not two cut halves.
+    """
+    if not redact or len(text) <= MAX_REDACTION_SCAN_CHARS:
+        return text
+    collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
+    return bound_scan_input(collapsed)
+
+
+def _bounded_leaves(
+    leaves: Iterator[tuple[str | None, str]], base64_limit: int, redact: bool
+) -> tuple[tuple[str | None, str], ...]:
+    return tuple((key, _bounded_for_redaction(text, base64_limit, redact)) for key, text in leaves)
+
+
 def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit: int, redact: bool) -> bool:
     if _is_redacted(record):
         return True
-    message: Final = _render_message(record)
-    exception: Final = _render_exception(record)
-    stack: Final = record.stack_info if isinstance(record.stack_info, str) else None
+    message: Final = _bounded_for_redaction(_render_message(record), base64_limit, redact)
+    rendered_exception: Final = _render_exception(record)
+    exception: Final = (
+        _bounded_for_redaction(rendered_exception, base64_limit, redact) if rendered_exception is not None else None
+    )
+    stack: Final = (
+        _bounded_for_redaction(record.stack_info, base64_limit, redact) if isinstance(record.stack_info, str) else None
+    )
     substituted_color: Final = _substituted_color_message(record)
     extras: Final = (
         tuple(
@@ -484,12 +510,22 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
         if redact
         else ()
     )
-    extra_leaves: Final = tuple(
-        itertools.chain.from_iterable(_string_leaves(key, prepared) for key, _, prepared in extras)
+    extra_leaves: Final = _bounded_leaves(
+        itertools.chain.from_iterable(_string_leaves(key, prepared) for key, _, prepared in extras),
+        base64_limit,
+        redact,
     )
-    raw_template: Final = record.msg if redact and isinstance(record.msg, str) and record.args else None
+    raw_template: Final = (
+        _bounded_for_redaction(record.msg, base64_limit, redact)
+        if redact and isinstance(record.msg, str) and record.args
+        else None
+    )
     color_template: Final = record.__dict__.get("color_message")
-    raw_color: Final = color_template if redact and isinstance(color_template, str) and record.args else None
+    raw_color: Final = (
+        _bounded_for_redaction(color_template, base64_limit, redact)
+        if redact and isinstance(color_template, str) and record.args
+        else None
+    )
     leaves: Final = (
         extra_leaves
         + (((None, raw_template),) if raw_template is not None else ())
