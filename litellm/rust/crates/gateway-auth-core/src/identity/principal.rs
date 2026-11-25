@@ -1,11 +1,11 @@
 use litellm_config::RbacRole;
 use serde_json::Value;
 
-use super::jwt::{AgentMode, HeaderTeam, ManagedAgent, Team, User};
+use super::jwt::{AgentMode, HeaderTeam, JwtIdentity, ManagedAgent};
 use crate::{Rows, commit::Grants};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CallerKind {
+pub(crate) enum ClaimantKind {
     ProxyAdmin,
     Jwt,
     ManagedAgent(AgentMode),
@@ -14,8 +14,8 @@ pub(crate) enum CallerKind {
 /// What a JWT's claims say about who sends it, after the cheap agent reads and before any team,
 /// user or organization is read.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Caller<R: Rows> {
-    pub(crate) kind: CallerKind,
+pub(crate) struct Claimant<R: Rows> {
+    pub(crate) kind: ClaimantKind,
     pub(crate) rbac_role: Option<RbacRole>,
     pub(crate) scopes: Vec<String>,
     pub(crate) agent: Option<ManagedAgent<R::Agent>>,
@@ -25,21 +25,14 @@ pub(crate) struct Caller<R: Rows> {
     pub(crate) issuer: Value,
 }
 
-/// Everything identity read for a caller that is neither a proxy admin nor an autonomous agent.
+/// The identity read for a claimant that is neither a proxy admin nor an autonomous agent, with
+/// what the last route check and `commit` still need beside it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Principal<R: Rows> {
-    pub(crate) caller: Caller<R>,
-    pub(crate) user_id: Option<String>,
-    pub(crate) user_email: Option<String>,
-    pub(crate) user: Option<User<R::User>>,
-    pub(crate) team_id: Option<String>,
-    pub(crate) team: Option<Team<R::Team>>,
-    pub(crate) membership: Option<R::Membership>,
+    pub(crate) identity: JwtIdentity<R>,
     /// The header team the team was taken from, which may still need the user's membership.
     pub(crate) header_team: Option<HeaderTeam>,
-    pub(crate) org_id: Option<String>,
-    pub(crate) org: Option<R::Org>,
-    pub(crate) end_user_id: Option<String>,
-    pub(crate) end_user: Option<R::EndUser>,
+    /// The teams the user's row lists.
+    pub(crate) user_teams: Vec<String>,
     pub(crate) grants: Grants<R>,
 }

@@ -1,9 +1,7 @@
 //! Callers for the inline tests, over rows that hold a key, which the native host's do not yet.
 
 use litellm_gateway_auth_core::{
-    Caller, KeyHash, Rows,
-    authn::key::KeyRecord,
-    identity::key::{KeyContext, TeamGrant},
+    Belongs, Caller, KeyHash, Rows, authn::key::KeyRecord, identity::key::KeyContext,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,9 +27,6 @@ pub(crate) fn key(stored: &str, is_proxy_admin: bool) -> Caller<Held> {
             is_proxy_admin,
             ..KeyRecord::default()
         },
-        end_user: (),
-        owner: None,
-        team: TeamGrant::NoTeam,
-        project: None,
+        belongs: Belongs::default(),
     }))
 }

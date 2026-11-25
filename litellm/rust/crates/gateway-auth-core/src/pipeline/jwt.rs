@@ -3,7 +3,7 @@ use litellm_config::{LitellmRole, RbacRole, UnregisteredJwtClientBehavior as Beh
 use serde_json::Value;
 
 use crate::{
-    AuthHost, Error, JwtDenial, Rows, Token,
+    AuthHost, Belongs, Error, JwtDenial, Rows, TeamGrant, Token,
     authn::jwt::{
         self, Claims, JwtRequest, JwtSettings, KeyOrigin, MappedJwt,
         mapping::{self, Mapping, Pending, Resolved},
@@ -12,10 +12,10 @@ use crate::{
     commit::{self, Grant, Grants},
     host::{KeyRow, UserRow},
     identity::{
-        Caller, CallerKind, Principal,
+        Claimant, ClaimantKind, Principal,
         jwt::{
-            AgentMode, ClaimIdentity, FinishedJwt, JwtIdentity, JwtMapping, JwtOutcome, JwtRows,
-            Provisioning, Team, TeamSettings, UserInfo, agent, caller, claims, org,
+            AgentMode, ClaimIdentity, FinishedJwt, JwtIdentity, JwtMapping, JwtOutcome,
+            Provisioning, Team, TeamSettings, UserInfo, agent, claimant, claims, org,
             team::{self, Joined},
             user::{self, ResolvedUser},
         },
@@ -104,23 +104,23 @@ pub(crate) async fn resolve_identity<H: AuthHost>(
     Ok(identity)
 }
 
-/// What a caller claims about itself before any read: the user id an RBAC role rebinds to its
+/// What a claimant says about itself before any read: the user id an RBAC role rebinds to its
 /// object id, and the team an RBAC team token names.
 fn claimed_ids<R: Rows>(
-    caller: &Caller<R>,
+    claimant: &Claimant<R>,
     info: &UserInfo,
     claims: &Claims,
     settings: &JwtSettings,
 ) -> (Option<String>, Option<String>) {
     let object_id = claims::object_id(claims, settings).filter(|text| !text.is_empty());
-    match (caller.rbac_role, object_id) {
+    match (claimant.rbac_role, object_id) {
         (Some(RbacRole::Team), Some(object_id)) => (Some(object_id), info.user_id.clone()),
         (Some(RbacRole::InternalUser), Some(object_id)) => (None, Some(object_id)),
         _ => (None, info.user_id.clone()),
     }
 }
 
-/// `JWTAuthManager.authorize_jwt` after `authenticate_jwt`: the caller and what it may call, then
+/// `JWTAuthManager.authorize_jwt` after `authenticate_jwt`: the claimant and what it may call, then
 /// a proxy admin's or an autonomous agent's identity, or the team, organization and user behind
 /// anyone else, each check as soon as what it reads exists.
 async fn authorize<H: AuthHost>(
@@ -132,32 +132,32 @@ async fn authorize<H: AuthHost>(
     provisioning: Option<Provisioning>,
 ) -> Result<Authorized<H::Rows>, Error> {
     let target = Target::from(request);
-    let caller = caller::caller(host, claims, settings).await?;
-    policy.credential(&caller, &target)?;
-    let info = match &caller.agent {
+    let claimant = claimant::claimant(host, claims, settings).await?;
+    policy.credential(&claimant, &target)?;
+    let info = match &claimant.agent {
         Some(agent) => UserInfo {
             user_id: agent.user_id.clone(),
             ..UserInfo::default()
         },
         None => claims::user_info(claims, settings),
     };
-    policy.email_domain(&caller, &info)?;
-    let claims_value = Value::Object(claims.0.clone());
-    let grants = match &caller.agent {
+    policy.email_domain(&claimant, &info)?;
+    let grants = match &claimant.agent {
         Some(agent) => Grants::default().with(Grant::RecordAgentAuthentication(agent.row.clone())),
         None => Grants::default(),
     };
-    if let (CallerKind::ManagedAgent(AgentMode::Autonomous), Some(agent)) =
-        (caller.kind, caller.agent.clone())
+    if let (ClaimantKind::ManagedAgent(AgentMode::Autonomous), Some(agent)) =
+        (claimant.kind, claimant.agent.clone())
     {
-        let identity = agent::autonomous_identity::<H::Rows>(claims_value, agent);
+        let identity =
+            agent::autonomous_identity::<H::Rows>(Value::Object(claims.0.clone()), agent);
         return Ok(Authorized { identity, grants });
     }
-    if caller.kind == CallerKind::ProxyAdmin {
+    if claimant.kind == ClaimantKind::ProxyAdmin {
         let identity = admin(
             host,
             claims,
-            caller,
+            claimant,
             info,
             request,
             settings,
@@ -170,7 +170,7 @@ async fn authorize<H: AuthHost>(
     let principal = principal(
         host,
         claims,
-        caller,
+        claimant,
         info,
         request,
         settings,
@@ -180,7 +180,10 @@ async fn authorize<H: AuthHost>(
     )
     .await?;
     policy.principal(&principal, &target)?;
-    Ok(identity_of(claims_value, principal))
+    Ok(Authorized {
+        identity: principal.identity,
+        grants: principal.grants,
+    })
 }
 
 /// A proxy admin's identity: the header team on LLM routes and the admin's user row.
@@ -191,7 +194,7 @@ async fn authorize<H: AuthHost>(
 async fn admin<H: AuthHost>(
     host: &H,
     claims: &Claims,
-    caller: Caller<H::Rows>,
+    claimant: Claimant<H::Rows>,
     info: UserInfo,
     request: &JwtRequest<'_>,
     settings: &JwtSettings,
@@ -201,7 +204,7 @@ async fn admin<H: AuthHost>(
     if provisioning.is_none() {
         policy.claimed_email(&info)?;
     }
-    let (_, user_id) = claimed_ids(&caller, &info, claims, settings);
+    let (_, user_id) = claimed_ids(&claimant, &info, claims, settings);
     let team_id_upsert = provisioning.is_some_and(|provisioning| provisioning.team_id_upsert);
     let team = team::admin_header_team(
         host,
@@ -236,18 +239,23 @@ async fn admin<H: AuthHost>(
         team_id: team.as_ref().map(|team| team.team_id.clone()),
         org_id: claims::org_id(claims, settings),
         end_user_id: None,
-        agent_id: caller.agent_id,
+        agent_id: claimant.agent_id,
         managed_agent: None,
-        rows: JwtRows {
+        belongs: Belongs {
             user: user.map(|user| user.row),
-            team: team.map(|team| team.row),
-            ..JwtRows::default()
+            team: team_grant(team),
+            ..Belongs::default()
         },
     })
 }
 
-/// The team, organization, user and end user behind a caller that is neither a proxy admin nor
-/// an autonomous agent, with the grants it earns.
+/// A JWT's team is one the core loaded, never a key's own copy.
+fn team_grant<R: Rows>(team: Option<Team<R::Team>>) -> TeamGrant<R> {
+    team.map_or(TeamGrant::NoTeam, |team| TeamGrant::Loaded(team.row))
+}
+
+/// The identity of a claimant that is neither a proxy admin nor an autonomous agent: the team,
+/// organization, user and end user behind it, with the grants it earns.
 #[expect(
     clippy::too_many_arguments,
     reason = "each stage input is read once, where `authorize_jwt` reads it"
@@ -255,7 +263,7 @@ async fn admin<H: AuthHost>(
 async fn principal<H: AuthHost>(
     host: &H,
     claims: &Claims,
-    caller: Caller<H::Rows>,
+    claimant: Claimant<H::Rows>,
     info: UserInfo,
     request: &JwtRequest<'_>,
     settings: &JwtSettings,
@@ -264,8 +272,8 @@ async fn principal<H: AuthHost>(
     grants: Grants<H::Rows>,
 ) -> Result<Principal<H::Rows>, Error> {
     let target = Target::from(request);
-    let (rbac_team_id, user_id) = claimed_ids(&caller, &info, claims, settings);
-    let provisioned = provisioning.filter(|_| caller.agent.is_none());
+    let (rbac_team_id, user_id) = claimed_ids(&claimant, &info, claims, settings);
+    let provisioned = provisioning.filter(|_| claimant.agent.is_none());
     let team_id_upsert = provisioning.is_some_and(|provisioning| provisioning.team_id_upsert);
     let team_settings = TeamSettings::from(&settings.config);
     let eligibility = policy.team_eligibility(&target);
@@ -280,7 +288,7 @@ async fn principal<H: AuthHost>(
         &eligibility,
     )
     .await?;
-    let granting = agent::delegated_team(host, caller.agent.as_ref(), &claimed, settings).await?;
+    let granting = agent::delegated_team(host, claimant.agent.as_ref(), &claimed, settings).await?;
     policy.granting_team(granting.as_deref(), claimed.team_id.as_deref(), &target)?;
     let (selected_team_id, selected_team) = team::selected(host, granting, &claimed).await?;
     policy.team(selected_team_id.as_deref(), selected_team.as_ref(), &target)?;
@@ -324,14 +332,14 @@ async fn principal<H: AuthHost>(
     };
     let user_teams = user
         .as_ref()
-        .map(|user| user.teams.as_slice())
+        .map(|user| user.teams.clone())
         .unwrap_or_default();
 
     let (team_id, team, membership) = match selected_team_id {
         None if claimed.db_fallback => {
             let found = team::db_team_fallback(
                 host,
-                user_teams,
+                &user_teams,
                 user_id.as_deref(),
                 request.model,
                 &eligibility,
@@ -345,7 +353,7 @@ async fn principal<H: AuthHost>(
             joined(found)
         }
         None => joined(
-            team::single_team_fallback(host, user_teams, user_id.as_deref(), team_id_upsert)
+            team::single_team_fallback(host, &user_teams, user_id.as_deref(), team_id_upsert)
                 .await?,
         ),
         Some(selected) => (Some(selected), selected_team, selected_membership),
@@ -366,19 +374,36 @@ async fn principal<H: AuthHost>(
         }
         _ => grants,
     };
+    let is_proxy_admin = claimant.agent.is_none()
+        && user.as_ref().is_some_and(|user| {
+            user.user_role.as_deref() == Some(<&str>::from(LitellmRole::ProxyAdmin))
+        });
+    let user_email = user
+        .as_ref()
+        .and_then(|user| user.user_email.clone().filter(|text| !text.is_empty()))
+        .or(info.user_email);
     Ok(Principal {
-        caller,
-        user_id,
-        user_email: info.user_email,
-        user,
-        team_id,
-        team,
-        membership,
+        identity: JwtIdentity {
+            claims: Value::Object(claims.0.clone()),
+            is_proxy_admin,
+            user_id,
+            user_email,
+            team_id,
+            org_id,
+            end_user_id,
+            agent_id: claimant.agent_id,
+            managed_agent: claimant.agent,
+            belongs: Belongs {
+                user: user.map(|user| user.row),
+                team: team_grant(team),
+                membership: membership.filter(|_| !is_proxy_admin),
+                org,
+                project: None,
+                end_user,
+            },
+        },
         header_team: claimed.header_team,
-        org_id,
-        org,
-        end_user_id,
-        end_user,
+        user_teams,
         grants,
     })
 }
@@ -392,50 +417,6 @@ async fn bind_team_member<H: AuthHost>(
         (Some(team), Some(user_id)) => host.bind_team_member(team, user_id).await.map(Some),
         (team, _) => Ok(team),
     }
-}
-
-fn identity_of<R: Rows>(claims: Value, principal: Principal<R>) -> Authorized<R> {
-    let Principal {
-        caller,
-        user_id,
-        user_email,
-        user,
-        team_id,
-        team,
-        membership,
-        header_team: _,
-        org_id,
-        org,
-        end_user_id,
-        end_user,
-        grants,
-    } = principal;
-    let is_proxy_admin = caller.agent.is_none()
-        && user.as_ref().is_some_and(|user| {
-            user.user_role.as_deref() == Some(<&str>::from(LitellmRole::ProxyAdmin))
-        });
-    let identity = JwtIdentity {
-        claims,
-        is_proxy_admin,
-        user_id,
-        user_email: user
-            .as_ref()
-            .and_then(|user| user.user_email.clone().filter(|text| !text.is_empty()))
-            .or(user_email),
-        team_id,
-        org_id,
-        end_user_id,
-        agent_id: caller.agent_id,
-        managed_agent: caller.agent,
-        rows: JwtRows {
-            user: user.map(|user| user.row),
-            team: team.map(|team| team.row),
-            membership: membership.filter(|_| !is_proxy_admin),
-            org,
-            end_user,
-        },
-    };
-    Authorized { identity, grants }
 }
 
 /// A team's id, the team and the membership loaded with it.
@@ -501,7 +482,7 @@ async fn register<H: AuthHost>(
             minted,
             org_id: identity.org_id,
         },
-        user: identity.rows.user,
+        user: identity.belongs.user,
     };
     let falls_through_to_key_checks = (settings.config.auto_register_map_existing_key
         || pending.behavior == Behavior::LinkOnly)
@@ -705,7 +686,62 @@ mod tests {
         assert!(identity.is_proxy_admin);
         assert_eq!(identity.user_id.as_deref(), Some("u1"));
         assert_eq!(identity.team_id.as_deref(), team_id);
+        assert_eq!(
+            identity.belongs,
+            Belongs {
+                user: Some("u1".to_owned()),
+                team: team_id.map_or(TeamGrant::NoTeam, |team| TeamGrant::Loaded(team.to_owned())),
+                ..Belongs::default()
+            }
+        );
         assert_eq!(calls(&host), expected_calls);
+    }
+
+    #[rstest]
+    #[case::the_rows_email(Some("row@corp.com"), "row@corp.com")]
+    #[case::the_claim_when_the_row_has_an_empty_one(Some(""), "claim@corp.com")]
+    #[case::the_claim_when_the_row_has_none(None, "claim@corp.com")]
+    #[tokio::test]
+    async fn a_users_email_is_the_rows_before_the_claimed_one(
+        #[case] row_email: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let host = ScriptedHost {
+            users: HashMap::from([(
+                "u1",
+                User {
+                    user_email: row_email.map(str::to_owned),
+                    ..user("u1", "internal_user", &[])
+                },
+            )]),
+            ..host(json!({"sub": "u1", "email": "claim@corp.com"}))
+        };
+        let identity = authorize_with(&host, request(CHAT), &settings(config()), None)
+            .await
+            .unwrap();
+        assert_eq!(identity.user_email.as_deref(), Some(expected));
+    }
+
+    #[tokio::test]
+    async fn a_provisional_header_team_a_grant_replaced_needs_no_membership() {
+        let host = ScriptedHost {
+            managed: Some(agent(AgentMode::Delegated)),
+            delegated_team: Some("t5"),
+            teams: HashMap::from([("t5", team("t5")), ("t9", team("t9"))]),
+            users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
+            ..host(json!({"iss": "https://idp", "sub": "someone-else"}))
+        };
+        let settings = settings(JwtAuthSettings {
+            fallback_to_db_teams: true,
+            team_ids_jwt_field: Some("groups".into()),
+            ..config()
+        });
+        let request = JwtRequest {
+            team_header: Some("t9"),
+            ..request(CHAT)
+        };
+        let identity = authorize_with(&host, request, &settings, None).await;
+        assert_eq!(team_id_of(&identity), Ok(Some("t5")));
     }
 
     #[tokio::test]
@@ -765,12 +801,12 @@ mod tests {
             (Some("t1"), false)
         );
         assert_eq!(
-            identity.rows,
-            JwtRows {
+            identity.belongs,
+            Belongs {
                 user: Some("u1".to_owned()),
-                team: Some("t1".to_owned()),
+                team: TeamGrant::Loaded("t1".to_owned()),
                 membership: Some("membership u1 t1".to_owned()),
-                ..JwtRows::default()
+                ..Belongs::default()
             }
         );
         assert_eq!(calls(&host), expected_calls);
@@ -805,7 +841,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(identity.user_id.as_deref(), Some("canonical"));
-        assert_eq!(identity.rows.team.as_deref(), Some("t1 canonical"));
+        assert_eq!(
+            identity.belongs.team,
+            TeamGrant::Loaded("t1 canonical".to_owned())
+        );
         assert_eq!(calls(&host), expected_calls);
     }
 
@@ -988,9 +1027,9 @@ mod tests {
                 "add_member u1 t2",
             ]
         );
-        assert_eq!(identity.rows.user.as_deref(), Some("u1+role+teams"));
+        assert_eq!(identity.belongs.user.as_deref(), Some("u1+role+teams"));
         assert_eq!(
-            identity.rows.membership, None,
+            identity.belongs.membership, None,
             "a proxy admin's identity carries no membership"
         );
     }
@@ -998,6 +1037,7 @@ mod tests {
     #[rstest]
     #[case::no_user_or_team(json!({}), Err(JwtDenial::NoObjectId.into()), &["managed_agent"])]
     #[case::user_is_enough(json!({"sub": "u1"}), Ok(Some("u1")), &["managed_agent", "resolve_user u1 team=-"])]
+    #[case::team_is_enough(json!({"groups": ["t1"]}), Ok(None), &["managed_agent", "team t1"])]
     #[tokio::test]
     async fn enforce_rbac_needs_an_object_id(
         #[case] claims: Value,
@@ -1005,12 +1045,16 @@ mod tests {
         #[case] expected_calls: &[&str],
     ) {
         let host = ScriptedHost {
+            teams: HashMap::from([("t1", team("t1"))]),
             users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
             ..host(claims)
         };
         let settings = JwtSettings {
             enforce_rbac: true,
-            ..settings(config())
+            ..settings(JwtAuthSettings {
+                team_ids_jwt_field: Some("groups".into()),
+                ..config()
+            })
         };
         let identity = authorize_with(&host, request(CHAT), &settings, PROVISIONED).await;
         assert_eq!(
@@ -2128,12 +2172,12 @@ mod tests {
             (Some("o1"), Some("e1"))
         );
         assert_eq!(
-            identity.rows,
-            JwtRows {
+            identity.belongs,
+            Belongs {
                 user: Some("u1".to_owned()),
                 org: Some("org o1".to_owned()),
                 end_user: Some("end-user e1".to_owned()),
-                ..JwtRows::default()
+                ..Belongs::default()
             }
         );
         assert_eq!(

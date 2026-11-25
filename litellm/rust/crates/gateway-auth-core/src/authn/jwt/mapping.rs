@@ -465,9 +465,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        Belongs,
         authn::key::KeyRecord,
         commit::{self, Grant, Grants},
-        identity::jwt::JwtRows,
         testing::{Labels, ScriptedHost},
     };
 
@@ -500,7 +500,7 @@ mod tests {
             end_user_id: None,
             agent_id: None,
             managed_agent: None,
-            rows: JwtRows::default(),
+            belongs: Belongs::default(),
         }
     }
 

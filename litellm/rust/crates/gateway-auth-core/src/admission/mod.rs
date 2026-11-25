@@ -20,7 +20,7 @@ pub(crate) async fn key<H: AuthHost>(
 ) -> Result<KeyPrincipal<H::Rows>, Refused<H::Rows>> {
     let key = host.with_temp_budget(principal.key).await?;
     models::normalize(host, &key.row).await?;
-    budgets::key(host, &key.row, principal.owner.as_ref(), request)
+    budgets::key(host, &key.row, principal.belongs.user.as_ref(), request)
         .await
         .map_err(|error| Refused::new(error, Some(&key.row)))?;
     if settings.proxy_budget && settings.has_db {

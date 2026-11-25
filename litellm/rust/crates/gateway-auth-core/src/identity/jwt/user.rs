@@ -2,7 +2,7 @@ use litellm_config::RbacRole;
 use serde_json::Value;
 
 use super::{
-    ClaimIdentity, Provisioning, User, UserLookup, caller,
+    ClaimIdentity, Provisioning, User, UserLookup, claimant,
     claims::{self},
 };
 use crate::{
@@ -76,7 +76,7 @@ pub(crate) async fn claim_identity<H: AuthHost>(
             .or(info.user_id),
         _ => info.user_id,
     };
-    let agent_id = caller::resolve_agent_id(host, claims, settings).await?;
+    let agent_id = claimant::resolve_agent_id(host, claims, settings).await?;
     let is_admin = claims::is_admin(&claims::scopes(claims)?, settings);
     match resolve_user(
         host,
