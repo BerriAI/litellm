@@ -137,7 +137,11 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
-from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS, billed_deployment_tokens
+from litellm.llms.gemini.empty_image_response import (
+    IMAGE_ANSWER_ERRORS,
+    billed_deployment_tokens,
+    success_tokens_without_failed_image_answers,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -8899,7 +8903,9 @@ class Router:
                 deployment_id=str(deployment_id),
             )
 
-            total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
             counted_tokens: Final = get_counted_usage_tokens(litellm_params)
             deployment_name: Final = metadata.get("deployment", None)
             return await self._increment_deployment_usage(

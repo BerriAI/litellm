@@ -29,6 +29,7 @@ class ImageRefusalError(ContentPolicyViolationError):
 
 IMAGE_ANSWER_ERRORS: Final = (ImageRefusalError, UnservedImageError)
 IMAGE_ANSWERS_BILLED_ON_FAILURE: Final = "image_answers_billed_on_failure"
+IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE: Final = "image_answer_tokens_counted_on_failure"
 SETTLED_BY_THE_ASYNC_FAILURE_HOOK: Final = frozenset({CallTypes.aimage_generation.value, CallTypes.aimage_edit.value})
 
 
@@ -66,6 +67,18 @@ def success_cost_without_failed_image_answers(call_details: Mapping[str, object]
     if not isinstance(billed_on_failure, (int, float)):
         return response_cost
     return max(response_cost - billed_on_failure, 0.0)
+
+
+def image_answer_tokens_counted_on_failure(call_details: Mapping[str, object]) -> int:
+    billed: Final = billed_deployment_tokens(call_details)
+    return 0 if billed is None else billed.tokens
+
+
+def success_tokens_without_failed_image_answers(call_details: Mapping[str, object], total_tokens: int) -> int:
+    counted_on_failure: Final = call_details.get(IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE)
+    if not isinstance(counted_on_failure, int):
+        return total_tokens
+    return max(total_tokens - counted_on_failure, 0)
 
 
 class FailedImageBilling(Protocol):

@@ -22,7 +22,11 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.gemini.empty_image_response import SETTLED_BY_THE_ASYNC_FAILURE_HOOK, billed_deployment_tokens
+from litellm.llms.gemini.empty_image_response import (
+    SETTLED_BY_THE_ASYNC_FAILURE_HOOK,
+    billed_deployment_tokens,
+    success_tokens_without_failed_image_answers,
+)
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
@@ -365,7 +369,9 @@ class ModelRateLimitingCheck(CustomLogger):
             if model_id is None:
                 return
 
-            total_tokens: Final = standard_logging_object.get("total_tokens", 0)
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
             model: Final = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             verbose_router_logger.debug(

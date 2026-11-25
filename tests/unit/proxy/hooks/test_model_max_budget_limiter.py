@@ -12,6 +12,7 @@ import respx
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
@@ -362,13 +363,11 @@ async def _key_spend_after_falling_back_from(primary: str, monkeypatch: pytest.M
         litellm_logging_obj=logging_obj,
         litellm_call_id=f"key-budget-{primary}",
     )
-    backup_key: Final = f"virtual_key_spend:{KEY_HASH}:backup:1d"
-    for _ in range(300):
-        if await _spend(limiter, backup_key):
-            break
-        await asyncio.sleep(0.05)
-    await asyncio.sleep(0.2)
-    return await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:primary:1d"), await _spend(limiter, backup_key)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    return await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:primary:1d"), await _spend(
+        limiter, f"virtual_key_spend:{KEY_HASH}:backup:1d"
+    )
 
 
 @pytest.mark.asyncio

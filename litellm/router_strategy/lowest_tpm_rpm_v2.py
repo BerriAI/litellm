@@ -16,7 +16,11 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
-from litellm.llms.gemini.empty_image_response import SETTLED_BY_THE_ASYNC_FAILURE_HOOK, billed_deployment_tokens
+from litellm.llms.gemini.empty_image_response import (
+    SETTLED_BY_THE_ASYNC_FAILURE_HOOK,
+    billed_deployment_tokens,
+    success_tokens_without_failed_image_answers,
+)
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
@@ -314,7 +318,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 return
             elif isinstance(id, int):
                 id = str(id)
-            total_tokens: Final = standard_logging_object.get("total_tokens")
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
             # ------------
             # Setup values
             # ------------

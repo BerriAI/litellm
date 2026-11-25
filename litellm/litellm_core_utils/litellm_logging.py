@@ -131,7 +131,12 @@ from litellm.litellm_core_utils.tool_fields import (
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.llms.gemini.empty_image_response import IMAGE_ANSWERS_BILLED_ON_FAILURE, image_answer_cost_on_failure
+from litellm.llms.gemini.empty_image_response import (
+    IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE,
+    IMAGE_ANSWERS_BILLED_ON_FAILURE,
+    image_answer_cost_on_failure,
+    image_answer_tokens_counted_on_failure,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
@@ -349,7 +354,9 @@ _PREVIOUS_ATTEMPT_FAILURE_DETAILS: Final = (
     "exception",
     "traceback_exception",
 )
-_LOGGING_OWNED_BILLING_FIELDS: Final = frozenset({IMAGE_ANSWERS_BILLED_ON_FAILURE, "failed_attempts_billed_on_success"})
+_LOGGING_OWNED_BILLING_FIELDS: Final = frozenset(
+    {IMAGE_ANSWERS_BILLED_ON_FAILURE, IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE, "failed_attempts_billed_on_success"}
+)
 
 
 def _without_logging_owned_billing_fields(request_fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -807,6 +814,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._provider_reported_cost: float | None = None
         self._failed_attempts_owed_on_success: tuple[tuple[Usage, float], ...] = ()
         self._image_answers_billed_on_failure: float = 0.0
+        self._image_answer_tokens_counted_on_failure: int = 0
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -2475,6 +2483,7 @@ class Logging(LiteLLMLoggingBaseClass):
         failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
         self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
         self.model_call_details[IMAGE_ANSWERS_BILLED_ON_FAILURE] = self._image_answers_billed_on_failure
+        self.model_call_details[IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE] = self._image_answer_tokens_counted_on_failure
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
@@ -4400,6 +4409,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.mark_logging_complete(event_type="async_failure")
         self._image_answers_billed_on_failure += image_answer_cost_on_failure(self.model_call_details)
+        self._image_answer_tokens_counted_on_failure += image_answer_tokens_counted_on_failure(self.model_call_details)
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})

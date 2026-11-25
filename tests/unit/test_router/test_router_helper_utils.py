@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
@@ -1032,6 +1034,75 @@ async def test_an_image_answer_without_an_image_counts_its_answered_tokens_in_th
         assert await router.get_model_group_usage("image") == (1110, 1)
     finally:
         router.discard()
+
+
+def _image_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{name}.invalid/v1",
+                },
+                "model_info": {"id": name},
+            }
+            for name in ("refuser", "backup")
+        ],
+        fallbacks=[{"refuser": ["backup"]}],
+        num_retries=0,
+    )
+
+
+async def _backup_usage_after_serving(model: str) -> tuple[int | None, int | None]:
+    router: Final = _image_router()
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model=model,
+        prompt="a single small red dot",
+        litellm_call_id=f"image-served-for-{model}",
+    )
+    refusal: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+    served: Final = {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://refuser.invalid").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [refusal],
+                        "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+                    },
+                )
+            )
+            upstream.post(url__startswith="https://backup.invalid").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [served],
+                        "usageMetadata": {"promptTokenCount": 200, "candidatesTokenCount": 100, "totalTokenCount": 300},
+                    },
+                )
+            )
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            await asyncio.sleep(0)
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return await router.get_model_group_usage("backup")
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_a_fallback_serving_a_refused_image_counts_the_same_model_group_usage_as_serving_it_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    assert await _backup_usage_after_serving("refuser") == await _backup_usage_after_serving("backup")
 
 
 @pytest.mark.asyncio

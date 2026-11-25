@@ -25,6 +25,7 @@ from litellm import Router
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
@@ -235,11 +236,8 @@ async def _session_spend_after(
             litellm_logging_obj=logging_obj,
             litellm_call_id=session_id,
         )
-    for _ in range(300):
-        if await handler._get_current_spend(handler._make_cache_key(session_id)):
-            break
-        await asyncio.sleep(0.05)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
     return await handler._get_current_spend(handler._make_cache_key(session_id))
 
 
