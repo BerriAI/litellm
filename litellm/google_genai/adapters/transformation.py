@@ -1032,8 +1032,12 @@ class GoogleGenAIAdapter:
 
     def _map_usage(self, usage: object) -> Mapping[str, int]:
         """Map OpenAI usage to Google GenAI usage format"""
-        return {
+        usage_metadata: Final = {
             "promptTokenCount": getattr(usage, "prompt_tokens", 0) or 0,
             "candidatesTokenCount": getattr(usage, "completion_tokens", 0) or 0,
             "totalTokenCount": getattr(usage, "total_tokens", 0) or 0,
         }
+        cached_tokens: Final = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+        if cached_tokens:
+            return {**usage_metadata, "cachedContentTokenCount": cached_tokens}
+        return usage_metadata
