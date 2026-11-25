@@ -515,7 +515,9 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
 
     cost: Final = logger.response_cost_calculator(response)
 
-    expected_additional: Final = additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    expected_additional: Final = (
+        additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    )
     assert cost == pytest.approx((0.0 if covered else 100 * 0.01 + 10 * 0.02) + expected_additional)
 
 
@@ -3032,7 +3034,9 @@ async def test_failure_callbacks_release_exception_without_losing_traceback(
         def record(self, kwargs: dict[str, object]) -> None:
             failure: Final = kwargs.get("exception")
             trace: Final = kwargs.get("traceback_exception")
-            scoped: Final = logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            scoped: Final = (
+                logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            )
             scoped.dynamic_failure_callbacks = []
             scoped.failure_handler(cast(Exception, failure), cast(str, trace))
             observations.put_nowait(
@@ -11615,7 +11619,7 @@ def test_mixpanel_dispatch_needs_otel_v2_and_builds_one_logger(monkeypatch: pyte
 
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
-        logger = built()
+        logger: Final = built()
         assert isinstance(logger, OpenTelemetryV2)
         assert logger.callback_name == "mixpanel"
         assert built() is logger

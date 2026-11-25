@@ -3,6 +3,7 @@ event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -290,9 +291,9 @@ def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch: pytest.Monk
     from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
-    cfg = mixpanel_preset()
-    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
-    expected_basic = base64.b64encode(b"mp-token-123:").decode()
+    cfg: Final = mixpanel_preset()
+    spec: Final = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    expected_basic: Final = base64.b64encode(b"mp-token-123:").decode()
     assert spec.kind == "otlp_http"
     assert spec.endpoint == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
     assert _otlp_traces_endpoint(spec.endpoint) == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
@@ -310,18 +311,18 @@ def test_mixpanel_preset_region_and_endpoint_override(monkeypatch: pytest.Monkey
     from litellm.integrations.otel.model.config import ExporterOwner
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
-    eu_cfg = mixpanel_preset()
-    eu_spec = next(e for e in eu_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    eu_cfg: Final = mixpanel_preset()
+    eu_spec: Final = next(e for e in eu_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
     assert eu_spec.endpoint == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
 
     monkeypatch.setenv("MIXPANEL_REGION", "in")
-    in_cfg = mixpanel_preset()
-    in_spec = next(e for e in in_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    in_cfg: Final = mixpanel_preset()
+    in_spec: Final = next(e for e in in_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
     assert in_spec.endpoint == "https://ingestion-in.mixpanel.com/v1/ai/otel/traces"
 
     monkeypatch.setenv("MIXPANEL_ENDPOINT", "http://collector.internal:4318/v1/ai/otel/traces")
-    override_cfg = mixpanel_preset()
-    override_spec = next(e for e in override_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    override_cfg: Final = mixpanel_preset()
+    override_spec: Final = next(e for e in override_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
     assert override_spec.endpoint == "http://collector.internal:4318/v1/ai/otel/traces"
 
 
@@ -330,8 +331,8 @@ def test_mixpanel_preset_without_token_is_header_gated(monkeypatch: pytest.Monke
     from litellm.integrations.otel.model.config import ExporterOwner
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
-    cfg = mixpanel_preset()
-    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    cfg: Final = mixpanel_preset()
+    spec: Final = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
     assert spec.headers is None
     assert spec.requires_headers is True
 
@@ -347,7 +348,7 @@ def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(m
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     is_otel_v2_enabled.cache_clear()
     try:
-        logger = _maybe_construct_otel_v2("mixpanel", [])
+        logger: Final = _maybe_construct_otel_v2("mixpanel", [])
     finally:
         is_otel_v2_enabled.cache_clear()
     assert isinstance(logger, OpenTelemetryV2)
@@ -362,7 +363,7 @@ def test_mixpanel_with_a_token_keeps_the_operators_collector_beside_its_own_expo
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
     monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
-    collector = ExporterSpec(kind="otlp_http", endpoint="http://collector.local")
-    cfg = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+    collector: Final = ExporterSpec(kind="otlp_http", endpoint="http://collector.local")
+    cfg: Final = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
     assert [spec.owner for spec in cfg.exporters] == [None, ExporterOwner.MIXPANEL]
     assert "user.id" not in cfg.baggage_promoted_keys

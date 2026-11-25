@@ -9678,7 +9678,7 @@ def test_vertex_sends_exactly_one_authorization_header():
 
 @pytest.mark.asyncio
 async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_field() -> None:
-    key_with_langfuse_callback = UserAPIKeyAuth(
+    key_with_langfuse_callback: Final = UserAPIKeyAuth(
         api_key="hashed-key",
         metadata={
             "logging": [
@@ -9691,7 +9691,7 @@ async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_fiel
         },
     )
 
-    updated = await add_litellm_data_to_request(
+    updated: Final = await add_litellm_data_to_request(
         data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hello"}]},
         request=_callback_credential_request_mock(),
         user_api_key_dict=key_with_langfuse_callback,

@@ -3,6 +3,7 @@ and the two antipattern boundaries: http.* is never promoted, and the full
 metadata blob is never promoted (only the bounded allowlist)."""
 
 import json
+from typing import Final
 
 import pytest
 
@@ -271,10 +272,10 @@ def test_the_mixpanel_preset_never_promotes_user_id_through_baggage(monkeypatch:
     monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
-    payload = _payload()
+    payload: Final = _payload()
     payload["end_user"] = "user_123"
-    data = LLMCallSpanData.from_standard_logging_payload(payload)
-    mp_cfg = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporter="in_memory"))
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload)
+    mp_cfg: Final = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporter="in_memory"))
 
     assert "user.id" not in mp_cfg.baggage_promoted_keys
     assert "user.id" not in promoted_baggage(
@@ -283,16 +284,16 @@ def test_the_mixpanel_preset_never_promotes_user_id_through_baggage(monkeypatch:
 
 
 def test_user_id_precedence_and_key_owner_exclusion() -> None:
-    payload = _payload()
+    payload: Final = _payload()
     payload["end_user"] = "from-end-user"
     payload["metadata"]["user_api_key_user_id"] = "from-key-owner"
     payload["metadata"]["requester_metadata"] = {"user.id": "from-explicit-user-dot-id"}
-    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload)
     assert data.identity.user_id == "from-explicit-user-dot-id"
 
-    key_owner_only_payload = _payload()
+    key_owner_only_payload: Final = _payload()
     key_owner_only_payload["metadata"]["user_api_key_user_id"] = "from-key-owner"
-    key_owner_only_data = LLMCallSpanData.from_standard_logging_payload(key_owner_only_payload)
+    key_owner_only_data: Final = LLMCallSpanData.from_standard_logging_payload(key_owner_only_payload)
     assert key_owner_only_data.identity.user_id is None
 
 
@@ -302,7 +303,7 @@ def test_user_id_precedence_and_key_owner_exclusion() -> None:
     ids=["empty", "whitespace", "true", "false", "null", "list", "mapping", "oversized"],
 )
 def test_an_unusable_named_id_gives_way_to_the_next_source(unusable: object) -> None:
-    payload = _payload()
+    payload: Final = _payload()
     payload["end_user"] = "from-end-user"
     payload["metadata"]["requester_metadata"] = {"user.id": unusable}
     assert LLMCallSpanData.from_standard_logging_payload(payload).identity.user_id == "from-end-user"
@@ -315,13 +316,13 @@ def test_a_control_character_is_not_part_of_an_id() -> None:
 
 
 def test_the_id_in_baggage_is_read_from_the_current_context() -> None:
-    token = attach(baggage.set_baggage("user.id", "in-baggage"))
+    token: Final = attach(baggage.set_baggage("user.id", "in-baggage"))
     try:
         assert ctx_mod.inbound_user_id() == "in-baggage"
     finally:
         detach(token)
     assert ctx_mod.inbound_user_id() is None
-    unusable = attach(baggage.set_baggage("user.id", "a\nb"))
+    unusable: Final = attach(baggage.set_baggage("user.id", "a\nb"))
     try:
         assert ctx_mod.inbound_user_id() is None
     finally:
@@ -368,14 +369,14 @@ def test_the_call_event_reads_the_named_id_from_either_metadata_and_the_payload_
     assert event_id({"metadata": None}) is None
     assert caller_user_id_in_call({"litellm_params": None}) is None
 
-    payload = _payload()
+    payload: Final = _payload()
     payload["end_user"] = "from-end-user"
     assert LLMCallSpanData.from_standard_logging_payload(payload, named_user_id="named").identity.user_id == "named"
 
 
 def test_the_openai_user_param_is_the_last_resort_and_leaves_the_end_user_alone() -> None:
-    payload = _payload()
+    payload: Final = _payload()
     payload["model_parameters"] = {"user": "from-param"}
-    identity = LLMCallSpanData.from_standard_logging_payload(payload).identity
+    identity: Final = LLMCallSpanData.from_standard_logging_payload(payload).identity
     assert identity.user_id == "from-param"
     assert not identity.end_user

@@ -749,7 +749,7 @@ def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reach
 def test_mixpanel_dynamic_headers_and_endpoint_routing(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    expected_auth = "Basic " + base64.b64encode(b"team-token:").decode()
+    expected_auth: Final = "Basic " + base64.b64encode(b"team-token:").decode()
     assert dynamic_otlp_headers("mixpanel", {"mixpanel_project_token": "team-token"}) == {
         "Authorization": expected_auth
     }
@@ -782,7 +782,7 @@ def test_mixpanel_dynamic_headers_and_endpoint_routing(
     assert "unknown mixpanel_region" not in caplog.text
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        fallback = dynamic_otlp_endpoint(
+        fallback: Final = dynamic_otlp_endpoint(
             "mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "ap-south"}
         )
     assert fallback == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"

@@ -169,13 +169,13 @@ def _emit_llm(logger, kwargs=None, *, ambient=None, fail=False):
 def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
     monkeypatch: pytest.MonkeyPatch, call_metadata: dict[str, str], in_baggage: str | None, expected: str | None
 ) -> None:
-    exporter = InMemorySpanExporter()
+    exporter: Final = InMemorySpanExporter()
     monkeypatch.setitem(providers._EXPORTER_FACTORIES, "sdk_mixpanel", lambda _spec: exporter)
-    cfg = OpenTelemetryV2Config(
+    cfg: Final = OpenTelemetryV2Config(
         mapper_names=["genai", "mixpanel"],
         exporters=[ExporterSpec(kind="sdk_mixpanel", owner=ExporterOwner.MIXPANEL)],
     )
-    logger = OpenTelemetryV2(
+    logger: Final = OpenTelemetryV2(
         config=cfg, tracer_provider=providers.build_tracer_provider(cfg, use_simple_processor=True)
     )
 
@@ -186,7 +186,7 @@ def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
 
     contextvars.copy_context().run(emit)
 
-    model_calls = [span for span in exporter.get_finished_spans() if "gen_ai.operation.name" in span.attributes]
+    model_calls: Final = [span for span in exporter.get_finished_spans() if "gen_ai.operation.name" in span.attributes]
     assert [span.attributes.get("user.id") for span in model_calls] == [expected]
 
 

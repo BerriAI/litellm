@@ -497,19 +497,19 @@ class TestMixpanelCallbackValidation:
         from litellm.proxy.common_utils.callback_utils import is_sensitive_callback_key
         from litellm.proxy.management_endpoints.team_callback_endpoints import _redact_callback_secrets
 
-        client = TestClient(app)
-        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
+        client: Final = TestClient(app)
+        response: Final = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
         assert response.status_code == 200
-        mixpanel = next((config for config in response.json() if config.get("id") == "mixpanel"), None)
+        mixpanel: Final = next((config for config in response.json() if config.get("id") == "mixpanel"), None)
         assert mixpanel is not None
         assert mixpanel["supports_key_team_logging"] is True
-        params = mixpanel["dynamic_params"]
+        params: Final = mixpanel["dynamic_params"]
         assert params["mixpanel_project_token"]["type"] == "password"
         assert "mixpanel_region" in params
         assert is_sensitive_callback_key("mixpanel_project_token") is True
         assert is_sensitive_callback_key("mixpanel_region") is False
 
-        raw_metadata = {
+        raw_metadata: Final = {
             "logging": [
                 {
                     "callback_name": "mixpanel",
@@ -518,7 +518,7 @@ class TestMixpanelCallbackValidation:
                 }
             ]
         }
-        redacted = _redact_callback_secrets(raw_metadata)
+        redacted: Final = _redact_callback_secrets(raw_metadata)
         assert redacted["logging"][0]["callback_vars"]["mixpanel_project_token"] == "***REDACTED***"
 
     @pytest.mark.parametrize(
@@ -543,8 +543,8 @@ class TestMixpanelCallbackValidation:
 
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
-        admin = UserAPIKeyAuth(user_role="proxy_admin")
-        request = MagicMock(spec=Request)
+        admin: Final = UserAPIKeyAuth(user_role="proxy_admin")
+        request: Final = MagicMock(spec=Request)
         try:
             with pytest.raises(ProxyException) as created:
                 await new_team(data=NewTeamRequest(metadata=metadata), http_request=request, user_api_key_dict=admin)
@@ -592,7 +592,7 @@ class TestMixpanelCallbackValidation:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
         from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
 
-        real_token = {
+        real_token: Final = {
             "logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": "real"}}],
             "callback_settings": {"callback_vars": {"mixpanel_project_token": "real"}},
         }

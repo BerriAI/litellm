@@ -6210,7 +6210,7 @@ class TestLangfuseRequestMetadataStaysWithLangfuse:
 def test_mixpanel_destination_resolves_endpoint_and_basic_auth() -> None:
     assert "mixpanel" in destination_capable_backends()
     assert destination_for("mixpanel", {"mixpanel_region": "eu"}) is None
-    destination = destination_for("mixpanel", {"mixpanel_project_token": "team-tok", "mixpanel_region": "eu"})
+    destination: Final = destination_for("mixpanel", {"mixpanel_project_token": "team-tok", "mixpanel_region": "eu"})
     assert destination is not None
     assert destination.endpoint == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
     assert destination.headers["Authorization"] == f"Basic {b64encode(b'team-tok:').decode()}"
@@ -6245,7 +6245,7 @@ class TestMixpanelGetsTheCallersId:
 
     @staticmethod
     def _operator(monkeypatch: pytest.MonkeyPatch) -> tuple[TracerProvider, dict[object, InMemorySpanExporter]]:
-        exporters: dict[object, InMemorySpanExporter] = {}  # mutable-ok: filled as specs build
+        exporters: Final[dict[object, InMemorySpanExporter]] = {}  # mutable-ok: filled as specs build
         kind: Final = "lit10367_mixpanel"
         monkeypatch.setitem(
             otel_providers._EXPORTER_FACTORIES,
@@ -6268,7 +6268,7 @@ class TestMixpanelGetsTheCallersId:
         def run() -> None:
             set_request_destinations(destinations)
             set_request_user_id(user_id)
-            tracer = get_tracer(provider, "litellm")
+            tracer: Final = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/chat/completions"):
                 with tracer.start_as_current_span("chat gpt-4o") as span:
                     span.set_attributes(dict(model_call_attributes))
@@ -6342,10 +6342,10 @@ class TestMixpanelGetsTheCallersId:
 
         def run() -> None:
             set_request_destinations((sampled,))
-            tracer = get_tracer(provider, "litellm")
+            tracer: Final = get_tracer(provider, "litellm")
             for index in range(otel_providers._MAX_PENDING_TREES + 1):
                 set_request_user_id(f"caller-{index}")
-                root = tracer.start_span(f"POST {index}", context=trace_api.Context())
+                root: Final = tracer.start_span(f"POST {index}", context=trace_api.Context())
                 tracer.start_span(f"chat {index}", context=trace_api.set_span_in_context(root)).end()
 
         in_fresh_context(run)
