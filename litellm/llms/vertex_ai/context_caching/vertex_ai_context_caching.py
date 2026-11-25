@@ -451,7 +451,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_content: str | None = None,
         context_caching: bool = True,
         drop_params: bool = False,
-    ) -> tuple[list[AllMessageValues], dict, str | None]:
+    ) -> tuple[list[AllMessageValues], dict[str, object], str | None]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -611,7 +611,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_content: str | None = None,
         context_caching: bool = True,
         drop_params: bool = False,
-    ) -> tuple[list[AllMessageValues], dict, str | None]:
+    ) -> tuple[list[AllMessageValues], dict[str, object], str | None]:
         """
         Receives
         - messages: List of dict - messages in the openai format

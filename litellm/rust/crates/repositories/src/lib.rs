@@ -1,7 +1,7 @@
 //! Rust repositories for the objects the proxy reads from Postgres: the auth objects it reads when its auth cache
-//! misses, and the spend log sums it reseeds cold budget window counters from. The spend log repository also writes
-//! the spend logs and their ledger deliveries, and the gateway request repository adds the daily gateway request
-//! counts.
+//! misses, the spend log sums it reseeds cold budget window counters from, and the config, model, credential and
+//! UI settings rows the gateway loads its DB config from. The spend log repository also writes the spend logs and
+//! their ledger deliveries, and the gateway request repository adds the daily gateway request counts.
 //!
 //! Each repository is a folder that owns its queries, the shaping of their rows into what their callers consume,
 //! and any memory tier private to that object. Queries are private to their folder, so every read goes through a
@@ -17,6 +17,8 @@ mod access_group;
 mod agent_identity;
 mod audit_log;
 mod budget;
+mod config;
+mod credential;
 mod database;
 mod end_user;
 mod gateway_request;
@@ -28,6 +30,7 @@ mod model_access_group;
 mod object_permission;
 mod organization;
 mod project;
+mod proxy_model;
 mod raw_json;
 mod spend_log;
 mod tag;
@@ -35,6 +38,7 @@ mod team;
 mod team_membership;
 #[cfg(test)]
 mod test_support;
+mod ui_settings;
 mod user;
 mod utc_timestamp;
 
@@ -42,6 +46,8 @@ pub use access_group::{AccessGroup, AccessGroupRepository};
 pub use agent_identity::AgentIdentityRepository;
 pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
+pub use config::{ConfigParam, ConfigRepository};
+pub use credential::{Credential, CredentialRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use gateway_request::{GatewayRequestCount, GatewayRequestRepository};
@@ -53,6 +59,7 @@ pub use model_access_group::{ModelAccessGroupBudget, ModelAccessGroupRepository}
 pub use object_permission::{ObjectPermission, ObjectPermissionRepository};
 pub use organization::{Organization, OrganizationRepository};
 pub use project::{Project, ProjectRepository};
+pub use proxy_model::{ProxyModel, ProxyModelRepository};
 pub use raw_json::RawJson;
 pub use spend_log::{
     JsonText, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository, SpendLogWrite,
@@ -62,4 +69,5 @@ pub use team::{Team, TeamRepository};
 pub use team_membership::{
     AddedMember, MemberAdd, MemberBudget, NewMemberBudget, TeamMembership, TeamMembershipRepository,
 };
+pub use ui_settings::UiSettingsRepository;
 pub use user::{NewUserDefaults, SignIn, User, UserRepository};

@@ -169,11 +169,11 @@ def _names_a_credential_header(key: str | None) -> bool:
     return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
 
 
-def _names_a_credential_field(key: str | None) -> bool:
+def _names_a_credential_field(key: str | None, value: object) -> bool:
     if key is None:
         return False
     words: Final = frozenset(_FIELD_NAME_BOUNDARY.sub(" ", key).lower().split())
-    if words & QUANTITY_FIELD_NAME_WORDS:
+    if words & QUANTITY_FIELD_NAME_WORDS and not isinstance(value, str):
         return False
     compact: Final = "".join(character for character in key.lower() if character.isalnum())
     return bool(words & CREDENTIAL_FIELD_NAME_WORDS) or any(
@@ -201,7 +201,7 @@ def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
 
 
 def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
-    if _names_a_credential_header(key) or _names_a_credential_field(key):
+    if _names_a_credential_header(key) or _names_a_credential_field(key, value):
         return REDACTED
     if isinstance(value, str):
         return redact_internal_details(redact_structured_value(key, _redacted_embedded_json(key, value, depth)))
