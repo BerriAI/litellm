@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import weakref
 from base64 import b64decode, b64encode
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 from itertools import chain
@@ -22,7 +24,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 
-__all__ = ("Media", "MediaField", "MediaUpload", "MediaUploader", "extract_media")
+__all__ = ("Media", "MediaField", "MediaUpload", "MediaUploader", "extract_media", "restart_uploads_in_forked_child")
 
 MediaField: TypeAlias = Literal["input", "output", "metadata"]
 
@@ -161,6 +163,28 @@ def _storage_headers(upload_url: str, media: Media) -> Mapping[str, str]:
     }
 
 
+@dataclass(slots=True)
+class _Backlog:
+    """What one upload thread works through. A forked child gets a new one, since it has none of the parent's threads
+    and the parent still uploads what it queued."""
+
+    queue: Queue[MediaUpload] = field(default_factory=Queue)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    closed: threading.Event = field(default_factory=threading.Event)
+    queued_bytes: int = 0
+
+    def reserve(self, size: int, limit: int) -> bool:
+        with self.lock:
+            if self.queued_bytes + size > limit:
+                return False
+            self.queued_bytes += size
+            return True
+
+    def release(self, size: int) -> None:
+        with self.lock:
+            self.queued_bytes -= size
+
+
 class MediaUploader:
     """Uploads queued media to Langfuse on one daemon thread, so storage latency never holds up span export.
 
@@ -183,44 +207,50 @@ class MediaUploader:
         self._timeout: Final = timeout
         self._delays: Final = tuple(delays)
         self._max_queued_bytes: Final = max_queued_bytes
-        self._queue: Final[Queue[MediaUpload]] = Queue()
-        self._lock: Final = threading.Lock()
-        self._queued_bytes = 0
-        self._closed: Final = threading.Event()
+        self._backlog = self._started_backlog()
         self.failed_uploads = 0
-        threading.Thread(target=self._run, name="langfuse-media-upload", daemon=True).start()
+        _LIVE_UPLOADERS.add(self)
+
+    def _started_backlog(self) -> _Backlog:
+        backlog: Final = _Backlog()
+        threading.Thread(target=self._run, args=(backlog,), name="langfuse-media-upload", daemon=True).start()
+        return backlog
+
+    def restart_in_forked_child(self) -> None:
+        self._backlog.closed.set()
+        self._backlog = self._started_backlog()
 
     def submit(self, uploads: Sequence[MediaUpload]) -> bool:
         """All of ``uploads`` or none: ``False`` when they do not fit next to the payloads still waiting, and the
         caller has to keep them inline."""
         size: Final = sum(len(upload.media.content) for upload in uploads)
-        with self._lock:
-            if self._queued_bytes + size > self._max_queued_bytes:
-                return False
-            self._queued_bytes += size
+        backlog: Final = self._backlog
+        if not backlog.reserve(size, self._max_queued_bytes):
+            return False
         for upload in uploads:
-            self._queue.put_nowait(upload)
+            backlog.queue.put_nowait(upload)
         return True
 
     def drain(self, timeout_millis: int) -> bool:
         """``True`` once every submitted upload has been attempted, ``False`` if ``timeout_millis`` passes first."""
         deadline: Final = monotonic() + timeout_millis / 1000
-        while self._queue.unfinished_tasks and monotonic() < deadline:
+        queue: Final = self._backlog.queue
+        while queue.unfinished_tasks and monotonic() < deadline:
             sleep(_DRAIN_POLL_SECONDS)
-        return not self._queue.unfinished_tasks
+        return not queue.unfinished_tasks
 
     def shutdown(self) -> None:
         """The thread ends once the uploads already queued have been attempted."""
-        self._closed.set()
+        self._backlog.closed.set()
 
-    def _run(self) -> None:
-        while not (self._closed.is_set() and self._queue.empty()):
+    def _run(self, backlog: _Backlog) -> None:
+        while not (backlog.closed.is_set() and backlog.queue.empty()):
             try:
-                self._attempt(self._queue.get(timeout=_IDLE_POLL_SECONDS))
+                self._attempt(backlog, backlog.queue.get(timeout=_IDLE_POLL_SECONDS))
             except Empty:
                 continue
 
-    def _attempt(self, upload: MediaUpload) -> None:
+    def _attempt(self, backlog: _Backlog, upload: MediaUpload) -> None:
         try:
             failure: Final = self._failure(upload)
             if failure is not None:
@@ -232,9 +262,8 @@ class MediaUploader:
                     failure,
                 )
         finally:
-            with self._lock:
-                self._queued_bytes -= len(upload.media.content)
-            self._queue.task_done()
+            backlog.release(len(upload.media.content))
+            backlog.queue.task_done()
 
     def _failure(self, upload: MediaUpload) -> str | None:
         try:
@@ -324,3 +353,15 @@ class MediaUploader:
         except httpx.TransportError as error:
             verbose_logger.warning("Langfuse media %s upload raised %s", media.media_id, error)
             return None
+
+
+_LIVE_UPLOADERS: Final[weakref.WeakSet[MediaUploader]] = weakref.WeakSet()
+
+
+def restart_uploads_in_forked_child() -> None:
+    for uploader in tuple(_LIVE_UPLOADERS):
+        uploader.restart_in_forked_child()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=restart_uploads_in_forked_child)

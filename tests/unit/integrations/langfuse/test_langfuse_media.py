@@ -13,7 +13,13 @@ import httpx
 import pytest
 from langfuse.api import LangfuseAPI
 
-from litellm.integrations.langfuse.langfuse_media import MediaField, MediaUpload, MediaUploader, extract_media
+from litellm.integrations.langfuse.langfuse_media import (
+    MediaField,
+    MediaUpload,
+    MediaUploader,
+    extract_media,
+    restart_uploads_in_forked_child,
+)
 
 Transport = Callable[[httpx.Request], httpx.Response]
 
@@ -506,3 +512,33 @@ def test_shutdown_ends_the_upload_thread_after_the_queued_uploads():
         sleep(0.01)
     assert not thread.is_alive()
     assert len(requests) == 1
+
+
+def test_after_a_fork_the_child_uploads_on_its_own_thread_without_the_parents_queue():
+    """A forked child has none of the parent's threads. The parent's upload thread is held mid-request here, which
+    is what the child sees of it: queued work that nothing in the child will ever finish."""
+    requests: list[httpx.Request] = []
+    respond: Final = _langfuse(requests)
+    parent_thread_busy: Final = threading.Event()
+    release_parent_thread: Final = threading.Event()
+    first_request: Final = iter((True,))
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if next(first_request, False):
+            parent_thread_busy.set()
+            release_parent_thread.wait(10)
+        return respond(request)
+
+    uploader = _uploader(transport)
+    uploader.submit((_upload(),))
+    assert parent_thread_busy.wait(5)
+
+    restart_uploads_in_forked_child()
+
+    try:
+        assert uploader.submit((_upload(field="output"),)) is True
+        assert uploader.drain(5_000) is True
+        assert [request.method for request in requests] == ["POST", "PUT", "PATCH"]
+        assert json.loads(requests[0].content)["field"] == "output"
+    finally:
+        release_parent_thread.set()
