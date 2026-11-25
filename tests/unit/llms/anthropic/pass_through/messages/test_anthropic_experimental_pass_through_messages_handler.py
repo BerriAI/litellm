@@ -3,8 +3,6 @@ import copy
 import json
 import os
 import uuid
-from collections.abc import Mapping
-from datetime import datetime
 from typing import Any, Dict, Final, List
 
 import httpx
@@ -1617,12 +1615,12 @@ async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safegu
 class _ResponseHeaderCapture(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: Final[asyncio.Queue[Mapping[str, str]]] = asyncio.Queue()
+        self.logged: Final[asyncio.Queue[dict[str, str]]] = asyncio.Queue()
 
     async def async_log_success_event(
-        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self.logged.put_nowait(TypeAdapter(Mapping[str, str]).validate_python(kwargs["response_headers"]))
+        self.logged.put_nowait(TypeAdapter(dict[str, str]).validate_python(kwargs["response_headers"]))
 
 
 @pytest.mark.asyncio
