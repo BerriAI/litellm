@@ -142,10 +142,11 @@ DRIFT_WITH_BOTH_INDEXES: Final = (
 
 
 class TestFilterRequestLogIndexDiff:
+    @pytest.mark.parametrize("index", ("LiteLLM_EndUserTable_restricted_idx", "LiteLLM_SpendLogDelivery_batch_idx"))
     @pytest.mark.parametrize("prefix", ("DROP INDEX ", "DROP INDEX IF EXISTS ", 'DROP INDEX CONCURRENTLY "public".'))
-    def test_partial_index_drops_are_removed_but_other_drift_survives(self, prefix: str):
+    def test_partial_index_drops_are_removed_but_other_drift_survives(self, prefix: str, index: str):
         other: Final = 'ALTER TABLE "LiteLLM_EndUserTable" ADD COLUMN alias TEXT;'
-        statement: Final = prefix + '"LiteLLM_EndUserTable_restricted_idx";'
+        statement: Final = f'{prefix}"{index}";'
         assert filter_request_log_index_diff(statement) == ""
         assert other in filter_request_log_index_diff(statement + other)
 

@@ -76,6 +76,7 @@ REQUEST_LOG_INDEXES: Final = (
         "LiteLLM_EndUserTable_restricted_idx",
         '("user_id") WHERE ' + END_USER_RESTRICTED_PREDICATE,
     ),
+    RequestLogIndex("LiteLLM_SpendLogDelivery", "LiteLLM_SpendLogDelivery_batch_idx", '("delivery_id") WHERE is_batch'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_session_id_idx", '("session_id")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_startTime_request_id_idx", '("startTime", "request_id")'),
     RequestLogIndex(
