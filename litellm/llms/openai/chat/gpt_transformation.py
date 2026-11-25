@@ -8,7 +8,7 @@ import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast, overload
 from urllib.parse import urlparse
 
 import httpx
@@ -1077,8 +1077,6 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
-    upstream_abort_error: ClassVar[type[BaseLLMException]] = OpenAIError
-
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         """
         Map 'reasoning' field to 'reasoning_content' field in delta.

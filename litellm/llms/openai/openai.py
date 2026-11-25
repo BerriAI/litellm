@@ -3,7 +3,7 @@ import json
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
 
@@ -402,8 +402,6 @@ class OpenAIConfig(BaseConfig):
 
 
 class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
-    upstream_abort_error: ClassVar[type[BaseLLMException]] = OpenAIError
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         """
         {'choices': [{'delta': {'content': '', 'role': 'assistant'}, 'finish_reason': None, 'index': 0, 'logprobs': None}], 'created': 1735763082, 'id': 'a83a2b0fbfaf4aab9c2c93cb8ba346d7', 'model': 'mistral-large', 'object': 'chat.completion.chunk'}
