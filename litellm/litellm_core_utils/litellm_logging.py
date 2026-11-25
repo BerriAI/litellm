@@ -247,6 +247,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
+    FailureLoggedCost,
     GuardrailStatus,
     ImageResponse,
     LiteLLMBatch,
@@ -3454,7 +3455,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not isinstance(own_cost, (int, float)):
             return combined_usage
         self.model_call_details["response_cost"] = own_cost + partial_cost
-        self.model_call_details["failure_logged_cost_billed_on_success"] = partial_cost
+        self.model_call_details["failure_logged_cost_billed_on_success"] = FailureLoggedCost(partial_cost)
         if self.cost_breakdown is not None:
             self.cost_breakdown = self.cost_breakdown | CostBreakdown(
                 total_cost=own_cost + partial_cost,
@@ -3481,8 +3482,9 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
         continued_partial_logged: Final = self.model_call_details.get("failure_logged_cost_billed_on_success")
-        self.model_call_details["failure_logged_cost_billed_on_success"] = self._failure_logged_cost_owed_on_success + (
-            continued_partial_logged if isinstance(continued_partial_logged, float) else 0.0
+        self.model_call_details["failure_logged_cost_billed_on_success"] = FailureLoggedCost(
+            self._failure_logged_cost_owed_on_success
+            + (continued_partial_logged.cost if isinstance(continued_partial_logged, FailureLoggedCost) else 0.0)
         )
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)

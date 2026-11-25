@@ -6,8 +6,10 @@ anthropic_messages, embedding and rerank surfaces leave it unset, which used to 
 the callback raise before any spend was recorded, so those budgets never moved.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import partial
+from types import MappingProxyType
 from typing import Final
 
 import litellm
@@ -146,7 +148,9 @@ _EARLIER_ATTEMPT: Final = (Usage(prompt_tokens=1000, completion_tokens=500, tota
 _SERVED: Final = ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
 
 
-def _openai_attempt(limiter: RouterBudgetLimiting, *, stream: bool, call_id: str) -> LitellmLogging:
+def _openai_attempt(
+    limiter: RouterBudgetLimiting, *, stream: bool, call_id: str, request_params: Mapping[str, object] = MappingProxyType({})
+) -> LitellmLogging:
     logging_obj: Final = LitellmLogging(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -159,7 +163,11 @@ def _openai_attempt(limiter: RouterBudgetLimiting, *, stream: bool, call_id: str
         dynamic_async_failure_callbacks=[limiter],
     )
     logging_obj.update_environment_variables(
-        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+        model="gpt-4o-mini",
+        user="",
+        optional_params=dict(request_params),
+        litellm_params={"metadata": {}},
+        custom_llm_provider="openai",
     )
     return logging_obj
 
@@ -186,6 +194,24 @@ async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once(disa
     assert await _provider_spend(limiter) == pytest.approx(
         _EARLIER_ATTEMPT[1] + litellm.completion_cost(_SERVED, model="gpt-4o-mini")
     )
+
+
+@pytest.mark.asyncio
+async def test_a_request_param_cannot_mark_a_success_as_already_counted(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
+    )
+    logging_obj: Final = _openai_attempt(
+        limiter,
+        stream=False,
+        call_id="forged-already-counted",
+        request_params={"failure_logged_cost_billed_on_success": 1_000_000.0},
+    )
+    now: Final = datetime.now()
+
+    await logging_obj.async_success_handler(_SERVED, now, now)
+
+    assert await _provider_spend(limiter) == pytest.approx(litellm.completion_cost(_SERVED, model="gpt-4o-mini"))
 
 
 @pytest.mark.asyncio

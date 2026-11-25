@@ -52,7 +52,7 @@ from litellm.router_utils.cooldown_callbacks import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import LiteLLM_Params, RouterErrors
-from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
+from litellm.types.utils import BudgetConfig, FailureLoggedCost, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
@@ -72,7 +72,9 @@ def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
 
 def cost_left_after_failed_attempts(kwargs: Mapping[str, object], response_cost: float) -> float:
     already_counted: Final = kwargs.get("failure_logged_cost_billed_on_success")
-    return max(response_cost - already_counted, 0.0) if isinstance(already_counted, int | float) else response_cost
+    if not isinstance(already_counted, FailureLoggedCost):
+        return response_cost
+    return max(response_cost - already_counted.cost, 0.0)
 
 
 def _model_info_id(deployment: Mapping[str, object]) -> object:
