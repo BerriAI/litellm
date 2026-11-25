@@ -7686,6 +7686,61 @@ def test_bridged_chat_rejects_background_on_a_deployment_that_passes_responses_t
     assert upstream.call_count == 0
 
 
+def test_bridged_chat_rejects_background_on_a_pass_through_model_that_cannot_stream_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost,
+        "custom_openai/faked-stream-passthrough-model",
+        {"litellm_provider": "custom_openai", "mode": "responses", "supports_native_streaming": False},
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://example.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("faked-stream-passthrough-model"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model="custom_openai/faked-stream-passthrough-model",
+                messages=[{"role": "user", "content": "ping"}],
+                api_base="https://example.invalid/v1",
+                api_key="test-key",
+                stream=True,
+                background=True,
+                model_info={"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+def test_bridged_chat_sends_background_to_a_provider_that_answers_it_inline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, "openrouter/openai/gpt-5.3-codex", {"litellm_provider": "openrouter", "mode": "responses"}
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://openrouter.ai/api/v1/responses").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("openai/gpt-5.3-codex"))
+        )
+        response: Final = litellm.completion(
+            model="openrouter/openai/gpt-5.3-codex",
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="test-key",
+            background=True,
+            model_info={"mode": "responses"},
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
 def test_bridged_chat_keeps_serving_background_on_a_deployment_that_falls_back_to_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

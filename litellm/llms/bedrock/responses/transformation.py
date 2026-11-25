@@ -192,7 +192,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self.fetch_image = fetch_image
         self.async_fetch_image = async_fetch_image
 
-    def forwards_background(self) -> bool:
+    def starts_background_runs(self) -> bool:
         return "background" not in BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS
 
     @classmethod

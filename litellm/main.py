@@ -5420,11 +5420,19 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
     )
 
 
-def _responses_bridge_fakes_stream(model: str, custom_llm_provider: str, optional_params: Mapping[str, object]) -> bool:
+def _responses_bridge_fakes_stream(
+    model: str,
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+) -> bool:
     if optional_params.get("fake_stream") is True:
         return True
-    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
-        provider=custom_llm_provider, model=model
+    from litellm.responses.main import dispatched_responses_api_config
+
+    responses_config: Final = dispatched_responses_api_config(
+        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
     )
     return responses_config is not None and responses_config.should_fake_stream(
         model=model, stream=True, custom_llm_provider=custom_llm_provider
@@ -5441,14 +5449,14 @@ def _bridge_params_without_unretrievable_background_run(
     api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
-    from litellm.responses.main import forwards_background_upstream
+    from litellm.responses.main import starts_background_run_upstream
 
     extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
     if extra_body.get("stream", streams_upstream) is True and not _responses_bridge_fakes_stream(
-        model, custom_llm_provider, optional_params
+        model, custom_llm_provider, optional_params, api_base, deployment_model_info
     ):
         return optional_params
-    if not forwards_background_upstream(
+    if not starts_background_run_upstream(
         f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
     ):
         return optional_params
