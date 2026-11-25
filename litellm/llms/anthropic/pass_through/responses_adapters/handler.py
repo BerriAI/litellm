@@ -6,6 +6,7 @@ Used when the target model is an OpenAI model.
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -18,6 +19,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     drops_unsupported_params,
     iter_items,
@@ -75,6 +77,7 @@ _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
+_WEB_SEARCH_FILTERS_REFUSAL: Final = "Parameter 'filters' not supported with model"
 
 
 def _record_bridged_response(responses_kwargs: Mapping[str, object], result: ResponsesAPIResponse) -> None:
@@ -291,41 +294,82 @@ def _model_excludes_effort(
     )
 
 
-def _drops_refused_summary(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> bool:
+@dataclass(frozen=True, slots=True)
+class _RefusedField:
+    refusal: str
+    reason: str
+    sent: Callable[[Mapping[str, object]], bool]
+    without: Callable[[Mapping[str, object]], Mapping[str, object]]
+
+    def refused(self, error: Exception) -> bool:
+        return isinstance(error, litellm.BadRequestError) and self.refusal in error.message
+
+
+def _sends_summary(responses_kwargs: Mapping[str, object]) -> bool:
     reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
-    return drop_params and reasoning is not None and "summary" in reasoning
+    return reasoning is not None and "summary" in reasoning
 
 
-def _is_refused_summary(error: Exception) -> bool:
-    return isinstance(error, litellm.BadRequestError) and _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL in error.message
+def _without_summary(responses_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning")) or {}
+    return {**responses_kwargs, "reasoning": {key: value for key, value in reasoning.items() if key != "summary"}}
 
 
-def _resent_without_refused_summary(
+def _filtered_web_search(tool: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(tool)
+    return mapping if mapping is not None and mapping.get("type") == "web_search" and "filters" in mapping else None
+
+
+def _unfiltered(tool: object) -> object:
+    search: Final = _filtered_web_search(tool)
+    return tool if search is None else {key: value for key, value in search.items() if key != "filters"}
+
+
+def _sends_web_search_filters(responses_kwargs: Mapping[str, object]) -> bool:
+    return any(_filtered_web_search(tool) is not None for tool in as_object_list(responses_kwargs.get("tools")) or ())
+
+
+def _without_web_search_filters(responses_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = as_object_list(responses_kwargs.get("tools")) or ()
+    return {**responses_kwargs, "tools": [_unfiltered(tool) for tool in tools]}
+
+
+_REFUSED_FIELDS: Final = (
+    _RefusedField(
+        refusal=_UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL,
+        reason="reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is verified",
+        sent=_sends_summary,
+        without=_without_summary,
+    ),
+    _RefusedField(
+        refusal=_WEB_SEARCH_FILTERS_REFUSAL,
+        reason="web search domain filters, OpenAI does not take them on this model",
+        sent=_sends_web_search_filters,
+        without=_without_web_search_filters,
+    ),
+)
+
+
+def _droppable_fields(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> tuple[_RefusedField, ...]:
+    return tuple(field for field in _REFUSED_FIELDS if drop_params and field.sent(responses_kwargs))
+
+
+def _resent_without_refused_fields(
     responses_kwargs: Mapping[str, object], *, drop_params: bool
 ) -> AbstractContextManager[None]:
-    return (
-        resent_on(_is_refused_summary)
-        if _drops_refused_summary(responses_kwargs, drop_params=drop_params)
-        else nullcontext()
-    )
+    droppable: Final = _droppable_fields(responses_kwargs, drop_params=drop_params)
+    return resent_on(lambda error: any(field.refused(error) for field in droppable)) if droppable else nullcontext()
 
 
-def _retry_without_refused_summary(
+def _retry_without_refused_field(
     responses_kwargs: Mapping[str, object], error: litellm.BadRequestError, *, model: str, drop_params: bool
 ) -> Mapping[str, object] | None:
-    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
-    if (
-        reasoning is None
-        or not _drops_refused_summary(responses_kwargs, drop_params=drop_params)
-        or not _is_refused_summary(error)
-    ):
+    droppable: Final = _droppable_fields(responses_kwargs, drop_params=drop_params)
+    refused: Final = next((field for field in droppable if field.refused(error)), None)
+    if refused is None:
         return None
-    verbose_logger.warning(
-        "Retrying %s without reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is "
-        "verified, because drop_params is set",
-        model,
-    )
-    return {**responses_kwargs, "reasoning": {key: value for key, value in reasoning.items() if key != "summary"}}
+    verbose_logger.warning("Retrying %s without %s, because drop_params is set", model, refused.reason)
+    return refused.without(responses_kwargs)
 
 
 def _maps_reasoning(
@@ -551,30 +595,34 @@ def _kwarg_text(responses_kwargs: Mapping[str, object], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-async def _aresponses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _ResponsesResult:
+async def _aresponses_dropping_refused_fields(
+    responses_kwargs: Mapping[str, object], *, drop_params: bool
+) -> _ResponsesResult:
     try:
-        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+        with _resent_without_refused_fields(responses_kwargs, drop_params=drop_params):
             return await litellm.aresponses(**responses_kwargs)
     except litellm.BadRequestError as error:
-        retry_kwargs: Final = _retry_without_refused_summary(
+        retry_kwargs: Final = _retry_without_refused_field(
             responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
         )
         if retry_kwargs is None:
             raise
-        return await litellm.aresponses(**retry_kwargs)
+        return await _aresponses_dropping_refused_fields(retry_kwargs, drop_params=drop_params)
 
 
-def _responses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _SyncResponsesResult:
+def _responses_dropping_refused_fields(
+    responses_kwargs: Mapping[str, object], *, drop_params: bool
+) -> _SyncResponsesResult:
     try:
-        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+        with _resent_without_refused_fields(responses_kwargs, drop_params=drop_params):
             return litellm.responses(**responses_kwargs)
     except litellm.BadRequestError as error:
-        retry_kwargs: Final = _retry_without_refused_summary(
+        retry_kwargs: Final = _retry_without_refused_field(
             responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
         )
         if retry_kwargs is None:
             raise
-        return litellm.responses(**retry_kwargs)
+        return _responses_dropping_refused_fields(retry_kwargs, drop_params=drop_params)
 
 
 def _messages_without_rejected_reasoning(
@@ -599,7 +647,9 @@ async def _aresponses_without_rejected_reasoning(
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, await _aresponses(responses_kwargs, drop_params=drop_params)
+            return responses_kwargs, await _aresponses_dropping_refused_fields(
+                responses_kwargs, drop_params=drop_params
+            )
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
@@ -607,7 +657,7 @@ async def _aresponses_without_rejected_reasoning(
         if replayed_messages is None:
             raise
         replay_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(replayed_messages))
-        return replay_kwargs, await _aresponses(replay_kwargs, drop_params=drop_params)
+        return replay_kwargs, await _aresponses_dropping_refused_fields(replay_kwargs, drop_params=drop_params)
 
 
 def _responses_without_rejected_reasoning(
@@ -617,7 +667,7 @@ def _responses_without_rejected_reasoning(
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, _responses(responses_kwargs, drop_params=drop_params)
+            return responses_kwargs, _responses_dropping_refused_fields(responses_kwargs, drop_params=drop_params)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
@@ -625,7 +675,7 @@ def _responses_without_rejected_reasoning(
         if replayed_messages is None:
             raise
         replay_kwargs: Final = without_stored_instructions(responses_kwargs_for(replayed_messages))
-        return replay_kwargs, _responses(replay_kwargs, drop_params=drop_params)
+        return replay_kwargs, _responses_dropping_refused_fields(replay_kwargs, drop_params=drop_params)
 
 
 class LiteLLMMessagesToResponsesAPIHandler:
