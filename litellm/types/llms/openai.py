@@ -869,6 +869,7 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
     detail: str
     format: str
     video_metadata: ReadOnly[Mapping[str, object]]
+    audio_metadata: ReadOnly[Mapping[str, object]]
 
 
 class ChatCompletionImageObject(TypedDict):

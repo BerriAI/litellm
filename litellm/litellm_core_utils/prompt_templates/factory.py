@@ -1581,6 +1581,7 @@ class GeminiMediaSource:
     inline_in_tool_result: bool = False
     document_metadata: Mapping[str, object] | None = None
     spreadsheet_metadata: Mapping[str, object] | None = None
+    audio_metadata: Mapping[str, object] | None = None
     max_download_bytes: int | None = None
 
 
@@ -1642,6 +1643,7 @@ def _gemini_url_media_source(url: str, fields: Mapping[str, object]) -> GeminiMe
         detail=detail if isinstance(detail, str) else None,
         video_metadata=as_str_mapping(fields.get("video_metadata")),
         inline_in_tool_result=True,
+        audio_metadata=as_str_mapping(fields.get("audio_metadata")),
     )
 
 
@@ -1679,11 +1681,13 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
         if not isinstance(audio_data, str) or not isinstance(audio_format, str):
             return None
         audio_mime: Final = audio_format if audio_format.startswith("audio/") else f"audio/{audio_format}"
+        audio_fields: Final = {**content, **audio}
         return GeminiMediaSource(
             url=convert_generic_image_chunk_to_openai_image_obj(
                 GenericImageParsingChunk(type="base64", media_type=audio_mime, data=audio_data)
             ),
             format=audio_mime,
+            audio_metadata=as_str_mapping(audio_fields.get("audio_metadata")),
         )
     if content_type not in ("file", "input_file"):
         return None
@@ -1707,6 +1711,7 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
         inline_in_tool_result=source == file_data,
         document_metadata=as_str_mapping(file.get("document_metadata")),
         spreadsheet_metadata=as_str_mapping(file.get("spreadsheet_metadata")),
+        audio_metadata=as_str_mapping(file.get("audio_metadata")),
     )
 
 
@@ -1721,7 +1726,10 @@ def _gemini_tool_media_part(
     drop_params: bool = False,
 ) -> VertexPartType | None:
     from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES, gemini_fetches_url_itself
-    from litellm.llms.vertex_ai.gemini.transformation import changes_gemini_media_settings, encode_gemini_media_source
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        encode_gemini_media_source,
+        vertex_tool_result_ignored_settings,
+    )
 
     source: Final = gemini_media_source(content)
     if source is None:
@@ -1733,16 +1741,16 @@ def _gemini_tool_media_part(
             )
         return None
     vertex_nested: Final = nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
-    drops_video_settings: Final = (
-        vertex_nested
-        and content.get("type") == "video_url"
-        and changes_gemini_media_settings(source.detail, source.video_metadata)
+    ignored_settings: Final = (
+        vertex_tool_result_ignored_settings(source, is_video_url=content.get("type") == "video_url")
+        if vertex_nested
+        else ()
     )
-    if drops_video_settings and not drop_params:
+    if ignored_settings and not drop_params:
         raise litellm.BadRequestError(
             message=(
-                "Vertex ignores detail and video_metadata on a video inside a tool result. "
-                "Move the video to a user message, remove them, or set drop_params=True."
+                f"Vertex ignores {', '.join(ignored_settings)} on media inside a tool result. "
+                "Move the media to a user message, remove them, or set drop_params=True."
             ),
             model=model or "",
             llm_provider=custom_llm_provider or "vertex_ai",
@@ -1760,7 +1768,18 @@ def _gemini_tool_media_part(
             model=model or "",
             llm_provider=custom_llm_provider or "gemini",
         )
-    kept_source: Final = replace(source, detail=None, video_metadata=None) if vertex_nested else source
+    kept_source: Final = (
+        replace(
+            source,
+            detail=None,
+            video_metadata=None,
+            document_metadata=None,
+            spreadsheet_metadata=None,
+            audio_metadata=None,
+        )
+        if vertex_nested
+        else source
+    )
     try:
         encoded_source: Final = (
             replace(
@@ -1848,7 +1867,11 @@ def _function_response_part(part: VertexPartType, *, include_file_inspection: bo
     )
     selection: Final = (
         FunctionResponsePartType(
-            **gemini_file_inspection_metadata(part.get("document_metadata"), part.get("spreadsheet_metadata"))
+            **gemini_file_inspection_metadata(
+                document_metadata=part.get("document_metadata"),
+                spreadsheet_metadata=part.get("spreadsheet_metadata"),
+                audio_metadata=part.get("audio_metadata"),
+            )
         )
         if include_file_inspection
         else FunctionResponsePartType()

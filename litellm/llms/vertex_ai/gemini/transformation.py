@@ -161,10 +161,15 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
-def changes_gemini_media_settings(detail: str | None, video_metadata: Mapping[str, object] | None) -> bool:
-    return _convert_detail_to_media_resolution_enum(detail) is not None or bool(
-        gemini_video_metadata_from_openai(video_metadata or {})
+def vertex_tool_result_ignored_settings(source: GeminiMediaSource, *, is_video_url: bool) -> tuple[str, ...]:
+    settings: Final = (
+        ("detail", is_video_url and _convert_detail_to_media_resolution_enum(source.detail) is not None),
+        ("video_metadata", bool(gemini_video_metadata_from_openai(source.video_metadata or {}))),
+        ("document_metadata", bool(source.document_metadata)),
+        ("spreadsheet_metadata", bool(source.spreadsheet_metadata)),
+        ("audio_metadata", bool(source.audio_metadata)),
     )
+    return tuple(name for name, ignored in settings if ignored)
 
 
 def _get_highest_media_resolution(current: str | None, new_detail: str | None) -> str | None:
@@ -660,7 +665,14 @@ def encode_gemini_media_source(
         custom_llm_provider=custom_llm_provider,
         max_download_bytes=source.max_download_bytes,
     )
-    return {**part, **encode_gemini_file_inspection_metadata(source.document_metadata, source.spreadsheet_metadata)}
+    return {
+        **part,
+        **encode_gemini_file_inspection_metadata(
+            document_metadata=source.document_metadata,
+            spreadsheet_metadata=source.spreadsheet_metadata,
+            audio_metadata=source.audio_metadata,
+        ),
+    }
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -672,38 +684,45 @@ def snake_to_camel(snake_str: str) -> str:
 _snake_to_camel = snake_to_camel
 
 
+def _camel_case_keys(metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    return None if metadata is None else {snake_to_camel(key): value for key, value in metadata.items()}
+
+
 def encode_gemini_file_inspection_metadata(
+    *,
     document_metadata: Mapping[str, object] | None,
     spreadsheet_metadata: Mapping[str, object] | None,
-    media_resolution: Mapping[str, str] | None = None,
+    audio_metadata: Mapping[str, object] | None,
 ) -> GeminiFileInspectionMetadata:
     return gemini_file_inspection_metadata(
-        {snake_to_camel(key): value for key, value in document_metadata.items()}
-        if document_metadata is not None
-        else None,
-        {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()}
-        if spreadsheet_metadata is not None
-        else None,
-        media_resolution,
+        document_metadata=_camel_case_keys(document_metadata),
+        spreadsheet_metadata=_camel_case_keys(spreadsheet_metadata),
+        audio_metadata=_camel_case_keys(audio_metadata),
     )
 
 
 def gemini_file_inspection_metadata(
+    *,
     document_metadata: Mapping[str, object] | None,
     spreadsheet_metadata: Mapping[str, object] | None,
-    media_resolution: Mapping[str, str] | None = None,
+    audio_metadata: Mapping[str, object] | None,
 ) -> GeminiFileInspectionMetadata:
     document: Final = (
         GeminiFileInspectionMetadata(document_metadata=document_metadata)
         if document_metadata is not None
         else GeminiFileInspectionMetadata()
     )
-    selection: Final[GeminiFileInspectionMetadata] = (
-        {**document, "spreadsheet_metadata": spreadsheet_metadata} if spreadsheet_metadata is not None else document
+    spreadsheet: Final = (
+        GeminiFileInspectionMetadata(spreadsheet_metadata=spreadsheet_metadata)
+        if spreadsheet_metadata is not None
+        else GeminiFileInspectionMetadata()
     )
-    if media_resolution is None:
-        return selection
-    return {**selection, "media_resolution": media_resolution}
+    audio: Final = (
+        GeminiFileInspectionMetadata(audio_metadata=audio_metadata)
+        if audio_metadata is not None
+        else GeminiFileInspectionMetadata()
+    )
+    return document | spreadsheet | audio
 
 
 def camel_to_snake(camel_str: str) -> str:

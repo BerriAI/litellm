@@ -50893,6 +50893,11 @@
         },
         "ChatCompletionImageUrlObject": {
           "properties": {
+            "audio_metadata": {
+              "additionalProperties": true,
+              "title": "Audio Metadata",
+              "type": "object"
+            },
             "detail": {
               "title": "Detail",
               "type": "string"

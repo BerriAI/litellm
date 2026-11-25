@@ -13,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import update_messages_with_model_file_ids
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.gemini.transformation import (
     _extract_max_media_resolution_from_messages,
@@ -27,16 +28,18 @@ from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
 
 
-@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
 @pytest.mark.parametrize(
-    "metadata, expected",
+    "mime_type, metadata, expected",
     [
-        ({}, {}),
+        ("application/pdf", {}, {}),
         (
+            "application/pdf",
             {"document_metadata": {"start_page": 2, "end_page": 4, "content_layers": ["PAGE_TEXT"]}},
             {"document_metadata": {"startPage": 2, "endPage": 4, "contentLayers": ["PAGE_TEXT"]}},
         ),
         (
+            "application/pdf",
             {
                 "spreadsheet_metadata": {
                     "sheet_index": 2,
@@ -54,26 +57,39 @@ from litellm.types.utils import Message
                 "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
             },
         ),
+        (
+            "audio/mpeg",
+            {"audio_metadata": {"start_offset": "60s", "end_offset": "90s"}},
+            {"audio_metadata": {"startOffset": "60s", "endOffset": "90s"}},
+        ),
+        (
+            "video/mp4",
+            {"video_metadata": {"fps": 1, "start_offset": "5s", "end_offset": "30s", "content_layers": ["FRAMES"]}},
+            {"video_metadata": {"fps": 1, "startOffset": "5s", "endOffset": "30s", "contentLayers": ["FRAMES"]}},
+        ),
+        (
+            "video/mp4",
+            {"video_metadata": {"content_layers": ["AUDIO", "TRANSCRIPT"]}},
+            {"video_metadata": {"contentLayers": ["AUDIO", "TRANSCRIPT"]}},
+        ),
     ],
 )
-def test_file_inspection_preserves_slice_and_uri(
-    version: str, metadata: dict[str, object], expected: dict[str, object]
+def test_file_inspection_preserves_slice_and_source(
+    source: str, mime_type: str, metadata: dict[str, object], expected: dict[str, object]
 ) -> None:
-    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
-    messages = [
-        {
-            "role": "user",
-            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", **metadata}}],
-        }
+    uri: Final = f"https://generativelanguage.googleapis.com/{source}/files/report"
+    file: Final = {"file_data": f"data:{mime_type};base64,cGRm"} if source == "inline" else {"file_id": uri}
+    media: Final = (
+        {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+        if source == "inline"
+        else {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    )
+    messages: Final = [
+        {"role": "user", "content": [{"type": "file", "file": {**file, "format": mime_type, **metadata}}]}
     ]
-    original = deepcopy(messages)
-    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-3.8-flash")
-    assert result == [
-        {
-            "role": "user",
-            "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}, **expected}, {"text": " "}],
-        }
-    ]
+    original: Final = deepcopy(messages)
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-3.8-flash")
+    assert result == [{"role": "user", "parts": [{**media, **expected}, {"text": " "}]}]
     assert messages == original
 
 
@@ -203,6 +219,16 @@ def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatc
             {"spreadsheet_metadata": {"sheet_index": 2}},
             {"spreadsheet_metadata": {"sheetIndex": 2}},
         ),
+        (
+            "audio/mpeg",
+            {"audio_metadata": {"start_offset": "60s", "end_offset": "90s"}},
+            {"audio_metadata": {"startOffset": "60s", "endOffset": "90s"}},
+        ),
+        (
+            "video/mp4",
+            {"video_metadata": {"content_layers": ["FRAMES"]}},
+            {"video_metadata": {"contentLayers": ["FRAMES"]}},
+        ),
     ],
 )
 def test_chat_tool_file_inspection_preserves_nested_selection(
@@ -312,6 +338,311 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
     )
 
 
+_AUDIO_SLICE: Final = {"start_offset": "60s", "end_offset": "90s"}
+_GEMINI_AUDIO_SLICE: Final = {"startOffset": "60s", "endOffset": "90s"}
+_MEDIA_TOOL_CALL: Final = {
+    "role": "assistant",
+    "tool_calls": [{"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}],
+}
+
+
+@pytest.mark.parametrize("role", ["user", "tool"])
+@pytest.mark.parametrize(
+    "audio_part",
+    [
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+            },
+            id="inside-input_audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav"},
+                "audio_metadata": _AUDIO_SLICE,
+            },
+            id="beside-input_audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+                "audio_metadata": {"start_offset": "0s", "end_offset": "5s"},
+            },
+            id="inside-wins-over-beside",
+        ),
+    ],
+)
+def test_input_audio_slice_reaches_gemini(role: str, audio_part: dict[str, object]) -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [{"role": "user", "content": [audio_part]}]
+        if role == "user"
+        else [_MEDIA_TOOL_CALL, {"role": "tool", "tool_call_id": "call_media", "content": [audio_part]}],
+    )
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    audio: Final = {
+        "inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"},
+        "audio_metadata": _GEMINI_AUDIO_SLICE,
+    }
+    assert result[-1]["parts"] == (
+        [audio, {"text": " "}]
+        if role == "user"
+        else [
+            {
+                "function_response": {
+                    "id": "call_media",
+                    "name": "get_media",
+                    "response": {"content": ""},
+                    "parts": [audio],
+                }
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "media"),
+    [
+        (
+            "https://generativelanguage.googleapis.com/v1beta/files/clip",
+            {"file_uri": "https://generativelanguage.googleapis.com/v1beta/files/clip"},
+        ),
+        (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            {"file_uri": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mime_type": "video/mp4"},
+        ),
+    ],
+)
+def test_video_url_content_layers_reach_gemini(url: str, media: dict[str, str]) -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video_url", "video_url": {"url": url, "video_metadata": {"content_layers": ["AUDIO"]}}}
+                ],
+            }
+        ],
+    )
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [{"file_data": media, "video_metadata": {"contentLayers": ["AUDIO"]}}, {"text": " "}],
+        }
+    ]
+
+
+def test_vertex_user_media_slices_are_forwarded_for_vertex_to_accept_or_refuse() -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": "gs://media-test/podcast.mp3",
+                            "format": "audio/mpeg",
+                            "audio_metadata": _AUDIO_SLICE,
+                        },
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {
+                            "url": "gs://media-test/clip.mp4",
+                            "video_metadata": {"content_layers": ["AUDIO"]},
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+    result: Final = gemini_convert_messages_with_history(
+        messages, model="gemini-3.8-flash", custom_llm_provider="vertex_ai"
+    )
+    assert result[-1]["parts"] == [
+        {
+            "file_data": {"file_uri": "gs://media-test/podcast.mp3", "mime_type": "audio/mpeg"},
+            "audio_metadata": _GEMINI_AUDIO_SLICE,
+        },
+        {
+            "file_data": {"file_uri": "gs://media-test/clip.mp4", "mime_type": "video/mp4"},
+            "video_metadata": {"contentLayers": ["AUDIO"]},
+        },
+        {"text": " "},
+    ]
+
+
+@pytest.mark.parametrize(
+    "input_items",
+    [
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:audio/mpeg;base64,c291bmQ=", "audio_metadata": _AUDIO_SLICE},
+                        }
+                    ],
+                }
+            ],
+            id="chat-image_url",
+        ),
+        pytest.param(
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": "data:audio/mpeg;base64,c291bmQ=",
+                                "audio_metadata": _AUDIO_SLICE,
+                            }
+                        ],
+                    }
+                ],
+                {},
+            ),
+            id="responses-input_image",
+        ),
+    ],
+)
+def test_audio_slice_on_an_image_part_reaches_gemini(input_items: list[AllMessageValues]) -> None:
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(input_items, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+        {"text": " "},
+    ]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        pytest.param({"file_data": "data:audio/mpeg;base64,c291bmQ="}, id="file"),
+        pytest.param(None, id="input_file"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "drop_params", "forwarded"), [("gemini", False, True), ("vertex_ai", True, False)]
+)
+def test_tool_result_audio_slice_reaches_gemini_and_is_dropped_on_vertex_under_drop_params(
+    file: dict[str, str] | None, provider: str, drop_params: bool, forwarded: bool
+) -> None:
+    media: Final = (
+        {"type": "file", "file": {**file, "format": "audio/mpeg", "audio_metadata": _AUDIO_SLICE}}
+        if file is not None
+        else {
+            "type": "input_file",
+            "file_data": "data:audio/mpeg;base64,c291bmQ=",
+            "format": "audio/mpeg",
+            "audio_metadata": _AUDIO_SLICE,
+        }
+    )
+    messages: Final = cast(
+        list[AllMessageValues],
+        [_MEDIA_TOOL_CALL, {"role": "tool", "tool_call_id": "call_media", "content": [media]}],
+    )
+    result: Final = gemini_convert_messages_with_history(
+        messages, model="gemini-3.8-flash", litellm_params={"drop_params": drop_params}, custom_llm_provider=provider
+    )
+    audio: Final = {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}}
+    assert result[-1]["parts"] == [
+        {
+            "function_response": {
+                "id": "call_media",
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [{**audio, "audio_metadata": _GEMINI_AUDIO_SLICE} if forwarded else audio],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_responses_video_content_layers_reach_gemini(role: str) -> None:
+    uri: Final = "https://generativelanguage.googleapis.com/v1beta/files/clip"
+    parts: Final = [
+        {"type": "input_text", "text": '{"ok":true}'},
+        {
+            "type": "input_file",
+            "file_id": uri,
+            "format": "video/mp4",
+            "video_metadata": {"content_layers": ["TRANSCRIPT"]},
+        },
+    ]
+    input_items: Final = (
+        [
+            {"type": "function_call", "call_id": "call_media", "name": "get_media", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_media", "output": parts},
+        ]
+        if role == "tool"
+        else [{"role": "user", "content": parts}]
+    )
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(input_items, {})
+    result: Final = gemini_convert_messages_with_history(
+        messages, model="gemini-3.8-flash", custom_llm_provider="gemini"
+    )
+    clip: Final = {
+        "file_data": {"file_uri": uri, "mime_type": "video/mp4"},
+        "video_metadata": {"contentLayers": ["TRANSCRIPT"]},
+    }
+    assert result[-1] == (
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "id": "call_media",
+                        "name": "get_media",
+                        "response": {"ok": True},
+                        "parts": [clip],
+                    }
+                }
+            ],
+        }
+        if role == "tool"
+        else {"role": "user", "parts": [{"text": '{"ok":true}'}, clip]}
+    )
+
+
+def test_managed_file_audio_slice_survives_the_provider_file_id_rewrite() -> None:
+    managed_file_id: Final = base64.urlsafe_b64encode(
+        b"litellm_proxy:audio/mpeg;unified_id,4f6d1c2e;target_model_names,gemini-4-argon"
+    ).decode()
+    uri: Final = "https://generativelanguage.googleapis.com/v1beta/files/podcast"
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_id": managed_file_id, "audio_metadata": _AUDIO_SLICE}}],
+            }
+        ],
+    )
+    rewritten: Final = update_messages_with_model_file_ids(
+        messages, "deployment-1", {managed_file_id: {"deployment-1": uri}}
+    )
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(rewritten, model="gemini-4-argon")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [
+                {"file_data": {"file_uri": uri, "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+                {"text": " "},
+            ],
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("provider", "model", "uri", "mime", "nested", "error"),
     [
@@ -360,11 +691,16 @@ def test_tool_uri_policy_follows_provider_and_model_placement(
     messages: Final = _responses_tool_media_history(
         {"type": "input_file", "file_url": uri, "video_metadata": {"fps": 2}, **({"format": mime} if mime else {})}
     )
+    settings: Final = {"drop_params": provider.startswith("vertex")}
     if error:
         with pytest.raises(litellm.BadRequestError, match=error):
-            gemini_convert_messages_with_history(messages, model=model, custom_llm_provider=provider)
+            gemini_convert_messages_with_history(
+                messages, model=model, litellm_params=settings, custom_llm_provider=provider
+            )
         return
-    result: Final = gemini_convert_messages_with_history(messages, model=model, custom_llm_provider=provider)
+    result: Final = gemini_convert_messages_with_history(
+        messages, model=model, litellm_params=settings, custom_llm_provider=provider
+    )
     file: Final = {
         "file_data": {"file_uri": uri, **({"mime_type": "video/mp4"} if provider.startswith("vertex") else {})}
     }

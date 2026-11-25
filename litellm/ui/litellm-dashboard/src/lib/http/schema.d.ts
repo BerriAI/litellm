@@ -32036,6 +32036,10 @@ export interface components {
         };
         /** ChatCompletionImageUrlObject */
         ChatCompletionImageUrlObject: {
+            /** Audio Metadata */
+            audio_metadata?: {
+                [key: string]: unknown;
+            };
             /** Detail */
             detail?: string;
             /** Format */

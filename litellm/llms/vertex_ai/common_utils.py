@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountFields
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
-    {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
+    {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset", "content_layers": "contentLayers"}
 )
 
 

@@ -2919,10 +2919,20 @@ _CLIP_WITH_SETTINGS_RESULT: Final = {
         {"type": "text", "text": '{"ok":true}'},
         {
             "type": "video_url",
-            "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "detail": "high", "video_metadata": {"fps": 2}},
+            "video_url": {
+                "url": "data:video/mp4;base64,AAAAGGZ0eXA=",
+                "detail": "high",
+                "video_metadata": {"fps": 2, "content_layers": ["FRAMES"]},
+            },
         },
     ],
 }
+_CLIP_WITH_CONTENT_LAYERS_RESULT: Final = _tool_result_with(
+    {
+        "type": "video_url",
+        "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "video_metadata": {"content_layers": ["AUDIO"]}},
+    }
+)
 
 
 def test_gemini_tool_result_video_carries_its_detail_and_metadata_into_the_function_response() -> None:
@@ -2939,7 +2949,7 @@ def test_gemini_tool_result_video_carries_its_detail_and_metadata_into_the_funct
                     {
                         "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
                         "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
-                        "video_metadata": {"fps": 2},
+                        "video_metadata": {"fps": 2, "contentLayers": ["FRAMES"]},
                     }
                 ],
             }
@@ -2947,54 +2957,140 @@ def test_gemini_tool_result_video_carries_its_detail_and_metadata_into_the_funct
     ]
 
 
-def test_vertex_tool_result_video_settings_are_a_bad_request_since_vertex_ignores_them() -> None:
-    with pytest.raises(litellm.BadRequestError, match="Vertex ignores detail and video_metadata") as excinfo:
-        convert_to_gemini_tool_call_result(
-            _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash"
-        )
+_INLINE_CLIP: Final = {"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}
+_INLINE_SOUND: Final = {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}}
+_INLINE_PDF: Final = {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}}
+_SHEET_MIME: Final = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_SOUND_SLICE: Final = {"start_offset": "60s", "end_offset": "90s"}
+_VERTEX_IGNORED_SETTINGS: Final = pytest.mark.parametrize(
+    ("result", "ignored", "kept"),
+    [
+        pytest.param(
+            _CLIP_WITH_SETTINGS_RESULT, "detail, video_metadata", _INLINE_CLIP, id="video-detail-and-metadata"
+        ),
+        pytest.param(_CLIP_WITH_CONTENT_LAYERS_RESULT, "video_metadata", _INLINE_CLIP, id="video-content-layers"),
+        pytest.param(
+            _tool_result_with(
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:video/mp4;base64,AAAAGGZ0eXA=",
+                        "video_metadata": {"start_offset": "5s"},
+                    },
+                }
+            ),
+            "video_metadata",
+            _INLINE_CLIP,
+            id="file-video-offsets",
+        ),
+        pytest.param(
+            _tool_result_with(
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:audio/mpeg;base64,c291bmQ=", "audio_metadata": _SOUND_SLICE},
+                }
+            ),
+            "audio_metadata",
+            _INLINE_SOUND,
+            id="file-audio-slice",
+        ),
+        pytest.param(
+            _tool_result_with(
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": "c291bmQ=", "format": "mpeg", "audio_metadata": _SOUND_SLICE},
+                }
+            ),
+            "audio_metadata",
+            _INLINE_SOUND,
+            id="input-audio-slice",
+        ),
+        pytest.param(
+            _tool_result_with(
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,JVBERg==",
+                        "detail": "high",
+                        "document_metadata": {"start_page": 2},
+                    },
+                }
+            ),
+            "document_metadata",
+            _INLINE_PDF,
+            id="document-pages-beside-detail",
+        ),
+        pytest.param(
+            _tool_result_with(
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:{_SHEET_MIME};base64,UEsDBA==",
+                        "spreadsheet_metadata": {"sheet_index": 2},
+                    },
+                }
+            ),
+            "spreadsheet_metadata",
+            {"inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME}},
+            id="spreadsheet-sheet",
+        ),
+    ],
+)
+
+
+@_VERTEX_IGNORED_SETTINGS
+def test_vertex_tool_result_media_settings_are_a_bad_request_since_vertex_ignores_them(
+    result: ChatCompletionToolMessage, ignored: str, kept: dict[str, object]
+) -> None:
+    message: Final = f"Vertex ignores {ignored} on media inside a tool result"
+    with pytest.raises(litellm.BadRequestError, match=message) as excinfo:
+        convert_to_gemini_tool_call_result(result, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash")
 
     assert (excinfo.value.llm_provider, excinfo.value.model) == ("vertex_ai", "gemini-3.8-flash")
 
 
 @pytest.mark.parametrize(
-    "settings",
-    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+    ("media", "kept"),
+    [
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "detail": "auto"}},
+            _INLINE_CLIP,
+            id="detail-auto",
+        ),
+        pytest.param(
+            {
+                "type": "video_url",
+                "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "video_metadata": {"label": "x"}},
+            },
+            _INLINE_CLIP,
+            id="no-op-metadata",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERg==", "detail": "high"}},
+            _INLINE_PDF,
+            id="detail-on-a-document",
+        ),
+    ],
 )
-def test_vertex_tool_result_video_settings_that_change_nothing_are_sent_without_error(
-    settings: dict[str, object],
+def test_vertex_tool_result_media_settings_that_change_nothing_are_sent_without_error(
+    media: dict[str, object], kept: dict[str, object]
 ) -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _tool_result_with({"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}}),
-        None,
-        custom_llm_provider="vertex_ai",
-        model="gemini-3.8-flash",
+        _tool_result_with(media), None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash"
     )
 
-    assert delivered == [
-        {
-            "function_response": {
-                "name": "find_clip",
-                "response": {"ok": True},
-                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
-            }
-        }
-    ]
+    assert delivered == [{"function_response": {"name": "find_clip", "response": {"ok": True}, "parts": [kept]}}]
 
 
-def test_drop_params_sends_a_vertex_tool_result_video_without_its_settings() -> None:
+@_VERTEX_IGNORED_SETTINGS
+def test_drop_params_sends_vertex_tool_result_media_without_its_settings(
+    result: ChatCompletionToolMessage, ignored: str, kept: dict[str, object]
+) -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash", drop_params=True
+        result, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash", drop_params=True
     )
 
-    assert delivered == [
-        {
-            "function_response": {
-                "name": "find_clip",
-                "response": {"ok": True},
-                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
-            }
-        }
-    ]
+    assert delivered == [{"function_response": {"name": "find_clip", "response": {"ok": True}, "parts": [kept]}}]
 
 
 def test_gemini_tool_result_image_carries_its_detail_into_the_function_response() -> None:
@@ -3057,7 +3153,7 @@ def test_gemini_tool_result_video_keeps_its_settings_beside_the_function_respons
         {
             "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
             "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
-            "video_metadata": {"fps": 2},
+            "video_metadata": {"fps": 2, "contentLayers": ["FRAMES"]},
         },
     ]
 

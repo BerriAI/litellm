@@ -388,6 +388,7 @@ def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
     )
     detail: Final = fields.get("detail") or item.get("detail")
     video_metadata: Final = fields.get("video_metadata") or item.get("video_metadata")
+    audio_metadata: Final = fields.get("audio_metadata") or item.get("audio_metadata")
     url: Final = (fields.get("url") if isinstance(source, Mapping) else source) or ""
     image_url: Final = _validate_responses_media(
         _IMAGE_URL_ADAPTER,
@@ -396,6 +397,7 @@ def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
             "detail": detail if isinstance(detail, str) else "auto",
             **({"format": media_format} if media_format is not None else {}),
             **({"video_metadata": video_metadata} if video_metadata is not None else {}),
+            **({"audio_metadata": audio_metadata} if audio_metadata is not None else {}),
             **_s3_bucket_owner_field(url, fields.get("bucket_owner", item.get("bucket_owner"))),
         },
     )
