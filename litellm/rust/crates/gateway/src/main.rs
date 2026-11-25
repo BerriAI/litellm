@@ -597,7 +597,7 @@ mod tests {
     #[case::an_admitted_request("/v1/messages", StoredConfig::Unused, (StatusCode::OK, None))]
     #[case::a_stored_config_layered_in(
         "/v1/messages",
-        StoredConfig::Loaded,
+        StoredConfig::Loaded(litellm_repositories::StoredObjects::default()),
         (StatusCode::OK, None)
     )]
     #[case::a_refused_request(

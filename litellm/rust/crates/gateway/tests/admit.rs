@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use axum::{body::Body, extract::Request, http::Method};
 use litellm_config::{Config, Environment};
 use litellm_gateway::{StoredConfig, host::auth::AuthStore};
+use litellm_repositories::StoredObjects;
 use rstest::rstest;
 use serde::Deserialize;
 
@@ -24,6 +25,9 @@ struct Scenario {
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
+    /// Which other stored objects the database holds, when `stored` is `loaded`.
+    #[serde(default)]
+    held: Held,
     requests: Vec<Sent>,
 }
 
@@ -43,14 +47,48 @@ enum Stored {
     UiSettingsUnread,
 }
 
-impl From<Stored> for StoredConfig {
-    fn from(stored: Stored) -> Self {
-        match stored {
-            Stored::Unused => Self::Unused,
-            Stored::Loaded => Self::Loaded,
-            Stored::Unread => Self::Unread,
-            Stored::UiSettingsUnread => Self::UiSettingsUnread,
+/// Each field of `StoredObjects`, `false` when the scenario leaves it out.
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Held {
+    default_on_guardrails: bool,
+    policy_attachments: bool,
+    tool_policies: bool,
+    cache_settings: bool,
+    config_overrides: bool,
+    anthropic_beta_headers_reload: bool,
+    model_cost_map_reload: bool,
+}
+
+impl From<Held> for StoredObjects {
+    fn from(held: Held) -> Self {
+        let Held {
+            default_on_guardrails,
+            policy_attachments,
+            tool_policies,
+            cache_settings,
+            config_overrides,
+            anthropic_beta_headers_reload,
+            model_cost_map_reload,
+        } = held;
+        Self {
+            default_on_guardrails,
+            policy_attachments,
+            tool_policies,
+            cache_settings,
+            config_overrides,
+            anthropic_beta_headers_reload,
+            model_cost_map_reload,
         }
+    }
+}
+
+fn stored_config(stored: Stored, held: Held) -> StoredConfig {
+    match stored {
+        Stored::Unused => StoredConfig::Unused,
+        Stored::Loaded => StoredConfig::Loaded(held.into()),
+        Stored::Unread => StoredConfig::Unread,
+        Stored::UiSettingsUnread => StoredConfig::UiSettingsUnread,
     }
 }
 
@@ -134,6 +172,7 @@ impl Sent {
 #[case::ui_settings_unread("ui_settings_unread")]
 #[case::environment_variables("environment_variables")]
 #[case::store_model_in_db_objects("store_model_in_db_objects")]
+#[case::store_model_in_db_nothing_held("store_model_in_db_nothing_held")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
 #[case::model_aliases("model_aliases")]
@@ -175,7 +214,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
         &state,
-        scenario.stored.into(),
+        stored_config(scenario.stored, scenario.held),
     ));
 
     let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {

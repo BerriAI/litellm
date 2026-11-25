@@ -18,7 +18,8 @@
 //! credential read fails changes nothing. A poll whose settings read fails keeps the settings it
 //! last served and deletes no model, only adding and updating. A config that does not build keeps
 //! the current one. The first read that loads lifts `db_config_not_loaded`, since the swap builds
-//! `Admit` over [`StoredConfig::Loaded`].
+//! `Admit` over [`StoredConfig::Loaded`]. A poll that finds the database came to hold or stopped
+//! holding a kind of stored object the gateway does not read swaps too, so `admit` follows it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,20 +35,20 @@ use litellm_config::{
     db::{
         models::DbModel,
         settings::{Section, SettingsRows, UiSettings},
-        switches::store_model_in_db,
+        switches::{DbObject, store_model_in_db},
     },
 };
 use litellm_config_load::Document;
 use litellm_db::Pools;
 use litellm_error::Report;
 use litellm_redis_store::config_sync::{self, Heard};
-use litellm_repositories::Database;
+use litellm_repositories::{Database, StoredObjects};
 use tokio::{sync::Mutex, task::JoinHandle, time::MissedTickBehavior};
 
 use crate::{
     Error, Live, Served, StoredConfig,
     config_sync::{Pacing, listen, uniform},
-    stored::{self, Fetched, Secrets, StoredRows},
+    stored::{self, Fetched, Secrets, StoredRows, holds},
 };
 
 /// Python falls back to this when `proxy_config_reload_interval_seconds` is unset or not
@@ -355,8 +356,9 @@ impl Reading {
                 return Reloaded::Unbuilt;
             }
         };
+        let objects = fetched.objects;
         let swapped = live
-            .swap(|current| rebuild(config, StoredConfig::Loaded, current))
+            .swap(|current| rebuild(config, StoredConfig::Loaded(objects), current))
             .await;
         match swapped {
             Ok(_) => {
@@ -537,6 +539,7 @@ pub(crate) struct Changes {
     removed: Vec<String>,
     credentials: Vec<String>,
     settings: Vec<String>,
+    objects: Vec<String>,
 }
 
 impl Changes {
@@ -607,6 +610,7 @@ impl Changes {
                 .collect(),
             credentials: changed(&credentials(before), &credentials(now)),
             settings,
+            objects: objects(before.objects, now.objects),
         }
     }
 
@@ -621,9 +625,19 @@ impl Changes {
             removed = self.removed.join(", "),
             credentials = self.credentials.join(", "),
             settings = self.settings.join(", "),
+            objects = self.objects.join(", "),
             "the config the proxy stores in its database changed"
         );
     }
+}
+
+/// Each kind of stored object the database came to hold or stopped holding.
+fn objects(was: StoredObjects, is: StoredObjects) -> Vec<String> {
+    <DbObject as strum::VariantArray>::VARIANTS
+        .iter()
+        .filter(|object| holds(was, **object) != holds(is, **object))
+        .map(|object| <&str>::from(*object).to_owned())
+        .collect()
 }
 
 /// A stored model compared by everything the config is built from.
@@ -663,7 +677,7 @@ mod tests {
         test_support::{Rows, credential, environment, model, secrets, setting},
     };
 
-    const FILE: &str = "model_list:\n  - model_name: file\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: file-key\ngeneral_settings:\n  master_key: gateway-key\n  store_model_in_db: true\n  supported_db_objects: [models]\n";
+    const FILE: &str = "model_list:\n  - model_name: file\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: file-key\ngeneral_settings:\n  master_key: gateway-key\n  store_model_in_db: true\n";
 
     fn params(api_key: &str) -> String {
         format!(r#"{{"model": "anthropic/claude-haiku-5-5", "api_key": "{api_key}"}}"#)
@@ -688,6 +702,7 @@ mod tests {
                 &format!(r#"{{"api_key": "{credential_key}"}}"#),
             )]),
             ui_settings: Ok(None),
+            ..Rows::default()
         }
     }
 
@@ -798,6 +813,18 @@ mod tests {
             removed: owned(removed),
             credentials: owned(credentials),
             settings: owned(settings),
+            objects: Vec::new(),
+        }
+    }
+
+    /// `rows` with the database holding a default-on guardrail.
+    fn guarded(rows: Rows) -> Rows {
+        Rows {
+            objects: Ok(StoredObjects {
+                default_on_guardrails: true,
+                ..StoredObjects::default()
+            }),
+            ..rows
         }
     }
 
@@ -816,6 +843,10 @@ mod tests {
     #[case::a_stored_variable_changed(
         stored(&[("a", "key-1")], "changed", "credential-key"),
         changes(&[], &[], &[], &[], &["environment_variables.STORED_VARIABLE"])
+    )]
+    #[case::a_guardrail_turned_on_for_every_request(
+        guarded(serving(&[("a", "key-1")])),
+        Changes { objects: vec!["guardrails".to_owned()], ..Changes::default() }
     )]
     #[tokio::test]
     async fn a_read_names_what_changed_by_model_id_credential_and_settings_key(
@@ -910,6 +941,31 @@ mod tests {
         );
         assert_eq!(reloaded, Reloaded::Swapped);
         assert_eq!(refused_for(&live, "a").await, Some("settings"));
+    }
+
+    #[rstest]
+    #[case::a_guardrail_turned_on(
+        serving(&[("a", "key-1")]),
+        guarded(serving(&[("a", "key-1")])),
+        Some("settings")
+    )]
+    #[case::the_guardrail_turned_off(
+        guarded(serving(&[("a", "key-1")])),
+        serving(&[("a", "key-1")]),
+        None
+    )]
+    #[tokio::test]
+    async fn a_read_that_finds_a_stored_object_come_or_gone_swaps_admit_to_follow_it(
+        #[case] booted_rows: Rows,
+        #[case] now: Rows,
+        #[case] refused: Option<&str>,
+    ) {
+        let (live, mut reading) = booted(&booted_rows).await;
+
+        let reloaded = reading.reload(&now, &live, &rebuild).await;
+
+        assert_eq!(reloaded, Reloaded::Swapped);
+        assert_eq!(refused_for(&live, "a").await, refused);
     }
 
     #[rstest]
@@ -1038,6 +1094,7 @@ mod tests {
     #[rstest]
     #[case::the_models_cannot_be_read(Rows { models: None, ..serving(&[]) })]
     #[case::the_credentials_cannot_be_read(Rows { credentials: None, ..serving(&[]) })]
+    #[case::the_stored_objects_cannot_be_read(Rows { objects: Err(()), ..guarded(serving(&[])) })]
     #[tokio::test]
     async fn a_read_that_fails_keeps_serving_every_model(#[case] now: Rows) {
         let (live, mut reading) = booted(&serving(&[("a", "key-1")])).await;
@@ -1310,6 +1367,10 @@ mod tests {
             &self,
         ) -> Result<Option<litellm_repositories::RawJson>, litellm_db::Error> {
             self.rows.ui_settings().await
+        }
+
+        async fn objects(&self) -> Result<litellm_repositories::StoredObjects, litellm_db::Error> {
+            self.rows.objects().await
         }
     }
 

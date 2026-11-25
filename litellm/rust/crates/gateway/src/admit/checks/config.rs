@@ -14,7 +14,7 @@ use super::{
     Admit, Reason, Refused,
     fields::{IsSet, other, unknown},
 };
-use crate::StoredConfig;
+use crate::{StoredConfig, stored::holds};
 
 const STORE_MODEL_IN_DB: &str = "store_model_in_db";
 /// The `LiteLLM_UISettings` row, named when it could not be read.
@@ -46,7 +46,7 @@ pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
         StoredConfig::UiSettingsUnread => {
             return Some(Reason::new(Refused::DbConfigNotLoaded, UI_SETTINGS));
         }
-        StoredConfig::Unused | StoredConfig::Loaded => {}
+        StoredConfig::Unused | StoredConfig::Loaded(_) => {}
     }
     unhonored(&admit.config, &admit.environment)
         .chain(stored_objects(admit))
@@ -54,42 +54,18 @@ pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
         .map(|over| Reason::new(Refused::Settings, over))
 }
 
-/// Whether the Python proxy loads `object` from its database, with `store_model_in_db` on, into
-/// something a request the native app serves reaches, while the native app does not read it.
-fn not_read_natively(object: DbObject) -> bool {
-    match object {
-        DbObject::Guardrails
-        | DbObject::Policies
-        | DbObject::Tools
-        | DbObject::AnthropicBetaHeaders
-        | DbObject::CacheSettings
-        | DbObject::SemanticFilterSettings
-        | DbObject::WebsearchInterceptionSettings
-        | DbObject::ConfigOverrides
-        | DbObject::ModelCostMap => true,
-        DbObject::Models
-        | DbObject::Mcp
-        | DbObject::VectorStores
-        | DbObject::VectorStoreIndexes
-        | DbObject::Agents
-        | DbObject::PassThroughEndpoints
-        | DbObject::Prompts
-        | DbObject::SearchTools
-        | DbObject::SsoSettings => false,
-    }
-}
-
-/// Each kind of stored object the proxy loads beside the stored config that the native app does
-/// not read, unless `general_settings.supported_db_objects` leaves it out. The native app cannot
-/// tell whether the database holds one, so it serves nothing while one may be loaded.
+/// Each kind of stored object the database holds that the proxy loads beside the stored config and
+/// the native app does not read, unless `general_settings.supported_db_objects` leaves it out.
 fn stored_objects(admit: &Admit) -> impl Iterator<Item = Box<str>> + '_ {
     let supported = SupportedDbObjects::of(&admit.config.general_settings);
+    let held = match admit.stored {
+        StoredConfig::Loaded(objects) => Some(objects),
+        StoredConfig::Unused | StoredConfig::Unread | StoredConfig::UiSettingsUnread => None,
+    };
     <DbObject as strum::VariantArray>::VARIANTS
         .iter()
         .filter(move |object| {
-            admit.stored == StoredConfig::Loaded
-                && not_read_natively(**object)
-                && supported.loads(**object)
+            held.is_some_and(|objects| holds(objects, **object)) && supported.loads(**object)
         })
         .map(|object| {
             format!(
