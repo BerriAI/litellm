@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_core import RouterCore
 from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream
 from litellm.types.router import RetryPolicy
@@ -669,35 +670,50 @@ async def test_a_retry_after_a_live_message_start_drops_its_own_and_sends_its_bl
     assert host.deployments_called() == ["a", "a"]
 
 
+@pytest.mark.parametrize("per_attempt_logging", [False, True], ids=["proxy", "sdk-router"])
 @pytest.mark.parametrize("retry_records_its_own_id", [False, True], ids=["native", "bridged"])
 @pytest.mark.parametrize("cut_attempts", [1, 2], ids=["one-retry", "two-retries"])
 async def test_a_retry_after_a_live_message_start_logs_the_message_id_the_client_saw(
-    make_core: MakeCore, host: ScriptedHost, retry_records_its_own_id: bool, cut_attempts: int
+    make_core: MakeCore,
+    host: ScriptedHost,
+    retry_records_its_own_id: bool,
+    cut_attempts: int,
+    per_attempt_logging: bool,
 ) -> None:
-    logging_obj: Final = request_logging()
+    shared_logging: Final = request_logging()
+    opened: Final[list[ByteStream]] = []
 
-    def opened_as(minted_id: str, answer: Callable[..., ByteStream]) -> Callable[..., ByteStream]:
+    def logging_of(stream: ByteStream) -> LiteLLMLogging:
+        logging_obj: Final = stream.logging_obj if per_attempt_logging else shared_logging
+        assert logging_obj is not None
+        return logging_obj
+
+    def opened_as(minted_id: str | None, *frames: bytes) -> Callable[..., ByteStream]:
+        answer: Final = anthropic_stream(*frames, opened=opened, logged=per_attempt_logging)
+
         def record_then_answer(**kwargs: object) -> ByteStream:  # kwargs-ok: the request
-            if retry_records_its_own_id:
-                logging_obj.record_streamed_anthropic_message_id(minted_id)
-            return answer(**kwargs)
+            stream: Final = answer(**kwargs)
+            if retry_records_its_own_id and minted_id is not None:
+                logging_of(stream).record_streamed_anthropic_message_id(minted_id)
+            return stream
 
         return record_then_answer
 
     cut_retries: Final = [
-        opened_as(f"msg_cut_{n}", anthropic_stream(RETRY_MESSAGE_START, THINKING_START, error_frame()))
-        for n in range(1, cut_attempts)
+        opened_as(f"msg_cut_{n}", RETRY_MESSAGE_START, THINKING_START, error_frame()) for n in range(1, cut_attempts)
     ]
     host.answer(
         "openai/a",
-        anthropic_stream(MESSAGE_START, THINKING_START, error_frame()),
+        opened_as(None, MESSAGE_START, THINKING_START, error_frame()),
         *cut_retries,
-        opened_as("msg_answered", anthropic_stream(RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP)),
+        opened_as("msg_answered", RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP),
     )
     core = make_core(model_list=[deployment("a", "a")], num_retries=cut_attempts)
-    frames = await collect_bytes(await open_stream(core, litellm_logging_obj=logging_obj))
+    request: Final = {} if per_attempt_logging else {"litellm_logging_obj": shared_logging}
+    frames = await collect_bytes(await open_stream(core, **request))
     assert frames == [MESSAGE_START, text_delta("A"), MESSAGE_STOP]
-    assert logging_obj.streamed_anthropic_message_id == "msg_1"
+    assert len(opened) == cut_attempts + 1
+    assert logging_of(opened[-1]).streamed_anthropic_message_id == "msg_1"
 
 
 async def test_a_keepalive_sharing_a_chunk_with_the_retrys_message_start_still_reaches_the_client(

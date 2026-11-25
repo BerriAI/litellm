@@ -1223,6 +1223,10 @@ class FallbackAwareAnthropicMessagesStream:
         self.client_message_id = message_id
 
     @property
+    def source_logging(self) -> "LiteLLMLogging | None":
+        return _stream_logging(self._source_iterator)
+
+    @property
     def has_buffered_provider_output(self) -> bool:
         return getattr(self._source_iterator, "has_buffered_provider_output", False) is True
 
@@ -1713,9 +1717,9 @@ def _keep_client_message_id(recovered: object, wrapper: FallbackAwareAnthropicMe
         return
     if isinstance(recovered, FallbackAwareAnthropicMessagesStream):
         recovered.adopt_client_message_id(message_id)
-    logging_obj: Final = wrapper.attempt.kwargs.get("litellm_logging_obj")
-    if isinstance(logging_obj, LiteLLMLogging):
-        logging_obj.record_streamed_anthropic_message_id(message_id)
+    for logging_obj in (wrapper.attempt.kwargs.get("litellm_logging_obj"), _anthropic_stream_logging(recovered)):
+        if isinstance(logging_obj, LiteLLMLogging):
+            logging_obj.record_streamed_anthropic_message_id(message_id)
 
 
 async def _anthropic_yield_recovered(
@@ -1861,6 +1865,12 @@ def _stream_logging(stream: object) -> "LiteLLMLogging | None":
 
     logging_obj: Final = getattr(stream, "logging_obj", getattr(stream, "litellm_logging_obj", None))
     return logging_obj if isinstance(logging_obj, LiteLLMLogging) else None
+
+
+def _anthropic_stream_logging(stream: object) -> "LiteLLMLogging | None":
+    if isinstance(stream, FallbackAwareAnthropicMessagesStream):
+        return stream.source_logging
+    return _stream_logging(stream)
 
 
 def _cost_breakdown_of(stream: object) -> CostBreakdown | None:
