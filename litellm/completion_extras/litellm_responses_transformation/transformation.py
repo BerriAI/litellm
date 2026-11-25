@@ -2422,9 +2422,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if isinstance(str_line, BaseModel):
             return self.chunk_parser(str_line.model_dump())
 
-        if not str_line or str_line.startswith("event:"):
-            # ignore.
-            return GenericStreamingChunk(text="", tool_use=None, is_finished=False, finish_reason="", usage=None)
         index: Final = str_line.find("data:")
         if index != -1:
             str_line = str_line[index + 5 :]
