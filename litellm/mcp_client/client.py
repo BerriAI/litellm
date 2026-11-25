@@ -11,7 +11,6 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
-from contextvars import ContextVar
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
@@ -38,6 +37,9 @@ _TransportStreams: TypeAlias = tuple[
     WriteStream[SessionMessage],
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+_DispatcherFactory: TypeAlias = Callable[
+    [ReadStream[SessionMessage | Exception], WriteStream[SessionMessage]], JSONRPCDispatcher
+]
 _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
 
 
@@ -248,7 +250,6 @@ def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
 TSessionResult = TypeVar("TSessionResult")
 _ListPage = TypeVar("_ListPage", ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult)
 _ListItem = TypeVar("_ListItem")
-_owner_listing_ttl_present: Final[ContextVar[bool | None]] = ContextVar("owner_listing_ttl_present", default=None)
 
 
 async def _run_bounded_cleanup(operation: Callable[[], Awaitable[TSessionResult]], deadline: float) -> TSessionResult:
@@ -485,6 +486,8 @@ def _notify_cleanup(callback: Callable[[], None] | None) -> None:
 
 
 class _OwnerDiscoveryDispatcher(JSONRPCDispatcher):
+    ttl_present: bool = False
+
     async def send_raw_request(
         self,
         method: str,
@@ -495,8 +498,19 @@ class _OwnerDiscoveryDispatcher(JSONRPCDispatcher):
     ) -> dict[str, object]:  # mutable-ok: the SDK dispatcher contract requires a dictionary result
         raw: Final = await super().send_raw_request(method, params, opts, _related_request_id=_related_request_id)
         if method == "resources/list":
-            _owner_listing_ttl_present.set("ttlMs" in raw)
+            self.ttl_present = "ttlMs" in raw
         return raw
+
+
+class _OwnerDiscovery:
+    dispatcher: _OwnerDiscoveryDispatcher | None = None
+
+    def create_dispatcher(
+        self, read_stream: ReadStream[SessionMessage | Exception], write_stream: WriteStream[SessionMessage]
+    ) -> _OwnerDiscoveryDispatcher:
+        dispatcher: Final = _OwnerDiscoveryDispatcher(read_stream, write_stream)
+        self.dispatcher = dispatcher
+        return dispatcher
 
 
 class _UnvalidatedClientSession(ClientSession):
@@ -779,6 +793,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        dispatcher_factory: _DispatcherFactory | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -812,9 +827,7 @@ class MCPClient:
                         _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
                     )
                     discovery_dispatcher: Final = (
-                        _OwnerDiscoveryDispatcher(read_stream, write_stream)
-                        if _owner_listing_ttl_present.get() is not None
-                        else None
+                        dispatcher_factory(read_stream, write_stream) if dispatcher_factory is not None else None
                     )
                     session_ctx: Final = session_type(
                         read_stream if discovery_dispatcher is None else None,
@@ -892,6 +905,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        dispatcher_factory: _DispatcherFactory | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -911,8 +925,14 @@ class MCPClient:
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
                     on_notification=on_notification,
+                    dispatcher_factory=dispatcher_factory,
                 )
-                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
+                if (
+                    on_stream_error is not None
+                    or on_cleanup is not None
+                    or on_notification is not None
+                    or dispatcher_factory is not None
+                )
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
@@ -1310,14 +1330,21 @@ class MCPClient:
             return self.error_tool_result(e)
 
     async def _run_optional_discovery(
-        self, operation: Callable[[ClientSession], Awaitable[_ListPage]], *, preserve_ttl_omission: bool = False
+        self,
+        operation: Callable[[ClientSession], Awaitable[_ListPage]],
+        *,
+        dispatcher_factory: _DispatcherFactory | None = None,
     ) -> _ListPage:
         async def timed_operation(session: ClientSession) -> tuple[_ListPage, float]:
             result: Final = await operation(session)
             return result, time.monotonic()
 
-        result, received = await self.run_with_session(timed_operation)
-        if preserve_ttl_omission and "ttl_ms" not in result.model_fields_set:
+        result, received = (
+            await self.run_with_session(timed_operation)
+            if dispatcher_factory is None
+            else await self.run_with_session(timed_operation, dispatcher_factory=dispatcher_factory)
+        )
+        if dispatcher_factory is not None and "ttl_ms" not in result.model_fields_set:
             return result
         return age_freshness(result, time.monotonic() - received)
 
@@ -1478,6 +1505,8 @@ class MCPClient:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
+        discovery: Final = _OwnerDiscovery() if for_owner_lookup else None
+
         async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
             capabilities: Final = session.server_capabilities
             empty: Final = (
@@ -1488,8 +1517,9 @@ class MCPClient:
 
             async def fetch_page(params: PaginatedRequestParams | None) -> ListResourcesResult:
                 page: Final = await session.list_resources(params=params)
+                dispatcher: Final = discovery.dispatcher if discovery is not None else None
                 # Legacy sessions strip ttlMs before parsing. A stripped hint must not become a default TTL.
-                if for_owner_lookup and _owner_listing_ttl_present.get() and "ttl_ms" not in page.model_fields_set:
+                if dispatcher is not None and dispatcher.ttl_present and "ttl_ms" not in page.model_fields_set:
                     return page.model_copy(update={"ttl_ms": 0})
                 return page
 
@@ -1509,14 +1539,9 @@ class MCPClient:
                 return empty
 
         try:
-            token: Final = _owner_listing_ttl_present.set(False) if for_owner_lookup else None
-            try:
-                result: Final = await self._run_optional_discovery(
-                    _list_resources_operation, preserve_ttl_omission=for_owner_lookup
-                )
-            finally:
-                if token is not None:
-                    _owner_listing_ttl_present.reset(token)
+            result: Final = await self._run_optional_discovery(
+                _list_resources_operation, dispatcher_factory=discovery.create_dispatcher if discovery else None
+            )
             resource_count: Final = len(result.resources)
             resource_names: Final = [resource.name for resource in result.resources]
             verbose_logger.info(
