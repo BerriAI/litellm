@@ -80,6 +80,27 @@ def _sync_follow_up_refusal(
     )
 
 
+def _invalid_previous_response_id(
+    previous_response_id: object, model: str, provider: str | None
+) -> litellm.BadRequestError | None:
+    if previous_response_id is None or isinstance(previous_response_id, str):
+        return None
+    message: Final = (
+        f"Invalid type for 'previous_response_id': expected a string, got {type(previous_response_id).__name__}"
+    )
+    return litellm.BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "invalid_type",
+        },
+    )
+
+
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
@@ -99,6 +120,12 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
+        previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
+        invalid_previous_response_id: Final = _invalid_previous_response_id(
+            previous_response_id, model, custom_llm_provider
+        )
+        if invalid_previous_response_id is not None:
+            raise invalid_previous_response_id
         hoisted: Final = hoist_additional_tools(input, responses_api_request.get("tools"))
         bridged_input: Final = hoisted.input
         bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
@@ -118,7 +145,6 @@ class LiteLLMCompletionTransformationHandler:
         echoed_request: Final = _with_the_tool_choice_sent(
             bridged_request, custom_llm_provider, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
         )
-        previous_response_id: Final[str | None] = echoed_request.get("previous_response_id")
 
         if _is_async:
             return self.async_response_api_handler(

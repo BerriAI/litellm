@@ -434,6 +434,7 @@ async def _bridged_follow_up(
     provider: _RecordingAnthropicHandler,
     proxy_fields: Mapping[str, object] = MappingProxyType({}),
     follow_up_input: str | Sequence[Mapping[str, object]] = "Double it",
+    previous_response_id: object = _TURN_ONE_ID,
 ) -> object:
     request: Final = {
         **proxy_fields,
@@ -441,7 +442,7 @@ async def _bridged_follow_up(
         "api_base": "https://fake-foundry-resource.services.ai.azure.com",
         "api_key": "fake-api-key",
         "input": follow_up_input,
-        "previous_response_id": _TURN_ONE_ID,
+        "previous_response_id": previous_response_id,
     }
     if not asynchronous:
         sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(provider)))
@@ -490,6 +491,21 @@ async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_b
     assert f"Previous response with id '{_TURN_ONE_ID}' not found." in refused.value.message
     assert "`store_prompts_in_spend_logs: true`" in refused.value.message
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("previous_response_id", [123, [_TURN_ONE_ID]], ids=["int", "list"])
+async def test_a_non_string_previous_response_id_is_a_400_before_the_provider_call(
+    asynchronous: bool, previous_response_id: object
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _bridged_follow_up(asynchronous, provider, previous_response_id=previous_response_id)
+
+    assert provider.request_body is None, "the follow-up reached the provider with an id it cannot look up"
+    assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
 
 @pytest.mark.asyncio
 async def test_refused_follow_ups_do_not_count_toward_the_deployments_failure_rate():
