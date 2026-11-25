@@ -533,19 +533,45 @@ async def test_masked_partial_function_call_args_in_the_request_are_written_back
 
 
 @pytest.mark.asyncio
-async def test_masked_non_string_partial_function_call_arg_in_the_request_is_rejected() -> None:
-    streamed_number: Final = [
-        {"functionCall": {"name": "send_payment", "willContinue": True}},
-        {"functionCall": {"partialArgs": [{"jsonPath": "$.card", "numberValue": 4111}]}},
-    ]
+@pytest.mark.parametrize(
+    ("partial_args", "masked_partial_args"),
+    [
+        pytest.param(
+            [{"jsonPath": "$.card", "numberValue": 4111}],
+            [{"jsonPath": "$.card", "stringValue": "[CARD]"}],
+            id="camel-case",
+        ),
+        pytest.param(
+            [
+                {"json_path": "$.card", "number_value": 4111, "will_continue": True},
+                {"json_path": "$.card", "number_value": 1111},
+            ],
+            [
+                {"json_path": "$.card", "will_continue": True, "string_value": "[CARD]1111"},
+                {"json_path": "$.card", "string_value": ""},
+            ],
+            id="snake-case-split",
+        ),
+    ],
+)
+async def test_masked_number_in_partial_function_call_args_is_written_back_as_a_string(
+    partial_args: list[dict[str, object]], masked_partial_args: list[dict[str, object]]
+) -> None:
     data: Final = {
         "model": "gemini-2.5-flash",
-        "contents": [{"role": "model", "parts": copy.deepcopy(streamed_number)}],
+        "contents": [
+            {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "send_payment", "willContinue": True}},
+                    {"functionCall": {"partialArgs": copy.deepcopy(partial_args)}},
+                ],
+            }
+        ],
     }
 
-    with pytest.raises(UnappliableRequestRewrite):
-        await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_masking_card_numbers)
-        )
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_masking_card_numbers)
+    )
 
-    assert data["contents"][0]["parts"] == streamed_number
+    assert data["contents"][0]["parts"][1]["functionCall"]["partialArgs"] == masked_partial_args

@@ -51,6 +51,7 @@ _PARTIAL_ARG_VALUE_FIELDS: Final = (
     ("boolValue", "bool_value"),
     ("nullValue", "null_value"),
 )
+_NON_STRING_VALUE_FIELDS: Final = tuple(chain.from_iterable(_PARTIAL_ARG_VALUE_FIELDS[1:]))
 
 
 def _as_dict(value: object) -> Mapping[object, object] | None:
@@ -221,8 +222,23 @@ def _set_field(container: object, name: str, value: object) -> None:
     setattr(container, name, value)
 
 
-def _string_value_field(partial_arg: object) -> str | None:
-    return next((name for name in ("stringValue", "string_value") if isinstance(_field(partial_arg, name), str)), None)
+def _clear_field(container: object, name: str) -> None:
+    if isinstance(container, dict) and name in container:
+        del container[name]  # rebind-ok: guardrail write-back rewrites the caller's part in place
+    elif getattr(container, name, None) is not None:
+        setattr(container, name, None)
+
+
+def _string_value_field(partial_arg: object) -> str:
+    snake_case: Final = _field(partial_arg, "json_path") is not None or _field(partial_arg, "string_value") is not None
+    return "string_value" if snake_case else "stringValue"
+
+
+def _write_partial_text(partial_arg: object, text: str) -> None:
+    string_field: Final = _string_value_field(partial_arg)
+    for name in _NON_STRING_VALUE_FIELDS:
+        _clear_field(partial_arg, name)
+    _set_field(partial_arg, string_field, text)
 
 
 def _write_partial_path(
@@ -232,11 +248,8 @@ def _write_partial_path(
         raise unappliable_request_rewrite(guardrail_name)
     if returned == sent_text:
         return
-    fields: Final = tuple(field for field in map(_string_value_field, partial_args) if field is not None)
-    if len(fields) != len(partial_args):
-        raise unappliable_request_rewrite(guardrail_name)
-    for index, (partial_arg, field) in enumerate(zip(partial_args, fields, strict=True)):
-        _set_field(partial_arg, field, returned if index == 0 else "")
+    for index, partial_arg in enumerate(partial_args):
+        _write_partial_text(partial_arg, returned if index == 0 else "")
 
 
 def _write_group_args(group: Sequence[object], args: Mapping[str, object], guardrail_name: str | None) -> None:
