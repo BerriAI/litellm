@@ -709,9 +709,8 @@ mod tests {
         stored: StoredConfig,
         current: Arc<Served>,
     ) -> Result<Served, Error> {
-        let environment = Environment::default();
-        let state = current.state.next(&config, &environment).await?;
-        let admit = Admit::new(&config, &environment, &state, stored);
+        let state = current.state.next(&config).await?;
+        let admit = Admit::new(&config, &state, stored);
         Ok(Served::new(state, Some(Arc::new(admit)), native()))
     }
 
@@ -737,12 +736,7 @@ mod tests {
         let state = AppState::build(&loaded.config, &Environment::default())
             .await
             .unwrap();
-        let admit = Admit::new(
-            &loaded.config,
-            &Environment::default(),
-            &state,
-            loaded.stored,
-        );
+        let admit = Admit::new(&loaded.config, &state, loaded.stored);
         let live = Live::new(Served::new(state, Some(Arc::new(admit)), native()));
         let reading = Reading {
             booted: booted_document(&document, served.as_ref()),
@@ -1010,6 +1004,34 @@ mod tests {
         assert_eq!(
             (first, second, over.as_deref()),
             (Reloaded::Off, Reloaded::Off, Some("ui_settings"))
+        );
+    }
+
+    fn with_window(seconds: &str) -> Rows {
+        Rows {
+            settings: Some(vec![setting(
+                "environment_variables",
+                &format!(r#"{{"LITELLM_RATE_LIMIT_WINDOW_SIZE": "{seconds}"}}"#),
+            )]),
+            ..serving(&[("a", "key-1")])
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_changed_stored_variable_reaches_the_key_limiter_on_the_next_swap() {
+        let (live, mut reading) = booted(&with_window("60")).await;
+        let before = live.current().state.key_limiter.window_size();
+
+        let reloaded = reading.reload(&with_window("3600"), &live, &rebuild).await;
+
+        assert_eq!(
+            (
+                before,
+                reloaded,
+                live.current().state.key_limiter.window_size()
+            ),
+            (60, Reloaded::Swapped, 3600)
         );
     }
 

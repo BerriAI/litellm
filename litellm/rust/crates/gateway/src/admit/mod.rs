@@ -68,7 +68,8 @@ type Deployed = (String, Result<LlmProviders, String>);
 /// built again and replaced together.
 pub struct Admit {
     config: Config,
-    /// The variables only the environment holds, as `main` read them.
+    /// The variables only the environment holds, with the config's `environment_variables` in
+    /// front of the process's.
     environment: Environment,
     /// Whether `config` holds the config the proxy stores in its database.
     stored: StoredConfig,
@@ -110,14 +111,9 @@ fn token_estimate(
 
 impl Admit {
     /// By the `config` the native app `state` is built from, with its environment under it as
-    /// `load_config` leaves it, the `environment` `main` read, and whether `config` holds the
-    /// config the proxy stores in its database.
-    pub fn new(
-        config: &Config,
-        environment: &Environment,
-        state: &AppState,
-        stored: StoredConfig,
-    ) -> Self {
+    /// `load_config` leaves it, and whether `config` holds the config the proxy stores in its
+    /// database.
+    pub fn new(config: &Config, state: &AppState, stored: StoredConfig) -> Self {
         let deployments = state
             .inference
             .router
@@ -148,7 +144,7 @@ impl Admit {
             })
             .collect();
         Self {
-            environment: environment.clone(),
+            environment: state.variables.clone(),
             stored,
             auth: state.auth(config),
             aliased,

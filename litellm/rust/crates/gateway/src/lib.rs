@@ -92,23 +92,24 @@ const LICENSE: &str = "LITELLM_LICENSE";
 /// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
 /// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
-/// memory otherwise.
+/// memory otherwise. `variables` holds the config's `environment_variables` in front of the
+/// process's, as the limiter reads its window from them on every call.
 pub async fn build_inference(
     config: &Config,
-    environment: &Environment,
+    variables: &Environment,
     resources: &Resources,
     routing: RoutingCache,
     redis: &RedisClients,
 ) -> Result<Inference, Error> {
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
-    inference_over(config, environment, resources, routing, redis, counters).await
+    inference_over(config, variables, resources, routing, redis, counters).await
 }
 
 /// [`build_inference`] over the routing state and the limiters' counters a previous config's
 /// inference counted in, so a new config keeps its cooldowns and rate limit windows.
 pub(crate) async fn inference_over(
     config: &Config,
-    environment: &Environment,
+    variables: &Environment,
     resources: &Resources,
     routing: impl Into<Arc<RoutingCache>>,
     redis: &RedisClients,
@@ -118,7 +119,7 @@ pub(crate) async fn inference_over(
     let (router, shaping) = boot::router(config, &catalog).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
-    let limits = parallel_request_limiter::Settings::read(config, environment);
+    let limits = parallel_request_limiter::Settings::read(config, variables);
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
     let model_capacity = model_capacity::Settings::read(config, limits, licensed).map(|read| {

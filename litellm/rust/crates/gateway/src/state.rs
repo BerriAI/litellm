@@ -52,6 +52,9 @@ pub struct AppState {
     /// What the key limits and model group capacity count in, in this process's memory when there
     /// is no coordination Redis.
     pub counters: Arc<RateLimits>,
+    /// The variables only the environment holds, read through `environment`, for the readers
+    /// Python runs after its config exported them, such as the key limiter and admit.
+    pub variables: Environment,
     /// The gateway request counts the request volume middleware records. `None` without a
     /// database.
     pub gateway_requests: Option<Arc<GatewayRequests>>,
@@ -64,12 +67,14 @@ impl AppState {
         Self::over(config, environment, &Resources::build(config)?).await
     }
 
-    /// The state `config` describes, built from the `resources` made for it.
+    /// The state `config` describes, built from the `resources` made for it. `environment` is
+    /// the process's alone, for the settings Python reads before it loads its config.
     pub async fn over(
         config: &Config,
         environment: &Environment,
         resources: &Resources,
     ) -> Result<Self, Error> {
+        let variables = Environment::read(&*resources.environment)?;
         let redis = crate::redis::connect(config, resources).await?;
         let routing = crate::redis::routing(&redis, environment);
         let counters = parallel_request_limiter::counters(redis.coordination.clone());
@@ -78,7 +83,7 @@ impl AppState {
             key_limiter,
         } = crate::inference_over(
             config,
-            environment,
+            &variables,
             resources,
             routing,
             &redis,
@@ -110,6 +115,7 @@ impl AppState {
             key_limiter,
             environment: resources.environment.clone(),
             counters,
+            variables,
             gateway_requests,
             gateway_requests_flush,
         })
@@ -119,18 +125,19 @@ impl AppState {
     /// the Redis clients, the database pools and the keys read through them, the license, the
     /// HTTP client pool, the deployments' routing state and the limiters' counters. Only what
     /// `config` decides is built again, its environment, router and callbacks.
-    pub async fn next(&self, config: &Config, environment: &Environment) -> Result<Self, Error> {
+    pub async fn next(&self, config: &Config) -> Result<Self, Error> {
         let resources = Resources::sharing(
             config,
             Arc::new(ProcessEnvironment),
             self.inference.resources.clone(),
         )?;
+        let variables = Environment::read(&*resources.environment)?;
         let Inference {
             gateway: inference,
             key_limiter,
         } = crate::inference_over(
             config,
-            environment,
+            &variables,
             &resources,
             self.inference.shared_routing(),
             &self.redis,
@@ -141,6 +148,7 @@ impl AppState {
             inference,
             key_limiter,
             environment: resources.environment,
+            variables,
             ..self.clone()
         })
     }
@@ -244,5 +252,33 @@ impl FromRef<AppState> for RedisClients {
 impl FromRef<AppState> for Option<Pools> {
     fn from_ref(state: &AppState) -> Self {
         state.database.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::unset("model_list: []\n", 60)]
+    #[case::from_the_config_environment(
+        "model_list: []\nenvironment_variables:\n  LITELLM_RATE_LIMIT_WINDOW_SIZE: \"3600\"\n",
+        3600
+    )]
+    #[tokio::test]
+    async fn the_key_limiter_reads_its_window_from_the_config_environment(
+        #[case] yaml: &str,
+        #[case] window_size: i64,
+    ) {
+        let config = Config::from_yaml(yaml).unwrap();
+
+        let state = AppState::build(&config, &Environment::default())
+            .await
+            .unwrap();
+
+        assert_eq!(state.key_limiter.window_size(), window_size);
+        state.close().await;
     }
 }
