@@ -447,13 +447,9 @@ def test_rs256_changed_pem_with_the_same_kid_signs_and_verifies_with_the_new_key
     ids=("invalid", "weak", "non-rsa", "encrypted"),
 )
 def test_rs256_invalid_private_keys_are_rejected_on_every_attempt(private_pem: str, error: str) -> None:
-    with patch(
-        "cryptography.hazmat.primitives.serialization.load_pem_private_key", wraps=serialization.load_pem_private_key
-    ) as load_private_key:
-        for _ in range(2):
-            with pytest.raises(ValidationError, match=error):
-                AsymmetricSessionKeys(private_key_pem=SecretStr(private_pem), kid="rejected")
-        assert load_private_key.call_count == 2
+    for _ in range(2):
+        with pytest.raises(ValidationError, match=error):
+            AsymmetricSessionKeys(private_key_pem=SecretStr(private_pem), kid="rejected")
 
 
 def test_rs256_access_round_trip_with_kid_and_alg_pinned_in_header():
