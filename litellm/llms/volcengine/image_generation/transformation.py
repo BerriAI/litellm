@@ -124,7 +124,7 @@ def ark_image_generation_url(api_base: str | None) -> str:
 
 def _ark_api_key(api_key: str | None, model: str) -> str:
     resolved_api_key: Final[str | None] = (
-        api_key or litellm.api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY") or litellm.api_key
     )
     if not resolved_api_key:
         raise AuthenticationError(

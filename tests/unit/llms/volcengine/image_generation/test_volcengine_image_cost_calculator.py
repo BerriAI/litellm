@@ -234,3 +234,17 @@ def test_a_deployment_priced_without_an_output_image_price_bills_its_own_price(
     )
 
     assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(("input_images", "expected_cost"), [(0, 0.03), (1, 0.04)], ids=["generation", "edit"])
+def test_a_deployment_with_both_image_prices_bills_outputs_and_inputs_like_the_cost_map(
+    input_images: int, expected_cost: float
+) -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="ep-20261101-abc",
+        completion_response=_response(("1024x1024",), input_images=input_images),
+        custom_llm_provider="volcengine",
+        model_info={"input_cost_per_image": 0.01, "output_cost_per_image": 0.03},
+    )
+
+    assert cost == pytest.approx(expected_cost)
