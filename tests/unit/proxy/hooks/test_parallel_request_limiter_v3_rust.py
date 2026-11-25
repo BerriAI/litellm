@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired, total_deadline
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -2530,6 +2531,61 @@ async def test_failure_event_refunds_reservation_for_input_only_estimate_v3():
     )
 
     assert int(_local(handler, tokens_key) or 0) == 0
+
+
+def _billed_refusal() -> ImageRefusalError:
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://generativelanguage.googleapis.com")),
+        provider_specific_fields={},
+        billed_answer=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_failure_event_settles_tpm_reservation_at_a_billed_image_refusal_without_output_v3():
+    _api_key = hash_token("sk-billed-image-refusal")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = _counter("api_key", _api_key)
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refusal-call")
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "refusal-call",
+            "exception": _billed_refusal(),
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(_local(handler, tokens_key) or 0) == 777
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_settles_reservation_at_a_billed_image_refusal_without_output_v3():
+    _api_key = hash_token("sk-billed-image-refusal-post-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = _counter("api_key", _api_key)
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refusal-post-call")
+
+    await handler.async_post_call_failure_hook(
+        request_data={
+            "model": "gemini-3.1-flash-image",
+            "litellm_call_id": "refusal-post-call",
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        original_exception=_billed_refusal(),
+        user_api_key_dict=UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000),
+    )
+
+    assert int(_local(handler, tokens_key) or 0) == 777
 
 
 @pytest.mark.asyncio

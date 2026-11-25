@@ -24,7 +24,11 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.gemini.empty_image_response import billed_deployment_tokens, is_answer_without_an_image
+from litellm.llms.gemini.empty_image_response import (
+    billed_deployment_tokens,
+    is_answer_without_an_image,
+    tokens_of_image_answers_billed_on_failure,
+)
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, CounterIncrement, RouterUsage, UsageCounter
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
@@ -486,7 +490,7 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            await self._async_count_tokens(kwargs, f"{model_id}", f"{model}", int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            await self._async_count_success_tokens(kwargs, f"{model_id}", f"{model}", int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
@@ -506,6 +510,16 @@ class ModelRateLimitingCheck(CustomLogger):
         tpm, tpd = self._token_counters(kwargs, model_id, model)
         self._increment(tpm, tokens, RoutingArgs.ttl)
         self._increment(tpd, tokens, RoutingArgs.daily_ttl)
+
+    def _count_success_tokens(self, kwargs: Mapping[str, object], model_id: str, model: str, tokens: int) -> None:
+        self._count_tokens(kwargs, model_id, model, max(0, tokens - tokens_of_image_answers_billed_on_failure(kwargs)))
+
+    async def _async_count_success_tokens(
+        self, kwargs: Mapping[str, object], model_id: str, model: str, tokens: int
+    ) -> None:
+        await self._async_count_tokens(
+            kwargs, model_id, model, max(0, tokens - tokens_of_image_answers_billed_on_failure(kwargs))
+        )
 
     async def _async_count_tokens(self, kwargs: Mapping[str, object], model_id: str, model: str, tokens: int) -> None:
         tpm, tpd = self._token_counters(kwargs, model_id, model)
@@ -548,7 +562,7 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            self._count_tokens(kwargs, f"{model_id}", f"{model}", int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            self._count_success_tokens(kwargs, f"{model_id}", f"{model}", int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.log_success_event: %s", e)

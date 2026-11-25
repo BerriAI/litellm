@@ -281,6 +281,7 @@ pub struct LogPrepareInputs {
 #[serde(default)]
 pub struct PostCallFailureInputs {
     pub combined_is_usage: bool,
+    pub provider_billed: bool,
     pub token_rate_limit_type: Value,
 }
 
@@ -543,7 +544,7 @@ pub fn manifest() -> Manifest {
                 ..Subscription::on(Hook::PostCallSuccess)
             },
             Subscription {
-                reads: FieldSet::of(&[Field::DeprecatedKwargs, Field::Usage]),
+                reads: FieldSet::of(&[Field::DeprecatedKwargs, Field::Usage, Field::Error]),
                 awaited: true,
                 ..Subscription::on(Hook::PostCallFailure)
             },
@@ -2071,7 +2072,8 @@ fn failure_facts(
         .get::<typed::Usage>()?
         .and_then(|usage| usage.combined)
         .filter(|combined| {
-            inputs.combined_is_usage && token_count(combined.completion_tokens.as_ref()) > 0
+            inputs.combined_is_usage
+                && (inputs.provider_billed || token_count(combined.completion_tokens.as_ref()) > 0)
         });
     let Some(combined) = combined else {
         return Ok(PostCallFailureFacts::default());
@@ -2231,6 +2233,45 @@ impl Callback for ParallelRequestLimiter {
         host: Host,
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(self.handle_hosted_with(input, state, Value::Null, None, host))
+    }
+}
+
+#[cfg(test)]
+mod failure_facts_tests {
+    use super::*;
+    use litellm_callbacks::FieldValues;
+    use rstest::rstest;
+    use serde_json::json;
+
+    fn refused_without_output() -> HookInput {
+        HookInput {
+            hook: Hook::PostCallFailure,
+            fields: FieldValues::new(FieldSet::of(&[Field::Usage])).with(
+                Field::Usage,
+                json!({"combined": {"prompt_tokens": 777, "completion_tokens": 0, "total_tokens": 777}}),
+            ),
+            call: None,
+        }
+    }
+
+    #[rstest]
+    #[case::billed(true, 777)]
+    #[case::not_billed(false, 0)]
+    fn a_failure_without_output_settles_at_its_usage_only_when_the_provider_billed_it(
+        #[case] provider_billed: bool,
+        #[case] tpm_actual: i64,
+    ) {
+        let inputs = PostCallFailureInputs {
+            combined_is_usage: true,
+            provider_billed,
+            token_rate_limit_type: json!("total"),
+        };
+        assert_eq!(
+            failure_facts(&refused_without_output(), &inputs)
+                .unwrap()
+                .tpm_actual,
+            tpm_actual
+        );
     }
 }
 

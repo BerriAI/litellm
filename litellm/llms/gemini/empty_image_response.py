@@ -12,13 +12,14 @@ from litellm.exceptions import (
     error_response_without_credentials,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ImageResponse, Usage
 
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
 _REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 _LOGGED_FIELDS: Final = TypeAdapter(dict[str, object])
 _ATTEMPT_COSTS: Final = TypeAdapter(tuple[tuple[object, float], ...])
+_ATTEMPT_USAGES: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
 
 class UnservedImageError(UnprocessableEntityError):
@@ -87,6 +88,14 @@ def cost_of_image_answers_billed_on_failure(kwargs: Mapping[str, object]) -> flo
         return 0.0
     carried: Final = _ATTEMPT_COSTS.validate_python(kwargs.get("failed_attempts_billed_on_success", ()))
     return sum(cost for _, cost in carried)
+
+
+def tokens_of_image_answers_billed_on_failure(kwargs: object) -> int:
+    fields: Final = as_str_mapping(kwargs) or {}
+    if fields.get("call_type") not in IMAGE_CALL_TYPES:
+        return 0
+    carried: Final = _ATTEMPT_USAGES.validate_python(fields.get("failed_attempts_billed_on_success", ()))
+    return sum(usage.total_tokens for usage, _ in carried)
 
 
 class _Candidate(BaseModel):

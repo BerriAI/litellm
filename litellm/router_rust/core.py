@@ -5376,7 +5376,9 @@ class _Driver:
             _failure_callbacks_blocked_logging_object,  # pyright: ignore[reportPrivateUsage]  # the fallback path's own rule
         )
 
-        if not in_call or call is None or failed.get("outside_deployment") is True:
+        if not in_call or call is None:
+            return False
+        if failed.get("outside_deployment") is True and not _answered_without_an_image(error):
             return False
         if self._plan.sync:
             if not failure_already_logged(call.kwargs, "sync_failure"):

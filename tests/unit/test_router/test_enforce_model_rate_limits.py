@@ -16,6 +16,7 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import CounterIncrement, CounterKind, RouterUsage, RouterUsageStore, UsageCounter
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
@@ -969,3 +970,82 @@ async def test_an_image_refusal_from_a_fallback_counts_its_answered_tokens_towar
         router.discard()
 
     assert refusing.call_count == 1
+
+
+_SERVED_IMAGE: Final = {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+_SERVED_USAGE: Final = {"promptTokenCount": 200, "candidatesTokenCount": 100, "totalTokenCount": 300}
+
+
+def _refuser_with_a_backup() -> Router:
+    return Router(
+        model_list=[_gemini_image_deployment("refuser", {}), _gemini_image_deployment("backup", {"tpm": 599})],
+        fallbacks=[{"refuser": ["backup"]}],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+
+def _mock_refuser_and_backup(upstream: respx.MockRouter) -> respx.Route:
+    upstream.post(url__startswith="https://refuser.invalid").mock(
+        return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+    )
+    return upstream.post(url__startswith="https://backup.invalid").mock(
+        return_value=httpx.Response(200, json={"candidates": [_SERVED_IMAGE], "usageMetadata": _SERVED_USAGE})
+    )
+
+
+def _refused_request_on_a_shared_logging_object(function: str) -> dict[str, object]:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function=function,
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="refuser",
+        prompt="a single small red dot",
+        litellm_call_id=f"{function}-refused-then-served-by-a-fallback",
+    )
+    return {**request, "litellm_logging_obj": logging_obj}
+
+
+async def _served_image_from(router: Router, request: dict[str, object]) -> None:
+    await router.aimage_generation(**request)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _refuser_with_a_backup()
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            serving = _mock_refuser_and_backup(upstream)
+            await _served_image_from(router, _refused_request_on_a_shared_logging_object("aimage_generation"))
+            await _served_image_from(router, {"model": "backup", "prompt": "a single small red dot"})
+            with pytest.raises(litellm.RateLimitError, match="current usage=600"):
+                await router.aimage_generation(model="backup", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert serving.call_count == 2
+
+
+def test_a_sync_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _refuser_with_a_backup()
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            serving = _mock_refuser_and_backup(upstream)
+            router.image_generation(**_refused_request_on_a_shared_logging_object("image_generation"))
+            router.image_generation(model="backup", prompt="a single small red dot")
+            with pytest.raises(litellm.RateLimitError, match="current usage=600"):
+                router.image_generation(model="backup", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert serving.call_count == 2
