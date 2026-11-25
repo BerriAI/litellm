@@ -1,3 +1,4 @@
+import time
 from collections.abc import Mapping
 from functools import reduce
 from types import MappingProxyType
@@ -963,4 +964,37 @@ def test_response_format_json_object_keeps_its_nested_response_schema() -> None:
         optional_params={"response_format": {"type": "json_object", "response_schema": schema}},
         litellm_params={},
     )
-    assert body.optional_params["response_format"] == {"type": "text", "mime_type": "application/json", "schema": schema}
+    assert body.optional_params["response_format"] == {
+        "type": "text",
+        "mime_type": "application/json",
+        "schema": schema,
+    }
+
+
+def test_long_legacy_function_history_is_converted_in_one_pass() -> None:
+    turns: Final = 20_000
+    messages: Final = [
+        turn
+        for _ in range(turns)
+        for turn in (
+            {"role": "assistant", "content": None, "function_call": {"name": "f", "arguments": "{}"}},
+            {"role": "function", "name": "f", "content": "ok"},
+        )
+    ]
+    started: Final = time.perf_counter()
+    body: Final = transform_chat_to_interactions_request(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "hi"}, *messages],
+        optional_params={},
+        litellm_params={},
+    )
+    assert time.perf_counter() - started < 5
+    assert body.input_steps[-2:] == [
+        {"type": "function_call", "id": f"call_f_{turns}", "name": "f", "arguments": {}},
+        {
+            "type": "function_result",
+            "call_id": f"call_f_{turns}",
+            "name": "f",
+            "result": [{"type": "text", "text": "ok"}],
+        },
+    ]

@@ -856,8 +856,8 @@ class InteractionsToCompletionBridgeHandler:
             _attach_response_metadata(wrapper, raw_response, wire.url)
             return wrapper
 
-        first_hop: Final = _interaction_of(raw_response)
         try:
+            first_hop: Final = _interaction_of(raw_response)
             _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
         except Exception:
             _log_unary_response(call_logger, messages, api_key, wire, raw_response.text)
@@ -1044,8 +1044,8 @@ class InteractionsToCompletionBridgeHandler:
             _attach_response_metadata(wrapper, raw_response, wire.url)
             return wrapper
 
-        first_hop: Final = _interaction_of(raw_response)
         try:
+            first_hop: Final = _interaction_of(raw_response)
             _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
         except Exception:
             _log_unary_response(call_logger, messages, api_key, wire, raw_response.text)

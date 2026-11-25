@@ -56,7 +56,6 @@ from .response_transformation import (
     FinishReason,
     annotations_for_block,
     attach_vertex_metadata,
-    legacy_function_call,
     map_interactions_status_to_finish_reason,
     parse_output_content_blocks,
     shifted,
@@ -316,24 +315,31 @@ class InteractionsChatStreamingIterator:
         finish_reason: FinishReason | None = None,
         usage: Usage | None = None,
     ) -> ModelResponseStream:
-        last_call: Final = delta.tool_calls[-1] if self._is_function_call and delta.tool_calls else None
-        if isinstance(last_call, ChatCompletionDeltaToolCall):
-            function: Final = _FUNCTION_FIELDS.validate_python(last_call.function.model_dump())
-            delta.function_call = FunctionCall(**legacy_function_call(function.get("name"), function.get("arguments")))
-            delta.tool_calls = None
         return ModelResponseStream(
             id=self._stream_id,
             model=self._model,
             choices=[
                 StreamingChoices(
                     index=0,
-                    delta=delta,
+                    delta=self._as_legacy_delta(delta),
                     finish_reason="function_call"
                     if self._is_function_call and finish_reason == "tool_calls"
                     else finish_reason,
                 )
             ],
             usage=usage,
+        )
+
+    def _as_legacy_delta(self, delta: Delta) -> Delta:
+        last_call: Final = delta.tool_calls[-1] if self._is_function_call and delta.tool_calls else None
+        if not isinstance(last_call, ChatCompletionDeltaToolCall):
+            return delta
+        function: Final = _FUNCTION_FIELDS.validate_python(last_call.function.model_dump())
+        return delta.model_copy(
+            update={
+                "function_call": FunctionCall(name=function.get("name"), arguments=function.get("arguments") or ""),
+                "tool_calls": None,
+            }
         )
 
     def _allocate_thought_slot(self, step_index: int) -> int:

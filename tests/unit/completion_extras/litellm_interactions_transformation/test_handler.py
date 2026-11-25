@@ -26,7 +26,6 @@ from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteracti
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import CallTypes, Choices, ModelResponse
 
-
 _OBJ_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
@@ -678,3 +677,28 @@ def test_continued_answer_is_logged_as_the_joined_response_not_the_first_hop() -
     logged: Final = _logged_original_response(log_obj)
     assert "first " in logged
     assert "second" in logged
+
+
+def test_reply_that_is_not_json_still_reaches_post_call_with_its_raw_body() -> None:
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(
+        transport=httpx.MockTransport(lambda _req: httpx.Response(200, text="<html>bad gateway</html>"))
+    )
+    log_obj: Final = _logging_stub("gemini-3-flash-preview")
+
+    with pytest.raises(ValueError):
+        _ = InteractionsToCompletionBridgeHandler().completion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=log_obj,
+            optional_params={},
+            litellm_params={},
+            api_key="test-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=sync_client,
+            custom_llm_provider="gemini",
+            stream=False,
+        )
+
+    assert _logged_original_response(log_obj) == "<html>bad gateway</html>"

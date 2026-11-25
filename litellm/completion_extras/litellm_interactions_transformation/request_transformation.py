@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, takewhile
 from types import MappingProxyType
@@ -717,34 +718,35 @@ def _blank_last_user_turn(messages: Sequence[JsonMapping], steps: Sequence[JsonV
     return ({"type": "user_input", "content": [{"type": "text", "text": " "}]},)
 
 
-def _legacy_call_id(messages: Sequence[JsonMapping], position: int, name: JsonValue) -> str:
-    calls_so_far: Final = sum(
-        1
-        for msg in messages[: position + 1]
-        if msg.get("role") == "assistant"
-        and isinstance(call := msg.get("function_call"), dict)
-        and call.get("name") == name
-    )
-    return f"call_{name}_{calls_so_far}"
-
-
-def _legacy_function_turn_as_tool_turn(messages: Sequence[JsonMapping], position: int) -> JsonMapping:
-    msg: Final = messages[position]
+def _legacy_call_name(msg: JsonMapping) -> str | None:
     call: Final = msg.get("function_call")
-    if msg.get("role") == "assistant" and isinstance(call, dict) and not msg.get("tool_calls"):
+    return str(call.get("name")) if msg.get("role") == "assistant" and isinstance(call, dict) else None
+
+
+def _legacy_function_turn_as_tool_turn(msg: JsonMapping, calls_by_name: Mapping[str, int]) -> JsonMapping:
+    name: Final = _legacy_call_name(msg)
+    if name is not None and not msg.get("tool_calls"):
         return {
             **{key: value for key, value in msg.items() if key != "function_call"},
             "tool_calls": [
-                {"id": _legacy_call_id(messages, position, call.get("name")), "type": "function", "function": call}
+                {"id": f"call_{name}_{calls_by_name[name]}", "type": "function", "function": msg.get("function_call")}
             ],
         }
     if msg.get("role") == "function" and not msg.get("tool_call_id"):
-        return {**msg, "tool_call_id": _legacy_call_id(messages, position, msg.get("name"))}
+        result_name: Final = str(msg.get("name"))
+        return {**msg, "tool_call_id": f"call_{result_name}_{calls_by_name.get(result_name, 0)}"}
     return msg
 
 
+def _legacy_function_turns_as_tool_turns(messages: Sequence[JsonMapping]) -> Iterator[JsonMapping]:
+    calls_by_name: Final[Counter[str]] = Counter()  # mutable-ok: per-request running count of calls per function name
+    for msg in messages:
+        calls_by_name.update(name for name in (_legacy_call_name(msg),) if name is not None)
+        yield _legacy_function_turn_as_tool_turn(msg, calls_by_name)
+
+
 def _with_legacy_function_turns_as_tool_turns(messages: Sequence[JsonMapping]) -> tuple[JsonMapping, ...]:
-    return tuple(_legacy_function_turn_as_tool_turn(messages, position) for position in range(len(messages)))
+    return tuple(_legacy_function_turns_as_tool_turns(messages))
 
 
 def _convert_messages(
