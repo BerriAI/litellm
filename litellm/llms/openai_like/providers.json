@@ -180,6 +180,19 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
+  "martllm": {
+    "base_url": "https://api.martllm.com/v1",
+    "api_key_env": "MARTLLM_API_KEY",
+    "api_base_env": "MARTLLM_API_BASE",
+    "special_handling": {
+      "require_own_api_key": true
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "meta": {
     "base_url": "https://api.meta.ai/v1",
     "api_key_env": "META_API_KEY",
@@ -311,18 +324,5 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
-  },
-  "uberllm": {
-    "base_url": "https://api.uberllm.dev/v1",
-    "api_key_env": "UBERLLM_API_KEY",
-    "api_base_env": "UBERLLM_API_BASE",
-    "special_handling": {
-      "require_own_api_key": true
-    },
-    "provider_info": {
-      "supports_function_calling": true,
-      "supports_reasoning": true
-    },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/messages"]
   }
 }

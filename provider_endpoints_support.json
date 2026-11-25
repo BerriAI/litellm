@@ -4280,13 +4280,13 @@
         "generateContent": false
       }
     },
-    "uberllm": {
-      "display_name": "UberLLM (`uberllm`)",
-      "url": "https://docs.litellm.ai/docs/providers/uberllm",
+    "martllm": {
+      "display_name": "MartLLM (`martllm`)",
+      "url": "https://martllm.com/docs",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
-        "responses": false,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,
