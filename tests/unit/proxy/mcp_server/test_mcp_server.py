@@ -3245,7 +3245,12 @@ def _docs_server(auth_type: str, legacy_client_credentials: bool = False) -> MCP
         ("/mcp/DOCS", "tools/list", "plain", ["DOCS"], _docs_server("oauth_delegate"), "reauthorizes:/mcp/DOCS"),
         ("/mcp/docs", "tools/list", "plain", ["docs"], _docs_server("api_key"), "none"),
         ("/mcp/docs", "tools/list", "plain", ["docs"], _docs_server("oauth2", legacy_client_credentials=True), "none"),
-        ("/mcp/docs", "tools/call", "plain", ["docs"], _docs_server("oauth_delegate"), "holds"),
+        ("/mcp/docs", "tools/call", "plain", ["docs"], _docs_server("oauth_delegate"), "reauthorizes:/mcp/docs"),
+        ("/mcp/docs", "tools/call", "plain", ["docs"], _docs_server("oauth2"), "reauthorizes:/mcp/docs"),
+        ("/mcp/docs", "tools/call", "plain", ["docs"], _docs_server("api_key"), "holds"),
+        ("/mcp/docs", "tools/call", "plain", ["docs", "wiki"], _docs_server("oauth2"), "holds"),
+        ("/mcp", "tools/call", "plain", ["docs"], _docs_server("oauth2"), "holds"),
+        ("/mcp/docs", "prompts/get", "plain", ["docs"], _docs_server("oauth2"), "none"),
         ("/mcp/docs", "tools/list", "plain", ["docs", "wiki"], _docs_server("oauth_delegate"), "none"),
         ("/mcp/docs", "tools/list", "plain", ["unregistered_group"], _docs_server("oauth_delegate"), "none"),
         ("/mcp/docs", "tools/list", "plain", None, _docs_server("oauth_delegate"), "none"),
@@ -3258,11 +3263,20 @@ def _docs_server(auth_type: str, legacy_client_credentials: bool = False) -> MCP
         ("/mcp/docs", "tools/list", "cursor-after-method", ["docs"], _docs_server("oauth_delegate"), "reauthorizes:/mcp/docs"),
         ("/mcp/docs", "prompts/list", "cursor-after-method", ["docs"], _docs_server("oauth_delegate"), "reauthorizes:/mcp/docs"),
         ("/mcp/docs", "tools/list", "cursor-before-method", ["docs"], _docs_server("oauth_delegate"), "holds"),
-        ("/mcp/docs", "tools/call", "cursor-after-method", ["docs"], _docs_server("oauth_delegate"), "holds"),
+        (
+            "/mcp/docs",
+            "tools/call",
+            "cursor-after-method",
+            ["docs"],
+            _docs_server("oauth_delegate"),
+            "reauthorizes:/mcp/docs",
+        ),
+        ("/mcp/docs", "tools/call", "cursor-after-method", ["docs"], _docs_server("oauth2"), "reauthorizes:/mcp/docs"),
+        ("/mcp/docs", "tools/call", "cursor-before-method", ["docs"], _docs_server("oauth2"), "holds"),
         ("/mcp/docs", "ping", "duplicate-method", ["docs"], _docs_server("oauth_delegate"), "none"),
     ],
 )
-async def test_mcp_routing_holds_a_single_servers_listing_response_for_a_reauth_challenge(
+async def test_mcp_routing_holds_a_single_servers_listing_or_tool_call_response_for_a_reauth_challenge(
     path: str, method: str, shape: str, selected_servers: Sequence[str] | None, docs: MCPServer, expected: str
 ) -> None:
     try:

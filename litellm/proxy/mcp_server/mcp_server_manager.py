@@ -7085,6 +7085,10 @@ class MCPServerManager:
                                 server_id=mcp_server.server_id,
                             ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
+                        rejected_login: Final = managed_per_user and auth_info is not None and auth_info[0] == 401
+                        scope_response: Final = get_scope_response() if rejected_login else None
+                        if scope_response is not None:
+                            scope_response.deny_reauth()
                         if not relays_upstream_auth or auth_info is None or auth_info[0] != 401:
                             # A genuine (non-auth or 403-forbidden) upstream/transport failure.
                             # raise_on_error demoted the client-layer log to debug, so surface it here at

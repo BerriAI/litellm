@@ -2503,18 +2503,22 @@ if MCP_AVAILABLE:
             ),
         )
 
-    def _is_listing_body(body: bytes) -> bool:
-        """A listing request, including one the routing peek cut off after its method."""
-        if is_listing_request(body):
+    def _is_reauthorizable_body(body: bytes) -> bool:
+        if is_listing_request(body) or is_tool_call_request(body):
             return True
         peek_cut: Final = len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
-        return peek_cut and _jsonrpc_text_method(body.decode("utf-8", errors="replace")) in LISTING_METHODS
+        method: Final = _jsonrpc_text_method(body.decode("utf-8", errors="replace")) if peek_cut else None
+        return method == "tools/call" or method in LISTING_METHODS
 
     def _server_to_reauthorize(
         mcp_servers: Sequence[str] | None, scoped_server_endpoint: bool, body: bytes, client_ip: str | None
     ) -> str | None:
-        """The server a client addressed alone for a listing it can fix by authenticating again."""
-        if not scoped_server_endpoint or mcp_servers is None or len(mcp_servers) != 1 or not _is_listing_body(body):
+        if (
+            not scoped_server_endpoint
+            or mcp_servers is None
+            or len(mcp_servers) != 1
+            or not _is_reauthorizable_body(body)
+        ):
             return None
         server: Final = operations.global_mcp_server_manager.get_mcp_server_by_identifier(
             mcp_servers[0], client_ip=client_ip
