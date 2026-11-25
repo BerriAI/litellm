@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.url_utils import (
     assert_same_origin,
     encode_url_path_segment,
     encode_url_path_segments,
+    ensure_api_route,
     validate_url,
 )
 
@@ -571,3 +572,38 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
     assert response.status_code == 200
     assert resolver_threads and all(thread is not loop_thread for thread in resolver_threads)
     assert released_by_the_loop and all(released_by_the_loop)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "route", "expected"),
+    [
+        ("https://gw.test/p/v1/messages", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p/v1/messages/", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/x/listen", "listen", "https://gw.test/x/listen"),
+        ("https://gw.test/p/", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/research", "search", "https://gw.test/research/search"),
+        ("http://embeddings", "embeddings", "http://embeddings/embeddings"),
+        ("http://embeddings:8080/", "embeddings", "http://embeddings:8080/embeddings"),
+        ("http:/", "anthropic/v1/messages", "http://anthropic/v1/messages"),
+        ("https://gw.test/p/v1/messages/?beta=true", "v1/messages", "https://gw.test/p/v1/messages?beta=true"),
+        ("https://gw.test/p/v1/messages?beta=true", "v1/messages", "https://gw.test/p/v1/messages?beta=true"),
+    ],
+    ids=(
+        "path-already-ends-in-route",
+        "path-ends-in-route-before-trailing-slash",
+        "last-segment-is-the-route",
+        "trailing-slash-base",
+        "route-with-leading-slash",
+        "path-ends-in-lookalike-suffix",
+        "host-named-like-the-route",
+        "host-with-port-named-like-the-route",
+        "host-stripped-as-a-suffix-leaves-only-the-scheme",
+        "route-path-with-a-slash-before-the-query",
+        "route-path-before-the-query",
+    ),
+)
+def test_ensure_api_route_appends_the_route_only_when_the_url_path_lacks_it(
+    api_base: str, route: str, expected: str
+) -> None:
+    assert ensure_api_route(api_base, route) == expected
