@@ -225,6 +225,15 @@
     "api_base_env": "CORTECS_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "straitly": {
+    "base_url": "https://api.straitly.ai/v1",
+    "api_key_env": "STRAITLY_API_KEY",
+    "api_base_env": "STRAITLY_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+    "provider_info": {
+      "supports_function_calling": true
+    }
+  },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",
