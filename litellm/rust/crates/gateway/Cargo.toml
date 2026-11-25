@@ -27,6 +27,7 @@ litellm-gateway-auth-core.workspace = true
 jiff.workspace = true
 litellm-callbacks.workspace = true
 parking_lot.workspace = true
+arc-swap.workspace = true
 rand.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
