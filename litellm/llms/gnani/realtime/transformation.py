@@ -7,6 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import NotRequired, ReadOnly
 
+from litellm import verbose_logger
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     SESSION_UPDATE_EVENT_TYPES,
@@ -15,6 +16,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     decode_pcm16_append,
     duration_usage,
     error_event,
+    ignored_session_settings,
     json_object,
     new_event_id,
     parse_transcription_session_update,
@@ -60,6 +62,7 @@ class _ProviderEvent(BaseModel):
     utterance_id: str | None = None
     text: str | None = None
     detected_language_code: str | None = None
+    audio_duration_ms: float | None = None
 
 
 class _Transcript(OpenAIRealtimeInputAudioTranscriptionCompleted):
@@ -98,14 +101,17 @@ class _MeteredBackend:
         if isinstance(message, bytes):
             self._unreported_bytes += len(message)
 
-    def take_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
+    def take_usage(self, seconds: float | None) -> RealtimeInputAudioTranscriptionUsage | None:
         pending: Final = self._unreported_bytes
-        self._unreported_bytes = 0
-        return duration_usage(pending / (2 * WIRE_RATE)) if pending else None
+        taken: Final = pending if seconds is None else min(pending, 2 * round(seconds * WIRE_RATE))
+        self._unreported_bytes = pending - taken
+        return duration_usage(taken / (2 * WIRE_RATE)) if taken else None
 
 
 class GnaniRealtimeConfig(BaseRealtimeConfig):
-    def __init__(self) -> None:
+    def __init__(self, drop_params: bool = False, requires_explicit_language: bool = False) -> None:
+        self._drop_params: Final = drop_params
+        self._requires_explicit_language: Final = requires_explicit_language
         self._backend: _MeteredBackend | None = None
         self._audio: Final = GnaniAudioStream()
         self._language: str = _DEFAULT_LANGUAGE
@@ -144,40 +150,55 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
         if isinstance(kind, str) and kind in SESSION_UPDATE_EVENT_TYPES:
             return (self._update(message),)
         if kind == "input_audio_buffer.append":
+            self._require_explicit_language(self._language)
             return self._audio.append(decode_pcm16_append(request.get("audio"), self._audio.max_encoded_append_bytes))
         if kind == "input_audio_buffer.commit":
             return self._audio.commit()
         raise RealtimeTranscriptionProtocolError(f"Gnani transcription does not support client event {kind!r}")
 
+    def _require_explicit_language(self, language: str) -> None:
+        if self._requires_explicit_language and (language == _DEFAULT_LANGUAGE or "," in language):
+            raise RealtimeTranscriptionProtocolError(
+                "Prisma v2.5 requires one explicit language, for example language 'hi'"
+            )
+
     def _update(self, message: str) -> str:
         update: Final = parse_transcription_session_update(message)
         if update.session_type not in (None, "transcription"):
             raise RealtimeTranscriptionProtocolError("Gnani realtime supports transcription sessions only")
-        if update.turn_detection_disabled or (
-            update.turn_detection is not None and update.turn_detection != {"type": "server_vad"}
-        ):
+        if update.turn_detection_disabled:
             raise RealtimeTranscriptionProtocolError("Gnani realtime requires server_vad")
-        if update.unsupported_transcription_keys:
+        if update.turn_detection_type not in (None, "server_vad") and not self._drop_params:
             raise RealtimeTranscriptionProtocolError(
-                f"Unsupported Gnani transcription settings: {', '.join(update.unsupported_transcription_keys)}"
+                "Gnani realtime supports server_vad only. Set drop_params to use server_vad instead"
             )
+        ignored: Final = ignored_session_settings(update)
+        if ignored and not self._drop_params:
+            raise RealtimeTranscriptionProtocolError(
+                f"Unsupported Gnani transcription settings: {', '.join(ignored)}. Set drop_params to ignore them"
+            )
+        if ignored:
+            verbose_logger.warning("Gnani realtime: dropping unsupported session settings %s", ignored)
         language: Final = _language(update.language) if update.language is not None else None
+        if language is not None:
+            self._require_explicit_language(language)
         fmt: Final = update.audio_format
         if fmt is not None:
             if not fmt.is_pcm16 or fmt.channels not in (None, 1):
                 raise RealtimeTranscriptionProtocolError("Gnani realtime requires mono PCM16 audio")
             self._audio.set_rate(24_000 if fmt.rate is None else fmt.rate)
+        self._language = language or self._language
         return json.dumps({"type": "update_settings", **({"language_code": language} if language else {})})
 
     def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
         self._backend = _MeteredBackend(backend)
         return self._backend
 
-    def _take_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
-        return self._backend.take_usage() if self._backend is not None else None
+    def _take_usage(self, seconds: float | None) -> RealtimeInputAudioTranscriptionUsage | None:
+        return self._backend.take_usage(seconds) if self._backend is not None else None
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
-        return self._take_usage()
+        return self._take_usage(None)
 
     async def pace_backend_send(self, message: bytes) -> None:
         await self._audio.pace()
@@ -229,7 +250,8 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
             "previous_item_id": self._previous_item,
         }
         self._previous_item = item
-        transcript: Final = completed_event(item, event.text, self._take_usage())
+        spoken: Final = None if event.audio_duration_ms is None else event.audio_duration_ms / 1000
+        transcript: Final = completed_event(item, event.text, self._take_usage(spoken))
         if event.detected_language_code is None:
             return committed, transcript
         detected: Final[_Transcript] = {**transcript, "detected_language_code": event.detected_language_code}

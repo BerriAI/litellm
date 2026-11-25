@@ -1,7 +1,9 @@
 import base64
 import json
+import math
 import struct
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -15,20 +17,135 @@ from litellm.utils import ProviderConfigManager
 
 
 @pytest.mark.parametrize("model", ["prisma-v2.5", "prisma-v3.0"])
-def test_client_pcm_is_resampled_and_framed_across_appends(model: str) -> None:
+def test_client_pcm_is_framed_across_appends(model: str) -> None:
     config: Final = ProviderConfigManager.get_provider_realtime_config(model, LlmProviders.GNANI)
     assert config is not None
-    samples: Final = struct.pack("<768h", *range(0, 1536, 2))
+    config.transform_realtime_request(_session_update(16_000, {"language": "hi"}), model)
+    samples: Final = struct.pack("<512h", *range(-256, 256))
 
     def append(pcm: bytes) -> tuple[str | bytes, ...]:
-        message: Final = json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
-        return tuple(config.transform_realtime_request(message, model))
+        return tuple(config.transform_realtime_request(_append(pcm), model))
 
     assert append(samples[:10]) == ()
-    assert append(samples[10:]) == (struct.pack("<512h", *range(0, 1536, 3)),)
+    assert append(samples[10:]) == (samples,)
     assert tuple(config.transform_realtime_request('{"type":"input_audio_buffer.commit"}', model)) == (
         '{"type":"commit"}',
     )
+
+
+@pytest.mark.parametrize(("rate", "alias_hz"), [(24_000, 11_000), (44_100, 10_000), (48_000, 10_000)])
+def test_resampling_filters_out_tones_above_the_wire_nyquist_and_keeps_speech_tones(rate: int, alias_hz: int) -> None:
+    full_scale_rms: Final = 10_000 / math.sqrt(2)
+    assert _rms(_forwarded_tone(rate, alias_hz)) < 0.01 * full_scale_rms
+    assert _rms(_forwarded_tone(rate, 1_000)) == pytest.approx(full_scale_rms, rel=0.02)
+
+
+def _forwarded_tone(rate: int, hz: int) -> bytes:
+    config: Final = GnaniRealtimeConfig()
+    config.transform_realtime_request(_session_update(rate, {}), "prisma-v3.0")
+    tone: Final = struct.pack(f"<{rate}h", *(round(10_000 * math.sin(2 * math.pi * hz * i / rate)) for i in range(rate)))
+    chunk: Final = rate // 5 * 2
+    appends: Final = (
+        config.transform_realtime_request(_append(tone[offset : offset + chunk]), "prisma-v3.0")
+        for offset in range(0, len(tone), chunk)
+    )
+    return _pcm(chain.from_iterable(appends))[3_200:]
+
+
+def _pcm(frames: Iterable[str | bytes]) -> bytes:
+    return b"".join(frame for frame in frames if isinstance(frame, bytes))
+
+
+@pytest.mark.parametrize("rate", [24_000, 44_100, 48_000])
+def test_commit_forwards_the_end_of_a_short_burst_held_back_by_the_resampling_filter(rate: int) -> None:
+    config: Final = GnaniRealtimeConfig()
+    config.transform_realtime_request(_session_update(rate, {}), "prisma-v3.0")
+    burst: Final = struct.pack(
+        f"<{rate // 500}h", *(round(10_000 * math.sin(2 * math.pi * 1_000 * i / rate)) for i in range(rate // 500))
+    )
+    assert config.transform_realtime_request(_append(burst), "prisma-v3.0") == ()
+    committed: Final = _pcm(config.transform_realtime_request('{"type":"input_audio_buffer.commit"}', "prisma-v3.0"))
+    burst_energy_at_wire_rate: Final = _energy(burst) * 16_000 / rate
+    assert _energy(committed) == pytest.approx(burst_energy_at_wire_rate, rel=0.1)
+
+
+def _energy(pcm: bytes) -> float:
+    return sum(sample * sample for sample in struct.unpack(f"<{len(pcm) // 2}h", pcm))
+
+
+def _rms(pcm: bytes) -> float:
+    samples: Final = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+
+
+def _session_update(rate: int, transcription: Mapping[str, object], **audio_input: object) -> str:
+    return json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": rate},
+                        "transcription": transcription,
+                        **audio_input,
+                    }
+                },
+            },
+        }
+    )
+
+
+def _append(pcm: bytes) -> str:
+    return json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
+
+
+@pytest.mark.parametrize(
+    ("turn_detection", "strict_error"),
+    [
+        (
+            {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300, "silence_duration_ms": 500},
+            "prompt, turn_detection.prefix_padding_ms, turn_detection.silence_duration_ms, turn_detection.threshold",
+        ),
+        ({"type": "semantic_vad", "eagerness": "auto"}, "server_vad only"),
+    ],
+)
+def test_tuned_turn_detection_and_prompt_are_rejected_unless_drop_params_drops_them(
+    turn_detection: Mapping[str, object], strict_error: str
+) -> None:
+    update: Final = _session_update(
+        24_000, {"model": "gnani-prisma-v3", "language": "en", "prompt": "Asha"}, turn_detection=turn_detection
+    )
+    strict: Final = ProviderConfigManager.get_provider_realtime_config("prisma-v3.0", LlmProviders.GNANI)
+    assert strict is not None
+    with pytest.raises(RealtimeTranscriptionProtocolError, match=strict_error):
+        strict.transform_realtime_request(update, "prisma-v3.0")
+    dropping: Final = ProviderConfigManager.get_provider_realtime_config(
+        "prisma-v3.0", LlmProviders.GNANI, drop_params=True
+    )
+    assert dropping is not None
+    (wire,) = dropping.transform_realtime_request(update, "prisma-v3.0")
+    assert isinstance(wire, str)
+    assert json.loads(wire) == {"type": "update_settings", "language_code": "en-IN"}
+
+
+@pytest.mark.parametrize("deployment_headers", [{}, {"lang_code": "indic-auto"}, {"lang_code": "hi, en"}])
+def test_prisma_v25_needs_one_explicit_language_before_audio(deployment_headers: Mapping[str, str]) -> None:
+    v25: Final = ProviderConfigManager.get_provider_realtime_config("prisma-v2.5", LlmProviders.GNANI)
+    v3: Final = ProviderConfigManager.get_provider_realtime_config("prisma-v3.0", LlmProviders.GNANI)
+    assert v25 is not None and v3 is not None
+    v25.validate_environment(deployment_headers, "prisma-v2.5", api_key="deployment-key")
+    v3.validate_environment(deployment_headers, "prisma-v3.0", api_key="deployment-key")
+    audio: Final = _append(bytes(2))
+    assert v3.transform_realtime_request(audio, "prisma-v3.0") == ()
+    with pytest.raises(RealtimeTranscriptionProtocolError, match="one explicit language"):
+        v25.transform_realtime_request(audio, "prisma-v2.5")
+    with pytest.raises(RealtimeTranscriptionProtocolError, match="one explicit language"):
+        v25.transform_realtime_request(_session_update(24_000, {"language": "indic-auto"}), "prisma-v2.5")
+    (wire,) = v25.transform_realtime_request(_session_update(24_000, {"language": "en"}), "prisma-v2.5")
+    assert isinstance(wire, str)
+    assert json.loads(wire) == {"type": "update_settings", "language_code": "en-IN"}
+    assert v25.transform_realtime_request(audio, "prisma-v2.5") == ()
 
 
 def test_unknown_gnani_model_cannot_fall_back_to_another_prisma_version() -> None:
@@ -93,12 +210,11 @@ def test_final_transcripts_link_consecutive_turns_across_a_provider_error() -> N
 
 def test_rejected_update_keeps_the_partial_audio_for_the_next_commit() -> None:
     config: Final = GnaniRealtimeConfig()
-    update: Final = '{"type":"transcription_session.update","session":{"input_audio_format":"pcm16"}}'
-    config.transform_realtime_request(update, "prisma-v3.0")
+    config.transform_realtime_request(_session_update(16_000, {}), "prisma-v3.0")
     assert config.transform_realtime_request('{"type":"input_audio_buffer.append","audio":"AQI="}', "prisma-v3.0") == ()
     with pytest.raises(RealtimeTranscriptionProtocolError, match="change the audio rate"):
         config.transform_realtime_request(
-            '{"type":"session.update","session":{"audio":{"input":{"format":{"type":"audio/pcm","rate":16000}}}}}',
+            '{"type":"session.update","session":{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}}}}}',
             "prisma-v3.0",
         )
     assert config.transform_realtime_request('{"type":"input_audio_buffer.commit"}', "prisma-v3.0") == (
@@ -193,6 +309,23 @@ async def test_forwarded_pcm_duration_is_reported_once_across_transcripts_and_di
     with pytest.raises(ConnectionError):
         await backend.send(bytes(2048))
     assert config.unbilled_usage_on_session_close("prisma-v3.0") == {"type": "duration", "seconds": 0.032}
+    assert config.unbilled_usage_on_session_close("prisma-v3.0") is None
+
+
+@pytest.mark.asyncio
+async def test_each_transcript_bills_its_spoken_duration_and_the_silence_left_bills_at_close() -> None:
+    config: Final = GnaniRealtimeConfig()
+    backend: Final = config.wrap_backend(Mock(send=AsyncMock()))
+    one_second: Final = 2 * 16_000
+    await backend.send(bytes(6 * one_second))
+    _, first = _events(config, {"type": "transcript", "text": "first", "audio_duration_ms": 3000})
+    _, second = _events(config, {"type": "transcript", "text": "second", "audio_duration_ms": 4000})
+    await backend.send(bytes(2 * one_second))
+    _, third = _events(config, {"type": "transcript", "text": "third", "audio_duration_ms": 500})
+    assert _usage(first) == {"type": "duration", "seconds": 3.0}
+    assert _usage(second) == {"type": "duration", "seconds": 3.0}
+    assert _usage(third) == {"type": "duration", "seconds": 0.5}
+    assert config.unbilled_usage_on_session_close("prisma-v3.0") == {"type": "duration", "seconds": 1.5}
     assert config.unbilled_usage_on_session_close("prisma-v3.0") is None
 
 

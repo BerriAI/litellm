@@ -112,6 +112,11 @@ def uses_server_vad(
     raise error(f"{backend} supports server_vad turn detection or null. Set drop_params to use server_vad instead")
 
 
+def ignored_session_settings(update: TranscriptionSessionUpdate) -> tuple[str, ...]:
+    vad_tuning: Final = (f"turn_detection.{key}" for key in sorted(update.turn_detection or {}) if key != "type")
+    return (*update.unsupported_transcription_keys, *vad_tuning)
+
+
 def new_event_id() -> str:
     return f"event_{uuid.uuid4().hex}"
 

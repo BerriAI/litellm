@@ -11991,6 +11991,7 @@ class ProviderConfigManager:
 
             return MetaRealtimeConfig(drop_params=drop_params)
         if LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.common_utils import is_prisma_v25
             from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
 
             gnani_info: Final = lookup_model_info_for_registration(model, provider.value)
@@ -11998,7 +11999,7 @@ class ProviderConfigManager:
                 gnani_info.get("supported_endpoints") or ()
             ):
                 return None
-            return GnaniRealtimeConfig()
+            return GnaniRealtimeConfig(drop_params=drop_params, requires_explicit_language=is_prisma_v25(model))
         if LlmProviders.SONIOX == provider:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 

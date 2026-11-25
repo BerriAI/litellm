@@ -13,14 +13,13 @@ from litellm.constants import GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS, OPENAI
 from litellm.exceptions import AuthenticationError, BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
-from litellm.litellm_core_utils.model_cost_table import published
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.gnani.common_utils import normalize_language
+from litellm.llms.gnani.common_utils import is_prisma_v25, normalize_language
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, OpenAIAudioTranscriptionOptionalParams
 from litellm.types.utils import FileTypes, TranscriptionResponse
@@ -28,8 +27,6 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 _SHARED_FIELDS: Final = frozenset(("format", "enable_substitution", "substitution_map", "bias_list"))
 _V25_FIELDS: Final = _SHARED_FIELDS | {"bias_score", "itn_native_numerals"}
 _V3_FIELDS: Final = _SHARED_FIELDS | {"keyterms", "topic", "previous_text", "speaker_names"}
-_V25_MODEL: Final = "prisma-v2.5"
-_V25_FIELDS_FLAG: Final = "gnani_v25_request_fields"
 _NOT_FORWARDED: Final = frozenset(
     (
         *OPENAI_TRANSCRIPTION_PARAMS,
@@ -56,21 +53,13 @@ class _PrismaTranscript(BaseModel):
     truncated: bool | None = None
 
 
-def _is_v25(model: str) -> bool:
-    name: Final = model.removeprefix("gnani/")
-    if (as_str_mapping(published().get(f"gnani/{name}")) or {}).get("litellm_provider") != "gnani":
-        return name == _V25_MODEL
-    flags: Final = litellm.get_model_info(model=name, custom_llm_provider="gnani").get("provider_specific_entry")
-    return name == _V25_MODEL if flags is None else flags.get(_V25_FIELDS_FLAG) == 1
-
-
 def _language_code(model: str, language: object) -> str:
     if language is not None and not isinstance(language, str):
         raise UnsupportedParamsError(message="language must be a string", model=model, llm_provider="gnani")
     hints: Final = tuple(filter(None, (hint.strip() for hint in (language or "").split(","))))
-    if not hints and not _is_v25(model):
+    if not hints and not is_prisma_v25(model):
         return "indic-auto"
-    if _is_v25(model) and (len(hints) != 1 or hints[0].lower() == "indic-auto"):
+    if is_prisma_v25(model) and (len(hints) != 1 or hints[0].lower() == "indic-auto"):
         raise UnsupportedParamsError(
             message="Prisma v2.5 requires one explicit language, for example language='hi'.",
             model=model,
@@ -108,7 +97,7 @@ def _accepted_keywords(model: str, keywords: object) -> tuple[str, ...] | None:
         terms: Final = tuple(_STRING_LIST.validate_python([keywords] if isinstance(keywords, str) else keywords))
     except ValidationError:
         return None
-    accepts: Final = _is_single_word if _is_v25(model) else _is_phrase
+    accepts: Final = _is_single_word if is_prisma_v25(model) else _is_phrase
     return terms if all(map(accepts, terms)) else None
 
 
@@ -116,7 +105,7 @@ def _rejected_keywords(model: str) -> UnsupportedParamsError:
     message: Final = (
         "Prisma v2.5 keywords must be single words made of letters only. "
         "Use gnani/prisma-v3.0 for phrases, digits or punctuation, or set drop_params=True to drop them."
-        if _is_v25(model)
+        if is_prisma_v25(model)
         else "Gnani keywords must be non-blank strings. Set drop_params=True to drop them."
     )
     return UnsupportedParamsError(message=message, model=model, llm_provider="gnani")
@@ -124,7 +113,7 @@ def _rejected_keywords(model: str) -> UnsupportedParamsError:
 
 def _with_keywords_as_terms(fields: Mapping[str, object], model: str, drops_unsupported: bool) -> Mapping[str, object]:
     keywords: Final = fields.get("keywords")
-    target: Final = "bias_list" if _is_v25(model) else "keyterms"
+    target: Final = "bias_list" if is_prisma_v25(model) else "keyterms"
     if keywords is None or fields.get("bias_list") is not None or fields.get(target) is not None:
         return fields
     terms: Final = _accepted_keywords(model, keywords)
@@ -134,7 +123,7 @@ def _with_keywords_as_terms(fields: Mapping[str, object], model: str, drops_unsu
         raise _rejected_keywords(model)
     if not terms:
         return fields
-    if not _is_v25(model):
+    if not is_prisma_v25(model):
         return {**fields, "keyterms": terms}
     bias_score: Final = fields.get("bias_score")
     return {
@@ -190,7 +179,7 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: the public capability API returns a list
-        if _is_v25(model):
+        if is_prisma_v25(model):
             return ["language", "languages", "keywords", "response_format"]
         return ["language", "languages", "keywords", "response_format", "prompt"]
 
@@ -260,7 +249,7 @@ class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         fields: Final = _without_names(
             _with_keywords_as_terms(_with_prompt_as_previous_text(requested), model, drops_unsupported), dropped
         )
-        supported: Final = _V25_FIELDS if _is_v25(model) else _V3_FIELDS
+        supported: Final = _V25_FIELDS if is_prisma_v25(model) else _V3_FIELDS
         incompatible: Final = (_V25_FIELDS | _V3_FIELDS) - supported
         unsupported: Final = sorted(key for key in incompatible if fields.get(key) is not None)
         if unsupported and not drops_unsupported:
