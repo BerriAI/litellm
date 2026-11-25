@@ -2170,8 +2170,8 @@ class TestAnthropicMessagesToolResultScanning:
         ids=["string_form", "list_form"],
     )
     async def test_replayed_mcp_tool_result_is_scanned_and_written_back(
-        self, scan_only_tool_results, mcp_result_content, masked_content
-    ):
+        self, scan_only_tool_results: bool, mcp_result_content: object, masked_content: object
+    ) -> None:
         guardrail = MockCanaryMaskingGuardrail()
         guardrail.scan_only_tool_results = scan_only_tool_results
         messages = [

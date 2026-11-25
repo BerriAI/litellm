@@ -363,7 +363,7 @@ class TestOutputConfigStructuredOutput:
         }
 
     @pytest.mark.parametrize("strict", [pytest.param({}, id="strict"), pytest.param({"strict": False}, id="loose")])
-    def test_translate_request_does_not_mutate_input_schema(self, strict: Dict[str, bool]):
+    def test_translate_request_does_not_mutate_input_schema(self, strict: Dict[str, bool]) -> None:
         """translate_request must not mutate the caller's output_format or schema dicts."""
         schema = {"type": "object", "properties": {"x": {"type": "number", "default": 1}}, "required": []}
         output_format = {"type": "json_schema", "schema": schema, **strict}
@@ -2828,7 +2828,7 @@ def test_disable_parallel_tool_use_turns_off_parallel_tool_calls(
         pytest.param(None, {}, id="null"),
     ],
 )
-def test_speed_maps_to_the_priority_service_tier(speed: object, expected: Dict[str, str]):
+def test_speed_maps_to_the_priority_service_tier(speed: object, expected: Dict[str, str]) -> None:
     kwargs: Final = _translate(False, speed=speed)
     assert {key: kwargs[key] for key in ("service_tier", "speed") if key in kwargs} == expected
 
@@ -2859,7 +2859,7 @@ def test_an_unknown_speed_answers_400_unless_drop_params_drops_it():
         pytest.param({**DOCS_SERVER, "tool_configuration": {"enabled": False}}, [], id="deprecated-disabled"),
     ],
 )
-def test_an_mcp_server_becomes_a_responses_mcp_tool(server: Dict[str, object], expected_tools: List[object]):
+def test_an_mcp_server_becomes_a_responses_mcp_tool(server: Dict[str, object], expected_tools: List[object]) -> None:
     kwargs: Final = _translate(False, mcp_servers=[server])
     assert kwargs.get("tools", []) == expected_tools
     assert "mcp_servers" not in kwargs
