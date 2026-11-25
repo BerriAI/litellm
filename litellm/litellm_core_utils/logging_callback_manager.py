@@ -382,15 +382,17 @@ class LoggingCallbackManager:
         parent_list: list[CustomLogger | Callable[..., object] | str],
     ):
         """
-        Add a custom logger to a list, if another instance of the same custom logger exists in the list, do not add it again.
+        Deduplicate explicit Proxy registrations by name and unnamed callbacks by their existing key.
         """
-        # Check if an instance of the same class already exists in the list
+        registration_name: Final = custom_logger._proxy_callback_registration_name
         custom_logger_key: Final = self._get_custom_logger_key(custom_logger)
         custom_logger_type_name: Final = type(custom_logger).__name__
         for existing_logger in parent_list:
-            if (
-                isinstance(existing_logger, CustomLogger)
-                and self._get_custom_logger_key(existing_logger) == custom_logger_key
+            if not isinstance(existing_logger, CustomLogger):
+                continue
+            existing_name: Final = existing_logger._proxy_callback_registration_name
+            if existing_name == registration_name and (
+                registration_name is not None or self._get_custom_logger_key(existing_logger) == custom_logger_key
             ):
                 verbose_logger.debug(
                     "Custom logger of type %s, key: %s already exists in %s, not adding again..",

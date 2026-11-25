@@ -145,6 +145,12 @@ def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Call
     resolved: Final = _classify_loaded_callback(entry=entry, loaded=loaded)
     if isinstance(resolved, _CallbackResolvedToClass | _CallbackNotDispatchable):
         _raise_callback_load_error(resolved)
+    if (
+        isinstance(resolved, CustomLogger)
+        and resolved._proxy_callback_registration_name is None
+        and all(part.isidentifier() for part in entry.split("."))
+    ):
+        resolved._proxy_callback_registration_name = entry
     return resolved
 
 

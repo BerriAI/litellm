@@ -649,6 +649,7 @@ def log_event_fn(kwargs, response_obj, start_time, end_time):
 NOT_A_CALLBACK = "some-plain-string"
 
 proxy_handler_instance = FloorMaxTokens()
+second_proxy_handler_instance = FloorMaxTokens()
 '''
 
 
@@ -755,6 +756,22 @@ async def test_initialize_callbacks_on_proxy_instance_entry_runs_pre_call_hook(p
     )
 
     assert data["max_tokens"] == 16
+
+
+def test_same_class_proxy_registrations_reach_async_success_list(
+    probe_config_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    names: Final = [
+        f"{_PROBE_MODULE_NAME}.{name}" for name in ("proxy_handler_instance", "second_proxy_handler_instance")
+    ]
+    _load_callbacks(names, probe_config_path)
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    for callback in (*litellm.callbacks, *litellm.callbacks):
+        assert isinstance(callback, CustomLogger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+
+    assert [callback._proxy_callback_registration_name for callback in litellm._async_success_callback] == names
 
 
 def test_initialize_callbacks_on_proxy_keeps_known_string_callback(probe_config_path):
