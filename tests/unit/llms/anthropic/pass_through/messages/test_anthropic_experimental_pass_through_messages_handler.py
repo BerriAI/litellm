@@ -3,12 +3,14 @@ import copy
 import json
 import os
 import uuid
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Any, Dict, Final, List
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1615,14 +1617,18 @@ async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safegu
 class _ResponseHeaderCapture(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        self.logged: Final[asyncio.Queue[Mapping[str, str]]] = asyncio.Queue()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.logged.put_nowait(dict(kwargs["response_headers"]))
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.put_nowait(TypeAdapter(Mapping[str, str]).validate_python(kwargs["response_headers"]))
 
 
 @pytest.mark.asyncio
-async def test_a_streamed_messages_call_hands_loggers_every_header_the_provider_sent(monkeypatch):
+async def test_a_streamed_messages_call_hands_loggers_every_header_the_provider_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.llms.anthropic.pass_through.messages import handler
 
     provider_headers: Final = {
