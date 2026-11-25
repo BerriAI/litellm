@@ -361,6 +361,69 @@ class TestContextCachingEndpoints:
         self.mock_client.post.assert_not_called()
         self.mock_async_client.post.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "rejection",
+        [
+            "Model `gemini-4-neon` does not support explicit context caching.",
+            "Explicit caching is not supported for models/gemini-4-argon.",
+        ],
+    )
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_check_and_create_cache_sends_uncached_when_the_model_rejects_explicit_caching(
+        self, is_async: bool, rejection: str
+    ):
+        empty_list: Final = MagicMock()
+        empty_list.json.return_value = {}
+        call_args: Final = self._gemini_v1_gateway_call_args(empty_list)
+        rejected: Final = MagicMock()
+        rejected.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Bad Request",
+            request=MagicMock(),
+            response=MagicMock(
+                status_code=400,
+                text=json.dumps({"error": {"code": 400, "message": rejection, "status": "INVALID_ARGUMENT"}}),
+            ),
+        )
+        self.mock_client.post.return_value = rejected
+        self.mock_async_client.post = AsyncMock(return_value=rejected)
+        client: Final = self.mock_async_client if is_async else self.mock_client
+
+        async def send() -> tuple[object, object, object]:
+            params: Final = {"tools": self.sample_tools, "tool_choice": "auto"}
+            if is_async:
+                return await self.context_caching.async_check_and_create_cache(
+                    client=client, **{**call_args, "optional_params": params}
+                )
+            return self.context_caching.check_and_create_cache(
+                client=client, **{**call_args, "optional_params": params}
+            )
+
+        uncached: Final = (call_args["messages"], {"tools": self.sample_tools, "tool_choice": "auto"}, None)
+        assert await send() == uncached
+        assert client.post.call_count == 1
+        assert await send() == uncached
+        assert (client.get.call_count, client.post.call_count) == (1, 1), "a rejected model is not asked again"
+
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_check_and_create_cache_raises_other_cache_creation_errors(self, is_async: bool):
+        empty_list: Final = MagicMock()
+        empty_list.json.return_value = {}
+        call_args: Final = self._gemini_v1_gateway_call_args(empty_list)
+        rejected: Final = MagicMock()
+        rejected.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Bad Request", request=MagicMock(), response=MagicMock(status_code=400, text="ttl is invalid")
+        )
+        self.mock_client.post.return_value = rejected
+        self.mock_async_client.post = AsyncMock(return_value=rejected)
+
+        with pytest.raises(VertexAIError, match="ttl is invalid"):
+            if is_async:
+                await self.context_caching.async_check_and_create_cache(client=self.mock_async_client, **call_args)
+            else:
+                self.context_caching.check_and_create_cache(client=self.mock_client, **call_args)
+
     @pytest.mark.parametrize("is_async", [False, True])
     @pytest.mark.asyncio
     async def test_check_and_create_cache_caches_through_a_gemini_v1_gateway_that_serves_cached_contents(
@@ -2576,7 +2639,9 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     )
 
     created: Final = next(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
@@ -2631,7 +2696,9 @@ async def test_cache_creation_drops_tool_call_arguments_gemini_cannot_use_when_d
     )
 
     created: Final = next(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     function_call: Final = created["contents"][1]["parts"][0]["function_call"]
     assert (function_call["name"], function_call["args"]) == ("get_weather", {})
@@ -2712,7 +2779,9 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
         )
 
     created: Final = tuple(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert len(created) == 1
@@ -2723,7 +2792,10 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
     assert generated[1]["contents"] == [
         {"role": "user", "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
         {"role": "model", "parts": [{"text": "answer 1"}]},
-        {"role": "user", "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}]},
+        {
+            "role": "user",
+            "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}],
+        },
     ]
 
 
@@ -2751,16 +2823,24 @@ def test_a_cache_mark_on_the_last_reminder_keeps_one_gemini_cache_and_the_remind
         )
 
     created: Final = tuple(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert len(created) == 1
     assert created[0]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
     assert generated[1]["cachedContent"] == "cachedContents/created"
     assert generated[1]["contents"] == [
-        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
+        {
+            "role": "user",
+            "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}],
+        },
         {"role": "model", "parts": [{"text": "answer 1"}]},
-        {"role": "user", "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}]},
+        {
+            "role": "user",
+            "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}],
+        },
     ]
 
 
@@ -2793,7 +2873,9 @@ async def test_a_ttl_on_a_reminder_that_ends_the_cached_block_still_sets_how_lon
         )
 
     created: Final = tuple(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert [(body["contents"], body.get("ttl")) for body in created] == [
@@ -2819,7 +2901,9 @@ async def test_a_reminder_ttl_gets_its_own_gemini_cache_beside_one_made_without_
         )
 
     created: Final = tuple(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     assert [body.get("ttl") for body in created] == [None, "300s"]
     assert created[0]["displayName"] != created[1]["displayName"]
@@ -2854,7 +2938,10 @@ def test_a_cached_block_from_a_later_turn_that_ends_on_a_reminder_goes_out_uncac
     assert generated["contents"] == [
         {"role": "user", "parts": [{"text": "question 1"}]},
         {"role": "model", "parts": [{"text": "answer 1 " * 3000}]},
-        {"role": "user", "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}, {"text": "question 2"}]},
+        {
+            "role": "user",
+            "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}, {"text": "question 2"}],
+        },
     ]
 
 
@@ -2906,7 +2993,10 @@ def test_a_model_without_system_messages_gets_a_later_reminder_the_same_way_with
         {"role": "system", "content": "2 of 8 turns used"},
     ]
     cached: Final[list[AllMessageValues]] = [
-        {"role": "user", "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
         *later_turns,
     ]
     uncached: Final[list[AllMessageValues]] = [{"role": "user", "content": "shared policy " * 3000}, *later_turns]
@@ -2934,7 +3024,10 @@ async def test_a_model_without_system_messages_takes_a_video_in_a_later_system_m
         {"role": "user", "content": "Describe the clip"},
     ]
     cached: Final[list[AllMessageValues]] = [
-        {"role": "user", "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
         *later_turns,
     ]
     uncached: Final[list[AllMessageValues]] = [{"role": "user", "content": "shared policy " * 3000}, *later_turns]
@@ -2981,7 +3074,9 @@ def _cached_request_with_search_and_functions(model: str) -> dict[str, object]:
 
 def _created_and_generated_bodies(calls: list[httpx.Request]) -> tuple[dict, dict]:
     created: Final = next(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     return created, generated
@@ -3012,7 +3107,10 @@ async def test_a_caller_who_turns_server_side_tools_off_caches_functions_without
 ) -> None:
     calls: Final[list[httpx.Request]] = []
     await complete(
-        {**_cached_request_with_search_and_functions(search_with_functions_model), "includeServerSideToolInvocations": False},
+        {
+            **_cached_request_with_search_and_functions(search_with_functions_model),
+            "includeServerSideToolInvocations": False,
+        },
         calls,
     )
 

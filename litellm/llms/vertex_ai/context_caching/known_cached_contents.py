@@ -14,6 +14,10 @@ _CACHE_REJECTED_STATUS_CODES: Final = frozenset({400, 403, 404})
 _NAMES_CACHED_CONTENT: Final = re.compile(r"cached?\s*content", re.IGNORECASE)
 _FORBIDS_FIELDS_BESIDE_A_CACHE: Final = re.compile(r"system[_\s]instruction", re.IGNORECASE)
 
+_REJECTS_EXPLICIT_CACHING: Final = re.compile(
+    r"does not support explicit (context )?caching|explicit (context )?caching is not supported", re.IGNORECASE
+)
+
 _RFC3339_FRACTION: Final = re.compile(r"\.(\d{1,6})\d*")
 
 
@@ -23,6 +27,10 @@ def names_rejected_cache(status_code: int, message: str) -> bool:
         and _NAMES_CACHED_CONTENT.search(message) is not None
         and _FORBIDS_FIELDS_BESIDE_A_CACHE.search(message) is None
     )
+
+
+def names_model_without_explicit_caching(status_code: int, message: str) -> bool:
+    return status_code == 400 and _REJECTS_EXPLICIT_CACHING.search(message) is not None
 
 
 def parse_expire_time(expire_time: object) -> float | None:
@@ -51,6 +59,7 @@ class KnownCachedContents:
     def __init__(self, clock: Callable[[], float] = time.time) -> None:
         self._clock: Final = clock
         self._entries: dict[tuple[tuple[str, str], str], tuple[str, float]] = {}  # mutable-ok: guarded by _lock
+        self._models_without_explicit_caching: frozenset[tuple[tuple[str, str], str]] = frozenset()
         self._lock: Final = threading.Lock()
         self._inflight: weakref.WeakKeyDictionary[  # mutable-ok: private, guarded by _lock
             asyncio.AbstractEventLoop, dict[tuple[tuple[str, str], str], asyncio.Future[str | None]]
@@ -105,6 +114,17 @@ class KnownCachedContents:
                     del self._entries[next(iter(self._entries))]
             self._entries[(scope, cache_key)] = (name, reuse_until)
 
+    def serves_explicit_caching(self, scope: tuple[str, str], model: str) -> bool:
+        return (scope, model) not in self._models_without_explicit_caching
+
+    def remember_model_without_explicit_caching(self, scope: tuple[str, str], model: str) -> None:
+        with self._lock:
+            self._models_without_explicit_caching = (  # rebind-ok: guarded by _lock
+                frozenset()
+                if len(self._models_without_explicit_caching) >= MAX_KNOWN_CACHED_CONTENTS
+                else self._models_without_explicit_caching
+            ) | {(scope, model)}
+
     def forget_rejected(self, cached_content: str | None, status_code: int) -> None:
         if cached_content is None or status_code not in _CACHE_REJECTED_STATUS_CODES:
             return
@@ -151,6 +171,7 @@ class KnownCachedContents:
         with self._lock:
             self._entries.clear()
             self._inflight.clear()
+            self._models_without_explicit_caching = frozenset()  # rebind-ok: guarded by _lock
 
 
 known_cached_contents: Final = KnownCachedContents()

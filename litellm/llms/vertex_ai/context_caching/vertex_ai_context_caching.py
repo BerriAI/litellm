@@ -22,7 +22,11 @@ from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_p
 from ..common_utils import VertexAIError, get_supports_system_message, get_vertex_base_url
 from ..gemini.transformation import reject_system_message_videos
 from ..vertex_llm_base import VertexBase, publisher_model_location
-from .known_cached_contents import KnownCachedContents, known_cached_contents
+from .known_cached_contents import (
+    KnownCachedContents,
+    known_cached_contents,
+    names_model_without_explicit_caching,
+)
 from .transformation import (
     cached_block_ttl,
     cached_messages_end_on_supported_turn,
@@ -90,6 +94,16 @@ def _sync_cache_client(timeout: float | httpx.Timeout | None) -> HTTPHandler:
 
 class _CachedContentsNotServedError(VertexAIError):
     pass
+
+
+class _ExplicitCachingNotSupportedError(VertexAIError):
+    pass
+
+
+def _cache_creation_error(status_code: int, message: str) -> VertexAIError:
+    if names_model_without_explicit_caching(status_code, message):
+        return _ExplicitCachingNotSupportedError(status_code=status_code, message=message)
+    return VertexAIError(status_code=status_code, message=message)
 
 
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
@@ -510,6 +524,12 @@ class ContextCachingEndpoints(VertexBase):
         if extra_headers is not None:
             headers.update(extra_headers)
 
+        scope: Final = KnownCachedContents.scope(
+            url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location
+        )
+        if not self._known_caches.serves_explicit_caching(scope, target.model):
+            return messages, optional_params, None
+
         http_client: Final = client if isinstance(client, HTTPHandler) else _sync_cache_client(timeout)
 
         ## CHECK IF CACHED ALREADY
@@ -532,9 +552,9 @@ class ContextCachingEndpoints(VertexBase):
         except _CachedContentsNotServedError:
             verbose_logger.debug("Gemini context caching: %s answers 404. Skipping context caching.", url)
             return messages, optional_params, None
-        for tool_param in _TOOL_PARAMS:
-            optional_params.pop(tool_param, None)
         if google_cache_name:
+            for tool_param in _TOOL_PARAMS:
+                optional_params.pop(tool_param, None)
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
@@ -572,17 +592,21 @@ class ContextCachingEndpoints(VertexBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            creation_error: Final = _cache_creation_error(err.response.status_code, err.response.text)
+            if not isinstance(creation_error, _ExplicitCachingNotSupportedError):
+                raise creation_error
+            verbose_logger.debug("%s Skipping context caching.", creation_error.message)
+            self._known_caches.remember_model_without_explicit_caching(scope, target.model)
+            return messages, optional_params, None
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        for tool_param in _TOOL_PARAMS:
+            optional_params.pop(tool_param, None)
         self._known_caches.remember(
-            KnownCachedContents.scope(
-                url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location
-            ),
+            scope,
             generated_cache_key,
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
@@ -681,6 +705,8 @@ class ContextCachingEndpoints(VertexBase):
         scope: Final = KnownCachedContents.scope(
             url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location
         )
+        if not self._known_caches.serves_explicit_caching(scope, target.model):
+            return messages, optional_params, None
 
         async def lookup_or_create() -> str | None:
             google_cache_name: Final = await self.async_check_cache(
@@ -735,8 +761,7 @@ class ContextCachingEndpoints(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
-                error_code: Final = err.response.status_code
-                raise VertexAIError(status_code=error_code, message=err.response.text)
+                raise _cache_creation_error(err.response.status_code, err.response.text)
             except httpx.TimeoutException:
                 raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
@@ -753,6 +778,10 @@ class ContextCachingEndpoints(VertexBase):
             )
         except _CachedContentsNotServedError:
             verbose_logger.debug("Gemini context caching: %s answers 404. Skipping context caching.", url)
+            return messages, optional_params, None
+        except _ExplicitCachingNotSupportedError as unsupported:
+            verbose_logger.debug("%s Skipping context caching.", unsupported.message)
+            self._known_caches.remember_model_without_explicit_caching(scope, target.model)
             return messages, optional_params, None
         for tool_param in _TOOL_PARAMS:
             optional_params.pop(tool_param, None)
