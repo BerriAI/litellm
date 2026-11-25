@@ -5448,15 +5448,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
+    def _billed_failure_after_settlement_ops(
+        self, stash: RequestRateLimiterStash, tpm_actual: int, itpm_actual: int, otpm_actual: int
+    ) -> list[RedisPipelineIncrementOperation]:
+        nothing_held: Final[frozenset[tuple[str, str]]] = frozenset()
+        return [
+            *self._build_reservation_aware_tpm_ops(
+                targets=tuple(scope for scope in stash.reserved_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
+                reserved_scopes=nothing_held,
+                actual_tokens=tpm_actual,
+                reserved_tokens=0,
+            ),
+            *self._build_reservation_aware_tpm_ops(
+                targets=tuple(stash.itpm_reserved_scopes),
+                reserved_scopes=nothing_held,
+                actual_tokens=itpm_actual,
+                reserved_tokens=0,
+            ),
+            *self._build_reservation_aware_tpm_ops(
+                targets=tuple(stash.otpm_reserved_scopes),
+                reserved_scopes=nothing_held,
+                actual_tokens=otpm_actual,
+                reserved_tokens=0,
+            ),
+        ]
+
     def _build_ptu_failure_settlement_ops(
         self,
         stash: RequestRateLimiterStash,
         source: Mapping[str, object],
         raw_actual_tokens: int,
         provider_billed: bool,
+        reservation_held: bool,
     ) -> tuple[ReservationAwareIncrementOperation, ...]:
         """Settle the team PTU reservation on failure in the normalized tokens it was taken in:
-        at the recovered partial usage when there is one, else a full refund."""
+        at the recovered partial usage when there is one, else a full refund. Once an earlier
+        failure settled the reservation, a billed failure charges its usage without a second refund."""
         ptu_scopes: Final = tuple(scope for scope in stash.reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
         if not ptu_scopes:
             return ()
@@ -5469,7 +5496,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._resolve_reconciled_usage(usage) if usage is not None else None,
                 raw_actual_tokens,
             ),
-            reserved_tokens=stash.ptu_reserved_tokens,
+            reserved_tokens=stash.ptu_reserved_tokens if reservation_held else 0,
             reservation_window_identities=stash.ptu_reserved_window_identities,
         )
 
@@ -5522,6 +5549,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         reserved_tokens=reserved_tokens,
                     )
                 )
+            if stash is not None and stash.reservation_released and provider_billed:
+                pipeline_operations.extend(
+                    self._billed_failure_after_settlement_ops(stash, tpm_actual, itpm_actual, otpm_actual)
+                )
 
             # Settle project ITPM/OTPM reservations the same way: at the
             # recovered partial usage, or a full refund when there is none.
@@ -5569,8 +5600,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     kwargs,  # pyright: ignore[reportUnknownArgumentType]  # hook kwargs are unannotated
                     tpm_actual,
                     provider_billed,
+                    reservation_held=reserved_tokens > 0,
                 )
-                if stash is not None and reserved_tokens > 0
+                if stash is not None and (reserved_tokens > 0 or (stash.reservation_released and provider_billed))
                 else ()
             )
 
@@ -5743,6 +5775,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
                     tpm_actual,
                     provider_billed,
+                    reservation_held=True,
                 )
                 if reserved_tokens > 0
                 else ()
