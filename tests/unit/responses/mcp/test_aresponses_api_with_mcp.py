@@ -19,6 +19,7 @@ from mcp.types import Tool as MCPTool
 
 # Import required modules
 import litellm
+from litellm.constants import MAX_GATEWAY_DIRECT_MCP_SERVERS
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
@@ -4702,6 +4703,31 @@ async def test_two_hosted_mcp_tools_with_the_same_server_label_answer_400_before
         )
 
     assert "Duplicate MCP server_label `deepwiki`" in str(refused.value)
+    assert (server.opened, provider.call_count) == ((), 0)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_more_direct_mcp_servers_than_the_cap_answer_400_before_any_server_is_opened(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com", "mcp.example.com"))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (), _BEDROCK_URL)
+    server: Final = _ScriptedMCPServer()
+    beside: Final = tuple(
+        {
+            "type": "mcp",
+            "server_label": f"example-{index}",
+            "server_url": "https://mcp.example.com/mcp",
+            "require_approval": "never",
+        }
+        for index in range(MAX_GATEWAY_DIRECT_MCP_SERVERS)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server, beside=beside)
+
+    assert f"more than the {MAX_GATEWAY_DIRECT_MCP_SERVERS} allowed" in str(refused.value)
     assert (server.opened, provider.call_count) == ((), 0)
 
 

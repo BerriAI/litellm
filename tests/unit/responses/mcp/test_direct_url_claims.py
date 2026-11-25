@@ -9,6 +9,7 @@ import pytest
 from mcp.types import CallToolRequestParams, CallToolResult, ToolAnnotations
 from mcp.types import Tool as MCPTool
 
+from litellm.constants import MAX_GATEWAY_DIRECT_MCP_SERVERS
 from litellm.exceptions import APIError, UnsupportedParamsError
 from litellm.responses.mcp.direct_url_claims import (
     AllowedTools,
@@ -76,12 +77,12 @@ def test_a_url_neither_registered_nor_allowlisted_is_left_alone():
 
 
 def test_a_registered_url_runs_as_its_gateway_server_under_the_callers_label():
-    claims: Final = _plan([FUNCTION_TOOL, _mcp_tool("https://Mcp.DeepWiki.com/mcp/", {"headers": {"X-Team": "a"}})])
+    claims: Final = _plan([FUNCTION_TOOL, _mcp_tool("https://Mcp.DeepWiki.com/mcp/", {"headers": {"x-mcp-deepwiki-team": "a"}})])
 
     assert claims is not None
     assert [dict(tool) for tool in claims.tools] == [
         FUNCTION_TOOL,
-        {**_mcp_tool("litellm_proxy/mcp/deepwiki"), "headers": {"X-Team": "a"}},
+        {**_mcp_tool("litellm_proxy/mcp/deepwiki"), "headers": {"x-mcp-deepwiki-team": "a"}},
     ]
     assert claims.direct == ()
     assert claims.server_labels == {"deepwiki": "wiki", "srv-deepwiki": "wiki"}
@@ -218,6 +219,50 @@ def test_a_claimed_tool_that_needs_approval_answers_400_or_is_left_for_the_drop(
     assert refused.value.status_code == 400
     assert "`wiki`" in refused.value.message
     assert _plan([tool], allowed_hosts=allowed_hosts, drop_params=True) is None
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [{"authorization": "caller-token"}, {"headers": {"X-Api-Key": "caller-key"}}],
+    ids=["authorization", "header"],
+)
+def test_a_registered_url_sent_with_credentials_answers_400_or_runs_without_them_under_drop_params(
+    credentials: Mapping[str, object],
+):
+    tool: Final = _mcp_tool("https://mcp.deepwiki.com/mcp", credentials)
+
+    with pytest.raises(UnsupportedParamsError) as refused:
+        _plan([tool])
+
+    assert refused.value.status_code == 400
+    assert "`wiki`" in refused.value.message
+    assert "`x-mcp-deepwiki-authorization`" in refused.value.message
+    dropped: Final = _plan([tool], drop_params=True)
+    assert dropped is not None
+    assert [entry["server_url"] for entry in dropped.tools] == ["litellm_proxy/mcp/deepwiki"]
+
+
+def test_a_registered_url_sent_with_a_header_its_server_forwards_runs_as_its_gateway_server():
+    forwarding: Final = DEEPWIKI.model_copy(update={"extra_headers": ["X-Api-Key"]})
+
+    claims: Final = _plan(
+        [_mcp_tool("https://mcp.deepwiki.com/mcp", {"headers": {"x-api-key": "caller-key"}})], servers=(forwarding,)
+    )
+
+    assert claims is not None
+    assert [entry["server_url"] for entry in claims.tools] == ["litellm_proxy/mcp/deepwiki"]
+
+
+def test_a_request_with_as_many_direct_servers_as_the_cap_plans_every_one():
+    tools: Final = [
+        _mcp_tool("https://mcp.example.com/mcp", {"server_label": f"example-{index}"})
+        for index in range(MAX_GATEWAY_DIRECT_MCP_SERVERS)
+    ]
+
+    claims: Final = _plan(tools, allowed_hosts=("mcp.example.com",))
+
+    assert claims is not None
+    assert len(claims.direct) == MAX_GATEWAY_DIRECT_MCP_SERVERS
 
 
 def test_a_tool_that_needs_approval_on_an_unclaimed_url_is_not_answered_here():

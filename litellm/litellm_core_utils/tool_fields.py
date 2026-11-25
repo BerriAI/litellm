@@ -363,6 +363,22 @@ def hosted_mcp_approval_error(server_labels: Sequence[str], model: str, route: s
     )
 
 
+def hosted_mcp_registered_credentials_error(
+    server_labels: Sequence[str], server_names: Sequence[str], model: str, route: str
+) -> UnsupportedParamsError:
+    named_tools: Final = ", ".join(f"`{label}`" for label in server_labels)
+    per_server_headers: Final = ", ".join(f"`x-mcp-{name}-authorization`" for name in server_names)
+    return _unrunnable_mcp_error(
+        f"The hosted MCP tool {named_tools} points at a server registered on the LiteLLM MCP gateway, which runs "
+        "it with the credentials set there, so the tool's `authorization` and any header the server does not forward "
+        "would not be sent. "
+        f"Remove them, or send your own credentials in {per_server_headers}. "
+        + _drop_params_hint("the tool's credentials"),
+        model=model,
+        route=route,
+    )
+
+
 _GATEWAY_REMEDY: Final = (
     'register it on the LiteLLM MCP gateway and send `server_url: "litellm_proxy/mcp/<server name>"`'
 )
@@ -374,8 +390,8 @@ def _hosted_mcp_remedy(how: str) -> str:
 
 _HOSTED_MCP_GATEWAY_REMEDY: Final = _hosted_mcp_remedy(_GATEWAY_REMEDY)
 _RESPONSES_GATEWAY_REMEDY: Final = _hosted_mcp_remedy(
-    f"{_GATEWAY_REMEDY}, or set `litellm_settings.gateway_runs_hosted_mcp: true` with the server registered or "
-    "its host in `gateway_hosted_mcp_allowed_hosts`"
+    f"{_GATEWAY_REMEDY}, or set `litellm.gateway_runs_hosted_mcp=True` (`gateway_runs_hosted_mcp: true` in "
+    "`litellm_settings` for proxy) with the server registered or its host in `gateway_hosted_mcp_allowed_hosts`"
 )
 
 

@@ -10,10 +10,11 @@ from mcp.types import CallToolRequestParams, CallToolResult, InputRequiredResult
 from mcp.types import Tool as MCPTool
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.constants import MAX_GATEWAY_DIRECT_MCP_SERVERS
 from litellm.exceptions import APIError, BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import GatewayTool, GatewayTools
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.litellm_core_utils.tool_fields import hosted_mcp_approval_error
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_approval_error, hosted_mcp_registered_credentials_error
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.proxy.mcp_server.utils import add_server_prefix_to_name
 from litellm.responses.mcp.tool_precheck import LITELLM_PROXY_MCP_SERVER_URL, proxy_path_mcp_name
@@ -220,6 +221,20 @@ def _caller_headers(tool: Mapping[str, object]) -> Mapping[str, str]:
     return MappingProxyType({**sent, **bearer})
 
 
+def _header_names(tool: Mapping[str, object]) -> tuple[str, ...]:
+    try:
+        return tuple(_HEADERS.validate_python(tool.get("headers") or {}))
+    except ValidationError:
+        return ()
+
+
+def _sends_credentials_the_gateway_ignores(tool: Mapping[str, object], server: MCPServer) -> bool:
+    forwarded: Final = frozenset(name.lower() for name in server.extra_headers or ())
+    return _text_field(tool, "authorization") is not None or any(
+        not name.lower().startswith("x-mcp-") and name.lower() not in forwarded for name in _header_names(tool)
+    )
+
+
 def allowed_tools_filter(tool: Mapping[str, object]) -> AllowedTools:
     allowed: Final = tool.get("allowed_tools")
     if allowed is None:
@@ -340,6 +355,38 @@ def _raise_if_server_labels_repeat(tools: Sequence[Mapping[str, object]], model:
     )
 
 
+def _raise_if_registered_claims_send_credentials(
+    claims: Sequence[_Claim], drop_params: object, model: str, route: str
+) -> None:
+    credentialed: Final = tuple(
+        claim
+        for claim in claims
+        if isinstance(claim, _RegisteredClaim) and _sends_credentials_the_gateway_ignores(claim.tool, claim.server)
+    )
+    if not credentialed or drops_unsupported_params(drop_params):
+        return
+    raise hosted_mcp_registered_credentials_error(
+        tuple(claim.label for claim in credentialed),
+        tuple(gateway_name(claim.server) for claim in credentialed),
+        model=model,
+        route=route,
+    )
+
+
+def _raise_if_too_many_direct_servers(direct: Sequence[DirectMCPServer], model: str) -> None:
+    if len(direct) <= MAX_GATEWAY_DIRECT_MCP_SERVERS:
+        return
+    raise BadRequestError(
+        message=(
+            f"This request has {len(direct)} hosted MCP tools whose server_url the gateway would connect to itself, "
+            f"more than the {MAX_GATEWAY_DIRECT_MCP_SERVERS} allowed. Send fewer, or register the servers on the "
+            "LiteLLM MCP gateway."
+        ),
+        model=model,
+        llm_provider="mcp",
+    )
+
+
 def plan_hosted_mcp_claims(
     tools: Sequence[Mapping[str, object]],
     servers: Collection[MCPServer],
@@ -351,7 +398,9 @@ def plan_hosted_mcp_claims(
     """Claim each hosted MCP tool whose URL a registered server serves or whose host the admin allowlisted. A claimed
     tool that needs approval answers 400, or under drop_params is left for the hosted MCP strip to drop. None when
     nothing is claimed, so the request keeps its current path. Once anything is claimed, two hosted MCP tools sharing a
-    server_label answer 400, as OpenAI does."""
+    server_label answer 400, as OpenAI does, and so do more than `MAX_GATEWAY_DIRECT_MCP_SERVERS` direct servers. A
+    registered match sent with `authorization` or headers its server would not get answers 400, or under drop_params
+    runs without them."""
     allowed_origins: Final = hosted_mcp_allowed_origins(allowed_hosts)
     registered_hosts: Final = _registered_hosts(servers)
     claims: Final = tuple(_claim(tool, servers, allowed_origins, registered_hosts) for tool in tools)
@@ -366,10 +415,13 @@ def plan_hosted_mcp_claims(
     if all(isinstance(claim, _Unclaimed) for claim in runnable):
         return None
     _raise_if_server_labels_repeat(tools, model)
+    direct: Final = tuple(claim.server for claim in runnable if isinstance(claim, _DirectClaim))
+    _raise_if_too_many_direct_servers(direct, model)
+    _raise_if_registered_claims_send_credentials(runnable, drop_params, model, route)
     registered: Final = tuple(claim for claim in runnable if isinstance(claim, _RegisteredClaim))
     return HostedMCPClaims(
         tools=tuple(tool for tool in map(_gateway_tool, runnable) if tool is not None),
-        direct=tuple(claim.server for claim in runnable if isinstance(claim, _DirectClaim)),
+        direct=direct,
         server_labels=MappingProxyType(
             dict(chain.from_iterable(entries.items() for entries in map(_label_entries, registered)))
         ),
