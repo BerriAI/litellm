@@ -5413,7 +5413,7 @@ requires-dist = [
     { name = "orjson", marker = "python_full_version < '3.15' and extra == 'proxy'", specifier = ">=3.11.6,<4.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "polars", marker = "extra == 'proxy'", specifier = ">=1.38.1,<2.0" },
-    { name = "prisma", marker = "extra == 'extra-proxy'", specifier = ">=0.11.0,<0.13" },
+    { name = "prisma", marker = "extra == 'extra-proxy'", specifier = ">=0.11.0,<1.0" },
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = ">=0.20.0,<1.0" },
     { name = "protobuf", marker = "extra == 'stt-nvidia-riva'", specifier = ">=5.26.1,<7.0" },
     { name = "psycopg", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },

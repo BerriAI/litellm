@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|mcp-dependencies|windows-release|redis-compat|prisma-engine|tests-only>}"
+category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|mcp-dependencies|windows-release|redis-compat|python-310|tests-only>}"
 
 has_client=false
 has_backend=false
@@ -10,7 +10,7 @@ has_cost_map=false
 has_mcp_dependencies=false
 has_windows_release=false
 has_redis_compat=false
-has_prisma_engine=false
+has_python_310=false
 outside_cost_map_set=false
 has_test=false
 outside_test_set=false
@@ -30,8 +30,8 @@ while IFS= read -r file || [ -n "$file" ]; do
       has_redis_compat=true ;;
   esac
   case "$file" in
-    litellm/proxy/db/prisma_engine.py | litellm/proxy/db/prisma_client.py | tests/unit/proxy/db/test_prisma_engine.py | tests/unit/proxy/db/conftest.py | tests/_process_helpers.py | .github/workflows/test-unit.yml | .github/actions/detect-changes/* | .github/scripts/detect_changes.sh | .github/scripts/ci/classify_changes.sh | pyproject.toml | uv.lock)
-      has_prisma_engine=true ;;
+    litellm/proxy/db/prisma_engine.py | litellm/proxy/db/prisma_client.py | tests/unit/proxy/db/test_prisma_engine.py | tests/unit/proxy/db/conftest.py | tests/_process_helpers.py | litellm/integrations/custom_logger_v2/*.py | tests/unit/integrations/custom_logger_v2/test_dispatcher.py | .github/workflows/test-unit.yml | .github/actions/detect-changes/* | .github/scripts/detect_changes.sh | .github/scripts/ci/classify_changes.sh | pyproject.toml | uv.lock)
+      has_python_310=true ;;
   esac
   case "$file" in
     *.md | *.mdx) : ;;
@@ -72,8 +72,8 @@ case "$category" in
   redis-compat)
     [ "$has_redis_compat" = true ] && echo run || echo skip
     ;;
-  prisma-engine)
-    [ "$has_prisma_engine" = true ] && echo run || echo skip
+  python-310)
+    [ "$has_python_310" = true ] && echo run || echo skip
     ;;
   backend)
     [ "$has_backend" = true ] && echo run || echo skip

@@ -122,7 +122,7 @@ cli = [
     "tomlkit>=0.13.3,<1.0",
 ]
 extra_proxy = [
-    "prisma>=0.11.0,<0.13",
+    "prisma>=0.11.0,<1.0",
     # Used by ProxyExtrasDBManager.spend_logs_is_partitioned() to detect a
     # partitioned LiteLLM_SpendLogs and keep schema reconciliation from
     # fighting its composite primary key.

@@ -14,7 +14,7 @@ description: >-
 
 inputs:
   category:
-    description: "Which classification to apply: backend, client, ui, provider-harness, cost-map-only, mcp-dependencies, windows-release, redis-compat, prisma-engine or tests-only"
+    description: "Which classification to apply: backend, client, ui, provider-harness, cost-map-only, mcp-dependencies, windows-release, redis-compat, python-310 or tests-only"
     required: false
     default: backend
   github-token:

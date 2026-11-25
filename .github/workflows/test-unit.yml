@@ -1070,6 +1070,7 @@ jobs:
         timeout-minutes: 5
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
+          PRISMA_VERSION: ${{ matrix.prisma-version }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
@@ -1081,6 +1082,9 @@ jobs:
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+          if [ -n "$PRISMA_VERSION" ]; then
+            uv pip install --python .venv/bin/python "prisma==${PRISMA_VERSION}"
+          fi
 
       - name: Check litellm/schema.prisma against the merge base
         if: steps.changes.outputs.decision != 'skip' && (matrix.shard == 'db-and-spend' || matrix.shard == 'core-auth-spend') && github.event_name == 'pull_request'
@@ -1098,7 +1102,7 @@ jobs:
           uv run --no-sync python litellm/scripts/check_schema_compatibility.py --base-commit "$merge_base"
 
       - name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && !matrix.prisma-version
         timeout-minutes: 3
         uses: ./.github/actions/cache-prisma-binaries
 
@@ -1346,11 +1350,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: prisma-engine-python-310
-            changes-category: prisma-engine
+          - shard: python-310
+            changes-category: python-310
             test-path: >-
               tests/unit/proxy/db/test_prisma_engine.py
+              tests/unit/integrations/custom_logger_v2/test_dispatcher.py
             python-version: "3.10"
+            prisma-version: "0.15.0"
             workers: 0
             reruns: 0
             timeout-minutes: 5
