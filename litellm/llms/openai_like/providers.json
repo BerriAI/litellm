@@ -397,5 +397,14 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "lessstrict": {
+    "base_url": "https://lessstrict.com/v1",
+    "api_key_env": "LESSSTRICT_API_KEY",
+    "api_base_env": "LESSSTRICT_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }
