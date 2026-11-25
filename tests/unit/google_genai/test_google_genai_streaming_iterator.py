@@ -13,6 +13,7 @@ from litellm.google_genai.streaming_iterator import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
@@ -269,3 +270,58 @@ async def test_async_stream_success_log_survives_garbage_collection_while_its_ca
         await drain_logging_tasks()
 
         assert (yielded, survived, logger.parks, logger.finished.is_set()) == (2, True, 1, True)
+
+
+@pytest.mark.parametrize("chunks_read_before_disconnect, expected_success_logs", [(0, 0), (1, 1), (2, 1)])
+@pytest.mark.asyncio
+async def test_a_client_that_disconnects_mid_stream_is_logged_once_for_what_it_received(
+    chunks_read_before_disconnect: int, expected_success_logs: int
+):
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = _logging_obj(recorder=recorder)
+    response: Final = httpx.Response(200, content=(_gemini_event("Hel") + _gemini_event("lo", "STOP")).encode())
+    iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=response,
+        model="gemini-3.1-flash",
+        logging_obj=logging_obj,
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+
+    received: Final = [await iterator.__anext__() for _ in range(chunks_read_before_disconnect)]
+    await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        request=None,
+        request_data={"litellm_logging_obj": logging_obj},
+        response=iterator,
+        client_disconnected=True,
+    )
+    await drain_logging_tasks()
+
+    assert (len(received), len(recorder.logged)) == (chunks_read_before_disconnect, expected_success_logs)
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_disconnects_after_the_stream_ended_is_not_logged_twice():
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = _logging_obj(recorder=recorder)
+    response: Final = httpx.Response(200, content=(_gemini_event("Hel") + _gemini_event("lo", "STOP")).encode())
+    iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=response,
+        model="gemini-3.1-flash",
+        logging_obj=logging_obj,
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+
+    yielded: Final = len([chunk async for chunk in iterator])
+    await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        request=None,
+        request_data={"litellm_logging_obj": logging_obj},
+        response=iterator,
+        client_disconnected=True,
+    )
+    await drain_logging_tasks()
+
+    assert (yielded, len(recorder.logged)) == (2, 1)

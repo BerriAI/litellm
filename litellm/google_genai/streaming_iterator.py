@@ -84,29 +84,40 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
             EndpointType.GEMINI if custom_llm_provider == litellm.LlmProviders.GEMINI.value else EndpointType.VERTEX_AI
         )
         self._hidden_params: dict[str, object] = hidden_params or {}
+        self._stream_logged = False
+
+    async def log_collected_stream(self) -> bool:
+        """Dispatch success logging for the chunks collected so far, at most once per stream.
+        Returns False when nothing was streamed."""
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        if self._stream_logged:
+            return True
+        if not self.collected_chunks:
+            return False
+        self._stream_logged = True
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=self.litellm_logging_obj,
+            passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+            url_route="/v1/generateContent",
+            request_body=self.request_body or {},
+            endpoint_type=self.endpoint_type,
+            start_time=self.start_time,
+            raw_bytes=tuple(self.collected_chunks),
+            end_time=datetime.now(),
+            model=self.model,
+        )
+        return True
 
     async def _handle_async_streaming_logging(
         self,
     ):
         """Handle the logging after all chunks have been collected."""
-        from litellm.proxy.pass_through_endpoints.streaming_handler import (
-            PassThroughStreamingHandler,
-        )
-
-        end_time: Final = datetime.now()
         spawn_logging_task(
             asyncio.get_running_loop(),
-            PassThroughStreamingHandler.route_streaming_logging_to_handler(
-                litellm_logging_obj=self.litellm_logging_obj,
-                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-                url_route="/v1/generateContent",
-                request_body=self.request_body or {},
-                endpoint_type=self.endpoint_type,
-                start_time=self.start_time,
-                raw_bytes=self.collected_chunks,
-                end_time=end_time,
-                model=self.model,
-            ),
+            self.log_collected_stream(),
             task_name="Google GenAI stream success log",
         )
 
