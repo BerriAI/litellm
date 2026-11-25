@@ -3,7 +3,7 @@ Helper utilities for tracking the cost of built-in tools.
 """
 
 import itertools
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
 from pydantic import ValidationError
@@ -37,6 +37,11 @@ _IMAGE_TOOL_RATE_FIELDS: Final = (
     "output_cost_per_image_token",
     "output_cost_per_token",
 )
+_IMAGE_TOOL_RATE_SECTIONS: Final = ("litellm_params", "model_info")
+
+
+def _first_set(values: Iterable[object]) -> object:
+    return next((value for value in values if value is not None), None)
 
 
 def _output_item_field(output_item: object, field: str) -> object:
@@ -334,21 +339,19 @@ class StandardBuiltInToolCostTracking:
     def _image_tool_deployment_rates(tool_model: str) -> Mapping[str, float]:
         """The provider runs the tool model itself, so no deployment is picked for it: the rates of the
         deployments named after the tool model apply only when every one of them configures the same ones."""
-        from litellm.cost_calculator import _raw_cost_map_entry  # pyright: ignore[reportPrivateUsage]  # cost map row
         from litellm.router_rust.surface.replay import operator_registries
 
         deployments: Final = itertools.chain.from_iterable(
             registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
             for registry in operator_registries()
         )
-        deployment_ids: Final = tuple(
-            _output_item_field(deployment.get("model_info"), "id")
+        configured: Final = frozenset(
+            tuple(
+                _first_set(_output_item_field(deployment.get(section), field) for section in _IMAGE_TOOL_RATE_SECTIONS)
+                for field in _IMAGE_TOOL_RATE_FIELDS
+            )
             for deployment in deployments
             if deployment.get("model_name") == tool_model
-        )
-        configured: Final = frozenset(
-            tuple((_raw_cost_map_entry(str(deployment_id)) or {}).get(field) for field in _IMAGE_TOOL_RATE_FIELDS)
-            for deployment_id in deployment_ids
         )
         if len(configured) != 1:
             return {}
