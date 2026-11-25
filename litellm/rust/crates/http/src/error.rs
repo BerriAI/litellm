@@ -329,9 +329,13 @@ impl Error {
             | Repr::WebSocketScheme(_)
             | Repr::WebSocketSchemeRewrite(_)
             | Repr::BlockedUrl
+            | Repr::Resolve(_)
             | Repr::DownloadDisabled
             | Repr::DownloadTooLarge
-            | Repr::TooManyRedirects => true,
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::Download(_) => true,
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -349,18 +353,13 @@ impl Error {
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
             | Repr::WebSocketClosed
-            | Repr::Resolve(_)
-            | Repr::MissingRedirectLocation
-            | Repr::InvalidRedirect(_)
             | Repr::DownloadStatus(_)
-            | Repr::Download(_)
             | Repr::DownloadTimeout(_) => false,
         }
     }
 
     pub fn is_response(&self) -> bool {
         match &*self.0 {
-            Repr::MissingRedirectLocation | Repr::InvalidRedirect(_) => true,
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -390,6 +389,8 @@ impl Error {
             | Repr::DownloadDisabled
             | Repr::DownloadTooLarge
             | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
             | Repr::DownloadStatus(_)
             | Repr::Download(_)
             | Repr::DownloadTimeout(_) => false,
@@ -431,46 +432,6 @@ impl Error {
             | Repr::InvalidRedirect(_)
             | Repr::DownloadStatus(_)
             | Repr::Download(_)
-            | Repr::DownloadTimeout(_) => false,
-        }
-    }
-
-    /// A media download could not resolve, reach or read from the media host, so no HTTP
-    /// status describes the failure.
-    pub fn is_media_unreachable(&self) -> bool {
-        match &*self.0 {
-            Repr::Resolve(_) | Repr::Download(_) => true,
-            Repr::Read { .. }
-            | Repr::InvalidPem { .. }
-            | Repr::Client(_)
-            | Repr::TlsConfig(_)
-            | Repr::RequestBody(_)
-            | Repr::Request(_)
-            | Repr::RequestUrl(_)
-            | Repr::ParseUrl(_)
-            | Repr::UnsignableBody
-            | Repr::UnsignableHeader(_)
-            | Repr::Signature(_)
-            | Repr::Connect { .. }
-            | Repr::Network(_)
-            | Repr::BodyCut { .. }
-            | Repr::Timeout(_)
-            | Repr::ReadTimeout { .. }
-            | Repr::Status { .. }
-            | Repr::WebSocketUrl(_)
-            | Repr::WebSocketScheme(_)
-            | Repr::WebSocketSchemeRewrite(_)
-            | Repr::Handshake(_)
-            | Repr::HandshakeTimeout(_)
-            | Repr::WebSocket(_)
-            | Repr::WebSocketClosed
-            | Repr::BlockedUrl
-            | Repr::DownloadDisabled
-            | Repr::DownloadTooLarge
-            | Repr::TooManyRedirects
-            | Repr::MissingRedirectLocation
-            | Repr::InvalidRedirect(_)
-            | Repr::DownloadStatus(_)
             | Repr::DownloadTimeout(_) => false,
         }
     }
@@ -629,7 +590,6 @@ impl Error {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn repr(&self) -> &Repr {
         &self.0
     }

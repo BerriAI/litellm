@@ -184,17 +184,14 @@ impl Error {
                 body,
                 headers,
             } => Some((*status, body, headers)),
-            Self::DocumentDownload(error) => error
-                .status()
-                .or_else(|| error.is_media_unreachable().then_some(400))
-                .map(|status| {
-                    let body = if error.is_timeout() {
-                        "OCR document download timed out"
-                    } else {
-                        "OCR document download failed"
-                    };
-                    (status, body, &*NO_HEADERS)
-                }),
+            Self::DocumentDownload(error) => error.status().map(|status| {
+                let body = if error.is_timeout() {
+                    "OCR document download timed out"
+                } else {
+                    "OCR document download failed"
+                };
+                (status, body, &*NO_HEADERS)
+            }),
             Self::Http(error) => error
                 .upstream_response()
                 .map(|(status, body)| (status, body, &*NO_HEADERS)),

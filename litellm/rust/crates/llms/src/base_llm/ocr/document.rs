@@ -214,12 +214,14 @@ mod tests {
             server.await.unwrap();
         }
 
-        let (status, body, _) = error.upstream_response().expect("a client-facing status");
-        assert_eq!((status, body), (400, "OCR document download failed"));
+        let message = litellm_error::Report::new(&error).to_string();
         assert_eq!(error.http_status_code(), Some(400));
+        assert!(error.is_request());
+        assert!(message.starts_with("media download failed: "), "{message}");
         assert!(litellm_error::find::<reqwest::Error>(&error).is_some());
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn an_unreachable_provider_keeps_no_client_status() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

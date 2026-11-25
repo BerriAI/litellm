@@ -79,6 +79,8 @@ pub struct MediaFetcher {
     allow_private_network: bool,
 }
 
+const FETCH_ATTEMPTS: usize = 3;
+
 type AddressResolution<'a> = Pin<Box<dyn Future<Output = io::Result<Vec<SocketAddr>>> + Send + 'a>>;
 
 trait AddressResolver: Send + Sync {
@@ -147,9 +149,23 @@ impl MediaFetcher {
         if policy.max_bytes == 0 {
             return Err(Repr::DownloadDisabled.into());
         }
-        tokio::time::timeout(policy.timeout, self.fetch_before_deadline(url, policy))
+        tokio::time::timeout(policy.timeout, self.fetch_with_retries(url, policy))
             .await
             .map_err(Repr::DownloadTimeout)?
+    }
+
+    async fn fetch_with_retries(
+        &self,
+        url: Url,
+        policy: DownloadPolicy,
+    ) -> Result<DownloadedMedia, Error> {
+        for _ in 1..FETCH_ATTEMPTS {
+            match self.fetch_before_deadline(url.clone(), policy).await {
+                Err(error) if matches!(error.repr(), Repr::Download(_)) => continue,
+                result => return result,
+            }
+        }
+        self.fetch_before_deadline(url, policy).await
     }
 
     async fn fetch_before_deadline(
@@ -344,7 +360,10 @@ impl Resolve for PublicDnsResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -603,6 +622,89 @@ mod tests {
         assert!(!error.dispatched());
     }
 
+    const CUT_BODY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nab";
+
+    #[rstest::rstest]
+    #[case::second_attempt(vec![CUT_BODY, OK_RESPONSE])]
+    #[case::last_attempt(vec![CUT_BODY, CUT_BODY, OK_RESPONSE])]
+    #[tokio::test]
+    async fn retries_a_download_the_media_host_cut(#[case] answers: Vec<&'static [u8]>) {
+        let attempts = answers.len();
+        let (url, server, address) = serve_named("public.test", answers).await;
+        let media = policy_checked_fetcher(address, HashSet::new())
+            .fetch(url, policy(10, 0))
+            .await
+            .expect("a later attempt downloads the media");
+        assert_eq!(server.await.expect("server completes").len(), attempts);
+        assert_eq!(media.bytes, b"ok");
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn stops_after_three_cut_downloads_as_the_callers_fault() {
+        let (url, server, address) = serve_named(
+            "public.test",
+            vec![CUT_BODY, CUT_BODY, CUT_BODY, OK_RESPONSE],
+        )
+        .await;
+        let error = policy_checked_fetcher(address, HashSet::new())
+            .fetch(url, policy(10, 0))
+            .await
+            .expect_err("no fourth attempt is made");
+        server.abort();
+        assert!(matches!(error.repr(), Repr::Download(_)));
+        assert!(error.is_request());
+    }
+
+    struct UnresolvableHost(AtomicUsize);
+
+    impl AddressResolver for UnresolvableHost {
+        fn resolve<'a>(&'a self, _host: &'a str, _port: u16) -> AddressResolution<'a> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async { Err(io::Error::new(io::ErrorKind::NotFound, "no such host")) })
+        }
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn an_unresolvable_host_is_the_callers_fault_and_is_not_retried() {
+        let resolver = Arc::new(UnresolvableHost(AtomicUsize::new(0)));
+        let direct = Resolution::from(&HttpSettings::default()).config;
+        let error = MediaFetcher::with_resolution(
+            &HttpClientPool::new(Arc::new(LoopbackDnsResolver(UNROUTABLE))),
+            &direct,
+            UrlPolicy::default(),
+            Arc::clone(&resolver) as Arc<dyn AddressResolver>,
+            Arc::new(|_| false),
+        )
+        .expect("test fetcher builds")
+        .fetch(
+            Url::parse("http://missing.test/document").expect("valid test URL"),
+            policy(10, 0),
+        )
+        .await
+        .expect_err("the host does not resolve");
+        assert!(matches!(error.repr(), Repr::Resolve(_)));
+        assert!(error.is_request());
+        assert_eq!(resolver.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[rstest::rstest]
+    #[case::missing_location(b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n")]
+    #[case::unreadable_location(
+        b"HTTP/1.1 302 Found\r\nLocation: \xff\r\nContent-Length: 0\r\n\r\n"
+    )]
+    #[tokio::test]
+    async fn a_broken_redirect_is_the_callers_fault(#[case] answer: &'static [u8]) {
+        let (url, server, address) = serve_named("public.test", vec![answer]).await;
+        let error = policy_checked_fetcher(address, HashSet::new())
+            .fetch(url, policy(10, 1))
+            .await
+            .expect_err("the redirect cannot be followed");
+        server.await.expect("server completes");
+        assert!(error.is_request());
+    }
+
     #[rstest::rstest]
     #[case::closed_before_answering(b"")]
     #[case::reset_mid_body(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nab")]
@@ -617,7 +719,7 @@ mod tests {
         server.await.expect("server completes");
         let report = litellm_error::Report::new(&error).to_string();
         assert!(!error.dispatched());
-        assert!(!error.is_request());
+        assert!(error.is_request());
         assert!(!report.contains("secret"), "{report}");
         assert!(!report.contains("document"), "{report}");
     }
