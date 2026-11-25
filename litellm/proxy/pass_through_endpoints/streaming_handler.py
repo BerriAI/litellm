@@ -149,7 +149,10 @@ class PassThroughStreamingHandler:
     ) -> None:
         if endpoint_type == EndpointType.ANTHROPIC:
             AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
-                litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=raw_bytes
+                litellm_logging_obj=litellm_logging_obj,
+                request_body=request_body,
+                all_chunks=raw_bytes,
+                url_route=stream_context.url_route if stream_context is not None else None,
             )
             return
         if stream_context is None or not raw_bytes:
@@ -448,6 +451,8 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
+        if not litellm_logging_obj.claim_stream_success():
+            return
         from litellm.llms.anthropic.messages.native.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
             is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence

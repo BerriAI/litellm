@@ -573,6 +573,7 @@ from .exceptions import (
 
 if TYPE_CHECKING:
     from litellm import MockException
+    from litellm.litellm_core_utils.reasoning_effort_strength import ReasoningEffortRounding
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -2746,6 +2747,7 @@ def client(original_function):
                     and not is_responses_litellm_router_call
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2872,7 +2874,15 @@ def client(original_function):
 
             # MODEL CALL
             call_kwargs: Final = (
-                {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
+                {
+                    **kwargs,
+                    "input": _caching_handler_response.embedding_uncached_input,
+                    **(
+                        {"extra_body": _caching_handler_response.embedding_uncached_extra_body}
+                        if "extra_body" in kwargs
+                        else {}
+                    ),
+                }
                 if _caching_handler_response is not None
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs
@@ -3097,6 +3107,7 @@ def client(original_function):
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -4202,6 +4213,13 @@ def deployment_declared_mid_conversation_system_support(model_info: object) -> b
             return None
 
 
+def declares_system_first(model: str, custom_llm_provider: str | None, model_info: object) -> bool:
+    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
+    if deployment_declared is not None:
+        return not deployment_declared
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system")
+
+
 def declared_mid_conversation_system_support(
     model: str, custom_llm_provider: str | None, model_info: object
 ) -> bool | None:
@@ -4209,12 +4227,11 @@ def declared_mid_conversation_system_support(
     The `supports_mid_conversation_system` the deployment's own model_info declares, else the one the
     cost map declares for the model, else None when neither sets it.
     """
-    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
-    if deployment_declared is not None:
-        return deployment_declared
-    if is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system"):
+    if declares_system_first(model, custom_llm_provider, model_info):
         return False
-    if supports_mid_conversation_system(model, custom_llm_provider):
+    if deployment_declared_mid_conversation_system_support(model_info) or supports_mid_conversation_system(
+        model, custom_llm_provider
+    ):
         return True
     return None
 
@@ -5974,6 +5991,18 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+def _reasoning_effort_rounding(model_info: Mapping[str, object] | None) -> ReasoningEffortRounding:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_rounding
+
+    return deployment_reasoning_effort_rounding(model_info)
+
+
+def _deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+    return deployment_reasoning_effort_levels(model_info)
+
+
 def _map_params_with_provider_config(
     provider_config: BaseConfig,
     *,
@@ -5997,6 +6026,15 @@ def _map_params_with_provider_config(
             reasoning_drop_logger=reasoning_drop_logger,
             base_model=base_model,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            reasoning_effort_rounding=_reasoning_effort_rounding(model_info),
+            declared_reasoning_efforts=_deployment_reasoning_effort_levels(model_info),
         )
     if isinstance(provider_config, litellm.OpenAIConfig):
         return provider_config.map_openai_params(
@@ -7461,7 +7499,7 @@ def _get_model_info_from_generalization(
     model: str,
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: str | None,
-) -> tuple[str, dict] | None:
+) -> tuple[str, dict[str, object]] | None:
     """Resolve an unmapped model via the declarative capability generalization rules.
 
     Tries the same name candidates as the exact lookups, in the same order, and
@@ -8115,6 +8153,7 @@ def _look_up_model_info(
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
                 output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
+                output_cost_per_image_token_flex=_model_info.get("output_cost_per_image_token_flex", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
@@ -8612,6 +8651,15 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
+_ALTERNATE_KEY_ENV_VARS: Final = {
+    "COHERE_API_KEY": ("CO_API_KEY",),
+    "FEATHERLESS_AI_API_KEY": ("FEATHERLESS_API_KEY",),
+    "PERPLEXITYAI_API_KEY": ("PERPLEXITY_API_KEY",),
+    "REPLICATE_API_KEY": ("REPLICATE_API_TOKEN",),
+    "VOLCENGINE_API_KEY": ("ARK_API_KEY",),
+}
+
+
 def validate_environment(
     model: str | None = None,
     api_key: str | None = None,
@@ -9024,6 +9072,10 @@ def validate_environment(
     def filter_missing_keys(keys: list[str], exclude_pattern: str) -> list[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
         return [key for key in keys if exclude_pattern not in key.lower()]
+
+    missing_keys = [  # rebind-ok: narrows the list like the filters below
+        key for key in missing_keys if not any(name in os.environ for name in _ALTERNATE_KEY_ENV_VARS.get(key, ()))
+    ]
 
     if api_key is not None:
         missing_keys = filter_missing_keys(missing_keys, "api_key")
@@ -10160,7 +10212,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def convert_to_dict(message: BaseModel | dict) -> dict:
+def convert_to_dict(message: BaseModel | dict) -> dict[str, object]:
     """
     Converts a message to a dictionary if it's a Pydantic model.
 
@@ -10224,7 +10276,7 @@ def validate_and_fix_openai_messages(
     return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
 
 
-def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
+def validate_and_fix_openai_tools(tools: list | None) -> list[dict[str, object]] | None:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -10330,7 +10382,7 @@ def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
     drop_params: bool = False,
-) -> dict | str | None:
+) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
 
@@ -11990,10 +12042,21 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.common_utils import is_prisma_v25, supports_realtime
+            from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
+
+            if not supports_realtime(model):
+                return None
+            return GnaniRealtimeConfig(drop_params=drop_params, requires_explicit_language=is_prisma_v25(model))
         if LlmProviders.SONIOX == provider:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 
             return SonioxRealtimeConfig.from_litellm_params(litellm_params, drop_params=drop_params)
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod
@@ -12669,7 +12732,7 @@ def return_raw_request(endpoint: CallTypes, kwargs: Mapping[str, object]) -> Raw
         )
 
 
-def jsonify_tools(tools: Sequence[object]) -> list[dict]:
+def jsonify_tools(tools: Sequence[object]) -> list[dict[str, object]]:
     """
     Fixes https://github.com/BerriAI/litellm/issues/9321
 

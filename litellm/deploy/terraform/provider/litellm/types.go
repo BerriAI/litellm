@@ -129,8 +129,8 @@ type LiteLLMParams struct {
 type ModelInfo struct {
 	ID          string `json:"id"`
 	DBModel     bool   `json:"db_model"`
-	BaseModel   string `json:"base_model"`
-	Tier        string `json:"tier"`
+	BaseModel   string `json:"base_model,omitempty"`
+	Tier        string `json:"tier,omitempty"`
 	Mode        string `json:"mode"`
 	TeamID      string `json:"team_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`

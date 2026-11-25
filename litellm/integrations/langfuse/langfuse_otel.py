@@ -313,7 +313,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
 
     @staticmethod
-    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
+    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict[str, object]:
         """
         Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
 

@@ -548,3 +548,34 @@ def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
     audio: Final = _strict_b64decode(audio_base64)
     frames: Final = _pcm16_wav_frames(audio) if audio is not None else None
     return base64.b64encode(frames).decode("ascii") if frames else audio_base64
+
+
+_RAW_PCM16_MEDIA_TYPES: Final = frozenset({"audio/l16", "audio/pcm"})
+
+
+def _media_type_count(media_type: str, name: str, default: int) -> int:
+    value: Final = next(
+        (
+            value.strip()
+            for key, _, value in (item.partition("=") for item in media_type.split(";")[1:])
+            if key.strip().lower() == name
+        ),
+        "",
+    )
+    return int(value) if value.isascii() and value.isdecimal() and int(value) > 0 else default
+
+
+def as_wav_base64(media_type: str, audio_base64: str) -> str:
+    if media_type.partition(";")[0].strip().lower() not in _RAW_PCM16_MEDIA_TYPES:
+        return audio_base64
+    frames: Final = _strict_b64decode(audio_base64)
+    if frames is None:
+        return audio_base64
+    channels, sample_width, default_rate = _PCM16_WAV_SHAPE
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(_media_type_count(media_type, "channels", channels))
+        wav.setsampwidth(sample_width)
+        wav.setframerate(_media_type_count(media_type, "rate", default_rate))
+        wav.writeframes(frames)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")

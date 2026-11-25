@@ -89,6 +89,17 @@ def is_sse_content_type(content_type: str | None) -> bool:
     return content_type is not None and content_type.split(";", 1)[0].strip().lower() == _SSE_MEDIA_TYPE
 
 
+def _delimiter_end(buffer: bytes | bytearray, start: int, delimiter: bytes, floor: int) -> int:
+    index: Final = buffer.rfind(delimiter, start)
+    return floor if index < 0 else index + len(delimiter)
+
+
+def last_sse_frame_end(buffer: bytes | bytearray, floor: int, appended: int) -> int:
+    """End of the last frame terminator past ``floor`` that a read of ``appended`` bytes completed, else ``floor``."""
+    start: Final = max(floor, len(buffer) - appended - _SSE_DELIMITER_LOOKBACK + 1)
+    return max(_delimiter_end(buffer, start, delimiter, floor) for delimiter in _SSE_FRAME_DELIMITERS)
+
+
 def split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
     """Split buffered SSE bytes into ``(complete_frames, unterminated_tail)``."""
     boundary_end: Final = max(

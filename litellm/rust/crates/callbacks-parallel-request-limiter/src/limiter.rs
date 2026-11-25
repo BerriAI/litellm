@@ -164,6 +164,9 @@ pub struct PostCallSuccessFacts {
 pub struct PostCallFailureFacts {
     #[serde(default)]
     pub tpm_actual: i64,
+    /// The cache-read prompt tokens `tpm_actual` leaves out.
+    #[serde(default)]
+    pub cached_tokens_left_out: i64,
     #[serde(default)]
     pub partial_usage: Option<Usage>,
 }
@@ -190,10 +193,15 @@ pub struct TargetFacts {
     pub customer_member_id: Option<String>,
 }
 
+type Scopes = Vec<(String, String)>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub group: String,
     pub key_owns: bool,
+    /// Whether the team counts cache-read prompt tokens against its TPM limit for this model.
+    #[serde(default)]
+    pub counts_cached_tokens: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +225,10 @@ pub struct SuccessFacts {
     pub exempt: bool,
     #[serde(default)]
     pub total_tokens: i64,
+    /// The cache-read prompt tokens `total_tokens` leaves out, which a team model limit that
+    /// counts them adds back.
+    #[serde(default)]
+    pub cached_tokens_left_out: i64,
     #[serde(default)]
     pub settles_at_reservation: bool,
     #[serde(default)]
@@ -245,6 +257,9 @@ pub struct FailureFacts {
     pub call_id: Option<String>,
     #[serde(default)]
     pub tpm_actual: i64,
+    /// The cache-read prompt tokens `tpm_actual` leaves out.
+    #[serde(default)]
+    pub cached_tokens_left_out: i64,
     #[serde(default)]
     pub partial_usage: Option<Usage>,
 }
@@ -281,6 +296,7 @@ pub struct LogPrepareInputs {
 #[serde(default)]
 pub struct PostCallFailureInputs {
     pub combined_is_usage: bool,
+    pub provider_billed: bool,
     pub token_rate_limit_type: Value,
 }
 
@@ -543,7 +559,7 @@ pub fn manifest() -> Manifest {
                 ..Subscription::on(Hook::PostCallSuccess)
             },
             Subscription {
-                reads: FieldSet::of(&[Field::DeprecatedKwargs, Field::Usage]),
+                reads: FieldSet::of(&[Field::DeprecatedKwargs, Field::Usage, Field::Error]),
                 awaited: true,
                 ..Subscription::on(Hook::PostCallFailure)
             },
@@ -1070,7 +1086,7 @@ impl ParallelRequestLimiter {
         if state.stash().settles_at_close {
             return;
         }
-        self.refund_batch_reservations(state).await;
+        self.refund_batch_reservations(state, ctx).await;
         let settlements = {
             let mut stash = state.stash();
             let (reserved, itpm, otpm) = Self::open_reservations(&stash);
@@ -1079,7 +1095,7 @@ impl ParallelRequestLimiter {
             }
             let settlements = self.failure_settlements(
                 &stash,
-                facts.tpm_actual,
+                (facts.tpm_actual, facts.cached_tokens_left_out),
                 facts.partial_usage.as_ref(),
                 (reserved, itpm, otpm),
             );
@@ -1087,19 +1103,17 @@ impl ParallelRequestLimiter {
             settlements
         };
         for settlement in settlements {
-            self.engine.settle(settlement, ctx, false).await;
+            self.engine.settle(settlement, ctx).await;
         }
     }
 
-    async fn refund_batch_reservations(&self, state: &LimiterState) {
+    async fn refund_batch_reservations(&self, state: &LimiterState, ctx: Ctx<'_>) {
         let enqueued = state.stash().batch_enqueued.take();
         if let Some(reservation) = enqueued {
             self.enqueued.refund(&reservation).await;
         }
         let refunds = std::mem::take(&mut state.stash().batch_tpd_refunds);
-        if !refunds.is_empty() {
-            self.engine.reservation_aware(&refunds).await;
-        }
+        self.engine.apply_usage(&refunds, ctx).await;
     }
 
     /// Leaves a WebSocket's admission reservation to its close: the failure callbacks of the
@@ -1132,7 +1146,11 @@ impl ParallelRequestLimiter {
         if !state.stash().owned {
             return;
         }
-        self.refund_batch_reservations(state).await;
+        let ctx = Ctx {
+            policy: Policy::default(),
+            request: None,
+        };
+        self.refund_batch_reservations(state, ctx).await;
         let settlements = {
             let mut stash = state.stash();
             let (reserved, itpm, otpm) = Self::open_reservations(&stash);
@@ -1157,7 +1175,7 @@ impl ParallelRequestLimiter {
                 Vec::new()
             };
             let ptu = if refunds_ptu && reserved > 0 {
-                self.ptu_failure_ops(&stash, 0, None)
+                self.ptu_failure_ops(&stash, 0, None, stash.ptu_reserved_tokens)
             } else {
                 Vec::new()
             };
@@ -1170,12 +1188,8 @@ impl ParallelRequestLimiter {
             stash.mark_reservation_released();
             settlements
         };
-        let ctx = Ctx {
-            policy: Policy::default(),
-            request: None,
-        };
         for settlement in settlements {
-            self.engine.settle(settlement, ctx, false).await;
+            self.engine.settle(settlement, ctx).await;
         }
     }
 
@@ -1193,27 +1207,39 @@ impl ParallelRequestLimiter {
         (reserved, itpm, otpm)
     }
 
+    fn tpm_settlement_targets(stash: &Stash) -> (Scopes, Scopes) {
+        stash
+            .reserved_scopes
+            .iter()
+            .filter(|scope| scope.0 != PTU_TEAM)
+            .cloned()
+            .partition(|scope| stash.cached_counting_scopes.contains(scope))
+    }
+
     fn failure_settlements(
         &self,
         stash: &Stash,
-        tpm_actual: i64,
+        (tpm_actual, cached_tokens_left_out): (i64, i64),
         partial_usage: Option<&Usage>,
         (reserved, itpm, otpm): (i64, i64, i64),
     ) -> Vec<Settlement> {
         let combined = if reserved > 0 {
-            let targets: Vec<(String, String)> = stash
-                .reserved_scopes
-                .iter()
-                .filter(|scope| scope.0 != PTU_TEAM)
-                .cloned()
-                .collect();
+            let (with_cached, targets) = Self::tpm_settlement_targets(stash);
             self.engine
                 .reservation_ops(&targets, &stash.reserved_scopes, tpm_actual, reserved)
+                .into_iter()
+                .chain(self.engine.reservation_ops(
+                    &with_cached,
+                    &stash.reserved_scopes,
+                    tpm_actual.saturating_add(cached_tokens_left_out.max(0)),
+                    reserved,
+                ))
+                .collect()
         } else {
             Vec::new()
         };
         let ptu = if reserved > 0 {
-            self.ptu_failure_ops(stash, tpm_actual, partial_usage)
+            self.ptu_failure_ops(stash, tpm_actual, partial_usage, stash.ptu_reserved_tokens)
         } else {
             Vec::new()
         };
@@ -1260,7 +1286,13 @@ impl ParallelRequestLimiter {
         ))
     }
 
-    fn ptu_failure_ops(&self, stash: &Stash, tpm_actual: i64, usage: Option<&Usage>) -> Vec<Op> {
+    fn ptu_failure_ops(
+        &self,
+        stash: &Stash,
+        tpm_actual: i64,
+        usage: Option<&Usage>,
+        reserved: i64,
+    ) -> Vec<Op> {
         let targets: Vec<(String, String)> = stash
             .reserved_scopes
             .iter()
@@ -1274,7 +1306,7 @@ impl ParallelRequestLimiter {
             &targets,
             &stash.reserved_scopes,
             settlement_tokens(stash.ptu_ceiling.as_ref(), usage, tpm_actual),
-            stash.ptu_reserved_tokens,
+            reserved,
             &stash.ptu_windows,
         )
     }
@@ -1328,7 +1360,7 @@ impl ParallelRequestLimiter {
             let open = Self::open_reservations(&stash);
             let settlements = self.failure_settlements(
                 &stash,
-                facts.tpm_actual,
+                (facts.tpm_actual, facts.cached_tokens_left_out),
                 facts.partial_usage.as_ref(),
                 open,
             );
@@ -1338,8 +1370,37 @@ impl ParallelRequestLimiter {
             settlements
         };
         for settlement in settlements {
-            self.engine.settle(settlement, ctx, true).await;
+            self.engine.settle(settlement, ctx).await;
         }
+    }
+
+    pub async fn settle_billed_failure(
+        &self,
+        state: &LimiterState,
+        facts: SuccessFacts,
+        request: Option<&RequestRedis>,
+    ) {
+        let ctx = Ctx {
+            policy: facts.policy.into(),
+            request,
+        };
+        {
+            let stash = state.stash();
+            if !stash.owned || !stash.for_call(facts.call_id.as_deref()) {
+                return;
+            }
+        }
+        self.release_stashed(state, true, ctx).await;
+        let (operations, io) = {
+            let mut stash = state.stash();
+            if stash.settles_at_close {
+                return;
+            }
+            let settlement = self.success_settlement(&stash, &facts);
+            stash.mark_reservation_released();
+            settlement
+        };
+        self.apply_success_settlement(&operations, io, ctx).await;
     }
 
     fn tpm_ops(
@@ -1374,26 +1435,38 @@ impl ParallelRequestLimiter {
         }
         let (operations, io) = {
             let mut stash = state.stash();
-            let operations = if facts.exempt {
-                Vec::new()
-            } else {
-                self.success_operations(&stash, &facts)
-            };
-            let io = self.io_success_settlement(&stash, &facts.io_usage);
+            let settlement = self.success_settlement(&stash, &facts);
             stash.clear_reserved_tokens();
-            (operations, io)
+            settlement
         };
-        self.engine.apply_usage(&operations, ctx).await;
-        match io {
-            Some(Settlement::Plain(operations)) if !operations.is_empty() => {
-                self.engine
-                    .increment_with_ttl_preservation(&operations, ctx)
-                    .await;
-            }
-            Some(Settlement::Project(operations)) if !operations.is_empty() => {
-                self.engine.reservation_aware(&operations).await;
-            }
-            _ => {}
+        self.apply_success_settlement(&operations, io, ctx).await;
+    }
+
+    fn success_settlement(
+        &self,
+        stash: &Stash,
+        facts: &SuccessFacts,
+    ) -> (Vec<Op>, Option<Settlement>) {
+        let operations = if facts.exempt {
+            Vec::new()
+        } else {
+            self.success_operations(stash, facts)
+        };
+        (
+            operations,
+            self.io_success_settlement(stash, &facts.io_usage),
+        )
+    }
+
+    async fn apply_success_settlement(
+        &self,
+        operations: &[Op],
+        io: Option<Settlement>,
+        ctx: Ctx<'_>,
+    ) {
+        self.engine.apply_usage(operations, ctx).await;
+        if let Some(settlement) = io {
+            self.engine.settle(settlement, ctx).await;
         }
     }
 
@@ -1469,6 +1542,16 @@ impl ParallelRequestLimiter {
         request: Option<&RequestRedis>,
     ) {
         match state {
+            Some(state) if !turn && call.billed_with_usage() => {
+                self.release_for_settlement(state, call.call_id.as_deref(), request)
+                    .await;
+                self.settle_billed_failure(
+                    state,
+                    call.success_facts(resolved, kind, true),
+                    request,
+                )
+                .await;
+            }
             Some(state) if !turn => {
                 self.release_for_settlement(state, call.call_id.as_deref(), request)
                     .await;
@@ -1616,16 +1699,29 @@ impl ParallelRequestLimiter {
                 )
             })
             .collect();
-        let charged: Vec<(String, String)> = targets
+        let cached_counting: BTreeSet<(String, String)> = candidates
+            .iter()
+            .filter(|model| model.counts_cached_tokens)
+            .map(|model| {
+                (
+                    "model_per_team".to_owned(),
+                    format!("{}:{}", facts.team_label, model.group),
+                )
+            })
+            .chain(stash.cached_counting_scopes.iter().cloned())
+            .collect();
+        let (charged_with_cached, charged): (Scopes, Scopes) = targets
             .into_iter()
             .filter(|target| !key_owned.contains(target))
-            .collect();
+            .partition(|target| cached_counting.contains(target));
         let abandoned: Vec<(String, String)> = if fell_back {
             stash
                 .reserved_scopes
                 .iter()
                 .filter(|scope| {
-                    PER_MODEL_KEYS.contains(&scope.0.as_str()) && !charged.contains(scope)
+                    PER_MODEL_KEYS.contains(&scope.0.as_str())
+                        && !charged.contains(scope)
+                        && !charged_with_cached.contains(scope)
                 })
                 .cloned()
                 .collect()
@@ -1638,6 +1734,11 @@ impl ParallelRequestLimiter {
         } else {
             facts.total_tokens
         };
+        let settled_with_cached = if facts.settles_at_reservation && keeps_reservation {
+            settled_tokens
+        } else {
+            settled_tokens.saturating_add(facts.cached_tokens_left_out.max(0))
+        };
         let mut operations: Vec<Op> = self
             .tpm_ops(
                 &charged,
@@ -1646,6 +1747,12 @@ impl ParallelRequestLimiter {
                 reserved_tokens,
             )
             .into_iter()
+            .chain(self.tpm_ops(
+                &charged_with_cached,
+                &stash.reserved_scopes,
+                settled_with_cached,
+                reserved_tokens,
+            ))
             .chain(self.tpm_ops(&abandoned, &stash.reserved_scopes, 0, reserved_tokens))
             .map(Op::Plain)
             .collect();
@@ -1819,11 +1926,14 @@ impl ParallelRequestLimiter {
             phase: inputs.phase,
             ..PreCallFacts::default()
         };
-        let facts = if inputs.batch_call {
-            PreCallFacts {
-                requested_model,
-                ..base
-            }
+        let (facts, cached_counting_scopes) = if inputs.batch_call {
+            (
+                PreCallFacts {
+                    requested_model,
+                    ..base
+                },
+                BTreeSet::new(),
+            )
         } else {
             let limits = input.fields.get::<typed::KeyLimits>()?;
             let rpm_limit_type = limits
@@ -1882,20 +1992,24 @@ impl ParallelRequestLimiter {
                         };
                     }
                 };
-            PreCallFacts {
-                descriptors,
-                reserved_model: inputs
-                    .lookups
-                    .rate_limited_model(requested_model.as_deref()),
-                requested_model,
-                ptu_ceiling: built.ptu_ceiling.or(inputs.held_ptu_ceiling),
-                reuses_request_slot,
-                ..base
-            }
+            (
+                PreCallFacts {
+                    descriptors,
+                    reserved_model: inputs
+                        .lookups
+                        .rate_limited_model(requested_model.as_deref()),
+                    requested_model,
+                    ptu_ceiling: built.ptu_ceiling.or(inputs.held_ptu_ceiling),
+                    reuses_request_slot,
+                    ..base
+                },
+                built.cached_counting_scopes,
+            )
         };
         {
             let mut stash = state.stash();
             stash.cap = cap;
+            stash.cached_counting_scopes = cached_counting_scopes;
             stash.pre_call = Some(facts.clone());
         }
         Ok(Ok(Some(facts)))
@@ -2071,7 +2185,8 @@ fn failure_facts(
         .get::<typed::Usage>()?
         .and_then(|usage| usage.combined)
         .filter(|combined| {
-            inputs.combined_is_usage && token_count(combined.completion_tokens.as_ref()) > 0
+            inputs.combined_is_usage
+                && (inputs.provider_billed || token_count(combined.completion_tokens.as_ref()) > 0)
         });
     let Some(combined) = combined else {
         return Ok(PostCallFailureFacts::default());
@@ -2093,6 +2208,15 @@ fn failure_facts(
     };
     Ok(PostCallFailureFacts {
         tpm_actual,
+        cached_tokens_left_out: match TokenRateLimitType::from_setting(
+            &inputs.token_rate_limit_type,
+        ) {
+            TokenRateLimitType::Output => 0,
+            TokenRateLimitType::Input => cached_tokens.clamp(0, prompt_tokens.max(0)),
+            TokenRateLimitType::Total => {
+                cached_tokens.clamp(0, token_count(combined.total_tokens.as_ref()).max(0))
+            }
+        },
         partial_usage: Some(Usage {
             prompt_tokens,
             completion_tokens,
@@ -2231,6 +2355,45 @@ impl Callback for ParallelRequestLimiter {
         host: Host,
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(self.handle_hosted_with(input, state, Value::Null, None, host))
+    }
+}
+
+#[cfg(test)]
+mod failure_facts_tests {
+    use super::*;
+    use litellm_callbacks::FieldValues;
+    use rstest::rstest;
+    use serde_json::json;
+
+    fn refused_without_output() -> HookInput {
+        HookInput {
+            hook: Hook::PostCallFailure,
+            fields: FieldValues::new(FieldSet::of(&[Field::Usage])).with(
+                Field::Usage,
+                json!({"combined": {"prompt_tokens": 777, "completion_tokens": 0, "total_tokens": 777}}),
+            ),
+            call: None,
+        }
+    }
+
+    #[rstest]
+    #[case::billed(true, 777)]
+    #[case::not_billed(false, 0)]
+    fn a_failure_without_output_settles_at_its_usage_only_when_the_provider_billed_it(
+        #[case] provider_billed: bool,
+        #[case] tpm_actual: i64,
+    ) {
+        let inputs = PostCallFailureInputs {
+            combined_is_usage: true,
+            provider_billed,
+            token_rate_limit_type: json!("total"),
+        };
+        assert_eq!(
+            failure_facts(&refused_without_output(), &inputs)
+                .unwrap()
+                .tpm_actual,
+            tpm_actual
+        );
     }
 }
 

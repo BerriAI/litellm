@@ -74,6 +74,12 @@ impl<H: Host> Gateway<H> {
         &self.routing
     }
 
+    /// The routing state itself, so a gateway built for a new config keeps the cooldowns, usage and
+    /// health this one counted.
+    pub fn shared_routing(&self) -> Arc<RoutingCache> {
+        self.routing.clone()
+    }
+
     pub fn host(&self) -> &H {
         &self.host
     }
@@ -89,7 +95,7 @@ impl<H: Host> Gateway<H> {
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
         shaping: HashMap<String, MessagesShaping>,
-        routing: RoutingCache,
+        routing: impl Into<Arc<RoutingCache>>,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
@@ -97,7 +103,7 @@ impl<H: Host> Gateway<H> {
         Ok(Self {
             host,
             cache: None,
-            routing: Arc::new(routing),
+            routing: routing.into(),
             shaping,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
@@ -124,11 +130,11 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
-        .layer(headers::layer())
         .layer(axum::middleware::from_fn_with_state(
             gateway.clone(),
             group_usage::told::<H>,
         ))
+        .layer(axum::middleware::from_fn(headers::render_response_headers))
         .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }

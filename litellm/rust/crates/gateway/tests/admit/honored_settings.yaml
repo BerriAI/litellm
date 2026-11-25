@@ -35,9 +35,14 @@ config:
     max_request_size_mb: 1
     enable_jwt_auth: true
     store_model_in_db: false
+    supported_db_objects: [models]
     token_rate_limit_type: output
   environment_variables:
     SOME_KEY: value
+  credential_list:
+    - credential_name: unused
+      credential_values: {api_key: other-key}
+      credential_info: {}
 
 requests:
   - name: plain

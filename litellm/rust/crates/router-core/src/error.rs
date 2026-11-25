@@ -89,7 +89,11 @@ pub enum Error {
     /// The pre-call checks found no deployment whose context window fits the prompt; `detail`
     /// names each one dropped for it.
     #[error("no deployment of `{model}` has a context window large enough for this call")]
-    ContextWindowExceeded { model: String, detail: String },
+    ContextWindowExceeded {
+        model: String,
+        detail: String,
+        held_for_fallback: bool,
+    },
     /// The pre-call checks found no deployment of `model` that takes the requested `params`.
     #[error("no deployment of `{model}` supports {params:?}")]
     UnsupportedParams { model: String, params: Vec<String> },
@@ -270,9 +274,14 @@ impl Error {
                 until: until.clone(),
                 timezone: timezone.clone(),
             },
-            Self::ContextWindowExceeded { model, detail } => Self::ContextWindowExceeded {
+            Self::ContextWindowExceeded {
+                model,
+                detail,
+                held_for_fallback,
+            } => Self::ContextWindowExceeded {
                 model: model.clone(),
                 detail: detail.clone(),
+                held_for_fallback: *held_for_fallback,
             },
             Self::UnsupportedParams { model, params } => Self::UnsupportedParams {
                 model: model.clone(),
@@ -432,7 +441,7 @@ pub struct AttemptError {
     pub detail: Option<Arc<str>>,
     /// The exception's class names, most specific first (its `__mro__`), for the rules Python
     /// decides by `isinstance`. Empty when the host reports none; the kind then stands in.
-    pub classes: Vec<Arc<str>>,
+    pub classes: Box<[Arc<str>]>,
     /// The host already recorded what this failure does to the deployment's health (a routing
     /// pre-call check's failure, which Python's attempt handles itself: a rate limit cools the
     /// deployment down, anything else records nothing), or no failure callback runs for it (it
@@ -446,6 +455,9 @@ pub struct AttemptError {
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
     /// failure keeps its own class, which decides its fallbacks and cooldown as for any failure.
     pub agentic_followup: bool,
+    /// A file or batch create the provider may already hold (`is_create_that_may_already_exist`):
+    /// neither retried nor sent to a fallback, since either sends the create again.
+    pub create_may_exist: bool,
     /// One of `deployment_callback_on_failure`'s early exits holds: the failure says nothing about
     /// the deployment, so it is neither counted nor cooled down (a failed request still counts
     /// against the minute's requests, which `async_deployment_callback_on_failure` does apart).
@@ -459,6 +471,7 @@ pub struct AttemptError {
     /// The failure counts against no per-minute requests: `async_deployment_callback_on_failure`
     /// does not run for a sync call, and returns at once for a batch retrieve.
     pub uncounted_request: bool,
+    pub answered_tokens: u32,
 }
 
 impl AttemptError {
@@ -470,14 +483,16 @@ impl AttemptError {
             num_retries: None,
             failed_deployment_id: None,
             detail: None,
-            classes: Vec::new(),
+            classes: Box::default(),
             recorded: false,
             names_provider: false,
             agentic_followup: false,
+            create_may_exist: false,
             outside_deployment: false,
             caller_scoped: false,
             status_absent: false,
             uncounted_request: false,
+            answered_tokens: 0,
         }
     }
 
@@ -506,10 +521,18 @@ impl AttemptError {
 
     /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a
     /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
-    /// over it, and a queue rejection ends the request. Its fallbacks still run, except a queue
-    /// rejection's.
+    /// over it, a follow-up whose earlier turns cannot be found stays unanswerable, and a queue
+    /// rejection ends the request. Its fallbacks still run, except a queue rejection's and those
+    /// of a follow-up to a response no provider holds.
     pub fn ends_retries(&self) -> bool {
-        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError") || self.queue_rejected()
+        self.agentic_followup
+            || self.is_a("RequestOverDeploymentTpmError")
+            || self.is_a("UnresolvablePreviousResponseError")
+            || self.queue_rejected()
+    }
+
+    pub fn is_unknown_follow_up(&self) -> bool {
+        self.is_a("UnknownPreviousResponseError")
     }
 
     /// The dynamic queue refused the attempt: the request ends with this error and runs no fallback.

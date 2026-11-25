@@ -2656,6 +2656,97 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_when_gemini_sends_wav_as_a_data_uri(
     assert base64.b64decode(response.choices[0].message.audio.data) == GEMINI_TTS_PCM16_FRAMES
 
 
+def _wav_shape_and_frames(audio_base64: str) -> tuple[int, int, int, bytes]:
+    with wave.open(io.BytesIO(base64.b64decode(audio_base64)), "rb") as wav:
+        return (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.readframes(wav.getnframes()))
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("part", "expected_shape"),
+    [
+        ({"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": _b64(GEMINI_TTS_PCM16_FRAMES)}}, (1, 2, 24000)),
+        ({"inlineData": {"mimeType": "audio/l16; rate=16000; channels=2", "data": _b64(GEMINI_TTS_PCM16_FRAMES)}}, (2, 2, 16000)),
+        ({"inlineData": {"mimeType": "audio/pcm", "data": _b64(GEMINI_TTS_PCM16_FRAMES)}}, (1, 2, 24000)),
+        ({"inlineData": {"mimeType": "audio/L16; rate=fast; channels=0", "data": _b64(GEMINI_TTS_PCM16_FRAMES)}}, (1, 2, 24000)),
+        ({"text": f"data:audio/L16;rate=24000;base64,{_b64(GEMINI_TTS_PCM16_FRAMES)}"}, (1, 2, 24000)),
+    ],
+    ids=["l16", "l16-with-its-own-rate-and-channels", "pcm", "l16-with-unusable-rate-and-channels", "data-uri"],
+)
+@pytest.mark.parametrize(
+    "audio", [{"voice": "Kore", "format": "wav"}, {"speech_config": {"voice_name": "Kore", "format": "wav"}}]
+)
+def test_gemini_tts_chat_audio_wraps_raw_pcm_in_a_wav_header_when_the_caller_asks_for_wav(
+    respx_mock: respx.MockRouter,
+    part: Mapping[str, object],
+    expected_shape: tuple[int, int, int],
+    audio: Mapping[str, object],
+) -> None:
+    route: Final = _mock_gemini_part(respx_mock, part, model="gemini-2.5-flash-preview-tts")
+
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        modalities=["audio"],
+        audio=audio,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert _wav_shape_and_frames(response.choices[0].message.audio.data) == (*expected_shape, GEMINI_TTS_PCM16_FRAMES)
+    assert json.loads(route.calls.last.request.content)["generationConfig"] == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("mime_type", ["audio/wav", "audio/mpeg"])
+def test_gemini_tts_chat_audio_keeps_the_provider_bytes_that_are_not_raw_pcm_when_the_caller_asks_for_wav(
+    respx_mock: respx.MockRouter, mime_type: str
+) -> None:
+    provider_audio: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
+    _mock_gemini_audio(respx_mock, mime_type, provider_audio)
+
+    response: Final = completion(
+        model="gemini/gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore", "format": "wav"},
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.audio.data == provider_audio
+
+
+def test_gemini_tts_chat_audio_rejects_wav_for_a_stream_and_drops_it_under_drop_params() -> None:
+    params: Final = {"modalities": ["audio"], "audio": {"voice": "Kore", "format": "wav"}, "stream": True}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("audio format 'wav' when streaming. Set format to 'pcm16' or")):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params=params, optional_params={}, model="gemini-3.8-flash-tts", drop_params=False
+        )
+
+    assert VertexGeminiConfig().map_openai_params(
+        non_default_params=params, optional_params={}, model="gemini-3.8-flash-tts", drop_params=True
+    ) == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+        "stream": True,
+    }
+
+
+def test_gemini_tts_chat_audio_names_both_formats_when_it_rejects_another_one() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("audio format 'mp3'. Set format to 'pcm16' or 'wav' or")):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "mp3"}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_tts_speech_wav_holds_only_the_pcm_frames_when_gemini_answers_wav(
     respx_mock: respx.MockRouter,
@@ -11602,7 +11693,7 @@ def test_gemini_context_caching_with_ttl():
         },
     ]
 
-    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed)
+    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed, lambda _: True)
     assert len(cached_messages) > 0
     assert len(non_cached_messages) > 0
 
@@ -11659,7 +11750,7 @@ def test_gemini_context_caching_separate_messages():
             ],
         },
     ]
-    cached_messages, non_cached_messages = separate_cached_messages(messages)
+    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: True)
     print(cached_messages)
     print(non_cached_messages)
     assert len(cached_messages) > 0, "Cached messages should be present"
@@ -13371,7 +13462,13 @@ def test_litellm_api_base(monkeypatch, provider, route):
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json.return_value = {
             "candidates": [
-                {"content": {"parts": [{"text": "test response"}], "role": "model"}, "finishReason": "STOP"}
+                {
+                    "content": {
+                        "parts": [{"text": "test response"}, {"inlineData": {"mimeType": "image/png", "data": "dGVzdA=="}}],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }
             ],
             "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             "embedding": {"values": [0.1, 0.2]},

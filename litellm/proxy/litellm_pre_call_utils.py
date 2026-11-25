@@ -483,7 +483,11 @@ from litellm.types.litellm_params import (
     STREAM_USAGE_INJECTED_FIELD,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
-from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
+from litellm.types.router import (
+    BaggageMappedTagsStamp,
+    ForwardedClientHeaders,
+    holds_api_key_secret_reference,
+)
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
@@ -1466,6 +1470,8 @@ def convert_key_logging_metadata_to_callback(
         if var.startswith("newrelic_") and data.callback_name != "newrelic":
             continue
         if var.startswith("signoz_") and data.callback_name != "signoz":
+            continue
+        if var.startswith("mixpanel_") and data.callback_name != "mixpanel":
             continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
@@ -2581,7 +2587,11 @@ class LiteLLMProxyRequestSetup:
         )
         if key_opts_out or request_cache.get("use-cache") is not True or not request_is_allowed:
             return MappingProxyType({})
-        return {k: v for k, v in request_cache.items() if not (k == "s-max-age" and "s-maxage" in key_cache)}
+        return {
+            k: v
+            for k, v in request_cache.items()
+            if k != "namespace" and not (k == "s-max-age" and "s-maxage" in key_cache)
+        }
 
     @staticmethod
     def add_key_level_controls(
@@ -3146,6 +3156,7 @@ async def add_litellm_data_to_request(
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
+    _headers_before_forwarding: Final = _REQUEST_FIELDS.validate_python(data).get("headers")
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
@@ -3154,6 +3165,7 @@ async def add_litellm_data_to_request(
             general_settings=general_settings,
         )
     )
+    _headers_after_global_forwarding: Final = _REQUEST_FIELDS.validate_python(data).get("headers")
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
@@ -3182,6 +3194,16 @@ async def add_litellm_data_to_request(
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
+    _forwarded_headers: Final = _REQUEST_FIELDS.validate_python(data).get("headers")
+    _forwarded_headers_stamp: Final = forwarded_client_headers_stamp(
+        _forwarded_headers,
+        forwarded_globally=_headers_after_global_forwarding is not _headers_before_forwarding,
+        forwarded_for_model_group=_forwarded_headers is not _headers_after_global_forwarding,
+    )
+    if _forwarded_headers_stamp is not None:
+        data["proxy_server_request"]["forwarded_client_headers"] = (  # rebind-ok: data is an out-param
+            _forwarded_headers_stamp
+        )
 
     # Header mappings can overwrite user_id below; the key/JWT identity is the only
     # one allowed to load per-user provider credentials.
@@ -4424,7 +4446,7 @@ def _extract_credential_from_entry(entry: object, provider: str | None = None) -
 
 
 def _get_enforced_params(general_settings: dict | None, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-    enforced_params: list | None = None
+    enforced_params: list[object] | None = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
         if (
@@ -4459,7 +4481,7 @@ def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
 
 def _enforced_params_check(
     request_body: Mapping[str, object],
-    general_settings: dict | None,
+    general_settings: dict[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     premium_user: bool,
 ) -> bool:
@@ -5001,6 +5023,17 @@ _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
+
+
+def forwarded_client_headers_stamp(
+    headers: object, *, forwarded_globally: bool, forwarded_for_model_group: bool
+) -> Mapping[str, object] | None:
+    """The record of the ``headers`` the proxy forwarded from the client, so a router fallback can tell them from
+    headers a caller or a later hook set. None when the proxy forwarded none."""
+    forwarded: Final = as_str_mapping(headers)
+    if not (forwarded_globally or forwarded_for_model_group) or forwarded is None:
+        return None
+    return ForwardedClientHeaders.of(forwarded, model_group_scoped=not forwarded_globally).model_dump()
 
 
 def add_provider_specific_headers_to_request(

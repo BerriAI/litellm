@@ -8552,8 +8552,8 @@ async def test_key_level_callback_vars_survive_the_strip():
     [
         pytest.param(
             {"ttl": 600},
-            {"use-cache": True, "namespace": "team-a"},
-            {"use-cache": True, "namespace": "team-a", "ttl": 600},
+            {"use-cache": True},
+            {"use-cache": True, "ttl": 600},
             True,
             id="key-control-added-to-request-opt-in",
         ),
@@ -8634,6 +8634,13 @@ async def test_key_level_callback_vars_survive_the_strip():
             {"use-cache": True, "s-max-age": 5, "ttl": 600},
             True,
             id="request-s-max-age-kept-when-the-key-has-no-s-maxage",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "namespace": "litellm:another-key-hash:acompletion"},
+            {"use-cache": True, "ttl": 600},
+            True,
+            id="request-namespace-is-dropped-so-the-key-stays-in-its-own-partition",
         ),
     ],
 )
@@ -9667,6 +9674,33 @@ def test_vertex_sends_exactly_one_authorization_header():
     vertex_request_headers.update(forwarded)
 
     assert _authorization_values(vertex_request_headers) == [GOOGLE_ACCESS_TOKEN]
+
+
+@pytest.mark.asyncio
+async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_field() -> None:
+    key_with_langfuse_callback: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {"langfuse_public_key": "pk", "mixpanel_project_token": "tok"},
+                }
+            ]
+        },
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hello"}]},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_langfuse_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"langfuse_public_key": "pk"}
 
 
 @pytest.mark.asyncio
@@ -12465,3 +12499,69 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+def _forwarded_x_app_stamp(stamp: object) -> tuple[bool, frozenset[str], bool, bool] | None:
+    from litellm.types.router import ForwardedClientHeaders
+
+    if stamp is None:
+        return None
+    parsed: Final = ForwardedClientHeaders.model_validate(stamp)
+    return (
+        parsed.model_group_scoped,
+        frozenset(parsed.digests),
+        parsed.still_forwarded("X-App", "cli-secret"),
+        parsed.still_forwarded("x-app", "set-by-hook"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "model_group_scope", "expected_stamp", "expected_headers"),
+    (
+        pytest.param(
+            {"forward_client_headers_to_llm_api": True},
+            None,
+            (False, frozenset({"x-app"}), True, False),
+            {"x-app": "cli-secret"},
+            id="global",
+        ),
+        pytest.param(
+            {}, ["claude"], (True, frozenset({"x-app"}), True, False), {"x-app": "cli-secret"}, id="model-group"
+        ),
+        pytest.param({}, None, None, None, id="not-forwarded"),
+    ),
+)
+async def test_add_litellm_data_to_request_stamps_only_the_client_headers_it_forwards(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    model_group_scope: list[str] | None,
+    expected_stamp: tuple[bool, frozenset[str], bool, bool] | None,
+    expected_headers: dict[str, str] | None,
+):
+    from litellm.types.router import ForwardedClientHeaders, ModelGroupSettings
+
+    monkeypatch.setattr(
+        litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=model_group_scope)
+    )
+    forged_stamp: Final = ForwardedClientHeaders.of({"x-forged": "value"}, model_group_scoped=True).model_dump()
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "claude",
+            "messages": [{"role": "user", "content": "hello"}],
+            "proxy_server_request": {"forwarded_client_headers": forged_stamp},
+        },
+        request=_make_request_mock(
+            "/v1/chat/completions",
+            {"Content-Type": "application/json", "x-litellm-api-key": "Bearer sk-virtual-key", "x-app": "cli-secret"},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+        version="test-version",
+    )
+
+    stamp: Final = updated["proxy_server_request"].get("forwarded_client_headers")
+    assert (_forwarded_x_app_stamp(stamp), updated.get("headers")) == (expected_stamp, expected_headers)
+    assert "cli-secret" not in json.dumps(stamp)

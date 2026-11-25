@@ -144,7 +144,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
                 render={({ field }) => (
                   <Switch
                     id={fieldId}
-                    checked={/^(true|1)$/i.test(String(field.value ?? ""))}
+                    checked={/^(true|1)$/i.test(String(field.value ?? paramConfig.default ?? ""))}
                     onCheckedChange={(checked: boolean) => field.onChange(String(checked))}
                     onBlur={field.onBlur}
                   />
@@ -276,18 +276,6 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 const CALLBACK_CONFIG_ALIASES: Record<string, string> = { s3_v2: "s3" };
 const CALLBACK_UNSUPPORTED_PARAMS: Record<string, readonly string[]> = { s3: ["s3_partition_granularity"] };
 
-interface DynamicParamConfig {
-  type?: string;
-  ui_name?: string;
-  required?: boolean;
-  options?: string[];
-}
-
-interface CallbackConfigWithParams {
-  id: string;
-  dynamic_params?: Record<string, DynamicParamConfig>;
-}
-
 const findCallbackConfig = <T extends { id: string }>(
   callbackConfigs: readonly T[],
   callbackName: string | null,
@@ -392,7 +380,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       const normalized = Object.fromEntries(
         Object.entries(selectedEditCallback.variables || {}).flatMap(([key, value]) => {
           const fieldName = fieldNameFor(key);
-          if (value == null && callbackConfig?.dynamic_params?.[fieldName]?.type === "select") {
+          const paramConfig = callbackConfig?.dynamic_params?.[fieldName];
+          if (value == null && (paramConfig?.type === "select" || paramConfig?.default !== undefined)) {
             return [];
           }
           return [[fieldName, value ?? ""]];
