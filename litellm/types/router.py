@@ -1265,6 +1265,21 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
+class RouterBudgetLimitError(ValueError):
+    """
+    Raised when every candidate deployment has exceeded its configured router budget.
+    """
+
+    status_code: Final = 429
+
+    def __init__(self, deployment_above_budget_info: str = "") -> None:
+        self.deployment_above_budget_info = deployment_above_budget_info
+        _message: Final = (
+            f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: {deployment_above_budget_info}"
+        )
+        super().__init__(_message)
+
+
 class RouterErrorTypes(str, enum.Enum):
     rate_limit_error = "rate_limit_error"
     all_deployments_in_cooldown = "all_deployments_in_cooldown"

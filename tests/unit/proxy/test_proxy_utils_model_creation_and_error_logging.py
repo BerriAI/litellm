@@ -4906,14 +4906,20 @@ def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expecte
 
 
 def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog):
+    from litellm.types.router import RouterBudgetLimitError
+
     with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
         provider_result = handle_exception_on_proxy(
             InternalServerError(message="upstream 500", llm_provider="openai", model="gpt-4")
+        )
+        budget_result = handle_exception_on_proxy(
+            RouterBudgetLimitError("Exceeded budget for provider openai: 5.0 >= 5.0")
         )
         assert ISSUE_URL_BASE not in caplog.text
         internal_result = handle_exception_on_proxy(KeyError("missing"))
 
     assert provider_result.code == internal_result.code == "500"
+    assert (budget_result.code, budget_result.type) == ("429", "rate_limit_error")
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
 

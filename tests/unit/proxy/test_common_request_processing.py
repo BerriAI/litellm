@@ -109,7 +109,7 @@ from litellm.router_config import build_router_config
 from litellm.router_python_host import python_host
 from litellm.router_rust.core import RustCore
 from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
-from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+from litellm.types.router import RouterBudgetLimitError, RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, SpecialEnums, StreamingChoices
 from litellm.utils import ModelResponseListIterator
 from tests._support.clock_loops import AutojumpClockLoop
@@ -5904,8 +5904,9 @@ class TestHandleLLMApiExceptionRetryAfter:
         (
             RouterRateLimitError(model="gpt-4", cooldown_time=42.3, enable_pre_call_checks=False, cooldown_list=[]),
             RouterRateLimitErrorBasic(model="gpt-4"),
+            RouterBudgetLimitError("Exceeded budget for provider openai: 5.0 >= 5.0"),
         ),
-        ids=("cooldown", "basic"),
+        ids=("cooldown", "basic", "budget"),
     )
     async def test_handle_llm_api_exception_answers_a_cooldown_with_429_and_no_bug_notice(self, exc, caplog):
         with caplog.at_level("ERROR"):
