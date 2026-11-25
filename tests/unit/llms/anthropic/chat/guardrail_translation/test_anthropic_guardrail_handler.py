@@ -7,6 +7,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -163,9 +164,9 @@ class OnlyDeferredToolsGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
     ) -> GenericGuardrailAPIInputs:
         return {
             **inputs,

@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
@@ -121,6 +121,16 @@ def unusable_deferred_tools_refusal(
         f"model_info.deferred_tools passthrough sends deferred tools as Claude Code sent them, which provider "
         f"{provider} rejects. Pick {other_modes} for this deployment, or set drop_params to send deferred tools "
         "the drop way"
+    )
+
+
+def native_stop_sequences_refusal(mode: DeferredToolsMode, stop_sequences: Sequence[str] | None) -> str | None:
+    if mode != "native" or not stop_sequences:
+        return None
+    return (
+        "model_info.deferred_tools native sends requests to the Responses API, which has no stop_sequences, so this "
+        "request would go to chat completions without tool search. Remove stop_sequences, or set drop_params to send "
+        "it to chat completions with deferred tools sent the drop way"
     )
 
 
