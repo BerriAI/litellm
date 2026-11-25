@@ -2217,6 +2217,26 @@ class TestApplyToAnthropicMessagesRequest:
         assert result_msgs[0]["content"][-1].get("cache_control") is None
         assert result_msgs[1]["content"][-1].get("cache_control") is None
 
+    def test_a_non_numeric_index_falls_back_to_the_role(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "First"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Response"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Second"}]},
+        ]
+        injection_points = [{"location": "message", "index": "last", "role": "user"}]
+
+        result_msgs, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert [message["content"][-1].get("cache_control") for message in result_msgs] == [
+            {"type": "ephemeral"},
+            None,
+            {"type": "ephemeral"},
+        ]
+
     def test_mixed_system_and_message_injection(self):
         messages = [
             {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
@@ -4699,8 +4719,8 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
 class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
     """The Responses layer's hook pass sees only the role-bearing input items, while the bridge
     forwards a function_call or function_call_output mark onto the tool call or tool message it
-    builds, so the pass reserves those marks before placing an ordinal point and the bridge's
-    pass, which sees them in its own messages, replaces the reservation with its own count."""
+    builds, so the pass reserves those marks before placing an ordinal counted from the start and
+    the bridge's pass, which sees them in its own messages, replaces the reservation with its own count."""
 
     MODEL = "claude-sonnet-4-6"
     MARK = {"type": "ephemeral"}
@@ -4744,7 +4764,7 @@ class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
         *earlier, last = self._items(marked_calls)
         items = [*earlier, *other_items, last]
         kwargs: dict = {
-            "cache_control_injection_points": [{"location": "message", "index": -1}],
+            "cache_control_injection_points": [{"location": "message", "index": 1}],
             CARRY_UNMATCHED_MESSAGE_POINTS: True,
         }
         _stamp_injection_points_for_the_hook(kwargs, self.MODEL, "anthropic", items, self._tools(marked_tools))

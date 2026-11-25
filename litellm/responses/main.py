@@ -1007,7 +1007,8 @@ def _prompt_management_sees_a_provisional_message_list(
     """Tell the cache-control hook that this layer's messages are not the ones sent upstream.
 
     A Responses request keeps its system prompt in ``instructions``, which only becomes a
-    system message when the chat-completion bridge builds one, so a role-targeted point
+    system message when the chat-completion bridge builds one, and keeps its tool calls and
+    results out of this layer's list, so a role-targeted point or one counted from the end
     is placed by the bridge's pass rather than this one.
 
     Only raised for a request that will be bridged. A provider serving Responses natively

@@ -779,9 +779,28 @@ def _message_dropping_created_cache_controls_between(
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
 # Responses API layer, whose `instructions` only becomes a system message further down.
-# Tells this hook to hand role-targeted points to the pass holding the final messages
-# rather than spending them on a list that is still missing some of their targets.
+# Tells this hook to hand role-targeted points and ordinals counted from the end to the
+# pass holding the final messages rather than spending them on a list that is still
+# missing some of their targets.
 CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
+
+
+def _parsed_index(text: str) -> int | None:
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _injection_index(point: CacheControlMessageInjectionPoint) -> int | None:
+    index: Final = point.get("index")
+    return _parsed_index(index) if isinstance(index, str) else index
+
+
+def _resolved_on_the_final_messages(point: CacheControlMessageInjectionPoint) -> bool:
+    index: Final = _injection_index(point)
+    return point.get("index") is None or (index is not None and index < 0)
+
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
@@ -893,13 +912,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
         # of them in one pass is what lets config order decide the shared breakpoint
-        # budget. An ordinal names a different message once a later layer builds its own
-        # list, so it is placed here or not at all.
+        # budget. The same goes for an ordinal counted from the end: the later layer only
+        # adds messages ahead of the caller's, while this list leaves out the trailing tool
+        # calls and results. An ordinal counted from the start keeps counting the caller's
+        # own messages, so it is placed here or not at all.
         carried_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
-            tuple(point for point in message_points if point.get("index") is None) if carry_unmatched else ()
+            tuple(point for point in message_points if _resolved_on_the_final_messages(point))
+            if carry_unmatched
+            else ()
         )
         applied_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
-            tuple(point for point in message_points if point.get("index") is not None)
+            tuple(point for point in message_points if not _resolved_on_the_final_messages(point))
             if carry_unmatched
             else tuple(message_points)
         )
@@ -1154,28 +1177,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
     ) -> list[int]:
         """Resolve which message indices an injection point targets."""
-        _targetted_index: Final[int | str | None] = point.get("index", None)
-        targetted_index: int | None = None
-        if isinstance(_targetted_index, str):
-            try:
-                targetted_index = int(_targetted_index)
-            except ValueError:
-                pass
-        else:
-            targetted_index = _targetted_index
+        requested_index: Final = _injection_index(point)
 
         # Case 1: Target by specific index
-        if targetted_index is not None:
-            original_index: Final = targetted_index
-            if targetted_index < 0:
-                targetted_index += len(messages)
-
+        if requested_index is not None:
+            targetted_index: Final = requested_index + len(messages) if requested_index < 0 else requested_index
             if 0 <= targetted_index < len(messages):
                 return [targetted_index]
 
             verbose_logger.warning(
                 "AnthropicCacheControlHook: Provided index %s is out of bounds for message list of length %s. Targeted index was %s. Skipping cache control injection for this point.",
-                original_index,
+                requested_index,
                 len(messages),
                 targetted_index,
             )
