@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from datetime import date
 
+import httpx
 import pytest
 from sdk_watch.changelog import Release
-from sdk_watch.github import already_handled
+from sdk_watch.github import RestGitHub, already_handled
 from sdk_watch.sources import Candidate, Sdk
 from sdk_watch.triage import ChangeKind, Finding, NeededChange
 
@@ -51,3 +52,36 @@ def test_a_change_is_handled_once_an_open_pr_a_recent_merge_or_the_agent_branch_
     github: FakeGitHub, handled: bool
 ) -> None:
     assert already_handled(github, FINDING) is handled
+
+
+def github_answering(responses: tuple[httpx.Response, ...], waits: list[float]) -> RestGitHub:
+    replies = iter(responses)
+    client = httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(lambda _: next(replies)))
+    return RestGitHub(client=client, repo="BerriAI/litellm", sleep=waits.append, clock=lambda: 1000.0)
+
+
+@pytest.mark.parametrize(
+    ("limit_headers", "wait"),
+    [
+        ({"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1030"}, 31.0),
+        ({"retry-after": "20"}, 20.0),
+    ],
+    ids=["search-quota-used-up", "secondary-limit"],
+)
+def test_a_rate_limited_lookup_waits_for_github_and_retries(limit_headers: dict[str, str], wait: float) -> None:
+    waits: list[float] = []
+    limited = httpx.Response(403, headers=limit_headers)
+    github = github_answering((limited, httpx.Response(200, json={"total_count": 2})), waits)
+
+    assert github.count_prs('is:open "billing_policy"') == 2
+    assert waits == [wait]
+
+
+def test_a_limit_that_resets_much_later_fails_at_once_instead_of_stalling_the_run() -> None:
+    waits: list[float] = []
+    limited = httpx.Response(403, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "4600"})
+    github = github_answering((limited,) * 4, waits)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        github.branch_exists("litellm_sdk_watch_anthropic_0_110_0_billing_policy")
+    assert waits == []
