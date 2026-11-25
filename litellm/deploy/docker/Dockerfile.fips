@@ -63,10 +63,10 @@ RUN --mount=type=secret,id=cgr-token \
     nodejs \
     npm \
     libsndfile \
-    build-base \
     clang \
     cmake \
     go \
+    make \
     perl
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
