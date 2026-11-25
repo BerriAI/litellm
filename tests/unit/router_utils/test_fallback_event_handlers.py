@@ -17,9 +17,12 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.exceptions import UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy.utils import _failure_fields_to_lift
+from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -44,6 +47,7 @@ from litellm.router_utils.fallback_event_handlers import (
     routed_deployment_id,
     run_async_fallback,
 )
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.router import AllowedFailsPolicy, FallbackSkipReason, SkippedFallbackTarget
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -130,6 +134,85 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
             fallback_depth=0,
             include_fallback_errors=True,
         )
+
+
+_PROVIDER_HELD_RESPONSE_ID: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+    custom_llm_provider="openai", model_id="native-primary-1", response_id="resp_turn_one"
+)
+
+
+class RefusingFallbackRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
+    def __init__(self, previous_response_id: str) -> None:
+        self.previous_response_id: Final = previous_response_id
+        self.attempted_model_groups: tuple[object, ...] = ()
+
+    def log_retry(self, kwargs: dict[str, object], e: Exception) -> dict[str, object]:
+        return kwargs
+
+    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> StreamingWrapper:
+        self.attempted_model_groups = (*self.attempted_model_groups, kwargs.get("model"))
+        if kwargs.get("model") == "bridged-hop":
+            raise previous_response_not_found((self.previous_response_id,), "gpt-5.4-mini", "openai")
+        if kwargs.get("model") == "failing-fallback":
+            raise litellm.InternalServerError("fallback failed", "openai", "gpt-5.4-mini")
+        return StreamingWrapper()
+
+
+async def _walk(router: RefusingFallbackRouter, fallback_model_group: list[str]) -> object:
+    return await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=fallback_model_group,
+        original_model_group="native-primary",
+        original_exception=litellm.InternalServerError("upstream failed", "openai", "gpt-5.4-mini"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="native-primary",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "previous_response_id",
+    [
+        ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="gemini", model_id="bridged-1", response_id="ZJ8uaPqXOd2N1PIPrIK6sQk"
+        ),
+        ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="azure_ai", model_id="bridged-1", response_id="chatcmpl-turn-one"
+        ),
+    ],
+    ids=["gemini-turn-the-chat-bridge-answered", "azure-turn-the-chat-bridge-answered"],
+)
+async def test_a_follow_up_refused_on_a_fallback_ends_the_walk_before_the_next_group(previous_response_id: str):
+    router: Final = RefusingFallbackRouter(previous_response_id)
+
+    with pytest.raises(UnresolvablePreviousResponseError):
+        await _walk(router, ["bridged-hop", "native-fallback"])
+
+    assert router.attempted_model_groups == ("bridged-hop",)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_cannot_rebuild_a_response_a_provider_holds_hands_it_to_the_next_group():
+    router: Final = RefusingFallbackRouter(_PROVIDER_HELD_RESPONSE_ID)
+
+    response: Final = await _walk(router, ["bridged-hop", "native-fallback"])
+
+    assert isinstance(response, StreamingWrapper)
+    assert router.attempted_model_groups == ("bridged-hop", "native-fallback")
+
+
+@pytest.mark.asyncio
+async def test_a_walk_that_fails_after_a_refusal_answers_with_the_last_fallbacks_error():
+    router: Final = RefusingFallbackRouter(_PROVIDER_HELD_RESPONSE_ID)
+
+    with pytest.raises(litellm.InternalServerError, match="fallback failed"):
+        await _walk(router, ["bridged-hop", "failing-fallback"])
+
+    assert router.attempted_model_groups == ("bridged-hop", "failing-fallback")
 
 
 class RecordingRouter:
@@ -898,6 +981,46 @@ class TestTriggerCooldownForFailedDeployment:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "refusal",
+        [
+            pytest.param(
+                previous_response_not_found(("resp_unknown",), "gpt-5.4-mini", "openai"), id="litellm-refusal"
+            ),
+            pytest.param(
+                litellm.BadRequestError(
+                    message="Previous response with id 'resp_gone' not found.",
+                    model="gpt-5.4-mini",
+                    llm_provider="openai",
+                    body={
+                        "type": "invalid_request_error",
+                        "param": "previous_response_id",
+                        "code": "previous_response_not_found",
+                        "message": "Previous response with id 'resp_gone' not found.",
+                    },
+                ),
+                id="provider-400-naming-the-previous-response",
+            ),
+        ],
+    )
+    def test_a_refused_follow_up_does_not_count_toward_the_fallback_deployments_failures(
+        self, refusal: litellm.BadRequestError
+    ):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "bridged-fallback",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-api-key"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ]
+        )
+        refusal.failed_deployment_id = "fallback-deployment"
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=refusal)
+
+        assert get_deployment_failures_for_current_minute(router, "fallback-deployment") == 0
 
     def test_uses_deployment_litellm_params_cooldown_time_override(self):
         mock_router = MagicMock()
@@ -2571,6 +2694,11 @@ def _provider_error(status_code: int) -> httpx.Response:
             litellm.InternalServerError(message="overloaded", model="m", llm_provider="openai"),
             False,
             id="500 still falls back",
+        ),
+        pytest.param(
+            previous_response_not_found((_PROVIDER_HELD_RESPONSE_ID,), "m", "openai"),
+            False,
+            id="a follow-up to a turn a provider holds keeps its fallbacks",
         ),
     ],
 )

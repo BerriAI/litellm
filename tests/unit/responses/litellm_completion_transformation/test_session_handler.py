@@ -916,6 +916,44 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
+@pytest.mark.asyncio
+async def test_message_history_replays_the_output_of_a_turn_a_native_responses_deployment_answered():
+    session_id: Final = "0b6f3c1e-8f0a-4a52-9d55-3f7c2e9f4d10"
+    request_id: Final = "resp_0b6f3c1e8f0a4a52"
+    native_turn: Final = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": session_id,
+        "proxy_server_request": {"input": "My name is Ada.", "model": "native-responses"},
+        "response": {
+            "id": request_id,
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {"type": "mcp_tools_fetched", "tools": []},
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Hello, Ada.", "annotations": []}],
+                },
+            ],
+        },
+    }
+    fake_prisma_client: Final = _FakePrismaClient(results=[[native_turn]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == [
+        ("user", "My name is Ada."),
+        ("assistant", [{"type": "text", "text": "Hello, Ada."}]),
+    ]
+
+
 GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -110,6 +111,27 @@ def _input_named_as_declared(stored_input: object, declared_names: frozenset[str
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
+
+
+_MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))
+
+
+def _is_model_output(item: object) -> bool:
+    match item:
+        case {"type": str() as item_type}:
+            return item_type not in _MCP_AUTO_EXECUTE_OUTPUT_TYPES
+        case _:
+            return True
+
+
+def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
+    match stored_response:
+        case {"object": "response", "output": list() as output}:
+            return [item for item in output if _is_model_output(item)]
+        case {"object": "response"}:
+            return []
+        case _:
+            return None
 
 
 class ResponsesSessionHandler:
@@ -236,7 +258,18 @@ class ResponsesSessionHandler:
         # Add Output messages for this Spend Log
         ############################################################
         _response_output: Final = spend_log.get("response", "{}")
-        if isinstance(_response_output, dict) and _response_output and _response_output != {}:
+        stored_responses_api_output: Final = _stored_responses_api_output(_response_output)
+        if stored_responses_api_output is not None:
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=stored_responses_api_output,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                    item_cache_control=item_cache_control,
+                    replay_tool_search=True,
+                )
+            )
+        elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response: Final = with_tool_calls_named_as_declared(
                 with_renamed_tool_calls(
@@ -261,7 +294,7 @@ class ResponsesSessionHandler:
         Get the parsed proxy server request from the spend log
         """
         proxy_server_request: Final[str | dict] = spend_log.get("proxy_server_request") or "{}"
-        proxy_server_request_dict: dict | None = None
+        proxy_server_request_dict: dict[str, object] | None = None
         if isinstance(proxy_server_request, dict):
             proxy_server_request_dict = proxy_server_request
         else:
@@ -336,7 +369,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _should_check_cold_storage_for_full_payload(
-        proxy_server_request_dict: dict | None,
+        proxy_server_request_dict: Mapping[str, object] | None,
     ) -> bool:
         """
         Only check cold storage when both are true
@@ -376,6 +409,9 @@ class ResponsesSessionHandler:
             RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
             RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
         )
+
+        if "litellm.proxy.proxy_server" not in sys.modules:
+            return []
         from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)

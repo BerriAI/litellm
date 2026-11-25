@@ -2,7 +2,7 @@ import asyncio
 import json
 import queue
 from collections.abc import Awaitable, Callable
-from types import NoneType
+from types import NoneType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -772,6 +772,19 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
     assert (sent_call["type"], sent_call["namespace"], sent_call["name"]) == ("function_call", "editor", "apply_patch")
 
 
+class _EarlierBridgedTurn:
+    async def query_raw(self, query: str, request_id: str) -> list[dict[str, object]]:
+        return [
+            {
+                "request_id": request_id,
+                "call_type": "aresponses",
+                "session_id": "earlier-session",
+                "proxy_server_request": {"input": "What is the first step?"},
+                "response": _chat_completion_payload("FW-GLM-5.3-Flash"),
+            }
+        ]
+
+
 @pytest.mark.asyncio
 @respx.mock
 @pytest.mark.parametrize(
@@ -783,24 +796,25 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
     ],
 )
 async def test_only_a_model_router_follow_up_to_a_bridged_turn_stays_on_the_bridge(model, earlier_response_id, bridged):
-    chat_route: Final = respx.post(url__regex=r".*/chat/completions(\?.*)?$").mock(
+    respx.post(url__regex=r".*/chat/completions(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_chat_completion_payload("FW-GLM-5.3-Flash"))
     )
-    responses_route: Final = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+    respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
 
-    await litellm.aresponses(
-        model=model,
-        input="And the next step?",
-        previous_response_id=ResponsesAPIRequestUtils._build_responses_api_response_id(
-            custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
-        ),
-        api_base=FOUNDRY_PROJECT_BASE,
-        api_key="fake-key",
-    )
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_EarlierBridgedTurn())):
+        await litellm.aresponses(
+            model=model,
+            input="And the next step?",
+            previous_response_id=ResponsesAPIRequestUtils._build_responses_api_response_id(
+                custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
+            ),
+            api_base=FOUNDRY_PROJECT_BASE,
+            api_key="fake-key",
+        )
 
-    assert (chat_route.called, responses_route.called) == (bridged, not bridged)
+    assert [call.request.url.path.endswith("/chat/completions") for call in respx.calls] == [bridged]
 
 
 @pytest.mark.parametrize(

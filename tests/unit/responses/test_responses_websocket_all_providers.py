@@ -1523,6 +1523,102 @@ class TestWebSocketErrorHandling:
         assert "error" in error_event
         assert "Invalid JSON" in error_event
 
+    @pytest.mark.asyncio
+    async def test_managed_handler_reports_a_turn_s_client_error_with_its_openai_type_code_and_param(
+        self, monkeypatch
+    ):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        not_found: Final = litellm.BadRequestError(
+            message="Previous response with id 'resp_gone' not found.",
+            model="anthropic/claude-sonnet-4-5",
+            llm_provider="anthropic",
+            body={
+                "message": "Previous response with id 'resp_gone' not found.",
+                "type": "invalid_request_error",
+                "param": "previous_response_id",
+                "code": "previous_response_not_found",
+            },
+        )
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=not_found))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+        )
+
+        await handler._process_response_create(
+            json.dumps({"type": "response.create", "input": "hi", "previous_response_id": "resp_gone"})
+        )
+
+        error_event: Final = json.loads(websocket.send_text.await_args_list[-1].args[0])
+        assert {key: error_event["error"][key] for key in ("type", "code", "param")} == {
+            "type": "invalid_request_error",
+            "code": "previous_response_not_found",
+            "param": "previous_response_id",
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("make_failure", "expected_type"),
+        [
+            pytest.param(
+                lambda litellm: litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="m"),
+                "rate_limit_exceeded",
+                id="429",
+            ),
+            pytest.param(
+                lambda litellm: litellm.ServiceUnavailableError(message="down", llm_provider="anthropic", model="m"),
+                "server_error",
+                id="503",
+            ),
+            pytest.param(lambda litellm: RuntimeError("no status"), "server_error", id="no-status"),
+        ],
+    )
+    async def test_managed_handler_types_a_turn_failure_by_its_status(self, monkeypatch, make_failure, expected_type):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=make_failure(litellm)))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        error_event: Final = json.loads(websocket.send_text.await_args_list[-1].args[0])
+        assert error_event["error"]["type"] == expected_type
+
 
 class TestWebSocketProjectQuotaEnforcement:
     """VERIA regression: the connection-level pre-call hook only runs once,
