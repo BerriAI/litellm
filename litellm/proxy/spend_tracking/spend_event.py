@@ -46,7 +46,10 @@ _STANDARD_LOGGING_DROPPED_KEYS: Final = frozenset({"model_parameters"})
 _NOT_OFFLOADED_RESPONSE_TYPES: Final = (LiteLLMBatch, InteractionsAPIResponse)
 
 
-class _LitellmParams(TypedDict, total=False):
+_NoLogParam: Final = TypedDict("_NoLogParam", {"no-log": ReadOnly[bool | None]}, total=False)
+
+
+class _LitellmParams(_NoLogParam, total=False):
     api_base: ReadOnly[str | None]
     custom_llm_provider: ReadOnly[str | None]
     litellm_call_id: ReadOnly[str | None]
@@ -286,6 +289,7 @@ def _litellm_params_for_event(
         "litellm_metadata": _metadata_for_event(litellm_metadata, budget_reservation),
         "proxy_server_request": litellm_params.get("proxy_server_request") if store_bodies else None,
         "preset_cache_key": cache_key,
+        "no-log": litellm_params.get("no-log"),
     }
     return projected
 

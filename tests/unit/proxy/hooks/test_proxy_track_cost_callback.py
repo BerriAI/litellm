@@ -4061,6 +4061,49 @@ async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_
 
 
 @pytest.mark.asyncio
+async def test_sidecar_keeps_guardrail_prompt_text_out_of_a_no_log_spend_row(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
+    monkeypatch.setitem(proxy_server.general_settings, "store_prompts_in_spend_logs", True)
+    matched_prompt_text: Final = "zebrafishsecret"
+    base: Final = _offload_kwargs()
+    kwargs: Final = {
+        **base,
+        "litellm_params": {**base["litellm_params"], "no-log": True},
+        "standard_logging_object": {
+            **base["standard_logging_object"],
+            "guardrail_information": [
+                {
+                    "guardrail_name": "cf-mask",
+                    "guardrail_status": "success",
+                    "guardrail_response": [{"type": "blocked_word", "keyword": matched_prompt_text}],
+                    "match_details": [{"type": "blocked_word", "snippet": matched_prompt_text}],
+                }
+            ],
+        },
+    }
+    start_time: Final = datetime(2026, 1, 1, 0, 0, 0)
+    end_time: Final = datetime(2026, 1, 1, 0, 0, 2)
+
+    async def in_process() -> None:
+        await ProxyDBLogger().async_log_success_event(kwargs, _offload_response(), start_time, end_time)
+
+    async def via_sidecar() -> None:
+        line = build_spend_event(kwargs, _offload_response(), start_time, end_time, store_bodies=False)
+        assert isinstance(line, bytes)
+        await run_spend_event(line)
+
+    in_process_row, _, _ = await _spend_row_written_by(in_process)
+    sidecar_row, _, _ = await _spend_row_written_by(via_sidecar)
+
+    assert matched_prompt_text not in json.dumps(sidecar_row, default=str), sidecar_row["metadata"]
+    assert sidecar_row == in_process_row
+    assert sidecar_row["spend"] == 0.0125
+    assert json.loads(sidecar_row["metadata"])["guardrail_information"][0]["guardrail_name"] == "cf-mask"
+
+
+@pytest.mark.asyncio
 async def test_sidecar_ignores_an_undecodable_event():  # test-quality-ok: a discarded event has no observable output other than the DB writer never being reached
     with (
         patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
