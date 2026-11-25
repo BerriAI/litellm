@@ -81,6 +81,7 @@ class CohereV2ChatResponseUsageBilledUnits(TypedDict, total=False):
 class CohereV2ChatResponseUsageTokens(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
+    reasoning_tokens: ReadOnly[int]
 
 
 class CohereV2ChatResponseUsage(TypedDict, total=False):
@@ -112,3 +113,25 @@ class CohereV2StreamedToolCall(BaseModel):
     arguments: str = Field(
         default="", validation_alias=AliasPath("delta", "message", "tool_calls", "function", "arguments")
     )
+
+
+class CohereV2StreamedContent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str = Field(default="", validation_alias=AliasPath("delta", "message", "content", "text"))
+    thinking: str = Field(default="", validation_alias=AliasPath("delta", "message", "content", "thinking"))
+
+
+class CohereV2StreamedTokens(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int | None = None
+
+
+class CohereV2StreamedMessageEnd(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    finish_reason: str | None = Field(default=None, validation_alias=AliasPath("delta", "finish_reason"))
+    tokens: CohereV2StreamedTokens | None = Field(default=None, validation_alias=AliasPath("delta", "usage", "tokens"))

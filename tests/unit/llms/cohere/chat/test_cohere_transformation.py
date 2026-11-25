@@ -512,6 +512,7 @@ async def test_cohere_v2_streaming(respx_mock: respx.MockRouter, stream: bool) -
         {"type": "content-delta", "index": 0, "delta": {"message": {"content": {"text": "Once upon"}}}},
         {"type": "content-delta", "index": 0, "delta": {"message": {"content": {"text": " a time"}}}},
         {"type": "content-end", "index": 0},
+        {"type": "message-end", "delta": {"finish_reason": "COMPLETE"}},
     )
     respx_mock.post(COHERE_V2_CHAT_URL).mock(
         return_value=(
@@ -1552,3 +1553,286 @@ def test_cohere_v2_pre_call_checks_skip_a_deployment_without_json_mode() -> None
     )
 
     assert picked["litellm_params"]["model"] == f"cohere_chat/{JSON_SCHEMA_MODEL}"
+
+
+ARITHMETIC_QUESTION: Final = {"role": "user", "content": "What is 17 * 23?"}
+COHERE_THINKING_USAGE: Final = {
+    "billed_units": {"input_tokens": 12, "output_tokens": 30},
+    "tokens": {"input_tokens": 66, "output_tokens": 38, "reasoning_tokens": 35},
+}
+
+
+def _cohere_v2_ndjson(events: tuple[dict[str, object], ...]) -> httpx.Response:
+    return httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in events).encode())
+
+
+def _cohere_v2_content_events(index: int, part_type: str, pieces: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content-start", "index": index, "delta": {"message": {"content": {"type": part_type, part_type: ""}}}},
+        *(
+            {"type": "content-delta", "index": index, "delta": {"message": {"content": {part_type: piece}}}}
+            for piece in pieces
+        ),
+        {"type": "content-end", "index": index},
+    )
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_cohere_v2_response_returns_thinking_and_reasoning_tokens(
+    respx_mock: respx.MockRouter, sync_mode: bool
+) -> None:
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **_cohere_v2_response(
+                    {
+                        "content": [
+                            {"type": "thinking", "thinking": "17 * 20 is 340, "},
+                            {"type": "thinking", "thinking": "plus 17 * 3 is 391."},
+                            {"type": "text", "text": "391"},
+                        ]
+                    }
+                ),
+                "usage": COHERE_THINKING_USAGE,
+            },
+        )
+    )
+    kwargs: Final = {
+        "model": f"cohere_chat/v2/{REASONING_MODEL}",
+        "messages": [ARITHMETIC_QUESTION],
+        "api_key": "cohere-test-key",
+    }
+
+    response: Final = litellm.completion(**kwargs) if sync_mode else await litellm.acompletion(**kwargs)
+
+    assert response.choices[0].message.content == "391"
+    assert response.choices[0].message.reasoning_content == "17 * 20 is 340, plus 17 * 3 is 391."
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (66, 38)
+    assert response.usage.completion_tokens_details.reasoning_tokens == 35
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_tool_call_response_keeps_its_thinking(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_cohere_v2_response(
+                {
+                    "content": [{"type": "thinking", "thinking": "I need the weather for Paris."}],
+                    "tool_calls": [
+                        {
+                            "id": "get_weather_0",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+                finish_reason="TOOL_CALL",
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model=f"cohere_chat/v2/{REASONING_MODEL}",
+        messages=[WEATHER_QUESTION],
+        tools=[WEATHER_TOOL],
+        api_key="cohere-test-key",
+    )
+
+    message: Final = response.choices[0].message
+    assert message.reasoning_content == "I need the weather for Paris."
+    assert [(call.id, json.loads(call.function.arguments)) for call in message.tool_calls] == [
+        ("get_weather_0", {"city": "Paris"})
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_cohere_v2_stream_returns_thinking_and_cohere_usage(respx_mock: respx.MockRouter, sync_mode: bool) -> None:
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=_cohere_v2_ndjson(
+            (
+                {"type": "message-start", "id": "7f3e", "delta": {"message": {"role": "assistant"}}},
+                *_cohere_v2_content_events(0, "thinking", ("17 * 20 is 340, ", "plus 17 * 3 is 391.")),
+                *_cohere_v2_content_events(1, "text", ("39", "1")),
+                {"type": "message-end", "delta": {"finish_reason": "COMPLETE", "usage": COHERE_THINKING_USAGE}},
+            )
+        )
+    )
+    kwargs: Final = {
+        "model": f"cohere_chat/v2/{REASONING_MODEL}",
+        "messages": [ARITHMETIC_QUESTION],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "cohere-test-key",
+    }
+
+    chunks: Final = (
+        list(litellm.completion(**kwargs))
+        if sync_mode
+        else [chunk async for chunk in await litellm.acompletion(**kwargs)]
+    )
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+
+    assert rebuilt is not None
+    assert rebuilt.choices[0].message.content == "391"
+    assert rebuilt.choices[0].message.reasoning_content == "17 * 20 is 340, plus 17 * 3 is 391."
+    assert rebuilt.choices[0].finish_reason == "stop"
+    assert (rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens) == (66, 38)
+    assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 35
+    assert len({chunk.id for chunk in chunks}) == 1
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_v2_stream_returns_thinking_before_tool_calls(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=_cohere_v2_ndjson(
+            (
+                {"type": "message-start", "id": "9a1c", "delta": {"message": {"role": "assistant"}}},
+                *_cohere_v2_content_events(0, "thinking", ("Two cities, ", "two calls.")),
+                *_cohere_v2_tool_call_events(0, "get_weather_paris", "Paris"),
+                *_cohere_v2_tool_call_events(1, "get_weather_tokyo", "Tokyo"),
+                {"type": "message-end", "delta": {"finish_reason": "TOOL_CALL", "usage": COHERE_THINKING_USAGE}},
+            )
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model=f"cohere_chat/v2/{REASONING_MODEL}",
+        messages=[{"role": "user", "content": "What is the weather in Paris and in Tokyo?"}],
+        tools=[WEATHER_TOOL],
+        stream=True,
+        stream_options={"include_usage": True},
+        api_key="cohere-test-key",
+    )
+    rebuilt: Final = litellm.stream_chunk_builder([chunk async for chunk in response])
+
+    assert rebuilt is not None
+    assert rebuilt.choices[0].message.reasoning_content == "Two cities, two calls."
+    assert [call.id for call in rebuilt.choices[0].message.tool_calls] == ["get_weather_paris", "get_weather_tokyo"]
+    assert rebuilt.choices[0].finish_reason == "tool_calls"
+    assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 35
+
+
+PARIS_TOOL_CALL: Final = {
+    "id": "get_weather_0",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("assistant_turn", "cohere_turn"),
+    [
+        (
+            {"role": "assistant", "content": "391", "reasoning_content": "17 * 23 is 391."},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}],
+            },
+        ),
+        (
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "391"}],
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "17 * 20 is 340.", "signature": ""},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "thinking", "thinking": "Plus 51 is 391.", "signature": ""},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "17 * 20 is 340.\nPlus 51 is 391."},
+                    {"type": "text", "text": "391"},
+                ],
+            },
+        ),
+        (
+            {
+                "role": "assistant",
+                "content": "391",
+                "reasoning_content": "17 * 23 is 391.",
+                "thinking_blocks": [{"type": "thinking", "thinking": "17 * 23 is 391.", "signature": ""}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}],
+            },
+        ),
+        (
+            {"role": "assistant", "content": None, "tool_calls": [PARIS_TOOL_CALL], "reasoning_content": "Check Paris."},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "Check Paris."}],
+                "tool_calls": [PARIS_TOOL_CALL],
+            },
+        ),
+        (
+            {"role": "assistant", "content": "", "reasoning_content": "Nothing to say."},
+            {"role": "assistant", "content": ""},
+        ),
+        (
+            {"role": "assistant", "content": "391", "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
+            {"role": "assistant", "content": "391"},
+        ),
+    ],
+)
+def test_cohere_v2_resent_assistant_thinking_becomes_cohere_thinking_content(
+    respx_mock: respx.MockRouter, assistant_turn: Mapping[str, object], cohere_turn: Mapping[str, object]
+) -> None:
+    follow_up: Final = {"role": "user", "content": "Now divide that by 17."}
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "23"}]}))
+    )
+
+    litellm.completion(
+        model=f"cohere_chat/v2/{REASONING_MODEL}",
+        messages=[ARITHMETIC_QUESTION, assistant_turn, follow_up],
+        api_key="cohere-test-key",
+    )
+
+    assert _sent_body(route)["messages"] == [ARITHMETIC_QUESTION, cohere_turn, follow_up]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_conversation_resending_the_returned_message_keeps_its_thinking(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_cohere_v2_response(
+                    {"content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}]}
+                ),
+            ),
+            httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "23"}]})),
+        ]
+    )
+    follow_up: Final = {"role": "user", "content": "Now divide that by 17."}
+    first: Final = litellm.completion(
+        model=f"cohere_chat/v2/{REASONING_MODEL}", messages=[ARITHMETIC_QUESTION], api_key="cohere-test-key"
+    )
+
+    litellm.completion(
+        model=f"cohere_chat/v2/{REASONING_MODEL}",
+        messages=[ARITHMETIC_QUESTION, first.choices[0].message, follow_up],
+        api_key="cohere-test-key",
+    )
+
+    assert _sent_body(route)["messages"][1] == {
+        "role": "assistant",
+        "content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}],
+    }
