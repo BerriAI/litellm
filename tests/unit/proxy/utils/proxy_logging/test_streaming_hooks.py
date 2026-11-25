@@ -802,6 +802,57 @@ async def test_chat_stream_refused_by_presidio_logs_its_failure_masked_by_loggin
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_refused_with_message_logging_off_keeps_the_prompt_from_logging_only_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    events: Final[list[str]] = []
+    request_data: Final[dict[str, object]] = {
+        "metadata": {},
+        "messages": [{"role": "user", "content": "my phone is 555-0100"}],
+    }
+    logging_obj, upstream = _armed_chat_stream("test_chat_stream_refused_redacted", request_data, events)
+    seen_by_guardrail: Final[list[object]] = []
+    failures: Final[list[object]] = []
+
+    class _RecordingGuardrail(CustomGuardrail):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            seen_by_guardrail.append(kwargs.get("messages"))
+            return kwargs, result
+
+    class _FailureRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            failures.append(kwargs["standard_logging_object"]["messages"])
+
+    block: Final = BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
+    monkeypatch.setattr(
+        litellm,
+        "_async_failure_callback",
+        [_RecordingGuardrail(guardrail_name="scan-logs", event_hook=GuardrailEventHooks.logging_only, default_on=True)],
+    )
+    logging_obj.dynamic_async_failure_callbacks = [_FailureRecorder()]
+    proxy_logging.alert_types = []
+    user_api_key_dict: Final = make_user_api_key_auth(request_route="/chat/completions")
+
+    with pytest.raises(BlockedPiiEntityError) as raised:
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=upstream,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        ):
+            pass
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=raised.value,
+        user_api_key_dict=user_api_key_dict,
+        route="/chat/completions",
+    )
+
+    assert ("555-0100" in repr(seen_by_guardrail), len(failures), "555-0100" in repr(failures)) == (False, 1, False)
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes_success_logging(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
