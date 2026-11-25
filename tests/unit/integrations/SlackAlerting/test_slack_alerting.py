@@ -967,6 +967,31 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
             )
         mock_send_alert.assert_awaited_once()
 
+@pytest.mark.asyncio
+async def test_budget_alert_without_receiver_email_still_reaches_slack(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@example.com")
+    alerts: Final = SlackAlerting(
+        alerting=["email", "slack"], alert_types=[AlertType.budget_alerts], internal_usage_cache=DualCache()
+    )
+    alerts.periodic_started = True
+    key_without_owner: Final = CallInfo(
+        token="sk-test-mock-token-607",
+        spend=2,
+        max_budget=1,
+        key_alias="key-without-owner",
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    await alerts.budget_alerts(type="token_budget", user_info=key_without_owner)
+    await alerts.budget_alerts(type="token_budget", user_info=key_without_owner)
+
+    queue: Final = TypeAdapter(list[AlertQueueItem]).validate_python(attribute_or_none(alerts, "log_queue"))
+    assert len(queue) == 1
+    assert "key-without-owner" in queue[0]["payload"]["text"]
+
+
 @pytest.mark.parametrize(
     "alerting_type",
     [
