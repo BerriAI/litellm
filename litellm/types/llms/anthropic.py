@@ -154,6 +154,36 @@ class ToolReference(TypedDict, total=False):
     tool_name: Required[str]
 
 
+class AnthropicToolReferenceBlock(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tool_reference"] = "tool_reference"
+    tool_name: str
+
+
+class AnthropicToolSearchResultContent(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    tool_references: tuple[AnthropicToolReferenceBlock, ...] = ()
+
+
+class AnthropicToolSearchToolResultBlock(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tool_search_tool_result"] = "tool_search_tool_result"
+    tool_use_id: str
+    content: AnthropicToolSearchResultContent
+
+    @property
+    def found_tools(self) -> bool:
+        return self.content.type == ANTHROPIC_TOOL_SEARCH_RESULT_CONTENT_TYPE
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(reference.tool_name for reference in self.content.tool_references)
+
+
 class DirectToolCaller(TypedDict, total=False):
     """Indicates a tool was called directly by Claude."""
 
@@ -699,7 +729,7 @@ class AnthropicResponseContentBlockToolUse(LiteLLMBaseModel):
 class AnthropicResponseContentBlockThinking(LiteLLMBaseModel):
     type: Literal["thinking"]
     thinking: str
-    signature: str | None
+    signature: str
 
 
 class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):
@@ -793,6 +823,9 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     TOOL_SEARCH_TOOL = "tool_search_tool"
 
 
+ANTHROPIC_UNRENDERED_BLOCK_TYPES: Final = frozenset({"fallback"})
+
+
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
@@ -810,6 +843,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
     MCP_CLIENT_2025_04_04 = "mcp-client-2025-04-04"
+    SERVER_SIDE_FALLBACK_2026_06_01 = "server-side-fallback-2026-06-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
@@ -820,6 +854,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
 )
 ANTHROPIC_TOOL_SEARCH_TOOL_NAMES: Final = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
 ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+ANTHROPIC_TOOL_SEARCH_RESULT_CONTENT_TYPE: Final = "tool_search_tool_search_result"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"

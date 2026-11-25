@@ -15,7 +15,9 @@ import pytest
 
 import litellm
 from litellm.llms.anthropic.pass_through.utils import (
+    maps_bare_output_effort,
     normalize_reasoning_effort_value,
+    requested_reasoning_summary,
 )
 from litellm.router_utils.reasoning_effort_capability import (
     resolve_supported_reasoning_efforts,
@@ -220,18 +222,18 @@ class TestAdvertisedLevelsAreTheForwardedLevels:
     "which levels does this deployment take" through two different readers, so the proxy advertised
     kimi-k3 max while /v1/messages quietly forwarded high. Both now resolve through one owner."""
 
-    KIMI_K3_SPELLINGS = (
+    KIMI_K3_PASSTHROUGH_SPELLINGS = (
         ("kimi-k3", "moonshot"),
         ("kimi-k3", "fireworks_ai"),
         ("kimi-k3-us", "fireworks_ai"),
-        ("FW-Kimi-K3", "azure_ai"),
     )
+    KIMI_K3_SPELLINGS = (*KIMI_K3_PASSTHROUGH_SPELLINGS, ("FW-Kimi-K3", "azure_ai"))
 
     @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
     def test_a_declared_level_is_forwarded_rather_than_degraded(self, local_model_cost_map, model, provider):
         assert normalize_reasoning_effort_value("max", model, provider) == "max"
 
-    @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
+    @pytest.mark.parametrize("model, provider", KIMI_K3_PASSTHROUGH_SPELLINGS)
     def test_a_level_the_entry_does_not_declare_still_degrades(self, local_model_cost_map, model, provider):
         """kimi-k3 declares low, high and max, so xhigh and minimal are absent from its set and keep
         falling through the chain rather than being waved past by the presence of a declaration."""
@@ -260,11 +262,12 @@ class TestAdvertisedLevelsAreTheForwardedLevels:
         for effort in ("minimal", "xhigh", "max"):
             assert normalize_reasoning_effort_value(effort, model, provider) in supported
 
-    def test_the_wider_perplexity_entry_keeps_the_levels_it_declares(self, local_model_cost_map):
-        """The entry describing that reseller declares a six-level set, and every one of them is
+    @pytest.mark.parametrize("model, provider", [("perplexity/kimi-k3", "perplexity"), ("FW-Kimi-K3", "azure_ai")])
+    def test_a_wider_entry_keeps_the_levels_it_declares(self, local_model_cost_map, model, provider):
+        """The entries describing that reseller and Foundry declare wider sets, and every level in them is
         forwarded, which is what the declared list exists to express."""
-        assert normalize_reasoning_effort_value("xhigh", "perplexity/kimi-k3", "perplexity") == "xhigh"
-        assert normalize_reasoning_effort_value("minimal", "perplexity/kimi-k3", "perplexity") == "minimal"
+        assert normalize_reasoning_effort_value("xhigh", model, provider) == "xhigh"
+        assert normalize_reasoning_effort_value("minimal", model, provider) == "minimal"
 
     def test_the_minimal_chain_clears_a_deployment_that_refuses_low(self, local_model_cost_map):
         """gpt-5.5-pro accepts medium, high and xhigh only, so the nearest level to ``minimal`` it
@@ -315,3 +318,48 @@ class TestADeclarationDisjointFromTheChain:
         what every deployment got before the resolver was consulted. Dropping the parameter outright
         is the real answer and belongs with the callers that build the request."""
         assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == expected
+
+
+@pytest.fixture
+def synthetic_model_entry(local_model_cost_map, request):
+    key = f"synthetic/{request.node.name}"
+    litellm.model_cost[key] = {"litellm_provider": "synthetic", "mode": "chat", **request.param}
+    litellm.get_model_info.cache_clear()
+    try:
+        yield key.removeprefix("synthetic/")
+    finally:
+        litellm.model_cost.pop(key, None)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "synthetic_model_entry, maps",
+    [
+        ({"supports_reasoning": True}, True),
+        ({"supports_reasoning": True, "default_reasoning_effort": "none"}, False),
+        ({"supports_reasoning": False}, False),
+        ({}, False),
+    ],
+    indirect=["synthetic_model_entry"],
+    ids=["reasons-by-default", "reasoning-off-by-default", "cannot-reason", "no-reasoning-flag"],
+)
+def test_a_bare_output_effort_maps_only_onto_a_model_that_reasons_by_default(synthetic_model_entry, maps):
+    assert maps_bare_output_effort(synthetic_model_entry, "synthetic", deployment_model_info=None) is maps
+
+
+@pytest.mark.parametrize(
+    "thinking, summary",
+    [
+        ({"type": "disabled", "display": "summarized", "summary": "detailed"}, None),
+        ({"type": "adaptive", "display": "omitted", "summary": "concise"}, "concise"),
+        ({"type": "adaptive", "display": "omitted"}, None),
+        ({"type": "adaptive", "display": "summarized"}, "auto"),
+        ({"type": "adaptive"}, None),
+        ({"type": "between_tools"}, "auto"),
+        ({"type": "between_tools", "display": "omitted"}, None),
+    ],
+)
+def test_requested_reasoning_summary_takes_the_client_summary_then_the_display_and_never_one_for_disabled(
+    thinking: dict[str, object], summary: str | None
+) -> None:
+    assert requested_reasoning_summary(thinking) == summary

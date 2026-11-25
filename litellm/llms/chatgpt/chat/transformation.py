@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
@@ -81,7 +82,17 @@ class ChatGPTConfig(OpenAIConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict:
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        optional_params = super().map_openai_params(
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+            allowed_openai_params=allowed_openai_params,
+        )
         optional_params.setdefault("stream", False)
         return optional_params

@@ -42,6 +42,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -704,6 +705,37 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
+
+
+def test_bedrock_invoke_messages_transform_names_only_custom_tools() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg: Final = AmazonAnthropicClaudeMessagesConfig()
+    result: Final = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Take a screenshot"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "tools": [
+                {"type": "computer_toolset_20260801"},
+                {"type": "browser_toolset_20260801"},
+                {"type": "text_editor_20250728"},
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "custom", "input_schema": {"type": "object", "properties": {}}},
+                {"input_schema": {"type": "object", "properties": {}}},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"] == [
+        {"type": "computer_toolset_20260801"},
+        {"type": "browser_toolset_20260801"},
+        {"type": "text_editor_20250728"},
+        {"type": "bash_20250124", "name": "bash"},
+        {"type": "custom", "input_schema": {"type": "object", "properties": {}}, "name": "litellm_unnamed_tool_4"},
+        {"input_schema": {"type": "object", "properties": {}}, "name": "litellm_unnamed_tool_5"},
+    ]
 
 
 def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
@@ -2365,6 +2397,89 @@ def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_ou
 
     assert result["messages"] == messages
     assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
+
+
+SERVER_SIDE_FALLBACK_BETA: Final = "server-side-fallback-2026-06-01"
+BEDROCK_OPUS_4_1: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+BEDROCK_HAIKU_4_5: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123"
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "global_drop_params", "expected_betas"),
+    [
+        pytest.param(BEDROCK_OPUS_4_1, {"drop_params": True}, False, [], id="opus_4_1_under_drop_params"),
+        pytest.param(BEDROCK_OPUS_4_1, {}, True, [], id="opus_4_1_under_global_drop_params"),
+        pytest.param(BEDROCK_OPUS_4_1, {}, False, [SERVER_SIDE_FALLBACK_BETA], id="opus_4_1_without_drop_params"),
+        pytest.param(
+            f"invoke/{BEDROCK_OPUS_4_1}",
+            {"drop_params": True},
+            False,
+            [],
+            id="invoke_routed_opus_4_1_under_drop_params",
+        ),
+        pytest.param(BEDROCK_HAIKU_4_5, {"drop_params": True}, False, [SERVER_SIDE_FALLBACK_BETA], id="haiku_4_5"),
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            {"drop_params": True},
+            False,
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="sonnet_4_5",
+        ),
+        pytest.param(
+            BEDROCK_HAIKU_4_5,
+            {"drop_params": True, "model_info": {"supports_server_side_fallback": False}},
+            False,
+            [],
+            id="deployment_turns_it_off",
+        ),
+        pytest.param(
+            BEDROCK_OPUS_4_1,
+            {"drop_params": True, "model_info": {"supports_server_side_fallback": True}},
+            False,
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="deployment_turns_it_on",
+        ),
+        pytest.param(
+            BEDROCK_PROFILE_ARN,
+            {"drop_params": True, "base_model": f"bedrock/{BEDROCK_HAIKU_4_5}"},
+            False,
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="profile_arn_with_a_supporting_base_model",
+        ),
+        pytest.param(
+            BEDROCK_PROFILE_ARN,
+            {"drop_params": True, "base_model": BEDROCK_OPUS_4_1},
+            False,
+            [],
+            id="profile_arn_with_an_opus_4_1_base_model",
+        ),
+    ],
+)
+def test_bedrock_invoke_drops_the_server_side_fallback_beta_under_drop_params_where_the_model_lacks_it(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: Mapping[str, object],
+    global_drop_params: bool,
+    expected_betas: list[str],
+) -> None:
+    """Bedrock Invoke answers 400 invalid beta flag to server-side-fallback-2026-06-01 on Opus 4.1 and takes it on
+    Haiku 4.5, Sonnet 4.5 and newer Claude, so drop_params drops it only where the model lacks it."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(**litellm_params),
+        headers={"anthropic-beta": SERVER_SIDE_FALLBACK_BETA},
+    )
+
+    assert result.get("anthropic_beta", []) == expected_betas
 
 
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
@@ -4310,3 +4425,98 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
 
     assert isinstance(raised, litellm.BadRequestError)
     assert len(bedrock.bodies) == 1
+
+
+@pytest.mark.asyncio
+async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_response_and_stops_upstream_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.llms.anthropic.pass_through.messages.streaming_iterator as streaming_iterator_module
+
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+
+    class _TrackedByteStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed: Final = asyncio.Event()
+            self.frames_sent = 0
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            self.frames_sent += 1
+            yield _bedrock_event_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abort_test",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": "us.anthropic.claude-sonnet-4-6",
+                        "usage": {"input_tokens": 4, "output_tokens": 1},
+                    },
+                }
+            )
+            for idx in range(50):
+                await asyncio.sleep(0.005)
+                if self.closed.is_set():
+                    break
+                self.frames_sent += 1
+                yield _bedrock_event_frame(
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": f"token_{idx} "},
+                    }
+                )
+
+        async def aclose(self) -> None:
+            self.closed.set()
+
+    tracked_stream: Final = _TrackedByteStream()
+    response: Final = httpx.Response(200, stream=tracked_stream)
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Count to 50"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="test_bedrock_abort_closes_httpx_response",
+            function_id="test_bedrock_abort_closes_httpx_response",
+        ),
+    )
+
+    first_frame: Final = await asyncio.wait_for(anext(iterator), timeout=5)
+    assert first_frame.startswith(b"event: message_start\n"), first_frame
+    assert not tracked_stream.closed.is_set()
+
+    await iterator.aclose()
+    await asyncio.wait_for(tracked_stream.closed.wait(), timeout=5)
+
+    assert tracked_stream.closed.is_set(), (
+        "Expected httpx.Response stream to be closed when detached-drain cap aborts upstream"
+    )
+    assert tracked_stream.frames_sent < 10, (
+        f"Expected upstream to stop generating after abort, but {tracked_stream.frames_sent} frames were read"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_message_stop_usage_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _source() -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1}}}
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
+        finally:
+            source_closed.set()
+
+    source: Final = _source()
+    promoted: Final = AmazonAnthropicClaudeMessagesConfig._promote_message_stop_usage(source)
+    await anext(promoted)
+    await aclose_if_supported(promoted)
+    assert source_closed.is_set()

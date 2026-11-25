@@ -4,13 +4,16 @@ Azure AI Anthropic CountTokens API transformation logic.
 Extends the base Anthropic CountTokens transformation with Azure authentication.
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.llms.anthropic.common_utils import carries_fallback_block, merge_anthropic_beta_headers
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -26,6 +29,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         self,
         api_key: str | None,
         litellm_params: dict[str, object] | None = None,
+        messages: Sequence[object] = (),
     ) -> dict[str, str]:
         """
         Get the required headers for the Azure AI Anthropic CountTokens API.
@@ -36,6 +40,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         Args:
             api_key: The Azure AI API key
             litellm_params: Optional LiteLLM parameters for additional auth config
+            messages: The request messages, read for the fallback beta an echoed fallback block needs
 
         Returns:
             Dictionary of required headers with both x-api-key and Azure authentication
@@ -44,7 +49,12 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         headers: Final = {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+            "anthropic-beta": merge_anthropic_beta_headers(
+                ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+                (ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value,)
+                if carries_fallback_block(messages)
+                else (),
+            ),
             **({"x-api-key": api_key} if api_key else {}),
         }
 

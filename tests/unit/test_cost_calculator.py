@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
-from litellm.constants import REALTIME_METERED_USAGE_KEY
+from litellm.constants import REALTIME_METERED_USAGE_KEY, REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.integrations.custom_logger import CustomLogger
@@ -430,6 +430,38 @@ def test_completion_cost_prices_rule_only_response_model_at_the_azure_deployment
         completion_response=response,
         model=deployment_model,
         custom_llm_provider="azure",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
+def test_completion_cost_prices_rule_only_base_model_from_the_response_model(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIT-9812: a deployment whose base_model is an undated name only a capability rule matches must not
+    stop the ladder at $0 when the response names a priced model"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/gpt-9.9-2026-01-01": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9-2026-01-01", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-eu-deployment",
+        custom_llm_provider="azure",
+        base_model="azure/eu/gpt-9.9",
     )
 
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
@@ -9411,6 +9443,48 @@ def _live_logging_object(
     return cast(Logging, SimpleNamespace(model_call_details=model_call_details))
 
 
+_SCRIBE_CLIP_SECONDS: Final = (60.0, 30.0)
+_SCRIBE_KEYTERMS_ADDON: Final = "elevenlabs/scribe_v2_realtime/keyterms"
+
+
+def _scribe_session_cost(addon_models: tuple[str, ...]) -> float:
+    return handle_realtime_stream_cost_calculation(
+        results=_live_session_results(
+            {
+                "type": "session.created",
+                "session": {
+                    "type": "transcription",
+                    "audio": {"input": {"transcription": {"model": "scribe_v2_realtime"}}},
+                },
+            },
+            *(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": {"type": "duration", "seconds": seconds},
+                }
+                for seconds in _SCRIBE_CLIP_SECONDS
+            ),
+        ),
+        combined_usage_object=Usage(),
+        custom_llm_provider="elevenlabs",
+        litellm_model_name="scribe_v2_realtime",
+        litellm_logging_obj=cast(
+            Logging, SimpleNamespace(model_call_details={REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY: addon_models})
+        ),
+    )
+
+
+def test_realtime_transcription_addons_bill_their_rate_on_every_transcribed_second(_local_model_cost_map: None) -> None:
+    addon_rate: Final = litellm.get_model_info(_SCRIBE_KEYTERMS_ADDON)["input_cost_per_second"] or 0.0
+    base_cost: Final = _scribe_session_cost(())
+
+    assert addon_rate > 0
+    assert base_cost > 0
+    assert _scribe_session_cost((_SCRIBE_KEYTERMS_ADDON,)) - base_cost == pytest.approx(
+        sum(_SCRIBE_CLIP_SECONDS) * addon_rate
+    )
+
+
 def test_realtime_keeps_first_reported_session_model_for_pricing(_local_model_cost_map: None) -> None:
     first_model: Final = "gpt-realtime-2"
     later_model: Final = "gpt-realtime-mini"
@@ -10411,3 +10485,87 @@ def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_respons
         )
 
     assert (image_data in str(exc_info.value)) is echoes_response
+
+
+_FOUNDRY_RESPONSES_API_BASE: Final = "https://myproject.services.ai.azure.com"
+
+
+def _bridged_foundry_response_cost(base_model: str) -> float:
+    with respx.mock(assert_all_called=True) as foundry:
+        foundry.post(f"{_FOUNDRY_RESPONSES_API_BASE}/openai/v1/responses").respond(
+            json={
+                "id": "resp_foundry",
+                "object": "response",
+                "created_at": 1789852145,
+                "status": "completed",
+                "model": "qa-prod-reasoner",
+                "output": [
+                    {
+                        "id": "fc_1",
+                        "type": "function_call",
+                        "status": "completed",
+                        "arguments": '{"city":"Paris"}',
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                    }
+                ],
+                "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+            }
+        )
+        response: Final = litellm.completion(
+            model="azure_ai/qa-prod-reasoner",
+            messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            reasoning_effort="high",
+            api_base=_FOUNDRY_RESPONSES_API_BASE,
+            api_key="fake-foundry-key",
+            model_info={"base_model": base_model},
+        )
+    response_cost: Final = response._hidden_params["response_cost"]
+    assert isinstance(response_cost, float)
+    return response_cost
+
+
+def test_a_nested_base_model_prices_a_bridged_foundry_request_like_the_plain_form(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    nested_cost: Final = _bridged_foundry_response_cost("azure_ai/openai/gpt-5.6-terra")
+
+    assert nested_cost > 0
+    assert nested_cost == pytest.approx(_bridged_foundry_response_cost("azure_ai/gpt-5.6-terra"))
+
+
+def test_a_nested_base_model_with_its_own_cost_map_row_keeps_that_rows_price(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_rate: Final = 1e-06
+    output_rate: Final = 2e-06
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/openai/lit-nested-row",
+        {
+            "litellm_provider": "azure_ai",
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit-nested-row",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-06, "output_cost_per_token": 7e-06},
+    )
+    litellm.utils._invalidate_model_cost_lowercase_map()
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(
+            model="qa-prod-reasoner", usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        ),
+        model="azure_ai/qa-prod-reasoner",
+        custom_llm_provider="azure_ai",
+        base_model="azure_ai/openai/lit-nested-row",
+    )
+
+    assert cost == pytest.approx(1000 * input_rate + 500 * output_rate)

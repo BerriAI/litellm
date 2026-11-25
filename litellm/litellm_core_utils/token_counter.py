@@ -971,8 +971,8 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
-                num_tokens += count_function(str(c.get("text", "")))
+            elif c["type"] in ("text", "fallback"):
+                num_tokens += count_function(str(text)) if (text := c.get("text", "")) or c["type"] == "text" else 0
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -1025,7 +1025,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference, search_result)."
+                    f"tool_reference, search_result, fallback)."
                 )
         return num_tokens
     except Exception as e:

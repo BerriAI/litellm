@@ -15,7 +15,10 @@ use crate::{
     Error, ErrorDetail,
     anthropic::messages::{
         handler::shape_anthropic_messages_request,
-        transformation::{transform_messages_request, update_headers_with_safeguards_beta},
+        transformation::{
+            drop_sampling_params_removed_by_requested_version, transform_messages_request,
+            update_headers_with_safeguards_beta,
+        },
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -160,6 +163,16 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        _url: &str,
+        headers: &Headers,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {

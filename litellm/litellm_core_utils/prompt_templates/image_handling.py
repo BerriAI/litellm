@@ -5,14 +5,14 @@ Helper functions to handle images passed in messages
 import asyncio
 import base64
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import Final
 
 import httpx
-from httpx import Response
+from httpx import USE_CLIENT_DEFAULT, Response
 
 import litellm
 from litellm import verbose_logger
@@ -36,11 +36,14 @@ def _header_value(response: Response, name: str) -> str | None:
         return None
 
 
-def _process_image_response(response: Response, url: str) -> str:
+def _process_image_response(response: Response, url: str, download_budget: int | None = None) -> str:
     if response.status_code != 200:
         raise litellm.ImageFetchError(
             f"Error: Unable to fetch image from URL. Status code: {response.status_code}, url={url}"
         )
+
+    if download_budget is not None and len(response.content) > download_budget:
+        raise litellm.ImageFetchError(f"Image download exceeds the remaining request budget of {download_budget} bytes")
 
     # Check size before downloading if Content-Length header is present
     content_length: Final = _header_value(response, "Content-Length")
@@ -98,7 +101,19 @@ def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchEr
     )
 
 
-async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
+def _cached_image(url: str, max_bytes: int | None) -> str | None:
+    cached: Final[object] = in_memory_cache.get_cache(url)
+    if not isinstance(cached, str):
+        return None
+    size: Final = len(cached.partition(",")[2].rstrip("=")) * 3 // 4
+    if max_bytes is not None and size > max_bytes:
+        raise litellm.ImageFetchError(f"Image download exceeds the remaining request budget of {max_bytes} bytes")
+    return cached
+
+
+async def async_convert_url_to_base64(
+    url: str, timeout: float | httpx.Timeout | None = None, *, max_bytes: int | None = None
+) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -108,15 +123,24 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result: Final = in_memory_cache.get_cache(url)
+    cached_result: Final = _cached_image(url, max_bytes)
     if cached_result:
         return cached_result
 
     client: Final = litellm.module_level_aclient
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = await async_safe_get(client, url, timeout=attempt_timeout)
-            return _process_image_response(response, url)
+            response = (
+                await async_safe_get(client, url, timeout=attempt_timeout)
+                if max_bytes is None
+                else await async_safe_get(
+                    _AsyncBodyPrefixReader(client.client),
+                    url,
+                    timeout=attempt_timeout,
+                    max_response_bytes=max_bytes + 1,
+                )
+            )
+            return _process_image_response(response, url, max_bytes)
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
@@ -126,7 +150,9 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
-def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
+def convert_url_to_base64(
+    url: str, timeout: float | httpx.Timeout | None = None, *, max_bytes: int | None = None
+) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -136,15 +162,19 @@ def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result: Final = in_memory_cache.get_cache(url)
+    cached_result: Final = _cached_image(url, max_bytes)
     if cached_result:
         return cached_result
 
     client: Final = litellm.module_level_client
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = safe_get(client, url, timeout=attempt_timeout)
-            return _process_image_response(response, url)
+            response = safe_get(
+                client if max_bytes is None else _ImageBodyReader(client.client, max_bytes + 1),
+                url,
+                timeout=attempt_timeout,
+            )
+            return _process_image_response(response, url, max_bytes)
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
@@ -157,6 +187,7 @@ def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None
 
 
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
+_REMOTE_MEDIA_PLACEHOLDER: Final = "data:image/png;base64,AA=="
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +238,66 @@ def inline_every_remote_url(_media: RemoteMedia) -> bool:
 
 def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
+
+
+_DECODED_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def _with_body_prefix(response: Response, prefix: bytes) -> Response:
+    return Response(
+        response.status_code,
+        headers=[(name, value) for name, value in response.headers.multi_items() if name not in _DECODED_BODY_HEADERS],
+        content=prefix,
+        request=response.request,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageBodyReader:
+    client: httpx.Client
+    max_bytes: int
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Response:
+        with self.client.stream(
+            "GET",
+            url,
+            headers={**(headers or {}), "Accept-Encoding": "identity"},
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            if (response.headers.get("content-encoding") or "identity").lower() != "identity":
+                raise litellm.ImageFetchError("Error: A download with a size limit needs an uncompressed response")
+            return _with_body_prefix(response, next(response.iter_bytes(self.max_bytes), b""))
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncBodyPrefixReader:
+    client: httpx.AsyncClient
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
+    ) -> Response:
+        async with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            return _with_body_prefix(response, await anext(response.aiter_bytes(max_response_bytes), b""))
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
@@ -322,12 +413,70 @@ async def async_convert_urls_to_base64(
         raise
 
 
+async def _download_outcome(url: str, timeout: float | httpx.Timeout | None) -> "str | litellm.ImageFetchError":
+    try:
+        return await async_convert_url_to_base64(url, timeout=timeout)
+    except litellm.ImageFetchError as error:
+        return error
+
+
+async def _downloads_through_first_failure(
+    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None
+) -> "AsyncIterator[str | litellm.ImageFetchError]":
+    for url in remote_urls:
+        yield (outcome := await _download_outcome(url, timeout))
+        if isinstance(outcome, litellm.ImageFetchError):
+            return
+
+
+async def async_fetch_urls_to_base64(
+    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
+) -> "Mapping[str, str | litellm.ImageFetchError]":
+    outcomes: Final = tuple([outcome async for outcome in _downloads_through_first_failure(remote_urls, timeout)])
+    return MappingProxyType(dict(zip(remote_urls[: len(outcomes)], outcomes, strict=True)))
+
+
 def _remote_urls_to_inline(
     messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
 ) -> tuple[str, ...]:
     parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
     remotes: Final = (remote for part in parts if (remote := _parse_remote_part(part)) is not None)
     return tuple(dict.fromkeys(remote.url for remote in remotes if should_inline(_remote_media(remote))))
+
+
+def _message_parts(messages: Iterable[AllMessageValues]) -> Iterator[object]:
+    return chain.from_iterable(_content_parts(message) for message in messages)
+
+
+def _file_of_file_part(part: object) -> Mapping[str, object] | None:
+    fields: Final = _as_mapping(part)
+    return _as_mapping(fields.get("file")) if fields is not None and fields.get("type") == "file" else None
+
+
+def _file_id_url(part: object, url_starts: tuple[str, ...]) -> str | None:
+    file: Final = _file_of_file_part(part)
+    file_id: Final = file.get("file_id") if file is not None else None
+    return file_id if isinstance(file_id, str) and file_id.startswith(url_starts) else None
+
+
+def _is_readable_file_part_or_other_part(part: object) -> bool:
+    fields: Final = _as_mapping(part)
+    if fields is None or fields.get("type") != "file":
+        return fields is not None
+    file: Final = _file_of_file_part(part)
+    file_id: Final = file.get("file_id") if file is not None else None
+    return file is not None and (not file_id or isinstance(file_id, str))
+
+
+def has_file_id_urls(messages: Iterable[AllMessageValues], url_starts: tuple[str, ...]) -> bool:
+    return any(_file_id_url(part, url_starts) is not None for part in _message_parts(messages))
+
+
+def file_id_urls_before_an_unreadable_part(
+    messages: Iterable[AllMessageValues], url_starts: tuple[str, ...]
+) -> tuple[str, ...]:
+    readable_parts: Final = takewhile(_is_readable_file_part_or_other_part, _message_parts(messages))
+    return tuple(dict.fromkeys(url for part in readable_parts if (url := _file_id_url(part, url_starts)) is not None))
 
 
 def inline_remote_media(
@@ -339,6 +488,30 @@ def inline_remote_media(
         return messages
     data_urls: Final = MappingProxyType({url: convert_url_to_base64(url) for url in remote_urls})
     return [_inline_message(message, data_urls, should_inline) for message in messages]
+
+
+def _with_file_data_placeholder(part: object) -> object:
+    fields: Final = _as_mapping(part)
+    file: Final = _file_of_file_part(part)
+    if fields is None or file is None or _remote_url(file.get("file_data")) is None:
+        return part
+    return {**fields, "file": {**file, "file_data": _REMOTE_MEDIA_PLACEHOLDER}}
+
+
+def _with_file_data_placeholders(message: AllMessageValues) -> AllMessageValues:
+    parts: Final = _content_parts(message)
+    if not parts:
+        return message
+    swapped: Final = {**message, "content": [_with_file_data_placeholder(part) for part in parts]}
+    return swapped  # pyright: ignore[reportReturnType]  # the same message with its remote file_data swapped
+
+
+def with_remote_media_placeholders(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    placeholders: Final = MappingProxyType(
+        dict.fromkeys(_remote_urls_to_inline(messages, inline_every_remote_url), _REMOTE_MEDIA_PLACEHOLDER)
+    )
+    inlined: Final = (_inline_message(message, placeholders, inline_every_remote_url) for message in messages)
+    return tuple(_with_file_data_placeholders(message) for message in inlined)
 
 
 async def async_inline_remote_media(

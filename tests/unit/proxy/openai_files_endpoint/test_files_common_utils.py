@@ -5,15 +5,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
+    configured_drop_params,
     canonical_provider_file_id,
     encode_file_id_with_model,
     get_credentials_for_model,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
     provider_file_id_spellings,
+    router_default_drop_params,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
@@ -657,6 +660,40 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
     assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
 
 
+
+@pytest.mark.parametrize(("model_id", "expected"), [("vertex-batch-drop", True), ("vertex-batch-keep", False)])
+def test_an_upload_with_a_null_drop_params_takes_its_deployments_drop_params(model_id: str, expected: bool) -> None:
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch-drop",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": True},
+            },
+            {
+                "model_name": "vertex-batch-keep",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
+            },
+        ]
+    )
+
+    assert configured_drop_params(llm_router, model_id, {"drop_params": None}) == {"drop_params": expected}
+
+
+def test_an_upload_with_a_null_drop_params_takes_the_router_default_over_its_deployment() -> None:
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch-keep",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
+            }
+        ],
+        default_litellm_params={"drop_params": True},
+    )
+
+    assert configured_drop_params(llm_router, "vertex-batch-keep", {"drop_params": None}) == {"drop_params": True}
+    assert router_default_drop_params(llm_router, {"drop_params": None}) == {"drop_params": True}
+
+
 @pytest.mark.parametrize(
     ("file_id", "canonical"),
     (
@@ -688,6 +725,7 @@ def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_st
         "batch-out1",
         "files/batch-out1",
         "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+        "https://generativelanguage.googleapis.com/v1/files/batch-out1",
     )
     for spelling in ("batch-out1", "files%2Fbatch-out1", "batch-out1/"):
         assert set(provider_file_id_spellings(spelling)) >= set(provider_file_id_spellings(wrapped)[1:]), spelling

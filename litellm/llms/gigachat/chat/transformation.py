@@ -17,6 +17,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -153,6 +154,9 @@ class GigaChatConfig(BaseConfig):
             "response_format",
         ]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
@@ -162,7 +166,11 @@ class GigaChatConfig(BaseConfig):
     ) -> dict:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
         request_params: Final = tool_params_without_hosted_mcp(
-            dict(non_default_params), model=model, route="gigachat", drop_params=drop_params
+            dict(non_default_params),
+            model=model,
+            route="gigachat",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         for param, value in request_params.items():
             if param == "stream":

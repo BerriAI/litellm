@@ -6,6 +6,7 @@ from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
@@ -19,11 +20,17 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         """
         DeepSeek reasoner models support thinking parameter.
         """
         return [*super().get_supported_openai_params(model), "thinking", "reasoning_effort"]
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
 
     def map_openai_params(
         self,
@@ -43,7 +50,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
         params_without_hosted_mcp: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route="deepseek", drop_params=drop_params
+            non_default_params,
+            model=model,
+            route="deepseek",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         # Let parent handle standard params first
         optional_params = super().map_openai_params(

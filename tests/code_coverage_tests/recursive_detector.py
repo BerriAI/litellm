@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",
@@ -34,6 +35,7 @@ IGNORE_FUNCTIONS = [
     "_contains_vision_content",  # max depth set.
     "_read_all_bytes",  # max depth set.
     "_fix_enum_types",  # max depth set.
+    "_pin_scalar_consts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); leaves the subtree past the cap untouched.
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.
@@ -84,6 +86,9 @@ IGNORE_FUNCTIONS = [
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_aws_group_members",  # bedrock vector store filters: walks only a pydantic-validated filter, which pydantic-core stops at 255 levels of nesting.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
+    "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
+    "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
+    "_redacted_client_field",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning REDACTED for anything nested past the cap.
 ]
 
 

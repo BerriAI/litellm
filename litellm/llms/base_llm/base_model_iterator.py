@@ -1,8 +1,8 @@
-import json
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import loads_json_object
 
 if TYPE_CHECKING:
     import httpx
@@ -44,14 +44,22 @@ def convert_model_response_to_streaming(
                         **cast(Choices, choice).message.model_dump(),
                     ),
                     finish_reason=choice.finish_reason,
+                    logprobs=getattr(choice, "logprobs", None),
                 )
             )
-        processed_chunk: Final = ModelResponseStream(
+        streaming_chunk: Final = ModelResponseStream(
             id=model_response.id,
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
+        )
+        service_tier: Final[object] = getattr(model_response, "service_tier", None)
+        processed_chunk: Final = (
+            streaming_chunk
+            if service_tier is None
+            else streaming_chunk.model_copy(update={"service_tier": service_tier})
         )
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
@@ -101,16 +109,9 @@ class BaseModelResponseIterator:
 
     @staticmethod
     def _string_to_dict_parser(str_line: str) -> dict | None:
-        stripped_json_chunk: dict | None = None
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
-        return stripped_json_chunk
+        decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
+        return decoded if isinstance(decoded, dict) else None
 
     @classmethod
     def string_to_dict_parser(

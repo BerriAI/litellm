@@ -118,6 +118,8 @@ pub struct ThinkingContext {
 pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
     pub drop_params: bool,
+    pub claude_base_model: bool,
+    pub keeps_unsigned_thinking: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -135,6 +137,8 @@ impl MessagesTransformContext {
                 budgets: ThinkingBudgets::from_lookup(env),
             },
             drop_params,
+            claude_base_model: false,
+            keeps_unsigned_thinking: false,
         }
     }
 }
