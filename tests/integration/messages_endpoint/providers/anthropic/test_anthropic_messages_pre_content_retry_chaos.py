@@ -256,7 +256,7 @@ def _served_id(served: _Served) -> str:
             return string_value(object_value(json.loads(served.text))["id"])
 
 
-def _assert_completed_on_the_second_attempt(served: _Served) -> None:
+def _assert_completed_on_the_second_attempt(served: _Served, first_attempt_sent_message_start: bool = False) -> None:
     assert served.status == 200, (served.call, served.text)
     assert _answer(served.call.marker) in served.text, (served.call, served.text)
     assert "error" not in served.text.lower() or served.call.endpoint == "responses", (served.call, served.text)
@@ -265,7 +265,8 @@ def _assert_completed_on_the_second_attempt(served: _Served) -> None:
             events: Final = parse_sse(served.text)
             assert event_types(events)[-1] == "message_stop", events
             assert delta_text(events) == _answer(served.call.marker), events
-            assert message_id(events) == f"msg_{served.call.marker}_a2", events
+            shown_attempt: Final = 1 if first_attempt_sent_message_start else 2
+            assert message_id(events) == f"msg_{served.call.marker}_a{shown_attempt}", events
         case "messages", False:
             assert _served_id(served) == f"msg_{served.call.marker}_a2", served.text
         case "chat", _:
@@ -378,10 +379,10 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_retrying_pre_content_
                 assert held_by[survivor_pid] >= 10, held_by
                 assert len(served) == held_by[survivor_pid], (held_by, len(served))
                 for item in served:
-                    _assert_completed_on_the_second_attempt(item)
+                    _assert_completed_on_the_second_attempt(item, first_attempt_sent_message_start=True)
             follow_up: Final = _Call(endpoint="messages", stream=True, marker=uuid.uuid4().hex)
             (answered,) = await _burst(base_url, candidate.key, models, (follow_up,))
-            _assert_completed_on_the_second_attempt(answered)
+            _assert_completed_on_the_second_attempt(answered, first_attempt_sent_message_start=True)
             _assert_each_served_id_landed_exactly_once(models, (*served, answered))
             assert all(upstream.attempts.count(item.call.marker) == 2 for item in (*served, answered))
 

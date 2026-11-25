@@ -53,7 +53,9 @@ class CohereEmbeddingConfig:
     def get_supported_openai_params(self) -> list[str]:
         return ["encoding_format"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = v
@@ -63,7 +65,7 @@ class CohereEmbeddingConfig:
         return "3" in model
 
     def _transform_request(
-        self, model: str, input: list[str], inference_params: dict
+        self, model: str, input: list[str], inference_params: Mapping[str, object]
     ) -> CohereEmbeddingRequestWithModel:
         is_encoded = False
         for input_str in input:
@@ -126,11 +128,11 @@ class CohereEmbeddingConfig:
         response: httpx.Response,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: dict | CohereEmbeddingRequest,
+        data: dict[str, object] | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: list[str],
     ) -> EmbeddingResponse:
         response_json: Final = _DECODED_JSON.validate_python(response.json())
         ## LOGGING
@@ -169,7 +171,7 @@ class CohereEmbeddingConfig:
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: list[str],
         billed_input_tokens: int | None = None,
     ) -> EmbeddingResponse:
         """
@@ -188,7 +190,7 @@ class CohereEmbeddingConfig:
             }
         """
         embeddings: Final = response_json["embeddings"]
-        output_data: Final = []
+        output_data: Final[list[dict[str, object]]] = []
         is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
 
         if isinstance(embeddings, dict):

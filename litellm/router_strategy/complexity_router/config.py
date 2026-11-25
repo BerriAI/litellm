@@ -8,7 +8,7 @@ All values are configurable via proxy config.yaml.
 import math
 import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -274,11 +274,20 @@ class ComplexityTierModel(LiteLLMBaseModel):
         return dict(value)
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _as_list_or_tuple(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
 def _normalize_tier_entries(
     raw_value: object,
-    tier: str,
+    tier: object,
 ) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
-    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    sequence: Final = _as_list_or_tuple(raw_value)
+    raw_entries: Final = sequence if sequence is not None else (raw_value,)
     entries: Final = tuple(
         ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
         for entry in raw_entries
@@ -286,7 +295,7 @@ def _normalize_tier_entries(
     model_names: Final = tuple(entry.model_name for entry in entries)
     if len(model_names) != len(frozenset(model_names)):
         raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
-    normalized: Final = entries[0].model_name if not isinstance(raw_value, (list, tuple)) else list(model_names)
+    normalized: Final = entries[0].model_name if sequence is None else list(model_names)
     return normalized, entries
 
 
@@ -548,6 +557,15 @@ class ClassifierLLMConfig(LiteLLMBaseModel):
     timeout_ms: int = Field(
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional output token limit for LLM classifier calls. Leave unset to keep the classifier "
+            "deployment or provider default. When set, overrides the deployment limit. "
+            "Leave room for reasoning tokens when reasoning_effort is set."
+        ),
     )
     circuit_breaker_enabled: bool = Field(
         default=True,
@@ -1714,14 +1732,16 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
     @field_validator("tiers", mode="before")
     @classmethod
     def _coerce_tier_values(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        mapping: Final = _as_dict(value)
+        if mapping is None:
             return value
-        coerced: Final[dict[str, object]] = {}
-        for key, item in value.items():
+        coerced: Final[dict[object, object]] = {}
+        for key, item in mapping.items():
+            sequence = _as_list_or_tuple(item)
             if isinstance(item, str):
                 coerced[key] = item
-            elif isinstance(item, (list, tuple)):
-                coerced[key] = list(item)
+            elif sequence is not None:
+                coerced[key] = list(sequence)
             else:
                 coerced[key] = item
         return coerced
@@ -1729,12 +1749,13 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_tier_model_configs(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        mapping: Final = _as_dict(value)
+        if mapping is None:
             return value
-        raw_tiers: Final = value.get("tiers")
-        if not isinstance(raw_tiers, dict):
+        raw_tiers: Final = _as_dict(mapping.get("tiers"))
+        if raw_tiers is None:
             return value
-        existing_configs: Final = value.get("tier_model_configs")
+        existing_configs: Final = mapping.get("tier_model_configs")
         normalized_entries: Final = MappingProxyType(
             {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
         )
@@ -1770,7 +1791,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             }
         )
         return {
-            **value,
+            **mapping,
             "tiers": normalized_tiers,
             "tier_model_configs": tier_model_configs,
         }

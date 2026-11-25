@@ -20,9 +20,11 @@ pub const GENAI_CALL_TYPES: [&str; 4] = genai::CALL_TYPES;
 pub use genai::config_field as genai_config_field;
 const CHARS_PER_TOKEN: i128 = 4;
 const RESPONSES: [&str; 2] = ["aresponses", "responses"];
+const ANTHROPIC_MESSAGES: [&str; 2] = ["anthropic_messages", "aanthropic_messages"];
 const EMBEDDING: [&str; 2] = ["aembedding", "embedding"];
 const TEXT_COMPLETION: [&str; 2] = ["atext_completion", "text_completion"];
 const EXTRACTION: [&str; 2] = ["extraction", "aextraction"];
+const REALTIME: [&str; 1] = ["_arealtime"];
 const MEDIA_TYPES: [&str; 10] = [
     "file",
     "input_file",
@@ -38,8 +40,10 @@ const MEDIA_TYPES: [&str; 10] = [
 
 /// Every top-level request member the estimator reads. A host may leave out any other member whose
 /// value it cannot hand over as JSON, since no estimate depends on it.
-pub const REQUEST_KEYS: [&str; 19] = [
+pub const REQUEST_KEYS: [&str; 21] = [
     "messages",
+    "system",
+    "instructions",
     "prompt",
     "input",
     "max_tokens",
@@ -235,6 +239,27 @@ fn messages_length(messages: &[Value]) -> Out<i128> {
     Ok(total)
 }
 
+fn instruction_length(request: &Map<String, Value>, call_type: &str) -> Out<i128> {
+    let instructions = if ANTHROPIC_MESSAGES.contains(&call_type) {
+        get(request, "system")
+    } else if RESPONSES.contains(&call_type) {
+        get(request, "instructions")
+    } else {
+        return Ok(0);
+    };
+    match py(instructions)? {
+        Py::Str(found) => Ok(length(found)),
+        Py::List(blocks) => blocks
+            .iter()
+            .map(|block| match block {
+                Value::Object(block) => Ok(text(get(block, "text"))?.map_or(0, length)),
+                _ => Ok(0),
+            })
+            .sum(),
+        _ => Ok(0),
+    }
+}
+
 fn may_hold_media(value: &Value) -> bool {
     match value {
         Value::Array(items) => items.iter().any(may_hold_media),
@@ -256,6 +281,13 @@ fn may_hold_embedding_media(value: &Value) -> bool {
         Value::String(text) => text.starts_with("data:"),
         _ => false,
     }
+}
+
+fn reads_input_as_media(request: &Map<String, Value>) -> bool {
+    ["inputType", "input_type"]
+        .into_iter()
+        .find_map(|key| get(request, key).as_str().filter(|kind| !kind.is_empty()))
+        .is_some_and(|kind| ["image", "video", "audio"].contains(&kind))
 }
 
 fn sequence_length(value: &Value) -> Out<i128> {
@@ -322,26 +354,29 @@ pub fn input_and_output_tokens(
         if (messages.is_array() || responses) && may_hold_media(media_source) {
             return Err(PythonServed);
         }
-        if embedding_call && may_hold_embedding_media(raw_input) {
+        if embedding_call && (may_hold_embedding_media(raw_input) || reads_input_as_media(request))
+        {
             return Err(PythonServed);
         }
     }
-    let total_chars = match (messages, extraction_length) {
-        (_, Some(extraction)) => extraction,
-        (Value::Array(items), None) if !items.is_empty() => messages_length(items)?,
-        _ => match py(prompt)? {
-            Py::Str(_) | Py::List(_) => sequence_length(prompt)?,
-            _ => sequence_length(raw_input)?,
-        },
-    };
+    let total_chars = instruction_length(request, call_type)?
+        + match (messages, extraction_length) {
+            (_, Some(extraction)) => extraction,
+            (Value::Array(items), None) if !items.is_empty() => messages_length(items)?,
+            _ => match py(prompt)? {
+                Py::Str(_) | Py::List(_) => sequence_length(prompt)?,
+                _ => sequence_length(raw_input)?,
+            },
+        };
     let estimated_input = if total_chars > 0 {
         (total_chars / CHARS_PER_TOKEN).max(1)
     } else {
         0
     };
     let explicit = explicit_output_cap(request, call_type, cap)?;
-    let generates_no_output =
-        is_embedding_request(request, call_type) || EXTRACTION.contains(&call_type);
+    let generates_no_output = is_embedding_request(request, call_type)
+        || EXTRACTION.contains(&call_type)
+        || REALTIME.contains(&call_type);
     let floor = i128::from(no_max_tokens_output_floor(
         estimate.min_configured_tpm_limit,
         cap.default_max_tokens_estimate,
@@ -428,6 +463,23 @@ mod tests {
     )]
     // No messages, no prompt: nothing to reserve.
     #[case::chat_empty(json!({"messages": []}), "acompletion", None, None, (0, 0))]
+    #[case::messages_system(
+        json!({"system": "x".repeat(40), "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
+        "anthropic_messages", None, None, (13, 50)
+    )]
+    #[case::messages_system_blocks(
+        json!({"system": [{"type": "text", "text": "x".repeat(40), "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": "abcdefgh"}],
+               "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
+        "anthropic_messages", None, None, (15, 50)
+    )]
+    #[case::chat_ignores_system(
+        json!({"system": "x".repeat(40), "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
+        "acompletion", None, None, (3, 50)
+    )]
+    #[case::responses_instructions(
+        json!({"instructions": "y".repeat(80), "input": "x".repeat(40), "max_output_tokens": 50}),
+        "aresponses", None, None, (30, 50)
+    )]
     // 8 characters of prompt: 2 input; the floor capped at int(1000 * 0.25) = 250.
     #[case::text_completion(json!({"prompt": "abcdefgh"}), "atext_completion", Some(1000), None, (2, 250))]
     // A prompt list sums str() of each item.
@@ -443,6 +495,7 @@ mod tests {
     )]
     // Embeddings generate no output.
     #[case::embedding(json!({"input": "abcdefgh"}), "aembedding", None, None, (2, 0))]
+    #[case::embedding_text_input_type(json!({"input": "abcdefgh", "input_type": "text"}), "aembedding", None, None, (2, 0))]
     #[case::genai_snake_case_config(
         json!({"contents": [{"role": "user", "parts": [{"text": "hello world!"}]}],
                "generation_config": {"max_output_tokens": 40, "candidate_count": 2}}),
@@ -482,6 +535,8 @@ mod tests {
         "aresponses"
     )]
     #[case::embedding_data_uri(json!({"input": "data:image/png;base64,AAAA"}), "aembedding")]
+    #[case::embedding_image_input_type(json!({"input": "AAAA", "input_type": "image"}), "aembedding")]
+    #[case::embedding_video_input_type(json!({"input": ["s3://b/c.mp4"], "inputType": "video"}), "aembedding")]
     fn media_is_left_to_python(#[case] data: Value, #[case] call_type: &str) {
         assert_eq!(
             estimated(data, call_type, None, None, true),

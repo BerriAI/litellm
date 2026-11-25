@@ -5,12 +5,17 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import base64
 import binascii
 import hashlib
+import io
 import math
 import os
+import wave
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
     FILE_EXTENSIONS,
@@ -174,7 +179,38 @@ def normalize_transcription_language_to_bcp47(language: str) -> str:
     return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
 
 
-def get_audio_file_name(file_obj: FileTypes) -> str:
+class _NamedFile(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
+class _ReadableFile(Protocol):
+    def read(self) -> object: ...
+
+
+class _TellableFile(Protocol):
+    def tell(self) -> object: ...
+
+
+class _SeekableFile(Protocol):
+    def seek(self, offset: object, /) -> object: ...
+
+
+_FILE_TUPLE: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(strict=True))
+
+
+def _file_tuple(file_obj: object) -> tuple[object, ...] | None:
+    try:
+        return _FILE_TUPLE.validate_python(file_obj)
+    except ValidationError:
+        return None
+
+
+def _is_path_like(value: object) -> bool:
+    return isinstance(value, os.PathLike)
+
+
+def get_audio_file_name(file_obj: object) -> str:
     """
     Safely get the name of a file-like object or return its string representation.
 
@@ -184,29 +220,30 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
     Returns:
         str: The name of the file if available, otherwise a string representation of the object.
     """
-    if hasattr(file_obj, "name"):
-        return getattr(file_obj, "name")
+    if has_attributes(file_obj, _NamedFile, "name"):
+        return file_obj.name
     elif hasattr(file_obj, "__str__"):
         return str(file_obj)
     else:
         return repr(file_obj)
 
 
-def get_audio_file_content_hash(file_obj: FileTypes) -> str:
+def get_audio_file_content_hash(file_obj: object) -> str:
     """
     Compute SHA-256 hash of audio file content for cache keys.
     Falls back to filename hash if content extraction fails.
     """
-    file_content: bytes | None = None
+    file_content: object = None
     fallback_filename: str | None = None
 
-    if isinstance(file_obj, tuple):
-        if len(file_obj) < 2:
-            fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
+    file_parts: Final = _file_tuple(file_obj)
+    if file_parts is not None:
+        if len(file_parts) < 2:
+            fallback_filename = str(file_parts[0]) if len(file_parts) > 0 else None
             file_content_obj = None
         else:
-            fallback_filename = str(file_obj[0]) if file_obj[0] is not None else None
-            file_content_obj = file_obj[1]
+            fallback_filename = str(file_parts[0]) if file_parts[0] is not None else None
+            file_content_obj = file_parts[1]
     else:
         file_content_obj = file_obj
         fallback_filename = get_audio_file_name(file_obj)
@@ -221,7 +258,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             # itself rather than opening it.
             fallback_filename = file_content_obj
             file_content = None
-        elif isinstance(file_content_obj, os.PathLike):
+        elif _is_path_like(file_content_obj):
             try:
                 with open(str(file_content_obj), "rb") as f:
                     file_content = f.read()
@@ -230,13 +267,15 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             except OSError:
                 fallback_filename = str(file_content_obj)
                 file_content = None
-        elif file_content_obj is not None and hasattr(file_content_obj, "read"):
+        elif file_content_obj is not None and has_attributes(file_content_obj, _ReadableFile, "read"):
             try:
-                current_position: Final = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
-                if hasattr(file_content_obj, "seek"):
+                current_position: Final = (
+                    file_content_obj.tell() if has_attributes(file_content_obj, _TellableFile, "tell") else None
+                )
+                if has_attributes(file_content_obj, _SeekableFile, "seek"):
                     file_content_obj.seek(0)
                 file_content = file_content_obj.read()
-                if current_position is not None and hasattr(file_content_obj, "seek"):
+                if current_position is not None and has_attributes(file_content_obj, _SeekableFile, "seek"):
                     file_content_obj.seek(current_position)
             except (OSError, AttributeError):
                 file_content = None
@@ -375,16 +414,22 @@ def estimate_audio_tokens(data: str | None, models: Sequence[str] = (), fallback
     """Estimate audio tokens from container duration within a bounded decoding budget."""
     if not data:
         return DEFAULT_AUDIO_TOKEN_ESTIMATE
-    fallback_estimate: Final = max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    duration_tokens: Final = audio_duration_tokens(data, models, fallback_model)
+    if duration_tokens is None:
+        return max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    return duration_tokens
+
+
+def audio_duration_tokens(data: str, models: Sequence[str], fallback_model: str | None) -> int | None:
     padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
     if len(data) * 3 // 4 - padding > _MAX_AUDIO_ESTIMATE_BYTES:
-        return fallback_estimate
+        return None
     try:
         duration: Final = calculate_request_duration(base64.b64decode(data, validate=True))
     except (ValueError, binascii.Error):
-        return fallback_estimate
+        return None
     if duration is None or not math.isfinite(duration) or duration <= 0:
-        return fallback_estimate
+        return None
     fallback_rate: Final = _audio_token_rate(fallback_model) if fallback_model is not None else None
     rate: Final = max(
         (_audio_token_rate(model) or fallback_rate or AUDIO_TOKENS_PER_SECOND for model in models),
@@ -463,3 +508,74 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
     if (audio[1] & _ADTS_SYNC_AND_LAYER_MASK) == _ADTS_SYNC_AND_LAYER:
         return _adts_aac_frame_media_type(audio)
     return _mpeg_audio_frame_media_type(audio)
+
+
+_PCM16_WAV_SHAPE: Final = (1, 2, 24000)
+_WAV_MEDIA_TYPES: Final = frozenset({FILE_MIME_TYPES[FileType.WAV], "audio/x-wav", "audio/wave", "audio/vnd.wave"})
+_WAV_HEADER_BASE64_CHARS: Final = 4096
+
+
+def _strict_b64decode(data: str) -> bytes | None:
+    try:
+        return base64.b64decode(data, validate=True)
+    except ValueError:
+        return None
+
+
+def _wav_shape(audio: bytes) -> tuple[int, int, int] | None:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            return (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+    except (wave.Error, EOFError, RuntimeError):
+        return None
+
+
+def _pcm16_wav_frames(audio: bytes) -> bytes | None:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            shape: Final = (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+            return wav.readframes(wav.getnframes()) if shape == _PCM16_WAV_SHAPE else None
+    except (wave.Error, EOFError, RuntimeError):
+        return None
+
+
+def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
+    if media_type.partition(";")[0].strip().lower() not in _WAV_MEDIA_TYPES:
+        return audio_base64
+    header: Final = _strict_b64decode(audio_base64[:_WAV_HEADER_BASE64_CHARS])
+    if header is None or _wav_shape(header) not in (None, _PCM16_WAV_SHAPE):
+        return audio_base64
+    audio: Final = _strict_b64decode(audio_base64)
+    frames: Final = _pcm16_wav_frames(audio) if audio is not None else None
+    return base64.b64encode(frames).decode("ascii") if frames else audio_base64
+
+
+_RAW_PCM16_MEDIA_TYPES: Final = frozenset({"audio/l16", "audio/pcm"})
+
+
+def _media_type_count(media_type: str, name: str, default: int) -> int:
+    value: Final = next(
+        (
+            value.strip()
+            for key, _, value in (item.partition("=") for item in media_type.split(";")[1:])
+            if key.strip().lower() == name
+        ),
+        "",
+    )
+    return int(value) if value.isascii() and value.isdecimal() and int(value) > 0 else default
+
+
+def as_wav_base64(media_type: str, audio_base64: str) -> str:
+    if media_type.partition(";")[0].strip().lower() not in _RAW_PCM16_MEDIA_TYPES:
+        return audio_base64
+    frames: Final = _strict_b64decode(audio_base64)
+    if frames is None:
+        return audio_base64
+    channels, sample_width, default_rate = _PCM16_WAV_SHAPE
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(_media_type_count(media_type, "channels", channels))
+        wav.setsampwidth(sample_width)
+        wav.setframerate(_media_type_count(media_type, "rate", default_rate))
+        wav.writeframes(frames)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")

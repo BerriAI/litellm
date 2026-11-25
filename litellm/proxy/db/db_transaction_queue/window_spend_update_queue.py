@@ -111,11 +111,14 @@ def _merge_window_spend_transactions(
         started_at for payload in payloads if (started_at := payload.get("started_at")) is not None
     )
     reset: Final = next((value for payload in payloads if (value := payload.get("reset_at")) is not None), None)
-    merged: Final[WindowSpendTransaction] = {
-        **first,
-        "spend": math.fsum(payload["spend"] for payload in payloads),
-        "started_at": min(started_ats) if started_ats else None,
-    }
+    merged: Final = WindowSpendTransaction(
+        entity_type=first["entity_type"],
+        entity_id=first["entity_id"],
+        window_duration=first["window_duration"],
+        window_start=first["window_start"],
+        spend=math.fsum(payload["spend"] for payload in payloads),
+        started_at=min(started_ats) if started_ats else None,
+    )
     return {**merged, "reset_at": reset} if reset is not None else merged
 
 
@@ -161,7 +164,7 @@ class WindowSpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> tuple[WindowSpendTransaction, ...]:
         """Drain the queue and return the increments aggregated per window."""
-        updates: Final = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final[list[tuple[WindowSpendTransaction, ...]]] = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d budget window spend update batches from in-memory queue",

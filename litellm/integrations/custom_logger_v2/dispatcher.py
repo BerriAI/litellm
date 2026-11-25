@@ -26,7 +26,7 @@ from litellm.integrations.custom_logger_v2.planner import EMPTY_PLAN, Entry, Hoo
 from litellm.integrations.custom_logger_v2.registry import CallbackRegistry, RegistrySnapshot
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, is_selected
 
-LegacyT: Final = TypeVar("LegacyT")
+LegacyT = TypeVar("LegacyT")
 
 Between: TypeAlias = Callable[[Mapping[Field, object]], Awaitable[Mapping[Field, object]]]
 SyncBinding: TypeAlias = Callable[[object, object], object]

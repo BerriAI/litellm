@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, MoreHorizontal, Pencil, Plus } from "lucide-react";
+import { MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -17,11 +17,12 @@ import type { Member } from "./customerHierarchyForms";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
+import { CustomerDetailHeader, CustomerDetailLayout } from "./CustomerDetailLayout";
+import CustomerHierarchyBreadcrumbs from "./CustomerHierarchyBreadcrumbs";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerEntityBudgetDialog from "./CustomerEntityBudgetDialog";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
-import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
 import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerMemberSearch from "./CustomerMemberSearch";
 import { customerUsageEntity, isCustomerUsageIdentifier, type CustomerUsageEntity } from "./customerUsageApi";
@@ -35,7 +36,6 @@ import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
 import type { CustomerHierarchyScope } from "./customerHierarchyApi";
-import { customerBudgetLimit } from "./customerBudgetUsage";
 import { CustomerBudgetLimitCell, CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
@@ -46,8 +46,7 @@ interface ScopeProps {
 }
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
-  const { t } = useTranslation();
-  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
@@ -69,47 +68,31 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
   };
   const budgetSettingsHref = `${customerHierarchyHref("manage", budgetScope)}&tab=settings`;
   return (
-    <header>
-      <nav
-        aria-label={t("customerPortal.analytics.breadcrumb")}
-        className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
-      >
-        <a href={customersHref} className="hover:text-foreground">
-          {t("customerPortal.analytics.allCustomers")}
-        </a>
-        {(team || selected.member) && (
-          <>
-            <ChevronRight aria-hidden="true" className="size-3" />
-            <button type="button" onClick={hierarchy.openOrganization} className="hover:text-foreground">
-              {selected.organization.alias || selected.organization.customer_org_id}
-            </button>
-          </>
-        )}
-        {selected.member && team && (
-          <>
-            <ChevronRight aria-hidden="true" className="size-3" />
-            <button
-              type="button"
-              onClick={() => hierarchy.openTeam(team.customer_team_id)}
-              className="hover:text-foreground"
-            >
-              {team.alias || team.customer_team_id}
-            </button>
-          </>
-        )}
-      </nav>
-      <div className="flex flex-wrap items-start justify-between gap-6">
-        <div className="min-w-0 flex-1 basis-72">
-          <h1 className="break-words text-2xl font-semibold tracking-tight">{label}</h1>
-          {label !== customerEntityId(entity) && (
-            <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
-          )}
-        </div>
+    <CustomerDetailHeader
+      title={label}
+      breadcrumbs={
+        <CustomerHierarchyBreadcrumbs
+          scope={budgetScope}
+          page="manage"
+          organizationLabel={selected.organization.alias}
+          teamLabel={team?.alias}
+          memberLabel={selected.member?.alias}
+          onOrganizationClick={hierarchy.openOrganization}
+          onTeamClick={() => {
+            if (team) hierarchy.openTeam(team.customer_team_id);
+          }}
+        />
+      }
+      actions={
         <div className="w-full sm:w-72">
           <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} scope={budgetScope} />
         </div>
-      </div>
-    </header>
+      }
+    >
+      {label !== customerEntityId(entity) && (
+        <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
+      )}
+    </CustomerDetailHeader>
   );
 }
 
@@ -269,7 +252,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                         : "customerPortal.hierarchy.loading",
                     )}
                   </TableCell>
-                  <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} rateLimits={row.entity.rateLimits} />
+                  <CustomerBudgetLimitCell entity={row.entity} />
                   <TableCell colSpan={4} />
                 </>
               )}
@@ -391,14 +374,14 @@ export default function CustomerHierarchyManager() {
 
   if (hierarchy.isLoading)
     return (
-      <p role="status" className="px-8 py-12 text-sm text-muted-foreground">
+      <p role="status" className="text-sm text-muted-foreground">
         {t("customerPortal.hierarchy.loading")}
       </p>
     );
   if (!hierarchy.canManage) return <ErrorState message={t("customerPortal.hierarchy.adminOnly")} />;
   if (!scope)
     return (
-      <div className="space-y-3 px-8 py-12">
+      <div className="space-y-3">
         <h1 className="text-xl font-semibold">{t("customerPortal.hierarchy.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("customerPortal.hierarchy.missingOrganization")}</p>
         <a href={customersHref} className="text-sm text-primary hover:underline">
@@ -416,7 +399,7 @@ export default function CustomerHierarchyManager() {
     );
   if (!selected)
     return (
-      <p role="status" className="px-8 py-12 text-sm text-muted-foreground">
+      <p role="status" className="text-sm text-muted-foreground">
         {t("customerPortal.hierarchy.loading")}
       </p>
     );
@@ -435,18 +418,9 @@ export default function CustomerHierarchyManager() {
   };
 
   return (
-    <main
-      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
-      aria-label={t("customerPortal.hierarchy.title")}
-    >
+    <CustomerDetailLayout label={t("customerPortal.hierarchy.title")}>
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
-      {entity.kind === "organization" && tab !== "budget_groups" && (
-        <CustomerOrganizationApps
-          key={scope.org}
-          organizationId={scope.org}
-          organizationAlias={selected.organization.alias}
-        />
-      )}
+      <CustomerHierarchyNavigation scope={currentScope} active={tab} />
       {selected.member && (
         <CustomerMemberApps
           key={selected.member.customer_member_id}
@@ -454,7 +428,6 @@ export default function CustomerHierarchyManager() {
           organizationId={selected.organization.customer_org_id}
         />
       )}
-      <CustomerHierarchyNavigation scope={currentScope} active={tab} />
       <section>
         {tab === "budget_groups" ? (
           <CustomerBudgetGroups
@@ -476,6 +449,6 @@ export default function CustomerHierarchyManager() {
           <HierarchyChildTable hierarchy={hierarchy} selected={selected} scope={scope} />
         )}
       </section>
-    </main>
+    </CustomerDetailLayout>
   );
 }

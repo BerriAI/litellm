@@ -11,7 +11,9 @@ import weakref
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Final
+from unittest.mock import Mock
 
 import aiohttp
 import aiohttp.abc
@@ -338,6 +340,41 @@ async def test_timeout_exception_gets_mapped():
     assert received_chunks == [b"chunk1"]
 
 
+class _RequestThatTimesOut:
+    def __init__(self, error: aiohttp.ServerTimeoutError) -> None:
+        self._error: Final = error
+
+    async def __aenter__(self) -> aiohttp.ClientResponse:
+        raise self._error
+
+
+class _SessionThatTimesOut:
+    def __init__(self, error: aiohttp.ServerTimeoutError) -> None:
+        self.closed: Final = False
+        self._loop: Final = asyncio.get_running_loop()
+        self._error: Final = error
+
+    def request(self, **_: object) -> _RequestThatTimesOut:
+        return _RequestThatTimesOut(self._error)
+
+
+@pytest.mark.parametrize(
+    "session_error, transport_error",
+    [
+        (aiohttp.ConnectionTimeoutError("no connection in time"), httpx.ConnectTimeout),
+        (aiohttp.SocketTimeoutError("no answer in time"), httpx.ReadTimeout),
+    ],
+    ids=["connect-timeout", "read-timeout"],
+)
+async def test_a_session_timeout_surfaces_as_the_httpx_timeout_of_the_same_phase(
+    session_error: aiohttp.ServerTimeoutError, transport_error: type[httpx.TimeoutException]
+):
+    transport: Final = LiteLLMAiohttpTransport(client=lambda: _SessionThatTimesOut(session_error))  # pyright: ignore[reportArgumentType]  # a fake session that only raises
+
+    with pytest.raises(transport_error):
+        await transport.handle_async_request(httpx.Request("POST", "https://api.example.test/v1/files"))
+
+
 @pytest.mark.asyncio
 async def test_handle_async_request_uses_env_proxy(monkeypatch):
     """Aiohttp transport should honor HTTP(S)_PROXY env vars"""
@@ -608,74 +645,31 @@ async def test_handle_async_request_sock_read_timeout_triggers():
 
 
 @pytest.mark.asyncio
-async def test_handle_async_request_streaming_does_not_timeout_on_total_duration():
-    """
-    Ensure that LiteLLMAiohttpTransport does NOT timeout on long-running
-    streaming responses as long as individual chunks arrive within the sock_read timeout.
-    This is the fix for issue #19184 - stream_timeout should only control the timeout
-    for individual chunks, not the total stream duration.
-    """
-    import asyncio
-    from aiohttp import web
+async def test_handle_async_request_streaming_does_not_timeout_on_total_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def upstream_response():
+        yield MockAiohttpResponse(content_chunks=[b"first\n", b"second\n", b"last\n"])
 
-    async def streaming_handler(request):
-        # Simulate a streaming response that takes longer than a single timeout
-        # but each chunk arrives quickly
-        response = web.StreamResponse()
-        await response.prepare(request)
+    async with aiohttp.ClientSession() as session:
+        upstream_request: Final = Mock(side_effect=lambda **kwargs: upstream_response())
+        monkeypatch.setattr(session, "request", upstream_request)
+        transport: Final = LiteLLMAiohttpTransport(client=session, owns_session=False)
+        request: Final = httpx.Request(
+            "GET", "http://upstream.test/stream", extensions={"timeout": {"connect": 5.0, "read": 0.15, "pool": 4.0}}
+        )
+        response: Final = await transport.handle_async_request(request)
+        try:
+            assert response.status_code == 200
+            assert await response.aread() == b"first\nsecond\nlast\n"
+        finally:
+            await response.aclose()
 
-        # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
-        for i in range(5):
-            await asyncio.sleep(0.05)  # Less than sock_read timeout
-            await response.write(f"chunk{i}\n".encode())
-
-        await response.write_eof()
-        return response
-
-    app = web.Application()
-    app.router.add_get("/stream", streaming_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-
-    port = site._server.sockets[0].getsockname()[1]
-
-    def factory():
-        return aiohttp.ClientSession()
-
-    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-
-    request = httpx.Request("GET", f"http://127.0.0.1:{port}/stream")
-
-    # Set sock_read timeout that's longer than individual chunk delays
-    # but shorter than total stream duration
-    # Total duration: ~0.25s, sock_read timeout: 0.15s per chunk
-    # This should NOT timeout because each chunk arrives within 0.15s
-    request.extensions["timeout"] = {
-        "connect": 5.0,
-        "read": 0.15,  # Timeout for individual reads
-        "pool": 5.0,
-        # Note: total is NOT set - this is the fix!
-    }
-
-    try:
-        # This should succeed without timing out
-        response = await transport.handle_async_request(request)
-        assert response.status_code == 200
-
-        # Read the streaming response
-        chunks = []
-        async for chunk in response.aiter_bytes():
-            chunks.append(chunk)
-
-        # Verify we got all chunks
-        full_response = b"".join(chunks).decode()
-        assert "chunk0" in full_response
-        assert "chunk4" in full_response
-    finally:
-        await transport.aclose()
-        await runner.cleanup()
+    upstream_request.assert_called_once()
+    assert upstream_request.call_args.kwargs["timeout"] == aiohttp.ClientTimeout(
+        total=None, sock_read=0.15, sock_connect=5.0, connect=4.0
+    )
 
 
 def _make_mock_session(closed=False):
@@ -1123,7 +1117,7 @@ def test_threadsafe_close_done_callback_tolerates_cancelled_future():
     future: "concurrent.futures.Future[None]" = concurrent.futures.Future()
     future.cancel()
 
-    LiteLLMAiohttpTransport._on_threadsafe_close_done(future)
+    assert LiteLLMAiohttpTransport._on_threadsafe_close_done(future) is None
 
 
 @pytest.mark.asyncio

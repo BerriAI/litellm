@@ -15,7 +15,7 @@ class BeamerApiTokenDetector(RegexBasedDetector):
         return "Beamer API token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Beamer API token
             re.compile(

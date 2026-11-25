@@ -105,11 +105,6 @@ model_list:
       model: vertex_ai/claude-haiku-4-5@20251001
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
-  - model_name: vertex-sonnet-4-5
-    litellm_params:
-      model: vertex_ai/claude-sonnet-4-5@20250929
-      vertex_project: os.environ/VERTEXAI_PROJECT
-      vertex_location: global
   - model_name: vertex-opus-4-5
     litellm_params:
       model: vertex_ai/claude-opus-4-5@20251101

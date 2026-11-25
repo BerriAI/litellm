@@ -432,12 +432,12 @@ async def test_usage_based_routing_refuses_the_next_websocket_turn_before_the_fi
 ):
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-early", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-early")
-    await admit_turn()
+    await admit_turn({})
 
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-early-turn").litellm_params, 35)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-early"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -448,7 +448,7 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-once", tpm=69)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-once")
     opened: Final = await _usage_now(router, "ws-tpm-v2-once")
-    await admit_turn()
+    await admit_turn({})
     first_turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-once-first")
 
     await record_turn(first_turn.litellm_params, 35)
@@ -456,10 +456,10 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     await _complete_35_token_turn(first_turn)
 
     assert await _usage_after(router, "ws-tpm-v2-once", opened) == (35, 1)
-    await admit_turn()
+    await admit_turn({})
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-once-second").litellm_params, 35)
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-once"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -513,15 +513,15 @@ async def test_usage_based_routing_counts_a_websocket_turn_whose_early_count_fai
         ),
     )
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-count-fails")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-count-fails-turn")
 
     await record_turn(turn.litellm_params, 35)
-    await admit_turn()
+    await admit_turn({})
     await _complete_35_token_turn(turn)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-count-fails"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -586,7 +586,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-unrouted", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-unrouted")
     opened: Final = await _usage_now(router, "ws-tpm-v2-unrouted")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(
         {**routed, "litellm_metadata": {"model_group": "ws-tpm-v2-unrouted", **deployment_metadata}},
         "ws-tpm-v2-unrouted-turn",
@@ -594,7 +594,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
 
     await record_turn(turn.litellm_params, 35)
 
-    await admit_turn()
+    await admit_turn({})
     assert (await _usage_after(router, "ws-tpm-v2-unrouted", opened))[0] == 0
 
 

@@ -14,7 +14,7 @@ use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair}
 use rstest::{Context, rstest};
 use rustls::{
     RootCertStore, ServerConfig,
-    crypto::ring,
+    crypto::aws_lc_rs,
     pki_types::{CertificateDer, PrivateKeyDer},
     server::WebPkiClientVerifier,
 };
@@ -73,7 +73,7 @@ impl Pki {
     }
 
     fn acceptor(&self, require_client_certificate: bool) -> TlsAcceptor {
-        let provider = Arc::new(ring::default_provider());
+        let provider = Arc::new(aws_lc_rs::default_provider());
         let builder = ServerConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
             .unwrap();

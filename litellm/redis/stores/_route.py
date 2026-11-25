@@ -81,4 +81,4 @@ def route(batch: Batch) -> Route:
 def post_call_request() -> NativeRequestRedis | None:
     """The current request's native batches for a post-call write nobody awaits, None outside a request."""
     request: Final = active_request_redis_batches()
-    return None if request is None else request.native_post_call()
+    return None if request is None else request.native()

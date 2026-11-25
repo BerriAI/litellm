@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_repositories::JwtKeyMappingRepository;
+use litellm_repositories::{Inserted, JwtKeyMappingRepository, NewKeyMapping};
 use pyo3::prelude::*;
 
 use crate::db::{NativeDatabase, map_error};
@@ -60,6 +60,37 @@ impl RustJwtKeyMappingRepository {
                         )
                     })
                     .collect::<Vec<_>>())
+            })?,
+        )
+    }
+
+    /// `(created, token)`: whether this call mapped the claim, then the hashed key now mapped to it, `None`
+    /// when the mapping that holds the claim is inactive or gone.
+    #[pyo3(signature = (jwt_claim_name, jwt_claim_value, token, *, jwt_issuer=None, written_by))]
+    fn insert<'py>(
+        &self,
+        py: Python<'py>,
+        jwt_claim_name: String,
+        jwt_claim_value: String,
+        token: String,
+        jwt_issuer: Option<String>,
+        written_by: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = Arc::clone(&self.0);
+        crate::execution::run_async_value(
+            py,
+            crate::db::for_caller(py, async move {
+                let mapping = NewKeyMapping {
+                    jwt_claim_name: &jwt_claim_name,
+                    jwt_claim_value: &jwt_claim_value,
+                    jwt_issuer: jwt_issuer.as_deref(),
+                    token: &token,
+                    written_by: &written_by,
+                };
+                match repository.insert(mapping).await.map_err(map_error)? {
+                    Inserted::Created(token) => Ok((true, Some(token))),
+                    Inserted::Conflict(token) => Ok((false, token)),
+                }
             })?,
         )
     }

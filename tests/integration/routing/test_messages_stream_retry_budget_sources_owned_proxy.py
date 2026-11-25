@@ -217,14 +217,14 @@ def _assert_failed_after_message_start(response: httpx.Response, served_id: str)
 
 def test_router_num_retries_governs_a_group_without_its_own_budget(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
-    _assert_completed(rig.stream(_ROUTER_BUDGET, "drop-once", marker), _served_id(_PRIMARY, marker, 2))
+    _assert_completed(rig.stream(_ROUTER_BUDGET, "drop-once", marker), _served_id(_PRIMARY, marker, 1))
     assert rig.attempts_on(_PRIMARY, marker) == 2
 
 
 def test_a_digit_string_deployment_budget_is_honored_as_a_number(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_STRING_BUDGET, "drop-always", marker)
-    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 3))
+    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 1))
     assert rig.attempts_on(_PRIMARY, marker) == 3
 
 
@@ -241,7 +241,7 @@ def _live_events(lines: Iterator[str]) -> Iterator[SseEvent]:
             yield from parse_sse("\n".join(block))
 
 
-def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _Rig) -> None:
+def test_message_start_and_pings_go_out_live_while_block_starts_wait_for_content(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     rig.content_gate.clear()
     try:
@@ -258,7 +258,7 @@ def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _R
             after_content: Final = tuple(arriving)
     finally:
         rig.content_gate.set()
-    assert event_types(before_content) == ("ping", "ping"), before_content
+    assert event_types(before_content) == ("message_start", "ping"), before_content
     events: Final = before_content + after_content
     assert tuple(kind for kind in event_types(events) if kind != "ping") == LIFECYCLE, events
     assert message_id(events) == _served_id(_PRIMARY, marker, 1), events
@@ -269,7 +269,7 @@ def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _R
 def test_a_retry_policy_default_retries_sets_the_budget_for_a_pre_content_drop(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_POLICY, "drop-always", marker)
-    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 3))
+    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 1))
     assert rig.attempts_on(_PRIMARY, marker) == 3
 
 
@@ -298,12 +298,11 @@ def test_a_retry_raising_a_context_window_error_reaches_the_context_window_fallb
     assert rig.attempts_on(_CONTEXT_WINDOW, marker) == 1
 
 
-def test_a_retry_rejected_with_401_ends_the_retries_and_reaches_the_client_unchanged(rig: _Rig) -> None:
+def test_a_retry_rejected_with_401_ends_the_retries_and_reaches_the_client_as_an_error_frame(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_LONELY, "drop-then-401", marker)
-    assert response.status_code == 401, response.text
+    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 1))
     assert "authentication_error" in response.text, response.text
-    assert "content_block_delta" not in response.text, response.text
     assert rig.attempts_on(_PRIMARY, marker) == 2
 
 

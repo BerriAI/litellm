@@ -5,6 +5,7 @@ Python-only work `PythonAuthHost` runs behind one `AuthHost` method, the way `li
 - Only `litellm/proxy/auth/host/python.py` imports from here. Plain reads and writes of one row stay in `python.py`. A module here holds a step the core cannot decide yet because its state or its writer is Python-owned
   - `budgets.py`: the budget checks and the proxy budget alert, which read Python-owned spend counters and send alerts
   - `jwt_auto_register.py`: minting or reusing a key for a JWT claim and inserting its mapping, with the race handling for two requests registering one claim
+  - `team_member_add.py`: adding a JWT's user to its team, which resolves the member's budget before the Rust write and evicts caches, updates the gauge and schedules the audit log after it
 - Each module's docstring has the same shape, so the path out of Python reads the same everywhere
   - one paragraph on what the step does
   - `TODO: moves to <Rust | gateway-auth-core> <in one piece | one check at a time>, <together with what>.`
