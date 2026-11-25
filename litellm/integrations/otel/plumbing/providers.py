@@ -544,17 +544,35 @@ def _in_trace(context: SpanContext, trace_id: int) -> SpanContext:
     )
 
 
-class _NamedTraceFilter(SpanProcessor):
-    """Hand a Langfuse exporter's ``inner`` each span in the trace its caller named (see :func:`in_named_trace`)."""
+_NAMED_TRACE_MARKS: Final = frozenset((LiteLLM.NAMED_TRACE_ID, LiteLLM.TRACE_ID_SKIPPED))
 
-    def __init__(self, inner: SpanProcessor) -> None:
+
+def without_named_trace_marks(span: ReadableSpan) -> ReadableSpan:
+    """``span`` as an exporter other than Langfuse receives it, with nothing about a trace its caller named."""
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if attributes.keys().isdisjoint(_NAMED_TRACE_MARKS):
+        return span
+    return _CountedSpanView(
+        span, MappingProxyType({key: value for key, value in attributes.items() if key not in _NAMED_TRACE_MARKS})
+    )
+
+
+def as_exported_to(span: ReadableSpan, langfuse: bool) -> ReadableSpan:
+    return in_named_trace(span) if langfuse else without_named_trace_marks(span)
+
+
+class _NamedTraceFilter(SpanProcessor):
+    """Hand ``inner`` each span as its exporter receives it (see :func:`as_exported_to`)."""
+
+    def __init__(self, inner: SpanProcessor, langfuse: bool) -> None:
         self._inner: Final = inner
+        self._langfuse: Final = langfuse
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         self._inner.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
-        self._inner.on_end(in_named_trace(span))
+        self._inner.on_end(as_exported_to(span, self._langfuse))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -973,7 +991,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         try:
             exported: Final = _scoped(
                 _for_destination(
-                    in_named_trace(span) if destination.callback_name == ExporterOwner.LANGFUSE_OTEL else span,
+                    as_exported_to(span, destination.callback_name == ExporterOwner.LANGFUSE_OTEL),
                     destination,
                     self._default_capture_for(destination),
                     self._langfuse_mapped,
@@ -1696,7 +1714,7 @@ def _spec_processor(
         else exporting
     )
     filtered: Final = _MessageContentFilter(scoped) if strip_message_content else scoped
-    return _NamedTraceFilter(filtered) if spec.owner is ExporterOwner.LANGFUSE_OTEL else filtered
+    return _NamedTraceFilter(filtered, langfuse=spec.owner is ExporterOwner.LANGFUSE_OTEL)
 
 
 class _RequestExclusionSampler(Sampler):

@@ -387,12 +387,12 @@ async def _form_object(scope: Scope, body: bytes) -> Mapping[str, object]:
     request: Final = Request({"type": "http", "method": "POST", "headers": Headers(scope=scope).raw}, receive)
     try:
         form: Final = await request.form()
-    except MultiPartException:
+    except (MultiPartException, ValueError):
         return _NO_BODY
     try:
         metadata: Final = form.get("metadata")
         return MappingProxyType({"metadata": parse_form_metadata(metadata)}) if isinstance(metadata, str) else _NO_BODY
-    except ProxyException:
+    except (ProxyException, ValueError, RecursionError):
         return _NO_BODY
     finally:
         await form.close()

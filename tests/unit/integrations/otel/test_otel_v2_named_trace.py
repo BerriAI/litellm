@@ -178,9 +178,7 @@ def test_every_other_exporter_and_the_traceresponse_keep_each_requests_own_trace
     assert UUID_HEX not in server
     assert _trace_ids(proxy.otel, "llm") == server
     assert [r.headers["traceresponse"].split("-")[1] for r in responses] == server
-    assert [
-        span.attributes.get(LiteLLM.NAMED_TRACE_ID) for span in proxy.otel.get_finished_spans() if span.name != "detached"
-    ] == [UUID_HEX] * 4
+    assert all(LiteLLM.NAMED_TRACE_ID not in span.attributes for span in proxy.otel.get_finished_spans())
 
 
 def test_every_span_of_a_named_langfuse_trace_links_to_the_same_span_in_the_trace_every_other_exporter_sees(proxy):
@@ -197,9 +195,9 @@ def test_every_span_of_a_named_langfuse_trace_links_to_the_same_span_in_the_trac
     assert all(LiteLLM.NAMED_TRACE_ID not in span.attributes for span in langfuse)
 
 
-
-@pytest.mark.parametrize("span_scope", ["full", "llm_only"])
-def test_every_span_a_langfuse_destination_gets_in_a_named_trace_links_to_the_trace_other_exporters_see(span_scope):
+def _named_call_through_a_destination(
+    callback_name: str, span_scope: str = "full"
+) -> tuple[InMemorySpanExporter, InMemorySpanExporter]:
     destination: Final = InMemorySpanExporter()
     other: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()
@@ -217,7 +215,7 @@ def test_every_span_a_langfuse_destination_gets_in_a_named_trace_links_to_the_tr
             OtelDestination(
                 endpoint="http://key.local/api/public/otel",
                 headers=MappingProxyType({"Authorization": "Basic a2V5"}),
-                callback_name="langfuse_otel",
+                callback_name=callback_name,
                 span_scope=span_scope,
             ),
         )
@@ -227,6 +225,12 @@ def test_every_span_a_langfuse_destination_gets_in_a_named_trace_links_to_the_tr
             tracer.start_span("chat m", attributes={GenAI.OPERATION_NAME: "chat"}).end()
     finally:
         reset_request_destinations(token)
+    return destination, other
+
+
+@pytest.mark.parametrize("span_scope", ["full", "llm_only"])
+def test_every_span_a_langfuse_destination_gets_in_a_named_trace_links_to_the_trace_other_exporters_see(span_scope):
+    destination, other = _named_call_through_a_destination("langfuse_otel", span_scope)
 
     seen: Final = {span.context.span_id: span.context for span in other.get_finished_spans()}
     exported: Final = destination.get_finished_spans()
@@ -234,6 +238,17 @@ def test_every_span_a_langfuse_destination_gets_in_a_named_trace_links_to_the_tr
     assert [[link.context for link in span.links] for span in exported] == [
         [seen[span.context.span_id]] for span in exported
     ]
+
+
+def test_a_destination_other_than_langfuse_gets_the_requests_own_trace_with_nothing_about_the_named_one():
+    destination, _other = _named_call_through_a_destination("arize")
+
+    exported: Final = destination.get_finished_spans()
+
+    assert len(exported) == 2
+    assert int(UUID_HEX, 16) not in {span.context.trace_id for span in exported}
+    assert all(LiteLLM.NAMED_TRACE_ID not in span.attributes for span in exported)
+
 
 @pytest.mark.parametrize(
     ("path", "own", "other"),
@@ -278,7 +293,9 @@ def test_a_langfuse_trace_id_header_names_the_trace(proxy):
         pytest.param(
             [("langfuse_trace_id", UUID), ("langfuse_trace_id", OTHER_HEX)], UUID_HEX, id="first-repeated-header-wins"
         ),
-        pytest.param({"x-litellm-trace-id": UUID}, sha256(b"body-trace").digest()[:16].hex(), id="litellm-header-unread"),
+        pytest.param(
+            {"x-litellm-trace-id": UUID}, sha256(b"body-trace").digest()[:16].hex(), id="litellm-header-unread"
+        ),
     ],
 )
 def test_only_the_langfuse_trace_id_header_wins_over_the_body(proxy, headers, expected):
@@ -436,7 +453,9 @@ def test_a_requests_spend_session_is_its_own_server_trace_whatever_trace_it_name
     "body, reason",
     [
         pytest.param(
-            {"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}, "existing_trace_id", id="existing_trace_id"
+            {"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}},
+            "existing_trace_id",
+            id="existing_trace_id",
         ),
         pytest.param({"metadata": {"trace_id": UUID}, "input": "x" * 200}, "body_too_large", id="over-the-size-limit"),
     ],
@@ -453,8 +472,11 @@ def test_a_request_whose_name_is_skipped_says_why_on_its_root_and_warns_once(mon
     assert [record.levelno for record in skipped].count(logging.DEBUG) == 3
     assert UUID_HEX not in _trace_ids(rig.langfuse)
     assert [
-        span.attributes.get(LiteLLM.TRACE_ID_SKIPPED) for span in rig.otel.get_finished_spans() if span.parent is None
+        span.attributes.get(LiteLLM.TRACE_ID_SKIPPED)
+        for span in rig.langfuse.get_finished_spans()
+        if span.parent is None
     ] == [None, reason] * 3
+    assert all(LiteLLM.TRACE_ID_SKIPPED not in span.attributes for span in rig.otel.get_finished_spans())
 
 
 def test_requests_skipped_for_different_content_encodings_warn_once(proxy, caplog):
@@ -598,6 +620,30 @@ def test_a_form_whose_metadata_names_no_trace_still_reaches_the_route(proxy, for
 
     assert response.content == request.read()
     assert UUID_HEX not in _trace_ids(proxy.langfuse)
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        pytest.param(b"garbage trace_id garbage", "multipart/form-data; boundary=XyZ", id="bad-multipart-body"),
+        pytest.param(b"garbage trace_id garbage", "multipart/form-data; boundary=" + "b" * 300, id="boundary-too-long"),
+        pytest.param(
+            b"model=m&metadata=" + b"%5B" * 100_000 + b"trace_id",
+            "application/x-www-form-urlencoded",
+            id="deep-metadata",
+        ),
+        pytest.param(
+            b"model=m&metadata=%7B%22trace_id%22%3A" + b"9" * 5000 + b"%7D",
+            "application/x-www-form-urlencoded",
+            id="metadata-integer-too-long",
+        ),
+    ],
+)
+def test_a_form_that_does_not_parse_still_reaches_the_route(proxy, content, content_type):
+    response: Final = proxy.client.post(PATHS[0], content=content, headers={"content-type": content_type})
+
+    assert response.content == content
+    assert len(_trace_ids(proxy.langfuse)) == 1
 
 
 @pytest.mark.parametrize("declare_length", [True, False])
@@ -796,7 +842,7 @@ def test_a_compressed_body_expanding_past_the_proxy_ratio_names_no_trace(proxy, 
 
     assert response.content == payload
     assert UUID_HEX not in _trace_ids(exporter)
-    (server,) = [span for span in proxy.otel.get_finished_spans() if span.kind is SpanKind.SERVER]
+    (server,) = [span for span in proxy.langfuse.get_finished_spans() if span.kind is SpanKind.SERVER]
     assert server.attributes[LiteLLM.TRACE_ID_SKIPPED] == "decoded_too_large"
 
 
@@ -896,6 +942,7 @@ async def test_a_compressed_body_names_no_trace_when_the_budget_cannot_cover_its
     import gzip
 
     from litellm import constants
+
     sent: Final = {"type": "http.request", "body": gzip.compress(_named_body()), "more_body": False}
     decoded_limit: Final = len(sent["body"]) * constants.MAX_REQUEST_BODY_DECOMPRESSION_RATIO
     short: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]) + decoded_limit - 1)
