@@ -707,6 +707,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
 SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
 SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
+CALLER_MESSAGE_COUNT_KEY: Final = "_caller_message_count"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
