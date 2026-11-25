@@ -125,18 +125,19 @@ impl AppState {
     /// the Redis clients, the database pools and the keys read through them, the license, the
     /// HTTP client pool, the deployments' routing state and the limiters' counters. Only what
     /// `config` decides is built again, its environment, router and callbacks.
-    pub async fn next(&self, config: &Config, environment: &Environment) -> Result<Self, Error> {
+    pub async fn next(&self, config: &Config) -> Result<Self, Error> {
         let resources = Resources::sharing(
             config,
             Arc::new(ProcessEnvironment),
             self.inference.resources.clone(),
         )?;
+        let variables = Environment::read(&*resources.environment)?;
         let Inference {
             gateway: inference,
             key_limiter,
         } = crate::inference_over(
             config,
-            environment,
+            &variables,
             &resources,
             self.inference.shared_routing(),
             &self.redis,
@@ -147,6 +148,7 @@ impl AppState {
             inference,
             key_limiter,
             environment: resources.environment,
+            variables,
             ..self.clone()
         })
     }

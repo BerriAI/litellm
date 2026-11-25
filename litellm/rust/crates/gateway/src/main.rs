@@ -303,7 +303,7 @@ fn polled(
             let environment = environment.clone();
             let in_flight = in_flight.clone();
             async move {
-                let state = current.state.next(&config, &environment).await?;
+                let state = current.state.next(&config).await?;
                 let admit = Arc::new(Admit::new(&config, &state, stored));
                 Ok(served(
                     state,
