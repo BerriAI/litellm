@@ -12,11 +12,11 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -156,7 +156,8 @@ def _holds_json_object_frame(frames: bytes) -> bool:
 def _classify_completed_frames(pending: bytearray, classified: int, appended: int) -> tuple[bytes, bytes, int]:
     """
     Split the frames a read of ``appended`` bytes completed into ``(preface, classifiable, next classified offset)``.
-    Only a buffer with no data-bearing frame yet (``classified == 0``) has a preface, which the caller drops.
+    Only a buffer with no data-bearing frame yet (``classified == 0``) has a preface, which the caller relays and
+    removes from its buffer.
     """
     frames_end: Final = last_sse_frame_end(pending, classified, appended)
     new_frames: Final = bytes(pending[classified:frames_end])
@@ -164,7 +165,12 @@ def _classify_completed_frames(pending: bytearray, classified: int, appended: in
     return preface, classifiable, frames_end - len(preface)
 
 
-async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+_FrameClassifier: TypeAlias = Callable[[bytearray, int, int], tuple[bytes, bytes, int]]
+
+
+async def _coalesce_first_sse_frame(
+    stream: AsyncIterator[object], classify: _FrameClassifier = _classify_completed_frames
+) -> AsyncGenerator[object, None]:
     """
     Relay leading data-less SSE frames (comment keepalives, events without a
     ``data:`` line) as they complete, and join raw ``bytes`` chunks until they
@@ -182,7 +188,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
                 yield chunk
                 continue
             pending.extend(chunk)
-            preface, classifiable, classified = _classify_completed_frames(pending, classified, len(chunk))
+            preface, classifiable, classified = classify(pending, classified, len(chunk))
             if preface:
                 yield _SsePreface(preface)
                 del pending[: len(preface)]

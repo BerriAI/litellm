@@ -8,7 +8,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -31,6 +31,8 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioPerRequestConfig,
     OPTIONAL_PresidioPIIMasking,
     _classify_completed_frames,
+    _coalesce_first_sse_frame,
+    _SsePreface,
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
@@ -2634,17 +2636,8 @@ async def test_apply_to_output_streaming_many_leading_non_object_reads_still_mas
     assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
 
 
-def _frames_classified_per_read(reads: Iterable[bytes]) -> Iterator[tuple[bytes, bytes]]:
-    pending: Final = bytearray()
-    classified = 0  # rebind-ok: each read advances the offset the classifier returns, as the stream wait does
-    for chunk in reads:
-        pending.extend(chunk)
-        preface, classifiable, classified = _classify_completed_frames(pending, classified, len(chunk))
-        del pending[: len(preface)]
-        yield preface, classifiable
-
-
-def test_classify_completed_frames_hands_each_read_only_the_frames_it_completed():
+@pytest.mark.asyncio
+async def test_coalesce_first_sse_frame_classifies_each_read_only_once():
     reads: Final = (
         b": keepalive\n\n",
         b"data: 5\n",
@@ -2653,17 +2646,28 @@ def test_classify_completed_frames_hands_each_read_only_the_frames_it_completed(
         b"ta: 8\r\r",
         b'data: {"type": "ping"}\n\n',
     )
+    classified_per_read: Final[list[tuple[bytes, bytes]]] = []
 
-    per_read: Final = tuple(_frames_classified_per_read(reads))
+    def recording_classifier(pending: bytearray, classified: int, appended: int) -> tuple[bytes, bytes, int]:
+        result: Final = _classify_completed_frames(pending, classified, appended)
+        classified_per_read.append(result[:2])
+        return result
 
-    assert per_read == (
+    async def upstream() -> AsyncIterator[object]:
+        for chunk in reads:
+            yield chunk
+
+    forwarded: Final = [chunk async for chunk in _coalesce_first_sse_frame(upstream(), recording_classifier)]
+
+    assert classified_per_read == [
         (b": keepalive\n\n", b""),
         (b"", b""),
         (b"", b"data: 5\n\n"),
         (b"", b"data: 6\r\n\r\ndata: 7\n\n"),
         (b"", b"data: 8\r\r"),
         (b"", b'data: {"type": "ping"}\n\n'),
-    )
+    ]
+    assert forwarded == [_SsePreface(b": keepalive\n\n"), b"".join(reads[1:])]
 
 
 @pytest.mark.asyncio
