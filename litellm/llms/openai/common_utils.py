@@ -351,7 +351,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def get_cached_openai_client(
-        client_initialization_params: dict, client_type: Literal["openai", "azure"]
+        client_initialization_params: dict[str, object], client_type: Literal["openai", "azure"]
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         """Retrieves the OpenAI client from the in-memory cache based on the client initialization parameters"""
         _cache_key: Final = BaseOpenAILLM.get_openai_client_cache_key(
@@ -384,7 +384,7 @@ class BaseOpenAILLM:
     def set_cached_openai_client(
         openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI,
         client_type: Literal["openai", "azure"],
-        client_initialization_params: dict,
+        client_initialization_params: dict[str, object],
         litellm_owned_client: bool = False,
     ):
         """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS

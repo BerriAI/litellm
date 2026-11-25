@@ -171,7 +171,7 @@ class AmazonNovaEmbeddingConfig:
             "encoding_format",
         ]
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]) -> dict:
         """Map OpenAI-style parameters to Nova parameters."""
         for k, v in non_default_params.items():
             if k == "dimensions":

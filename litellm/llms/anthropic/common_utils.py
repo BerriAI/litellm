@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, filterfalse
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
@@ -28,7 +28,13 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, lax_bool
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    lax_bool,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_file_ids_from_messages,
@@ -38,6 +44,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     find_anthropic_server_tool_result,
     message_field,
     parts_of,
+    string_field,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
@@ -52,6 +59,7 @@ from litellm.llms.anthropic.wif import (
     get_anthropic_wif_token,
     warn_if_static_credential_shadows_federation,
 )
+from litellm.llms.base_llm.auth.provider_oauth import oauth_credential_free_headers, provider_oauth_token
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -106,6 +114,11 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
     "thinking blocks, and those thinking tokens are billed as output tokens."
 )
+DROP_SERVER_SIDE_FALLBACK_BETA_WARNING: Final = (
+    "Dropping the %s beta for model=%s (drop_params=True): neither its model_info nor the model cost map lists "
+    "server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose "
+    "model supports it."
+)
 
 # Anthropic error `type` (both the JSON error body and SSE `event: error`
 # payloads use this field) mapped to the HTTP status code it corresponds to.
@@ -152,7 +165,7 @@ _SERVER_CALL_FIELD_KEYS: Final = ("server_tool_calls", "web_search_calls")
 _WEB_SEARCH_CALL_ADAPTER: Final = TypeAdapter(ResponseFunctionWebSearch)
 _TOOL_CALL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -173,6 +186,32 @@ def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
 
 def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
     return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+_UNSIGNED_THINKING_DOMAINS: Final = (
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+)
+
+_UNSIGNED_THINKING_PROVIDERS: Final = frozenset({"deepseek", "minimax", "tencent", "zai", "bigmodel"})
+
+
+def replays_unsigned_thinking(api_base: str) -> bool:
+    host: Final = urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname or ""
+    return any(host == domain or host.endswith(f".{domain}") for domain in _UNSIGNED_THINKING_DOMAINS)
+
+
+def verifies_claude_thinking_signatures(custom_llm_provider: str | None, model: str, api_base: str | None) -> bool:
+    if "claude" not in model.lower() or custom_llm_provider in _UNSIGNED_THINKING_PROVIDERS:
+        return False
+    upstream: Final = (
+        AnthropicModelInfo.resolve_anthropic_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
+    )
+    return upstream is None or not replays_unsigned_thinking(upstream)
 
 
 def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
@@ -266,6 +305,45 @@ def carries_signed_compaction_block(messages: Sequence[object]) -> bool:
     return any(map(_is_signed_compaction_block, chain.from_iterable(map(_message_blocks, messages))))
 
 
+def _is_fallback_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") == "fallback"
+
+
+def carries_fallback_block(messages: Sequence[object]) -> bool:
+    return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
+def _without_unrendered_content(message: Mapping[str, object]) -> Mapping[str, object]:
+    blocks: Final = as_object_list(message.get("content"))
+    if blocks is None:
+        return message
+    return {**message, "content": [block for block in blocks if not is_unrendered_block(block)]}
+
+
+def without_unrendered_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(map(_without_unrendered_content, messages))
+
+
+def _as_sent_text(block: JsonValue) -> tuple[JsonValue, ...]:
+    if not is_unrendered_block(block):
+        return (block,)
+    fields: Final = as_str_mapping(block)
+    text: Final = None if fields is None else fields.get("text")
+    return ({"type": "text", "text": text},) if isinstance(text, str) and text else ()
+
+
+def _with_unrendered_text_content(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": list(chain.from_iterable(map(_as_sent_text, content)))}
+
+
+def with_unrendered_blocks_as_text(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(map(_with_unrendered_text_content, messages))
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
@@ -329,6 +407,7 @@ def count_tokens_feature_betas(
                 ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
                 AnthropicModelInfo().is_mid_conversation_tool_change_used(messages),
             ),
+            (ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value, carries_fallback_block(messages)),
         )
         if used
     )
@@ -530,9 +609,11 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
 
 _SERVER_OWNED_AUTH_HEADERS: Final = SpecialHeaders.litellm_credential_header_names()
 _WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
+_REQUEST_MAPPING: Final = TypeAdapter(dict[str, object])
+_HeaderValue = TypeVar("_HeaderValue")
 
 
-def without_caller_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+def without_caller_credential_headers(headers: Mapping[str, _HeaderValue]) -> Mapping[str, _HeaderValue]:
     """``headers`` minus every header that authenticates the caller to litellm.
 
     The deployment's own credential is applied on top of the result, so a caller-supplied
@@ -586,6 +667,33 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     joined: Final = ",".join(_beta_header_values(existing) + _beta_header_values(new_beta))
     betas: Final = frozenset(b.strip() for b in joined.split(",") if b.strip())
     return ",".join(sorted(betas))
+
+
+def supports_server_side_fallback(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    declared: Final = None if model_info is None else model_info.get("supports_server_side_fallback")
+    if isinstance(declared, bool):
+        return declared
+    return AnthropicModelInfo.supports_model_capability(model, "supports_server_side_fallback", custom_llm_provider)
+
+
+def without_unsupported_server_side_fallback_beta(
+    betas: Sequence[str],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    drop_params: object,
+) -> tuple[str, ...]:
+    fallback_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+    if (
+        fallback_beta not in betas
+        or not drops_unsupported_params(drop_params)
+        or supports_server_side_fallback(model, custom_llm_provider, model_info)
+    ):
+        return tuple(betas)
+    litellm.verbose_logger.warning(DROP_SERVER_SIDE_FALLBACK_BETA_WARNING, fallback_beta, model)
+    return tuple(beta for beta in betas if beta != fallback_beta)
 
 
 def anthropic_oauth_token_from_header(value: object) -> str | None:
@@ -1606,38 +1714,34 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return headers
 
-    def validate_environment(
+    def _resolve_chat_auth(
         self,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: the consumer OAuth tier updates the caller's headers
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> dict:
-        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
-        if api_base is None and params_mapping is not None:
-            api_base = params_mapping.get("api_base")
-        use_bearer_for_custom_base: Final[bool] = bool(
-            params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
+        params_mapping: Mapping[str, object] | None,
+        api_key: str | None,
+        api_base: str | None,
+    ) -> tuple[Mapping[str, str], str | None, str | None, bool]:
+        allows_wif: Final = config_allows_workload_identity(self)
+        provider_token: Final = (
+            provider_oauth_token(params_mapping, api_base=api_base, provider="anthropic", model=model)
+            if params_mapping is not None and allows_wif
+            else None
         )
-        # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-        api_key = AnthropicModelInfo.get_api_key(api_key)
-        # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
-        auth_token: str | None = None
-        if api_key is None:
-            auth_token = AnthropicModelInfo.get_auth_token()
-        if (api_key is not None or auth_token is not None) and config_allows_workload_identity(self):
+        if provider_token is not None:
+            return oauth_credential_free_headers(headers), None, provider_token, False
+
+        _, oauth_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        configured_key: Final = AnthropicModelInfo.get_api_key(oauth_key)
+        auth_token: Final = AnthropicModelInfo.get_auth_token() if configured_key is None else None
+        if (configured_key is not None or auth_token is not None) and allows_wif:
             warn_if_static_credential_shadows_federation(params_mapping, model)
         wif_token: Final = (
             get_anthropic_wif_token(params_mapping, api_base, model)
-            if api_key is None and auth_token is None and config_allows_workload_identity(self)
+            if configured_key is None and auth_token is None and allows_wif
             else None
         )
-        wif_minted: Final = wif_token is not None
-        resolved_api_key: Final = wif_token if wif_token is not None else api_key
+        resolved_api_key: Final = wif_token if wif_token is not None else configured_key
         if resolved_api_key is None and auth_token is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -1651,7 +1755,31 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 llm_provider="anthropic",
                 model=model,
             )
+        return headers, resolved_api_key, auth_token, wif_token is not None
 
+    def validate_environment(
+        self,
+        headers: dict[str, str],
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        params_mapping: Final = (
+            _REQUEST_MAPPING.validate_python(litellm_params) if isinstance(litellm_params, dict) else None
+        )
+        configured_base: Final = params_mapping.get("api_base") if params_mapping is not None else None
+        resolved_api_base: Final = (
+            configured_base if api_base is None and isinstance(configured_base, str) else api_base
+        )
+        use_bearer_for_custom_base: Final = bool(
+            params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
+        )
+        resolved_headers, resolved_api_key, auth_token, wif_minted = self._resolve_chat_auth(
+            headers, model, params_mapping, api_key, resolved_api_base
+        )
         tools: Final = optional_params.get("tools")
         prompt_caching_set: Final = self.is_cache_control_set(messages=messages)
         computer_tool_used: Final = self.is_computer_tool_used(tools=tools)
@@ -1666,8 +1794,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         effort_used = self.is_effort_used(optional_params=optional_params, model=model, custom_llm_provider="anthropic")
         code_execution_tool_used: Final = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used: Final = self.is_container_with_skills_used(optional_params=optional_params)
+        beta_header: Final = resolved_headers.get("anthropic-beta")
         user_anthropic_beta_headers: Final = self._get_user_anthropic_beta_headers(
-            anthropic_beta_header=headers.get("anthropic-beta")
+            anthropic_beta_header=beta_header if isinstance(beta_header, str) else None
         )
         anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
@@ -1689,12 +1818,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             effort_used=effort_used,
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
-            api_base=api_base,
+            api_base=resolved_api_base,
             use_bearer_for_custom_base=use_bearer_for_custom_base,
             wif_minted=wif_minted,
         )
 
-        caller_headers: Final = without_caller_credential_headers(headers) if wif_minted else headers
+        caller_headers: Final = without_caller_credential_headers(resolved_headers) if wif_minted else resolved_headers
 
         return {**caller_headers, **anthropic_headers}
 
@@ -1869,7 +1998,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_text: bool = False) -> list[_MessageT]:
+def strip_advisor_blocks_from_messages(
+    messages: list[_MessageT], replace_with_text: bool = False, drop_params: object = None
+) -> list[_MessageT]:
     """
     Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
     from assistant message content.
@@ -1880,79 +2011,101 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
     control or on a follow-up turn.
 
     Args:
-        messages: Conversation history to process (mutated in-place).
+        messages: Conversation history to process. A message that changes is returned as a copy.
         replace_with_text: When True, replace the advisor exchange with an
             <advisor_feedback> text block so the executor retains the semantic
             context of what the advisor said.  When False (default), strip silently.
+        drop_params: The request's drop_params. When it is on, advisor blocks left without
+            their pair (a non-string or unmatched id) are dropped too, otherwise they reach
+            the provider as sent.
     """
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
+    drops_unpaired: Final = drops_unsupported_params(drop_params)
+    return [_message_without_advisor_blocks(message, replace_with_text, drops_unpaired) for message in messages]
 
-        # Collect advisor server_tool_use ids and their advice text (for replace mode).
-        advisor_id_to_text: dict[object, object] = {}
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "server_tool_use" and block.get("name") == "advisor":
-                bid = block.get("id")
-                if bid:
-                    advisor_id_to_text[bid] = None  # text filled in below
 
-        if not advisor_id_to_text:
-            continue
+def _message_without_advisor_blocks(message: _MessageT, replace_with_text: bool, drops_unpaired: bool) -> _MessageT:
+    fields: Final = as_str_mapping(message)
+    content: Final = as_object_list(fields.get("content")) if fields and fields.get("role") == "assistant" else None
+    new_content: Final = (
+        None if content is None else _without_advisor_blocks(content, replace_with_text, drops_unpaired)
+    )
+    if new_content is None:
+        return message
+    stripped: Final = copy.copy(message)
+    if isinstance(stripped, dict):
+        stripped["content"] = new_content
+    return stripped
 
-        # If replacing, collect the advisor response text from advisor_tool_result blocks.
-        if replace_with_text:
-            for block in content:
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "advisor_tool_result"
-                    and block.get("tool_use_id") in advisor_id_to_text
-                ):
-                    raw = block.get("content") or ""
-                    text = (
-                        raw
-                        if isinstance(raw, str)
-                        else next(
-                            (b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text"),
-                            "",
-                        )
-                    )
-                    advisor_id_to_text[block["tool_use_id"]] = text
 
-        new_content = []
-        for block in content:
-            if not isinstance(block, dict):
-                new_content.append(block)
-                continue
-            is_advisor_use = (
-                block.get("type") == "server_tool_use"
-                and block.get("name") == "advisor"
-                and block.get("id") in advisor_id_to_text
-            )
-            is_advisor_result = (
-                block.get("type") == "advisor_tool_result" and block.get("tool_use_id") in advisor_id_to_text
-            )
-            if is_advisor_use:
-                if replace_with_text:
-                    advice = advisor_id_to_text.get(block.get("id")) or ""
-                    if advice:
-                        new_content.append(
-                            {
-                                "type": "text",
-                                "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>",
-                            }
-                        )
-                # else: drop silently
-            elif is_advisor_result:
-                pass  # always drop — replaced above (or stripped)
-            else:
-                new_content.append(block)
+def _without_advisor_blocks(
+    blocks: Sequence[object], replace_with_text: bool, drops_unpaired: bool
+) -> Sequence[object] | None:
+    paired: Final = _without_advisor_exchanges(blocks, replace_with_text)
+    if not drops_unpaired:
+        return paired
+    return list(filterfalse(_is_advisor_block, blocks if paired is None else paired))
 
-        message["content"] = new_content
-    return messages
+
+def _without_advisor_exchanges(blocks: Sequence[object], replace_with_text: bool) -> list[object] | None:
+    advisor_ids: Final = frozenset(filter(None, map(_advisor_use_id, blocks)))
+    if not advisor_ids:
+        return None
+    advice_by_id: Final[Mapping[str, str]] = (
+        MappingProxyType(
+            {
+                result_id: _advisor_result_text(block)
+                for block in blocks
+                if (result_id := _advisor_result_id(block)) in advisor_ids
+            }
+        )
+        if replace_with_text
+        else MappingProxyType({})
+    )
+    return list(chain.from_iterable(_without_advisor_exchange(block, advisor_ids, advice_by_id) for block in blocks))
+
+
+def _is_advisor_block(block: object) -> bool:
+    match message_field(block, "type"):
+        case "server_tool_use":
+            return message_field(block, "name") == "advisor"
+        case "advisor_tool_result":
+            return True
+        case _:
+            return False
+
+
+def _advisor_use_id(block: object) -> str | None:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None or mapping.get("type") != "server_tool_use" or mapping.get("name") != "advisor":
+        return None
+    return string_field(mapping, "id")
+
+
+def _advisor_result_id(block: object) -> str | None:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None or mapping.get("type") != "advisor_tool_result":
+        return None
+    return string_field(mapping, "tool_use_id")
+
+
+def _advisor_result_text(block: object) -> str:
+    raw: Final = message_field(block, "content") or ""
+    if isinstance(raw, str):
+        return raw
+    if message_field(raw, "type") == "advisor_result":
+        return string_field(raw, "text") or ""
+    text_parts: Final = (as_str_mapping(part) for part in parts_of(raw))
+    return next((string_field(part, "text") or "" for part in text_parts if part and part.get("type") == "text"), "")
+
+
+def _without_advisor_exchange(
+    block: object, advisor_ids: frozenset[str], advice_by_id: Mapping[str, str]
+) -> tuple[object, ...]:
+    use_id: Final = _advisor_use_id(block)
+    if use_id in advisor_ids:
+        advice: Final = advice_by_id.get(use_id, "")
+        return ({"type": "text", "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>"},) if advice else ()
+    return () if _advisor_result_id(block) in advisor_ids else (block,)
 
 
 def _assistant_blocks(message: AllAnthropicPassThroughMessageValues) -> tuple[object, ...]:
@@ -1970,9 +2123,9 @@ def _results_with_unloaded_tools(
 def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> bool:
     match message_field(block, "type"):
         case "server_tool_use":
-            return message_field(block, "id") in stale_ids
+            return string_field(block, "id") in stale_ids
         case "tool_search_tool_result":
-            return message_field(block, "tool_use_id") in stale_ids
+            return string_field(block, "tool_use_id") in stale_ids
         case _:
             return False
 
@@ -2181,7 +2334,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) ->
     return out
 
 
-def _replayable_message(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+def _replayable_message(message: dict[str, object]) -> dict | None:  # mutable-ok: Anthropic message payload shape
     if not isinstance(message, Mapping):
         return message
     content: Final = message.get("content")
@@ -2209,7 +2362,7 @@ def _with_native_redacted_data(block: object) -> object:
 
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
-    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+    messages: Sequence[dict[str, object]],  # mutable-ok: Anthropic message payload shape
 ) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking / redacted_thinking blocks that carry another provider's encrypted
@@ -2238,17 +2391,57 @@ def strip_unsignable_thinking_blocks_for_claude(
     messages: list[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     model: str,
     base_model: str | None = None,
+    *,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
 ) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking blocks Claude cannot verify (no signature, or another provider's
     encrypted reasoning) before /v1/messages sends the request to a Claude model on
     the native or chat adapter route, since Claude answers 400 to them, a pending
-    tool turn included. Other targets (DeepSeek, MiniMax, GLM) need their unsigned
-    reasoning replayed.
+    tool turn included. Other targets (DeepSeek, MiniMax, GLM), and a Claude name
+    served by one of their Anthropic-compatible hosts, need their unsigned reasoning replayed.
     """
-    if not any("claude" in name.lower() for name in (model, base_model or "")):
+    if not any(
+        verifies_claude_thinking_signatures(custom_llm_provider, name, api_base) for name in (model, base_model or "")
+    ):
         return messages
     return [m for m in map(_without_unsignable_thinking, messages) if m is not None]
+
+
+def _json_message_without_unsignable_thinking(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | None:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    kept: Final = [block for block in content if not is_unsignable_thinking_block(block)]
+    if len(kept) == len(content):
+        return message
+    return {**message, "content": kept} if kept else None
+
+
+def strip_unsigned_thinking_from_anthropic_messages(
+    messages: Sequence[Mapping[str, JsonValue]],
+) -> list[Mapping[str, JsonValue]]:  # mutable-ok: the count_tokens body sends messages as a JSON list
+    stripped: Final = (_json_message_without_unsignable_thinking(message) for message in messages)
+    return [message for message in stripped if message is not None]
+
+
+def _json_block_without_provider_specific_fields(block: JsonValue) -> JsonValue:
+    if not isinstance(block, dict) or "provider_specific_fields" not in block:
+        return block
+    return {key: value for key, value in block.items() if key != "provider_specific_fields"}
+
+
+def json_message_without_provider_specific_fields(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": [_json_block_without_provider_specific_fields(block) for block in content]}
+
+
+def anthropic_message_objects(messages: Sequence[JsonValue]) -> Sequence[Mapping[str, JsonValue]] | None:
+    objects: Final = tuple(message for message in messages if isinstance(message, dict))
+    return objects if len(objects) == len(messages) else None
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
@@ -2949,7 +3142,7 @@ def normalize_cache_control_in_anthropic_payload(
 
 
 def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
-    openai_headers: Final = {}
+    openai_headers: Final[dict[str, str]] = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]
     if "anthropic-ratelimit-requests-remaining" in headers:
@@ -2966,9 +3159,14 @@ def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dic
 
 
 def _anthropic_model_entry(
-    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str], listed_ids: Mapping[str, str]
+    model: ModelInfoResponse,
+    created_at: str,
+    display_names: Mapping[str, str],
+    listed_ids: Mapping[str, str],
+    descriptions: Mapping[str, str],
 ) -> Mapping[str, object]:
     listed_id: Final = listed_ids.get(model["id"])
+    description: Final = descriptions.get(model["id"])
     source: Final[Mapping[str, object]] = (
         MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
     )
@@ -2977,6 +3175,7 @@ def _anthropic_model_entry(
         "id": listed_id or model["id"],
         **source,
         "display_name": display_names.get(model["id"], model["id"]),
+        **({"description": description} if description is not None else {}),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
         "max_tokens": model.get("max_output_tokens"),
@@ -2987,6 +3186,8 @@ def create_anthropic_model_list_response(
     models: Sequence[ModelInfoResponse],
     display_names: Mapping[str, str] = MappingProxyType({}),
     listed_ids: Mapping[str, str] = MappingProxyType({}),
+    *,
+    descriptions: Mapping[str, str] = MappingProxyType({}),
 ) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
@@ -3003,7 +3204,9 @@ def create_anthropic_model_list_response(
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data: Final = [_anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models]
+    data: Final = [
+        _anthropic_model_entry(model, created_at, display_names, listed_ids, descriptions) for model in models
+    ]
     return {
         "data": data,
         "has_more": False,

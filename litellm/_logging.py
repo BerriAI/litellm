@@ -29,6 +29,7 @@ from litellm.constants import (
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
     QUANTITY_FIELD_NAME_WORDS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -425,7 +426,7 @@ def _replace_base64_run(match: "re.Match[str]") -> str:
     run: Final = match.group(0)
     if not _looks_like_base64(run):
         return run
-    return f"[base64_data truncated: {format_base64_size(len(run))}]"
+    return f"{TRUNCATED_BASE64_MARKER}{format_base64_size(len(run))}]"
 
 
 def _collapse_base64_runs(text: str, limit: int) -> str:

@@ -110,6 +110,7 @@ IGNORE_FUNCTIONS = [
     "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
     "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
+    "_without_token_data",  # guardrail fingerprint: max depth set (DEFAULT_MAX_RECURSE_DEPTH); hashes the subtree as is at the cap.
 ]
 
 

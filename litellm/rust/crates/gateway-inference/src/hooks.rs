@@ -2,15 +2,21 @@
 //! runs them. The [`Host`](crate::Host) the gateway was built with answers them, so a route
 //! tells what happened to its call and never learns which callbacks hear it.
 
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::{Arc, OnceLock},
+    time::SystemTime,
+};
 
 use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream};
+use litellm_framer::sse::SseBlock;
 use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
+use litellm_router_core::Deployment;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -66,8 +72,15 @@ pub enum HookError {
 pub struct ServedCall {
     /// The model group that served it, an alias resolved, as the proxy logs it.
     pub model_group: String,
+    /// The deployment that answered, `None` when the router no longer holds it.
+    pub deployment: Option<Arc<Deployment>>,
+    /// The provider's id for the answer, as the response or a stream's first event names it.
+    pub response_id: Option<String>,
     /// As Python's litellm `Usage` counts it, `None` for an answer that carries no usage.
     pub usage: Option<ChatCompletionsUsage>,
+    /// When a stream's first event arrived, `None` for a complete answer, which Python logs as
+    /// starting its completion when it ended.
+    pub first_event: Option<SystemTime>,
 }
 
 /// The hooks of one call, told in the order the proxy runs them:
@@ -104,25 +117,26 @@ pub trait CallHooks: Send + Sync + 'static {
     fn failed(&self) -> impl Future<Output = ()> + Send;
 }
 
-/// A served call's answer with what the success log is told once it goes out, `None` for a
-/// stream, which tells its own end.
-pub(crate) struct Answer {
+/// A served call's response with the success log to send once it goes out, `None` for a
+/// stream, which sends its own when it ends.
+pub(crate) struct HookResponse {
     response: Response,
-    complete: Option<ServedCall>,
+    success_log: Option<ServedCall>,
 }
 
-/// What the hooks made of a served call before its answer is rendered.
-pub(crate) struct Told {
-    added: HeaderMap,
-    complete: Option<ServedCall>,
+/// What the post-call hooks leave for a served call's response: the headers the callbacks add,
+/// and the success log of a complete answer.
+pub(crate) struct PostCall {
+    headers: HeaderMap,
+    success_log: Option<ServedCall>,
 }
 
-impl Told {
+impl PostCall {
     /// `response` with the headers the callbacks add.
-    pub(crate) fn answer(self, response: impl IntoResponse) -> Answer {
-        Answer {
-            response: (self.added, response).into_response(),
-            complete: self.complete,
+    pub(crate) fn answer(self, response: impl IntoResponse) -> HookResponse {
+        HookResponse {
+            response: (self.headers, response).into_response(),
+            success_log: self.success_log,
         }
     }
 }
@@ -140,7 +154,7 @@ pub(crate) async fn around<H, F, Fut>(
 where
     H: Host,
     F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
-    Fut: Future<Output = Result<Answer, Ended>>,
+    Fut: Future<Output = Result<HookResponse, Ended>>,
 {
     let hooks = Arc::new(gateway.host.hooks(identity));
     let served = match hooks.pre_call(body).await {
@@ -148,8 +162,11 @@ where
         Err(ended) => Err(ended.into()),
     };
     match served {
-        Ok(Answer { response, complete }) => {
-            if let Some(served) = complete {
+        Ok(HookResponse {
+            response,
+            success_log,
+        }) => {
+            if let Some(served) = success_log {
                 record::spawn_in_call(async move { hooks.succeeded(served).await });
             }
             Ok(response)
@@ -161,47 +178,104 @@ where
     }
 }
 
-/// Tells the hooks about the `outcome` that served a call of route `E`, which `model_group`
-/// served. A complete answer tells what it counted, and a stream tells how it went once it ends,
-/// through the same `stream_outcome::watched` the router hears it from.
-pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
+/// What served a call: the model group, an alias resolved, and the deployment that answered.
+pub(crate) struct ServedBy {
+    pub(crate) model_group: String,
+    pub(crate) deployment: Option<Arc<Deployment>>,
+}
+
+/// What a stream's events told of its answer before it ended: when the first one arrived and the
+/// id the provider gave the answer.
+#[derive(Default)]
+struct StreamSeen {
+    first_event: OnceLock<SystemTime>,
+    response_id: OnceLock<String>,
+}
+
+impl StreamSeen {
+    fn see(&self, block: &SseBlock, response_id: fn(&str) -> Option<String>) {
+        let Some(event) = block.event.as_ref() else {
+            return;
+        };
+        let _ = self.first_event.get_or_init(SystemTime::now);
+        if self.response_id.get().is_none()
+            && let Some(id) = response_id(&event.data)
+        {
+            let _ = self.response_id.set(id);
+        }
+    }
+}
+
+/// Runs the post-call hooks on the `outcome` that served a call of route `E`, which `served` says
+/// served it. A complete answer tells what it counted, and a stream tells how it went once it
+/// ends, through the same `stream_outcome::watched` the router hears it from.
+pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
     hooks: &Arc<K>,
     outcome: &mut E::Outcome,
-    model_group: String,
-) -> Result<Told, Ended> {
+    served: ServedBy,
+) -> Result<PostCall, Ended> {
+    let ServedBy {
+        model_group,
+        deployment,
+    } = served;
     let Some((chunks, read)) = E::held(outcome) else {
         hooks.post_call_success().await?;
-        return Ok(Told {
-            added: hooks.response_headers().await,
-            complete: Some(ServedCall {
+        return Ok(PostCall {
+            headers: hooks.response_headers().await,
+            success_log: Some(ServedCall {
                 model_group,
+                deployment,
+                response_id: E::response_id(outcome),
                 usage: E::counts(outcome).and_then(E::usage),
+                first_event: None,
             }),
         });
     };
-    let told = Told {
-        added: hooks.response_headers().await,
-        complete: None,
+    let post_call = PostCall {
+        headers: hooks.response_headers().await,
+        success_log: None,
     };
     let hooks = hooks.clone();
     let usage: fn(Counts) -> Option<ChatCompletionsUsage> = E::usage;
-    let unwatched = std::mem::replace(chunks, stream::empty().boxed());
+    let response_id: fn(&str) -> Option<String> = E::stream_response_id;
+    let seen = Arc::new(StreamSeen::default());
+    let seeing = seen.clone();
+    let unwatched = std::mem::replace(chunks, stream::empty().boxed())
+        .inspect(move |block| {
+            if let Ok(block) = block {
+                seeing.see(block, response_id);
+            }
+        })
+        .boxed();
     *chunks = stream_outcome::watched(
         unwatched,
         read,
         stream_outcome::broke,
         move |outcome: Outcome| {
-            let (hooks, model_group) = (hooks.clone(), model_group.clone());
+            let (hooks, model_group, deployment, seen) = (
+                hooks.clone(),
+                model_group.clone(),
+                deployment.clone(),
+                seen.clone(),
+            );
             async move {
                 match outcome {
                     Ok(counts) => {
-                        let usage = usage(counts);
-                        hooks.succeeded(ServedCall { model_group, usage }).await;
+                        let served = ServedCall {
+                            model_group,
+                            deployment,
+                            response_id: seen.response_id.get().cloned(),
+                            usage: usage(counts),
+                            first_event: record::read(record::CallState::first_event)
+                                .flatten()
+                                .or_else(|| seen.first_event.get().copied()),
+                        };
+                        hooks.succeeded(served).await;
                     }
                     Err(_) => hooks.failed().await,
                 }
             }
         },
     );
-    Ok(told)
+    Ok(post_call)
 }

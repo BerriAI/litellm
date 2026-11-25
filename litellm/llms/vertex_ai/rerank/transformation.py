@@ -13,7 +13,14 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import int_of, iter_items, json_contains, require_get, subscript
+from litellm.litellm_core_utils.core_helpers import (
+    int_of,
+    iter_items,
+    json_contains,
+    length_of,
+    require_get,
+    subscript,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
@@ -46,7 +53,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> str:
         """
         Get the complete URL for the Vertex AI Discovery Engine ranking API
@@ -81,7 +88,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict[str, str | None]:
         """
@@ -117,7 +124,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         optional_rerank_params: dict,
         headers: Mapping[str, object],
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> dict:
         """
         Transform the request from Cohere format to Vertex AI Discovery Engine format
@@ -167,7 +174,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
+        request_data: dict[str, object] = {},
         optional_params: Mapping[str, object] = {},
         litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
@@ -215,7 +222,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
-        input_record_count: Final = len(request_data.get("records", ()))
+        input_record_count: Final = length_of(request_data.get("records", ()))
         search_units: Final = math.ceil(input_record_count / self.MAX_RECORDS_PER_SEARCH_UNIT)
         meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=search_units))
 

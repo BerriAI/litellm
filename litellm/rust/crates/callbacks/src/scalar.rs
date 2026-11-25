@@ -23,6 +23,18 @@ pub enum Scalar {
     },
 }
 
+impl From<String> for Scalar {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<&str> for Scalar {
+    fn from(text: &str) -> Self {
+        Self::Text(text.to_owned())
+    }
+}
+
 impl Scalar {
     pub fn truthy(&self) -> bool {
         match self {

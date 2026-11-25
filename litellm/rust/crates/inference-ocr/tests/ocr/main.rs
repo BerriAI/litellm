@@ -28,6 +28,7 @@ mod documents;
 mod lifecycle;
 mod machine;
 mod mistral;
+mod nace;
 mod reducto;
 mod vertex_ai;
 

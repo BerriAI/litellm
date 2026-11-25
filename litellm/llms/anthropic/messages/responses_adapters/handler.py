@@ -469,7 +469,9 @@ def _build_responses_kwargs(
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
-    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    from litellm.responses.bridge_check import drop_refused_forwarded_reasoning
+
+    forwarded_kwargs: Final = drop_refused_forwarded_reasoning(_forwarded_kwargs(extra_kwargs), model=model)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
     unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs)
     if unsupported_param_error is not None:
