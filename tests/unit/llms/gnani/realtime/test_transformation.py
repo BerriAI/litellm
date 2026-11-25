@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from litellm import Router
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.gnani.realtime.audio import GnaniAudioStream
@@ -185,6 +186,19 @@ def test_prisma_v25_needs_one_explicit_language_before_audio(deployment_headers:
 
 def test_unknown_gnani_model_cannot_fall_back_to_another_prisma_version() -> None:
     assert ProviderConfigManager.get_provider_realtime_config("unknown-prisma", LlmProviders.GNANI) is None
+
+
+def test_a_deployment_with_a_stored_transcription_only_endpoint_list_keeps_realtime_on() -> None:
+    Router(
+        model_list=[
+            {
+                "model_name": "stale-admin-ui-save",
+                "litellm_params": {"model": "gnani/prisma-v3.0", "api_key": "deployment-key"},
+                "model_info": {"supported_endpoints": ["/v1/audio/transcriptions"]},
+            }
+        ]
+    )
+    assert ProviderConfigManager.get_provider_realtime_config("prisma-v3.0", LlmProviders.GNANI) is not None
 
 
 def test_opening_and_updating_a_session_preserves_the_client_rate_and_acknowledged_language() -> None:

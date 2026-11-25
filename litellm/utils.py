@@ -12008,10 +12008,7 @@ class ProviderConfigManager:
             from litellm.llms.gnani.common_utils import is_prisma_v25
             from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
 
-            gnani_info: Final = lookup_model_info_for_registration(model, provider.value)
-            if isinstance(gnani_info, ModelInfoLookupMiss) or "/v1/realtime" not in (
-                gnani_info.get("supported_endpoints") or ()
-            ):
+            if isinstance(lookup_model_info_for_registration(model, provider.value), ModelInfoLookupMiss):
                 return None
             return GnaniRealtimeConfig(drop_params=drop_params, requires_explicit_language=is_prisma_v25(model))
         if LlmProviders.SONIOX == provider:
