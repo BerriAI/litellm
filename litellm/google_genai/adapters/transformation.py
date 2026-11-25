@@ -1,9 +1,8 @@
 import json
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
-from itertools import accumulate, chain, groupby, pairwise, repeat
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypeVar, cast
+from typing import Any, Final, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -13,7 +12,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
-from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict, skipped_tool_result
+from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -65,14 +64,12 @@ class _GenAIPart(TypedDict, total=False):
 
 
 class _GenAIFunctionResponse(TypedDict, total=False):
-    id: ReadOnly[JsonValue]
     name: ReadOnly[str]
     response: ReadOnly[object]
     parts: ReadOnly[object]
 
 
 class _GenAIRequestFunctionCall(TypedDict, total=False):
-    id: ReadOnly[JsonValue]
     name: ReadOnly[str]
     args: ReadOnly[object]
 
@@ -211,16 +208,15 @@ def _genai_message_parts(parts: object) -> tuple[_GenAIMessagePart, ...]:
     return tuple(converted for part in items if (converted := _genai_message_part(part)) is not None)
 
 
-def _genai_function_response(part: object) -> _GenAIFunctionResponse | None:
+def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
-    return _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
+    response: Final = _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
         _GENAI_FUNCTION_RESPONSE, fields.get("function_response")
     )
-
-
-def _genai_tool_response(response: _GenAIFunctionResponse, tool_call_id: str) -> ChatCompletionToolMessage:
+    if response is None:
+        return None
     result: Final = json.dumps(response.get("response", {}))
     media_fields: Final = (
         part_fields
@@ -230,23 +226,22 @@ def _genai_tool_response(response: _GenAIFunctionResponse, tool_call_id: str) ->
     media: Final = tuple(converted for fields in media_fields if (converted := _genai_media_part(fields)) is not None)
     return ChatCompletionToolMessage(
         role="tool",
-        tool_call_id=tool_call_id,
+        tool_call_id=f"call_{response.get('name', 'unknown')}",
         content=[ChatCompletionTextObject(type="text", text=result), *media] if media else result,
     )
 
 
-def _genai_function_call(part: object) -> _GenAIRequestFunctionCall | None:
+def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
-    return _validated(_GENAI_FUNCTION_CALL, fields.get("functionCall")) or _validated(
+    call: Final = _validated(_GENAI_FUNCTION_CALL, fields.get("functionCall")) or _validated(
         _GENAI_FUNCTION_CALL, fields.get("function_call")
     )
-
-
-def _genai_tool_call(call: _GenAIRequestFunctionCall, call_id: str) -> ChatCompletionAssistantToolCall:
+    if call is None:
+        return None
     return ChatCompletionAssistantToolCall(
-        id=call_id,
+        id=f"call_{call.get('name', 'unknown')}",
         type="function",
         function=ChatCompletionToolCallFunctionChunk(
             name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
@@ -254,152 +249,14 @@ def _genai_tool_call(call: _GenAIRequestFunctionCall, call_id: str) -> ChatCompl
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _GenAITurn:
-    role: Literal["user", "model"]
-    parts: tuple[_GenAIMessagePart, ...]
-    calls: tuple[_GenAIRequestFunctionCall, ...]
-    responses: tuple[_GenAIFunctionResponse, ...]
-
-
-def _genai_turn(content: object) -> _GenAITurn | None:
+def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
     fields: Final = _validated(_CONFIG_FIELDS, content)
     if fields is None:
-        return None
+        return ()
     parts: Final = _genai_content_parts(fields.get("parts", ()))
     converted: Final = _genai_message_parts(parts)
-    match fields.get("role", "user"):
-        case "user":
-            responses: Final = tuple(
-                response for part in parts if (response := _genai_function_response(part)) is not None
-            )
-            return _GenAITurn(role="user", parts=converted, calls=(), responses=responses)
-        case "model":
-            calls: Final = tuple(call for part in parts if (call := _genai_function_call(part)) is not None)
-            return _GenAITurn(role="model", parts=converted, calls=calls, responses=())
-        case _:
-            return None
-
-
-def _function_name(item: _GenAIRequestFunctionCall | _GenAIFunctionResponse) -> str:
-    return item.get("name", "unknown")
-
-
-def _caller_id(item: _GenAIRequestFunctionCall | _GenAIFunctionResponse) -> str | None:
-    caller_id: Final = item.get("id")
-    return caller_id if isinstance(caller_id, str) and caller_id else None
-
-
-def _genai_call_ids(calls: Sequence[_GenAIRequestFunctionCall]) -> tuple[str, ...]:
-    first_call_by_name: Final = MappingProxyType(
-        {_function_name(call): index for index, call in reversed(tuple(enumerate(calls)))}
-    )
-    return tuple(
-        f"call_{name}" if first_call_by_name[name] == index else f"call{index}"
-        for index, name in enumerate(map(_function_name, calls))
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _OpenCall:
-    key: str
-    turn: int
-    index: int
-
-
-@dataclass(frozen=True, slots=True)
-class _UnpairedResponse:
-    key: str
-    turn: int
-    index: int
-
-
-_PairingEvent: TypeAlias = _OpenCall | _UnpairedResponse
-
-
-def _bracket_order(event: _PairingEvent) -> tuple[str, int, int]:
-    match event:
-        case _OpenCall():
-            return (event.key, event.turn, -event.index)
-        case _UnpairedResponse():
-            return (event.key, event.turn, event.index)
-
-
-def _open_calls_after(open_calls: int, event: _PairingEvent) -> int:
-    match event:
-        case _OpenCall():
-            return open_calls + 1
-        case _UnpairedResponse():
-            return max(open_calls - 1, 0)
-
-
-def _bracket_pairs(events: Sequence[_PairingEvent]) -> Iterator[tuple[int, int]]:
-    open_before: Final = tuple(accumulate(events, _open_calls_after, initial=0))
-    depths: Final = tuple(
-        open_before[index] + 1 if isinstance(event, _OpenCall) else open_before[index]
-        for index, event in enumerate(events)
-    )
-    by_depth: Final = tuple(events[index] for index in sorted(range(len(events)), key=depths.__getitem__))
-    return (
-        (later.index, earlier.index)
-        for earlier, later in pairwise(by_depth)
-        if isinstance(earlier, _OpenCall) and isinstance(later, _UnpairedResponse)
-    )
-
-
-def _turn_of_each(counts: Iterable[int]) -> tuple[int, ...]:
-    return tuple(chain.from_iterable(repeat(turn, count) for turn, count in enumerate(counts)))
-
-
-def _bracket_paired_calls(open_calls: Iterable[_OpenCall], unpaired: Iterable[_UnpairedResponse]) -> Mapping[int, int]:
-    events: Final = sorted(chain(open_calls, unpaired), key=_bracket_order)
-    return MappingProxyType(
-        dict(
-            chain.from_iterable(
-                _bracket_pairs(tuple(same_key)) for _, same_key in groupby(events, key=lambda event: event.key)
-            )
-        )
-    )
-
-
-def _genai_answered_calls(turns: Sequence[_GenAITurn]) -> tuple[int | None, ...]:
-    calls: Final = tuple(chain.from_iterable(turn.calls for turn in turns))
-    responses: Final = tuple(chain.from_iterable(turn.responses for turn in turns))
-    call_turns: Final = _turn_of_each(len(turn.calls) for turn in turns)
-    response_turns: Final = _turn_of_each(len(turn.responses) for turn in turns)
-    by_caller_id: Final = _bracket_paired_calls(
-        (
-            _OpenCall(caller_id, call_turns[index], index)
-            for index, call in enumerate(calls)
-            if (caller_id := _caller_id(call))
-        ),
-        (
-            _UnpairedResponse(response_id, response_turns[index], index)
-            for index, response in enumerate(responses)
-            if (response_id := _caller_id(response))
-        ),
-    )
-    answered_by_id: Final = frozenset(by_caller_id.values())
-    by_name: Final = _bracket_paired_calls(
-        (
-            _OpenCall(_function_name(call), call_turns[index], index)
-            for index, call in enumerate(calls)
-            if index not in answered_by_id
-        ),
-        (
-            _UnpairedResponse(_function_name(response), response_turns[index], index)
-            for index, response in enumerate(responses)
-            if index not in by_caller_id
-        ),
-    )
-    return tuple(by_caller_id.get(index, by_name.get(index)) for index in range(len(responses)))
-
-
-def _genai_turn_messages(
-    turn: _GenAITurn, call_ids: Sequence[str], response_ids: Sequence[str]
-) -> tuple[AllMessageValues, ...]:
-    converted: Final = turn.parts
-    if turn.role == "user":
+    role: Final = fields.get("role", "user")
+    if role == "user":
         user_message: Final = (
             (
                 ChatCompletionUserMessage(
@@ -412,62 +269,17 @@ def _genai_turn_messages(
             if converted
             else ()
         )
-        return (*user_message, *map(_genai_tool_response, turn.responses, response_ids))
+        responses: Final = tuple(response for part in parts if (response := _genai_tool_response(part)) is not None)
+        return (*user_message, *responses)
+    if role != "model":
+        return ()
     text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
-    calls: Final = list(map(_genai_tool_call, turn.calls, call_ids))
+    calls: Final = [call for part in parts if (call := _genai_tool_call(part)) is not None]
     assistant_content: Final = list(converted) if any(part["type"] != "text" for part in converted) else text or None
     return (
-        (ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls),)
+        ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls)
         if calls
-        else (ChatCompletionAssistantMessage(role="assistant", content=assistant_content),)
-    )
-
-
-def _last_answering_turn(turns: Sequence[_GenAITurn], index: int) -> int:
-    next_model_turn: Final = next(
-        (later for later in range(index + 1, len(turns)) if turns[later].role == "model"), len(turns)
-    )
-    return max((later for later in range(index + 1, next_model_turn) if turns[later].responses), default=index)
-
-
-def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValues, ...]:
-    turns: Final = tuple(turn for content in contents if (turn := _genai_turn(content)) is not None)
-    calls: Final = tuple(chain.from_iterable(turn.calls for turn in turns))
-    call_ids: Final = _genai_call_ids(calls)
-    answered_calls: Final = _genai_answered_calls(turns)
-    responses: Final = tuple(chain.from_iterable(turn.responses for turn in turns))
-    response_ids: Final = tuple(
-        call_ids[call_index] if call_index is not None else f"call_{_function_name(response)}"
-        for call_index, response in zip(answered_calls, responses)
-    )
-    answered: Final = frozenset(call_index for call_index in answered_calls if call_index is not None)
-    call_turns: Final = _turn_of_each(len(turn.calls) for turn in turns)
-    skipped: Final = tuple(index not in answered and call_turns[index] < len(turns) - 1 for index in range(len(calls)))
-    call_starts: Final = tuple(accumulate((len(turn.calls) for turn in turns), initial=0))
-    response_starts: Final = tuple(accumulate((len(turn.responses) for turn in turns), initial=0))
-    skipped_results: Final = tuple(
-        tuple(
-            skipped_tool_result(call_id, _function_name(call))
-            for call, call_id, is_skipped in zip(turn.calls, call_ids[start:end], skipped[start:end])
-            if is_skipped
-        )
-        for turn, (start, end) in zip(turns, pairwise(call_starts))
-    )
-    skipped_after: Final = MappingProxyType(
-        {_last_answering_turn(turns, index): results for index, results in enumerate(skipped_results) if results}
-    )
-    return tuple(
-        chain.from_iterable(
-            (
-                *_genai_turn_messages(
-                    turn,
-                    call_ids[call_starts[index] : call_starts[index + 1]],
-                    response_ids[response_starts[index] : response_starts[index + 1]],
-                ),
-                *skipped_after.get(index, ()),
-            )
-            for index, turn in enumerate(turns)
-        )
+        else ChatCompletionAssistantMessage(role="assistant", content=assistant_content),
     )
 
 
@@ -826,7 +638,7 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]
             else ()
         )
-        return [*system_messages, *_genai_contents_messages(contents)]
+        return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
 
     def translate_completion_to_generate_content(
         self,

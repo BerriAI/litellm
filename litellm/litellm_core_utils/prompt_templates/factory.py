@@ -76,7 +76,6 @@ from .common_utils import (
     native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
-    skipped_tool_result,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
 
@@ -2587,9 +2586,7 @@ def _add_missing_tool_results(
         j += 1
 
     # Find missing tool results
-    missing_tool_call_ids: Final = frozenset(
-        call_id for call_id in expected_tool_call_ids - found_tool_call_ids if isinstance(call_id, str)
-    )
+    missing_tool_call_ids: Final = expected_tool_call_ids - found_tool_call_ids
 
     if missing_tool_call_ids:
         verbose_logger.debug(
@@ -2625,9 +2622,12 @@ def _add_missing_tool_results(
                             tool_name = getattr(function, "name", "unknown_tool")
                     break
 
-            result_messages.append(
-                skipped_tool_result(tool_call_id, tool_name if isinstance(tool_name, str) else "unknown_tool")
-            )
+            dummy_tool_result: ChatCompletionToolMessage = {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": f"[System: Tool execution skipped/interrupted by user. No result provided for tool '{tool_name}'.]",
+            }
+            result_messages.append(dummy_tool_result)
 
         # Return the messages and the number of original messages to skip
         return (result_messages, len(actual_tool_results))
