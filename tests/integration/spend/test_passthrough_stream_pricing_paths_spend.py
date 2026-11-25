@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from math import isclose
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -11,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 import yaml
+from integration._support.claude_code import message_reply, text_stream
 from integration._support.client import Gateway, eventually, gateway_from_environment, held
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
@@ -26,6 +28,10 @@ _CALLER_GOOGLE_TOKEN: Final = "caller-google-token"
 _GEMINI: Final = "gemini-3.5-flash-lite"
 _CLAUDE_ROUTE_MODEL: Final = "claude-haiku-4-5"
 _CLAUDE_SERVED_MODEL: Final = "claude-haiku-4-5-20251001"
+_MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
+_MANTLE_MODEL: Final = "anthropic.claude-haiku-4-5"
+_CACHE_READ_TOKENS: Final = 80
+_CACHE_WRITE_TOKENS: Final = 20
 _OPENAI_MODEL: Final = "gpt-5.6"
 _PROMPT_TOKENS: Final = 1200
 _COMPLETION_TOKENS: Final = 300
@@ -38,6 +44,8 @@ _HOSTS: Final = (
     "us-east5-aiplatform.googleapis.com",
     "generativelanguage.googleapis.com",
     "api.openai.com",
+    "api.anthropic.com",
+    _MANTLE_HOST,
 )
 _COST_MAP: Final = Path("litellm/model_prices_and_context_window_backup.json")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -188,6 +196,22 @@ def _finished_background_response(request: Request) -> Reply:
 
 
 def _upstream(request: Request) -> Reply:
+    if request.target in ("/anthropic/v1/messages", "/v1/messages"):
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        identity: Final = f"msg_{uuid.uuid4().hex}"
+        usage: Final = {
+            "input_tokens": _PROMPT_TOKENS,
+            "output_tokens": _COMPLETION_TOKENS,
+            "cache_read_input_tokens": _CACHE_READ_TOKENS,
+            "cache_creation_input_tokens": _CACHE_WRITE_TOKENS,
+        }
+        if body["stream"]:
+            return Reply(
+                content_type="text/event-stream", chunks=text_stream(identity, _CLAUDE_SERVED_MODEL, "scripted", usage)
+            )
+        return Reply(
+            body=message_reply(identity, _CLAUDE_SERVED_MODEL, ({"type": "text", "text": "scripted"},), dict(usage))
+        )
     if request.target.startswith("/v1/chat/completions"):
         return _openai_reply(request)
     if request.target.startswith("/v1/responses/"):
@@ -249,7 +273,24 @@ def _config(directory: Path, token_url: str) -> Path:
         "model_info": {"id": _CUSTOM_PRICED_GEMINI_ID},
     }
     path: Final = directory / "config.yaml"
-    path.write_text(yaml.safe_dump({**base, "model_list": [*existing, *deployments, custom_priced_gemini]}))
+    settings: Final = base["general_settings"]
+    assert isinstance(settings, dict), settings
+    endpoints: Final = [
+        {"path": f"/audit-{name}", "target": target, "include_subpath": True, "auth": True}
+        for name, target in (
+            ("mantle", f"https://{_MANTLE_HOST}/anthropic"),
+            ("anthropic", "https://api.anthropic.com"),
+        )
+    ]
+    path.write_text(
+        yaml.safe_dump(
+            {
+                **base,
+                "model_list": [*existing, *deployments, custom_priced_gemini],
+                "general_settings": {**settings, "pass_through_endpoints": endpoints},
+            }
+        )
+    )
     return path
 
 
@@ -323,7 +364,8 @@ def gateway_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
 def _spend_row(gateway: Gateway, key: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: gateway.rows(
-            'SELECT spend, custom_llm_provider FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            "SELECT spend, custom_llm_provider, prompt_tokens, completion_tokens, total_tokens "
+            'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (sha256(key.encode()).hexdigest(),),
         ),
         lambda found: len(found) == 1,
@@ -362,6 +404,51 @@ def _claude_path(location: str, action: str) -> str:
         f"/vertex_ai/v1/projects/{_PROJECT}/locations/{location}/publishers/anthropic/models/"
         f"{_CLAUDE_ROUTE_MODEL}:{action}"
     )
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "sse"))
+@pytest.mark.parametrize(
+    ("route", "host", "request_model", "provider", "price_key"),
+    (
+        ("mantle", _MANTLE_HOST, _MANTLE_MODEL, "bedrock_mantle", f"bedrock_mantle/{_MANTLE_MODEL}"),
+        ("anthropic", "api.anthropic.com", _CLAUDE_ROUTE_MODEL, "anthropic", _CLAUDE_SERVED_MODEL),
+    ),
+    ids=("mantle", "anthropic"),
+)
+def test_configured_messages_passthrough_persists_provider_usage_and_spend(
+    rig: _Rig, route: str, host: str, request_model: str, provider: str, price_key: str, stream: bool
+) -> None:
+    path: Final = f"/audit-{route}"
+    body: Final[Mapping[str, JsonValue]] = {
+        "model": request_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 500,
+        "stream": stream,
+    }
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key(user_id=scenario.user(user_role="proxy_admin"))
+        rig.upstream.drain()
+        _post_and_read(rig, f"{path}/v1/messages", body, {"Authorization": f"Bearer {key}"})
+        forwarded: Final = rig.upstream.drain()
+        assert len(forwarded) == 1
+        assert forwarded[0].headers["host"] == host
+        assert _JSON_OBJECT.validate_json(forwarded[0].body) == body
+        row: Final = _spend_row(rig.proxy, key)
+    prompt: Final = _PROMPT_TOKENS + _CACHE_READ_TOKENS + _CACHE_WRITE_TOKENS
+    assert row["custom_llm_provider"] == provider, row
+    assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (
+        prompt,
+        _COMPLETION_TOKENS,
+        prompt + _COMPLETION_TOKENS,
+    )
+    prices: Final = _cost_row(price_key)
+    cache_read: Final = prices["cache_read_input_token_cost"]
+    cache_write: Final = prices["cache_creation_input_token_cost"]
+    assert isinstance(cache_read, float) and isinstance(cache_write, float), prices
+    expected: Final = _list_price(price_key) + _CACHE_READ_TOKENS * cache_read + _CACHE_WRITE_TOKENS * cache_write
+    spend: Final = row["spend"]
+    assert isinstance(spend, float), row
+    assert isclose(spend, expected), (spend, expected)
 
 
 def test_claude_on_vertex_passthrough_spend_carries_the_regional_uplift_whether_or_not_the_call_streams(
