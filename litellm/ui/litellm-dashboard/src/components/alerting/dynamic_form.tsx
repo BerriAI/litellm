@@ -1,5 +1,4 @@
 import React from "react";
-import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { CircleCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { isEmptyAlertingSubmission } from "./mapper";
+import { alertingFormSchema, type AlertingFormValues } from "./schema";
 
 interface AlertingSetting {
   field_name: string;
@@ -25,8 +27,6 @@ interface DynamicFormProps {
   premiumUser: boolean;
 }
 
-type AlertingFormValues = Record<string, string | boolean>;
-
 const DynamicForm: React.FC<DynamicFormProps> = ({
   alertingSettings,
   handleInputChange,
@@ -35,16 +35,10 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   premiumUser,
 }) => {
   const { t } = useTranslation();
-  const form = useForm<AlertingFormValues>({ defaultValues: {} });
+  const form = useZodForm(alertingFormSchema, { defaultValues: {} });
 
   const onFinish = (formData: AlertingFormValues) => {
-    const isEmpty = Object.entries(formData).every(([, value]) => {
-      if (typeof value === "boolean") {
-        return false;
-      }
-      return value === "" || value === null || value === undefined;
-    });
-    if (!isEmpty) {
+    if (!isEmptyAlertingSubmission(formData)) {
       handleSubmit(formData);
     }
   };

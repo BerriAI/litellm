@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
+import { toAlertingWrites } from "./mapper";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 interface alertingSettingsItem {
@@ -57,15 +58,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    const initialFormValues: Record<string, any> = {};
-
-    alertingSettings.forEach((setting) => {
-      initialFormValues[setting.field_name] = setting.field_value;
-    });
-
-    // Merge initialFormValues with actual formValues
-    const mergedFormValues = { ...formValues, ...initialFormValues };
-    const { slack_alerting, ...alertingArgs } = mergedFormValues;
+    const { alertingArgs, slackAlerting: slack_alerting } = toAlertingWrites(formValues, alertingSettings);
     try {
       await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {

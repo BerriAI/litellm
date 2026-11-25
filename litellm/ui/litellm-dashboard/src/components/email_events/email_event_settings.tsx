@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from "react";
+import { Controller, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { getEmailEventSettings, updateEmailEventSettings, resetEmailEventSettings } from "../networking";
 import { EmailEvent } from "../../types";
-import { EmailEventSetting } from "./types";
+import { toEmailEventSettingsFields, toEmailEventSettingsUpdate } from "./mapper";
+import { emailEventSettingsSchema } from "./schema";
 
 interface EmailEventSettingsProps {
   accessToken: string | null;
@@ -17,7 +20,8 @@ interface EmailEventSettingsProps {
 const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) => {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
-  const [eventSettings, setEventSettings] = useState<EmailEventSetting[]>([]);
+  const { control, getValues, reset } = useZodForm(emailEventSettingsSchema, { defaultValues: { settings: [] } });
+  const eventSettings = useWatch({ control, name: "settings" });
 
   // Fetch email event settings on component mount
   useEffect(() => {
@@ -30,7 +34,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
     setLoading(true);
     try {
       const response = await getEmailEventSettings(accessToken);
-      setEventSettings(response.settings);
+      reset(toEmailEventSettingsFields(response));
     } catch (error) {
       console.error("Failed to fetch email event settings:", error);
       toast.fromError(error);
@@ -39,18 +43,11 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
     }
   };
 
-  const handleEnabledChange = (event: EmailEvent, checked: boolean) => {
-    const updatedSettings = eventSettings.map((setting) =>
-      setting.event === event ? { ...setting, enabled: checked } : setting,
-    );
-    setEventSettings(updatedSettings);
-  };
-
   const handleSaveSettings = async () => {
     if (!accessToken) return;
 
     try {
-      await updateEmailEventSettings(accessToken, { settings: eventSettings });
+      await updateEmailEventSettings(accessToken, toEmailEventSettingsUpdate(getValues()));
       toast.success(t("loggingAndAlerts.emailEvents.toasts.saved"));
     } catch (error) {
       console.error("Failed to update email event settings:", error);
@@ -112,13 +109,19 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
           </div>
         ) : (
           <div className="space-y-4">
-            {eventSettings.map((setting) => (
+            {eventSettings.map((setting, index) => (
               <div key={setting.event} className="flex items-start">
-                <Switch
-                  checked={setting.enabled}
-                  onCheckedChange={(checked) => handleEnabledChange(setting.event, checked)}
-                  aria-label={setting.event}
-                  className="mt-1"
+                <Controller
+                  control={control}
+                  name={`settings.${index}.enabled`}
+                  render={({ field }) => (
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      aria-label={setting.event}
+                      className="mt-1"
+                    />
+                  )}
                 />
                 <div className="ml-3">
                   <p className="text-sm">{setting.event}</p>
