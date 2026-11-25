@@ -40,6 +40,16 @@ def test_dashboard_discovers_webiq_with_its_display_name() -> None:
     ]
 
 
+def test_dashboard_omits_the_litellm_proxy_provider_its_form_cannot_configure() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    provider_names: Final = [provider["provider_name"] for provider in response.json()["providers"]]
+    assert "tavily" in provider_names
+    assert "litellm_proxy" not in provider_names
+
+
 @pytest.mark.asyncio
 async def test_list_search_tools_db_only(monkeypatch):
     """Test listing search tools when only DB tools exist"""

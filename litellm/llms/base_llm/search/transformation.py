@@ -119,6 +119,9 @@ class BaseSearchConfig:
     def forwarded_litellm_params(self) -> frozenset[str]:
         return frozenset()
 
+    def dashboard_configurable(self) -> bool:
+        return True
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Get HTTP method for search requests.
