@@ -782,6 +782,7 @@ mod tests {
         assert_eq!(Error::from(repr).is_unreachable_media(), expected);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn a_failed_download_is_unreachable_media_and_a_refused_provider_is_not() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");

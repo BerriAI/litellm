@@ -517,7 +517,6 @@ impl AttemptError {
         self.class_names().contains(&name)
     }
 
-    /// litellm refused the request before the call, and another attempt may not be refused.
     pub fn is_retried_refusal(&self) -> bool {
         self.is_a("UnsupportedEndpointError") || self.is_a("DocumentFetchError")
     }

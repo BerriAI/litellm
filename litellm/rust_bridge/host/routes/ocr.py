@@ -10,6 +10,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge import failures
+from litellm.rust_bridge._native import RustDocumentFetchError
 from litellm.rust_bridge.failures import UpstreamFailure
 from litellm.rust_bridge.public_call import optional_str
 
@@ -35,12 +36,14 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
             model=str(request["model"]).removeprefix(f"{request_provider}/"),
             llm_provider=request_provider,
         )
-    if getattr(error, "ocr_document_fetch_error", False):
-        return litellm.DocumentFetchError(
+    if isinstance(error, RustDocumentFetchError):
+        fetch_error: Final = litellm.DocumentFetchError(
             message=str(error),
             model=str(request["model"]).removeprefix(f"{request_provider}/"),
             llm_provider=request_provider,
         )
+        fetch_error.__context__ = error
+        return fetch_error
     return failures.map_native_failure(
         error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
     )

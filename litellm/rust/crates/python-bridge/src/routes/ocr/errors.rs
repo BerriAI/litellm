@@ -7,10 +7,9 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::errors::{by_fault, upstream_error};
+use crate::errors::{RustDocumentFetchError, by_fault, upstream_error};
 
 const REQUEST_FORMAT_ERROR: &str = "ocr_request_format_error";
-const DOCUMENT_FETCH_ERROR: &str = "ocr_document_fetch_error";
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
     Python::attach(|py| native(py, error).unwrap_or_else(std::convert::identity))
@@ -44,9 +43,7 @@ fn native(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             PyOSError::new_err(Report::new(cause.as_ref()).to_string())
         }
         (_, None) if error.is_unreachable_document() => {
-            let mapped = by_fault(true, &error);
-            mapped.value(py).setattr(DOCUMENT_FETCH_ERROR, true)?;
-            mapped
+            RustDocumentFetchError::new_err(Report::new(&error).to_string())
         }
         (_, None) => by_fault(error.is_request(), &error),
     };
@@ -173,8 +170,9 @@ mod tests {
         });
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn an_unreachable_document_is_a_flagged_bad_request() {
+    async fn an_unreachable_document_is_a_document_fetch_error() {
         use litellm_http::{Client, media::MediaFetcher};
         use litellm_llms::base_llm::ocr::{
             document::inline_remote_document, transformation::OcrConnection,
@@ -197,10 +195,12 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let mapped = to_pyerr(error);
+            assert!(
+                mapped.is_instance_of::<RustDocumentFetchError>(py),
+                "{mapped}"
+            );
             assert!(mapped.is_instance_of::<PyValueError>(py), "{mapped}");
             assert_eq!(status_code(py, &mapped), Some(400));
-            let flag = mapped.value(py).getattr(DOCUMENT_FETCH_ERROR).unwrap();
-            assert!(flag.extract::<bool>().unwrap());
         });
     }
 
@@ -216,8 +216,7 @@ mod tests {
             assert!(mapped.is_instance_of::<PyValueError>(py));
             assert_eq!(mapped.value(py).to_string(), report);
             assert_eq!(status_code(py, &mapped), Some(400));
-            let flag = mapped.value(py).getattr_opt(DOCUMENT_FETCH_ERROR).unwrap();
-            assert!(flag.is_none());
+            assert!(!mapped.is_instance_of::<RustDocumentFetchError>(py));
         });
     }
 

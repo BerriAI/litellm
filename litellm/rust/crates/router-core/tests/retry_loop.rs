@@ -184,7 +184,7 @@ async fn the_unary_loop_sleeps_once_more_after_its_last_failed_retry() {
     );
 }
 
-/// Unlike an endpoint a lone deployment refuses, its document may be reachable on the next try.
+#[rstest]
 #[tokio::test]
 async fn a_lone_deployment_retries_a_document_it_could_not_fetch() {
     let host = SleepingHost::failing("solo", vec![document_fetch(), document_fetch()]);
@@ -203,6 +203,7 @@ async fn a_lone_deployment_retries_a_document_it_could_not_fetch() {
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_document_that_stays_unreachable_falls_back_with_unsupported_params_fallbacks_off() {
     let host = SleepingHost::failing("solo", vec![document_fetch()]);

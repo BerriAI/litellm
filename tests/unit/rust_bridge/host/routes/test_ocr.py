@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.rust_bridge._native import RustDocumentFetchError
 from litellm.rust_bridge.host.routes.ocr import UpstreamFailure, map_failure
 from litellm.rust_bridge.host.routes.ocr import response as build_ocr_response
 from litellm.rust_bridge.public_call import NativeCall
@@ -30,11 +31,6 @@ class RustUpstreamError(Exception):
 
 class RustFormatError(Exception):
     ocr_request_format_error: Final = True
-
-
-class RustDocumentFetchError(ValueError):
-    ocr_document_fetch_error: Final = True
-    status_code: Final = 400
 
 
 def test_rust_ocr_response_retains_provider_native_response():
@@ -104,3 +100,4 @@ def test_map_failure_reports_an_unreachable_document_as_the_callers_bad_request(
     assert public_error.model == "mistral-ocr-latest"
     assert public_error.llm_provider == "mistral"
     assert public_error.message == "litellm.BadRequestError: media download failed: error sending request"
+    assert public_error.__context__ is error
