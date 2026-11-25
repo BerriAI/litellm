@@ -28,7 +28,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -551,8 +551,11 @@ _GEMINI_FILE_LIST_PATH: Final = re.compile(r"(?:^|/)files/?$")
 _PROMPT_TEXT_KEY: Final = "text"
 
 
-def _iter_gemini_file_references(value: object) -> Iterator[str]:
-    if isinstance(value, Mapping):
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _iter_gemini_file_references(value: JsonValue) -> Iterator[str]:
+    if isinstance(value, dict):
         for key, item in value.items():
             if key != _PROMPT_TEXT_KEY:
                 yield from _iter_gemini_file_references(item)
@@ -563,10 +566,10 @@ def _iter_gemini_file_references(value: object) -> Iterator[str]:
         yield value
 
 
-def _decoded_json(raw: bytes) -> object:
+def _decoded_json(raw: bytes) -> JsonValue:
     try:
-        return json.loads(raw)
-    except ValueError:
+        return _JSON_VALUE.validate_json(raw)
+    except ValidationError:
         return None
 
 
@@ -582,10 +585,15 @@ async def _enforce_gemini_passthrough_body_file_ownership(
         )
 
 
-def _listed_file_ids(listed: object) -> tuple[str, ...]:
-    if not isinstance(listed, Mapping):
+def _listed_file_ids(listed: JsonValue) -> tuple[str, ...]:
+    if not isinstance(listed, dict):
         return ()
-    return tuple(value for key in ("name", "uri") if isinstance(value := listed.get(key), str))
+    return tuple(value for value in (listed.get("name"), listed.get("uri")) if isinstance(value, str))
+
+
+def _iter_listed_file_ids(files: Sequence[JsonValue]) -> Iterator[str]:
+    for listed in files:
+        yield from _listed_file_ids(listed)
 
 
 async def _without_files_denied_to_caller(
@@ -598,9 +606,7 @@ async def _without_files_denied_to_caller(
     if not isinstance(listing, dict) or not isinstance(files, list):
         return response
     denied: Final = frozenset(
-        await guard.provider_file_ids_denied_to(
-            tuple(file_id for listed in files for file_id in _listed_file_ids(listed)), user_api_key_dict
-        )
+        await guard.provider_file_ids_denied_to(tuple(_iter_listed_file_ids(files)), user_api_key_dict)
     )
     if not denied:
         return response

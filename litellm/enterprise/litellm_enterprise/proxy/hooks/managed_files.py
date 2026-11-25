@@ -1201,27 +1201,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         batch's output/error files are first synced; ids with no row stay
         accessible so pass-through reads keep working.
         """
-        if self.prisma_client is None:
-            return
-        spellings: Final = list(provider_file_id_spellings(file_id))
-        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
-            where={
-                "OR": [
-                    {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
-                    {"flat_model_file_ids": {"hasSome": spellings}},
-                ]
-            }
-        )
-        for managed_file in managed_files:
-            if not can_access_resource(
-                user_api_key_dict=user_api_key_dict,
-                created_by=managed_file.created_by,
-                resource_team_id=managed_file.team_id,
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-                )
+        if await self.provider_file_ids_denied_to((file_id,), user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+            )
 
     async def provider_file_ids_denied_to(
         self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
@@ -1233,7 +1217,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         spellings_by_id: Final = MappingProxyType(
             {file_id: frozenset(provider_file_id_spellings(file_id)) for file_id in dict.fromkeys(file_ids)}
         )
-        spellings: Final = sorted(frozenset().union(*spellings_by_id.values()))
+        spellings: Final = sorted(frozenset(chain.from_iterable(spellings_by_id.values())))
         managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
             where={
                 "OR": [
