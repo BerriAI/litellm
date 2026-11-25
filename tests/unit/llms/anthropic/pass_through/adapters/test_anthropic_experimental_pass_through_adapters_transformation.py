@@ -2747,6 +2747,44 @@ def test_explicit_output_effort_beside_an_enabled_budget_reaches_a_non_claude_mo
     assert new_kwargs["reasoning_effort"] == reasoning_effort
 
 
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_explicit_output_effort_the_model_refuses_sends_what_the_budget_alone_sends_under_drop_params(
+    openai_model_without_low_tiers: str, drop_params: bool
+) -> None:
+    def sent_effort(output_config: Mapping[str, object]) -> object:
+        new_kwargs: Final = {"model": openai_model_without_low_tiers}
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(
+                Any,
+                {
+                    "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                    **output_config,
+                },
+            ),
+            cast(Any, new_kwargs),
+            custom_llm_provider="openai",
+            drop_params=drop_params,
+        )
+        return new_kwargs.get("reasoning_effort")
+
+    assert sent_effort({"output_config": {"effort": "low"}}) == (sent_effort({}) if drop_params else "low")
+
+
+def test_unknown_output_effort_beside_disabled_thinking_sends_none_without_a_drop_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    new_kwargs: Final = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(Any, {"thinking": {"type": "disabled"}, "output_config": {"effort": "turbo"}}),
+            cast(Any, new_kwargs),
+            drop_params=True,
+        )
+
+    assert new_kwargs["reasoning_effort"] == "none"
+    assert [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()] == []
+
+
 def test_thinking_disabled_translated_to_reasoning_effort_none_for_non_claude_model():
     adapter = LiteLLMAnthropicMessagesAdapter()
     thinking = {"type": "disabled"}

@@ -15,7 +15,10 @@ import respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
-from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -581,6 +584,33 @@ def test_build_responses_kwargs_lets_the_budget_decide_when_drop_params_drops_th
     )
 
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"] == ("medium" if drop_params else effort)
+
+
+LOW_BUDGET_THINKING: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize(
+    "effort, thinking",
+    [("minimal", LOW_BUDGET_THINKING), ("low", MEDIUM_BUDGET_THINKING)],
+    ids=["rounded-above-the-budget", "refused-by-the-model"],
+)
+def test_build_responses_kwargs_sends_what_the_budget_alone_sends_when_the_model_cannot_take_the_lower_effort(
+    openai_model_without_low_tiers: str, effort: str, thinking: dict[str, object], drop_params: bool
+) -> None:
+    def sent_reasoning(output_config: AnthropicOutputConfig | None) -> object:
+        return _build_responses_kwargs(
+            max_tokens=8000,
+            messages=MESSAGES,
+            model=openai_model_without_low_tiers,
+            output_config=output_config,
+            thinking=thinking,
+            extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+        ).get("reasoning")
+
+    assert sent_reasoning(cast(AnthropicOutputConfig, {"effort": effort})) == (
+        sent_reasoning(None) if drop_params or effort == "minimal" else {"effort": effort}
+    )
 
 
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])

@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_server
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.router_utils.reasoning_effort_capability import REASONING_EFFORT_STRENGTH_RANK
 from litellm.rust_bridge.public_call import optional_str
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -57,11 +58,10 @@ from ..utils import (
     REASONING_EFFORT_OFF,
     ClientEffort,
     ThinkingOffSwitch,
-    deployment_reasoning_efforts,
-    is_unconfirmed_none,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     maps_bare_output_effort,
+    model_excludes_effort,
     normalize_reasoning_effort_value,
     reasoning_off_level,
     thinking_off_switch,
@@ -237,7 +237,7 @@ def _reasoning_for_target(
         )
         return ClientEffort.DROPPED
     normalized: Final = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
-    if drop_params and _model_excludes_effort(
+    if drop_params and model_excludes_effort(
         normalized, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
     ):
         verbose_logger.warning(
@@ -255,13 +255,21 @@ def _responses_api_refuses_reasoning_effort(model: str, custom_llm_provider: str
     )
 
 
-def _model_excludes_effort(
-    effort: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
-) -> bool:
-    levels: Final = deployment_reasoning_efforts(model, custom_llm_provider, deployment_model_info) or ()
-    return (bool(levels) and effort not in levels) or is_unconfirmed_none(
-        effort, model, custom_llm_provider, deployment_model_info=deployment_model_info
-    )
+def _effort_rank(reasoning: object) -> int | None:
+    reasoning_params: Final = as_str_mapping(reasoning)
+    effort: Final = reasoning_params.get("effort") if reasoning_params is not None else None
+    return REASONING_EFFORT_STRENGTH_RANK.get(effort) if isinstance(effort, str) else None
+
+
+def _falls_back_to_budget(requested_reasoning: object, thinking: object) -> bool:
+    thinking_params: Final = as_str_mapping(thinking)
+    if requested_reasoning is None or thinking_params is None or thinking_params.get("type") != "enabled":
+        return False
+    if requested_reasoning is ClientEffort.DROPPED:
+        return True
+    requested_rank: Final = _effort_rank(requested_reasoning)
+    budget_rank: Final = _effort_rank(_ADAPTER.translate_thinking_to_reasoning(thinking))
+    return requested_rank is not None and budget_rank is not None and requested_rank > budget_rank
 
 
 def _drops_refused_summary(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> bool:
@@ -414,7 +422,7 @@ def _build_responses_kwargs(
     )
     budget_reasoning: Final = (
         _ADAPTER.translate_thinking_to_reasoning(thinking)
-        if requested_reasoning is ClientEffort.DROPPED and thinking is not None and thinking.get("type") == "enabled"
+        if _falls_back_to_budget(requested_reasoning, thinking)
         else None
     )
     target_reasoning: Final = (

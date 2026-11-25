@@ -119,7 +119,9 @@ def declared_reasoning_efforts_for_map_key(key: str) -> tuple[str, ...] | None:
 
 
 REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
-_STRENGTH_RANK: Final = MappingProxyType({effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)})
+REASONING_EFFORT_STRENGTH_RANK: Final = MappingProxyType(
+    {effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)}
+)
 
 
 def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -> str:
@@ -130,18 +132,26 @@ def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -
     who turned reasoning off must not be billed for it, and a model that cannot turn it off says so
     itself. A level outside the strength order is likewise returned as is for upstream to judge."""
     ranked: Final = sorted(
-        (effort for effort in declared if effort in _STRENGTH_RANK), key=lambda effort: _STRENGTH_RANK[effort]
+        (effort for effort in declared if effort in REASONING_EFFORT_STRENGTH_RANK),
+        key=lambda effort: REASONING_EFFORT_STRENGTH_RANK[effort],
     )
-    if requested in ranked or requested not in _STRENGTH_RANK or not ranked:
+    if requested in ranked or requested not in REASONING_EFFORT_STRENGTH_RANK or not ranked:
         return requested
-    return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
+    return next(
+        (
+            effort
+            for effort in ranked
+            if REASONING_EFFORT_STRENGTH_RANK[effort] >= REASONING_EFFORT_STRENGTH_RANK[requested]
+        ),
+        ranked[-1],
+    )
 
 
 def reasoning_effort_within_thinking_budget(requested: object, budget_effort: str | None) -> str | None:
-    budget_rank: Final = _STRENGTH_RANK.get(budget_effort) if budget_effort else None
+    budget_rank: Final = REASONING_EFFORT_STRENGTH_RANK.get(budget_effort) if budget_effort else None
     if budget_rank is None or not isinstance(requested, str) or not requested:
         return budget_effort
-    requested_rank: Final = _STRENGTH_RANK.get(requested)
+    requested_rank: Final = REASONING_EFFORT_STRENGTH_RANK.get(requested)
     return budget_effort if requested_rank is not None and requested_rank > budget_rank else requested
 
 
