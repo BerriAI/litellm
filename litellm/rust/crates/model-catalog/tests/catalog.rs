@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use litellm_model_catalog::{
-    BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode, Rejects, Written,
+    BUNDLED_MODEL_COUNT, BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode,
+    Rejects, Written,
 };
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -535,5 +536,31 @@ fn a_pointer_row_that_repeats_a_listed_alias_is_dropped_and_the_model_is_kept() 
     assert_eq!(
         written(&catalog),
         r#"{"Real":{"litellm_provider":"t","aliases":["real-latest"]}}"#
+    );
+}
+
+#[rstest]
+fn bundled_model_count_matches_the_parsed_registry() {
+    let parsed = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+
+    assert_eq!(BUNDLED_MODEL_COUNT, parsed.model_count());
+}
+
+#[rstest]
+fn trusted_parse_serves_the_bundled_registry_like_a_full_parse() {
+    let full = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    let trusted = Catalog::parse_trusted(BUNDLED_REGISTRY).unwrap().value;
+
+    assert_eq!(trusted.aliases(), full.aliases());
+    assert!(trusted.served().eq(full.served()));
+    assert!(
+        trusted
+            .written()
+            .map(|(key, _)| key)
+            .eq(full.written().map(|(key, _)| key))
+    );
+    assert_eq!(
+        trusted.fallback_rules().map(<[_]>::len),
+        full.fallback_rules().map(<[_]>::len)
     );
 }

@@ -147,6 +147,16 @@ impl ModelEntry {
 
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Loaded<Self>, Error> {
+        Self::parse_rows(body, read_row)
+    }
+
+    /// Reads a document CI already validated, such as the bundled one. Rows are indexed but not lowered, so every
+    /// `ModelEntry::model` is `None` and row problems are not collected
+    pub fn parse_trusted(body: &[u8]) -> Result<Loaded<Self>, Error> {
+        Self::parse_rows(body, read_trusted_row)
+    }
+
+    fn parse_rows(body: &[u8], read: fn(&Fields) -> RowRead) -> Result<Loaded<Self>, Error> {
         let document = match text_after_byte_order_mark(body) {
             Some(text) => serde_json::from_str::<Fields>(&text),
             None => serde_json::from_slice::<Fields>(body),
@@ -173,7 +183,7 @@ impl Catalog {
                     continue;
                 }
             };
-            let row = read_row(&fields);
+            let row = read(&fields);
             problems.extend(
                 row.problems
                     .into_iter()
@@ -549,6 +559,16 @@ fn read_row(fields: &Fields) -> RowRead {
         aliases,
         alias_of: None,
         problems,
+    }
+}
+
+fn read_trusted_row(fields: &Fields) -> RowRead {
+    let read = |key: &str| fields.get(key).filter(|value| !value.is_null());
+    RowRead {
+        model: None,
+        aliases: read("aliases").and_then(|value| Vec::<String>::deserialize(value).ok()),
+        alias_of: read("alias_of").and_then(|value| String::deserialize(value).ok()),
+        problems: Vec::new(),
     }
 }
 
