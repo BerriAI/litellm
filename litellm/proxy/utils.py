@@ -1769,6 +1769,12 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _is_refused_stream(litellm_logging_obj: object) -> bool:
+    return isinstance(litellm_logging_obj, Logging) and (
+        litellm_logging_obj.stream_success_refused or litellm_logging_obj.stream_success_claimed
+    )
+
+
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
     """A provider handoff or a cached response both mean the router selected a deployment."""
     caching_details: Final = litellm_logging_obj.caching_details
@@ -4538,7 +4544,7 @@ class ProxyLogging:
             error_type=error_type,
             route=user_api_key_dict.request_route,
             team_id=user_api_key_dict.team_id,
-            stream_refused=isinstance(logging_obj, Logging) and logging_obj.stream_success_refused,
+            stream_refused=_is_refused_stream(logging_obj),
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -4796,7 +4802,7 @@ class ProxyLogging:
                 input=input,
                 api_key="",
             )
-            if isinstance(litellm_logging_obj, Logging) and litellm_logging_obj.stream_success_refused:
+            if isinstance(litellm_logging_obj, Logging) and _is_refused_stream(litellm_logging_obj):
                 await litellm_logging_obj.mask_refused_stream_failure_log()
 
             await self._dispatch_proxy_only_failure_handlers(

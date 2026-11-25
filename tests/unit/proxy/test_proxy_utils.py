@@ -4082,8 +4082,9 @@ async def test_native_messages_stream_ending_in_a_callback_crash_still_logs_its_
     [
         GuardrailRaisedException(guardrail_name="output-check", message="Blocked by callback"),
         HTTPException(status_code=400, detail="Blocked by callback"),
+        BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output"),
     ],
-    ids=["guardrail_raised", "http_exception"],
+    ids=["guardrail_raised", "http_exception", "presidio_blocked_entity"],
 )
 async def test_stream_refused_after_its_success_was_logged_is_billed_once_and_still_logs_the_refusal(
     monkeypatch, refusal_error, served_as, request_route: str
