@@ -398,7 +398,7 @@
     "api_key_env": "INFEROCK_API_KEY",
     "api_base_env": [
       "INFEROCK_API_BASE",
-      "GATEWAY_BASE_URL"
+      "INFEROCK_API_BASE"
     ],
     "default_headers": {
       "x-governance-provider": "inferock-serve"
