@@ -970,6 +970,69 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     response.aclose.assert_awaited_once()
 
 
+def _openai_chat_chunk(
+    model_id: str, choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None
+) -> Mapping[str, object]:
+    return {
+        "id": "chatcmpl-2",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": model_id,
+        "choices": list(choices),
+        **({"usage": usage} if usage else {}),
+    }
+
+
+def _openai_tool_call_stream(model_id: str) -> bytes:
+    tool_call_start: Final = {
+        "role": "assistant",
+        "tool_calls": [
+            {"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": ""}}
+        ],
+    }
+    tool_call_arguments: Final = {"tool_calls": [{"index": 0, "function": {"arguments": '{"city": "Paris"}'}}]}
+    return b"".join(
+        _bedrock_event_stream_frame(_openai_chat_chunk(model_id, choices, usage))
+        for choices, usage in (
+            ([{"index": 0, "delta": tool_call_start, "finish_reason": None}], None),
+            ([{"index": 0, "delta": tool_call_arguments, "finish_reason": None}], None),
+            ([{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], None),
+            ((), {"prompt_tokens": 21, "completion_tokens": 9, "total_tokens": 30}),
+        )
+    )
+
+
+@pytest.mark.parametrize("model_id", ["qwen.qwen3-32b-v1:0", "mistral.mistral-large-3-675b-instruct"])
+def test_openai_chat_body_invoke_stream_rebuilds_the_tool_call_and_usage(
+    _aws_test_credentials: None, model_id: str
+) -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=_openai_tool_call_stream(model_id))
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle)))
+    stream: Final = litellm.completion(
+        model=f"bedrock/invoke/{model_id}",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        stream=True,
+        stream_options={"include_usage": True},
+        client=client,
+    )
+    response: Final = litellm.stream_chunk_builder(list(stream))
+
+    body: Final = json.loads(requests[0].content)
+    assert requests[0].url.raw_path.endswith(b"/invoke-with-response-stream")
+    assert body["messages"] == [{"role": "user", "content": "weather in Paris"}]
+    assert "prompt" not in body
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+    assert (tool_call.function.name, tool_call.function.arguments) == ("get_weather", '{"city": "Paris"}')
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (21, 9)
+
+
 def _truncated_frame() -> bytes:
     return _bedrock_event_stream_frame(_openai_stream_chunk({"role": "assistant"}))[:-8]
 

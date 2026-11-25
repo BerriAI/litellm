@@ -62,6 +62,7 @@ from ..common_utils import (
     get_bedrock_response_stream_shape,
     get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
+    invoke_takes_openai_chat_body,
 )
 
 bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_memory=50, default_ttl=600)
@@ -213,7 +214,9 @@ def _stream_decoder(
         )
     if bedrock_invoke_provider == "deepseek_r1":
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
-    if bedrock_invoke_provider == "moonshot":
+    if bedrock_invoke_provider == "moonshot" or (
+        bedrock_invoke_provider is not None and invoke_takes_openai_chat_body(model)
+    ):
         return AmazonOpenAICompatibleStreamDecoder(model=model, sync_stream=sync_stream)
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 

@@ -528,6 +528,8 @@ BEDROCK_ROUTES: Final = MappingProxyType(
         "agent": _bedrock("agent/AGENTID/ALIASID"),
         "agentcore": _bedrock("agentcore/arn:aws:bedrock-agentcore:us-east-1:000000000000:runtime/wire"),
         **{f"invoke/{family}": _bedrock(f"invoke/{model}") for family, model in BEDROCK_INVOKE_MODELS.items()},
+        "invoke/qwen_openai_chat_body": _bedrock("invoke/qwen.qwen3-32b-v1:0"),
+        "invoke/mistral_openai_chat_body": _bedrock("invoke/mistral.mistral-large-3-675b-instruct"),
     }
 )
 BEDROCK_ROUTES_WITHOUT_CHAT: Final = MappingProxyType({"async_invoke": "starts an async job instead of a chat call"})

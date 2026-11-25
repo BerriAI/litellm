@@ -1937,6 +1937,23 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return None
 
 
+_PROMPT_BODY_MISTRAL_MODELS: Final = (
+    "mistral.mistral-7b-instruct",
+    "mistral.mixtral-8x7b-instruct",
+    "mistral.mistral-small-2402",
+    "mistral.mistral-large-2402",
+    "mistral.mistral-large-2407",
+    "mistral.pixtral-large-2502",
+)
+
+
+def invoke_takes_openai_chat_body(model: str) -> bool:
+    base_model: Final = get_bedrock_base_model(model)
+    if base_model.startswith("qwen."):
+        return True
+    return base_model.startswith("mistral.") and not base_model.startswith(_PROMPT_BODY_MISTRAL_MODELS)
+
+
 def get_bedrock_chat_config(model: str):
     """
     Helper function to get the appropriate Bedrock chat config based on model and route.
@@ -1980,6 +1997,13 @@ def get_bedrock_chat_config(model: str):
         )
 
         return AmazonMantleConfig()
+
+    if invoke_takes_openai_chat_body(model):
+        from litellm.llms.bedrock.chat.invoke_transformations.amazon_invoke_openai_chat_transformation import (
+            AmazonInvokeOpenAIChatConfig,
+        )
+
+        return AmazonInvokeOpenAIChatConfig()
 
     # Handle provider-specific configs
     if bedrock_invoke_provider == "amazon":

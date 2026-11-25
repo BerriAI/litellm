@@ -64,6 +64,8 @@ _PARAMS_LIST_ADAPTER: Final = TypeAdapter(list[str])
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
     {
         "openai.gpt-oss": frozenset(("logit_bias",)),
+        "qwen.": frozenset(("logit_bias",)),
+        "mistral.": frozenset(("logit_bias",)),
         "xai.": frozenset(("frequency_penalty", "presence_penalty")),
     }
 )

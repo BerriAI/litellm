@@ -464,10 +464,10 @@ def test_transform_request_meta_llama(monkeypatch, respx_mock):
 @pytest.mark.respx(assert_all_called=True)
 def test_custom_prompt_roles_wrap_the_mistral_invoke_prompt(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.OpenOrca/invoke"
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.mistral-7b-instruct-v0:2/invoke"
     ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
     response: Final = litellm.completion(
-        model="bedrock/mistral.OpenOrca",
+        model="bedrock/mistral.mistral-7b-instruct-v0:2",
         messages=[{"role": "user", "content": "What's AWS?"}],
         roles={
             "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
