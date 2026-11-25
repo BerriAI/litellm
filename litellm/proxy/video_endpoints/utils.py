@@ -9,7 +9,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
-    model_less_provider_deployment,
+    provider_deployment_the_caller_may_use,
 )
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
@@ -163,7 +163,7 @@ async def video_list_target(
         return {"model": requested_model}
     if not isinstance(custom_llm_provider, str):
         return {}
-    deployment: Final = await model_less_provider_deployment(llm_router, user_api_key_dict, custom_llm_provider)
+    deployment: Final = await provider_deployment_the_caller_may_use(llm_router, user_api_key_dict, custom_llm_provider)
     return {} if deployment is None else {"model": deployment.deployment_id}
 
 

@@ -15,12 +15,20 @@ are checked by the genuine decode round-trip.
 """
 
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 
 from litellm.router import Router
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamTableCachedObj,
+    ProxyException,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
     authorized_video_model,
@@ -658,6 +666,60 @@ async def test_video_list_target_never_lends_a_deployment_the_key_cannot_call() 
 
     assert await video_list_target(None, "volcengine", _video_list_router(), restricted) == {}
     assert await video_list_target(None, "openai", _video_list_router(), restricted) == {"model": "dep-sora"}
+
+
+def _team_video_list_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-seedance",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "team-ark-key"},
+                "model_info": {"id": "team-a-seedance", "team_id": "team-a", "team_public_model_name": "team-seedance"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router", "team_id", "custom_llm_provider", "project_models", "expected"),
+    [
+        (_team_video_list_router(), "team-a", "volcengine", ["sora-video"], {}),
+        (_team_video_list_router(), "team-a", "volcengine", ["team-seedance"], {"model": "team-a-seedance"}),
+        (_video_list_router(), None, "volcengine", ["sora-video"], {}),
+        (_video_list_router(), None, "openai", ["sora-video"], {"model": "dep-sora"}),
+    ],
+)
+async def test_video_list_target_lends_a_key_without_a_model_list_only_what_its_project_allows(
+    router: Router,
+    team_id: str | None,
+    custom_llm_provider: str,
+    project_models: list[str],
+    expected: dict[str, str],
+) -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["team-seedance"])
+    )
+    await cache.async_set_cache(
+        key=AuthObject.project("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=project_models),
+    )
+    project_key: Final = UserAPIKeyAuth(
+        api_key="hashed",
+        team_id=team_id,
+        team_models=["team-seedance"] if team_id else [],
+        models=[],
+        project_id="proj-1",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        target: Final = await video_list_target(None, custom_llm_provider, router, project_key)
+
+    assert target == expected
 
 
 @pytest.mark.asyncio

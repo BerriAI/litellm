@@ -675,11 +675,18 @@ async def model_less_provider_credentials(
     deployment for the provider, any deployment the caller is granted for it
     answers. None means the caller falls back to environment credentials.
     """
-    deployment: Final = await model_less_provider_deployment(llm_router, user_api_key_dict, custom_llm_provider)
+    if llm_router is None:
+        return None
+    team_deployments: Final = _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
+    deployment: Final = (
+        await _model_less_pick(team_deployments, custom_llm_provider, llm_router, user_api_key_dict)
+        if team_deployments
+        else next(_accessible_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider), None)
+    )
     return None if deployment is None else deployment.credentials
 
 
-async def model_less_provider_deployment(
+async def provider_deployment_the_caller_may_use(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
@@ -687,9 +694,14 @@ async def model_less_provider_deployment(
     if llm_router is None:
         return None
     team_deployments: Final = _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
-    if not team_deployments:
-        return _accessible_provider_deployment(llm_router, user_api_key_dict, custom_llm_provider)
-    return await _model_less_pick(team_deployments, custom_llm_provider, llm_router, user_api_key_dict)
+    if team_deployments:
+        return await _first_team_deployment_the_caller_may_use(
+            team_deployments, custom_llm_provider, llm_router, user_api_key_dict
+        )
+    for deployment in _accessible_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider):
+        if await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict):
+            return deployment
+    return None
 
 
 async def team_deployment_as_the_caller_reaches_it(
@@ -1075,11 +1087,11 @@ def _team_provider_deployments(
     )
 
 
-def _accessible_provider_deployment(
+def _accessible_provider_deployments(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
-) -> TeamProviderDeployment | None:
+) -> Iterator[TeamProviderDeployment]:
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
     from litellm.proxy.auth.model_checks import get_complete_model_list
@@ -1119,13 +1131,10 @@ def _accessible_provider_deployment(
             is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
         )
     )
-    return next(
-        (
-            deployment
-            for model_name in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
-            if (deployment := _provider_deployment(registry, model_name, team_id, custom_llm_provider)) is not None
-        ),
-        None,
+    return (
+        deployment
+        for model_name in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
+        if (deployment := _provider_deployment(registry, model_name, team_id, custom_llm_provider)) is not None
     )
 
 
