@@ -15,7 +15,6 @@ impl Rows for Held {
     type ObjectPermission = ();
     type Project = ();
     type Membership = ();
-    type Org = ();
 }
 
 /// A key whose row is stored under `stored` and says `is_proxy_admin`.

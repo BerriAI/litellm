@@ -24,7 +24,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable, LiteLLM_ProjectTableCachedObj
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_ProjectTableCachedObj
 from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.auth_cache.handle import TeamRoster
@@ -1033,7 +1033,6 @@ class RustIdentity:
             Literal["user"],
             Literal["team"],
             Literal["membership"],
-            Literal["org"],
             Literal["end_user"],
         ] = (
             "claims",
@@ -1048,7 +1047,6 @@ class RustIdentity:
             "user",
             "team",
             "membership",
-            "org",
             "end_user",
         )
         def __new__(
@@ -1065,7 +1063,6 @@ class RustIdentity:
             user: LiteLLM_UserTable | None,
             team: LiteLLM_TeamTable | None,
             membership: LiteLLM_TeamMembership | None,
-            org: LiteLLM_OrganizationTable | None,
             end_user: EndUserRow | None,
         ) -> RustIdentity.Jwt: ...
         @property
@@ -1092,8 +1089,6 @@ class RustIdentity:
         def team(self) -> LiteLLM_TeamTable | None: ...
         @property
         def membership(self) -> LiteLLM_TeamMembership | None: ...
-        @property
-        def org(self) -> LiteLLM_OrganizationTable | None: ...
         @property
         def end_user(self) -> EndUserRow | None: ...
 
@@ -1970,7 +1965,7 @@ class RustAuth:
         *,
         membership: LiteLLM_TeamMembership | None = None,
     ) -> None: ...
-    def org(self, org_id: str | None = None, row: LiteLLM_OrganizationTable | None = None) -> None: ...
+    def org(self, org_id: str | None = None) -> None: ...
     def text(self, value: str | None = None) -> None: ...
     def mapped_key(
         self, facts: _KeyFacts | None = None, row: UserAPIKeyAuth | None = None, *, user_email: str | None = None

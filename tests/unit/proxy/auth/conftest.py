@@ -58,7 +58,6 @@ def jwt_identity() -> Callable[..., RustIdentity.Jwt]:
             "user": None,
             "team": None,
             "membership": None,
-            "org": None,
             "end_user": None,
             **overrides,
         }

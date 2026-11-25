@@ -49,7 +49,7 @@ def _org(call: RustAuth, org: LiteLLM_OrganizationTable | None) -> None:
     if org is None or org.organization_id is None:
         call.org()
     else:
-        call.org(org.organization_id, org)
+        call.org(org.organization_id)
 
 
 def _user(call: RustAuth, user: LiteLLM_UserTable | None) -> None:

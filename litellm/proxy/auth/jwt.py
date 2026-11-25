@@ -155,7 +155,6 @@ def jwt_result(identity: RustIdentity.Jwt, token: str | None) -> JWTAuthBuilderR
         user_email=identity.user_email,
         user_object=identity.user,
         org_id=identity.org_id,
-        org_object=identity.org,
         end_user_id=identity.end_user_id,
         end_user_object=None if end_user is None else end_user.end_user,
         token=token or "",

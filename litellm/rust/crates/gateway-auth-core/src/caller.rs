@@ -9,7 +9,10 @@ use litellm_config::LitellmRole;
 use crate::{
     KeyHash, Rows,
     authn::key::KeyRecord,
-    identity::key::{KeyContext, KeyOutcome},
+    identity::{
+        jwt::Org,
+        key::{KeyContext, KeyOutcome},
+    },
     outcome::Identity,
 };
 
@@ -33,7 +36,7 @@ pub struct Belongs<R: Rows> {
     pub team: TeamGrant<R>,
     /// The user's membership of `team`.
     pub membership: Option<R::Membership>,
-    pub org: Option<R::Org>,
+    pub org: Option<Org>,
     pub project: Option<R::Project>,
     /// The key path always reads one, which is empty for a request that names no end user.
     pub end_user: Option<R::EndUser>,
@@ -156,7 +159,6 @@ mod tests {
         type ObjectPermission = String;
         type Project = String;
         type Membership = String;
-        type Org = String;
     }
 
     fn stored(hash: &str) -> KeyRecord {

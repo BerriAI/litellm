@@ -130,10 +130,10 @@ pub struct UserLookup<'a> {
     pub email_verified: Option<&'a Value>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Org<R> {
+/// An organization the host found, as far as any host reads one: nothing but its id.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Org {
     pub organization_id: String,
-    pub row: R,
 }
 
 /// `JWTIdentity`

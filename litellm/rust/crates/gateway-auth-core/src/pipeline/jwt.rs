@@ -317,7 +317,7 @@ async fn principal<H: AuthHost>(
         None => None,
     };
     let (org_id, org) = match org {
-        Some(org) => (Some(org.organization_id), Some(org.row)),
+        Some(org) => (Some(org.organization_id.clone()), Some(org)),
         None => (claims::org_id(claims, settings), None),
     };
     let user = match user {
@@ -2154,7 +2154,6 @@ mod tests {
                 "acme",
                 Org {
                     organization_id: "o1".to_owned(),
-                    row: "org o1".to_owned(),
                 },
             )]),
             users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
@@ -2176,7 +2175,9 @@ mod tests {
             identity.belongs,
             Belongs {
                 user: Some("u1".to_owned()),
-                org: Some("org o1".to_owned()),
+                org: Some(Org {
+                    organization_id: "o1".to_owned(),
+                }),
                 end_user: Some("end-user e1".to_owned()),
                 ..Belongs::default()
             }

@@ -35,7 +35,6 @@ impl Rows for Labels {
     type ObjectPermission = String;
     type Project = String;
     type Membership = String;
-    type Org = String;
 }
 
 #[derive(Default)]
@@ -70,7 +69,7 @@ pub(crate) struct ScriptedHost {
     /// The host cannot run operator code, like one that does not embed Python.
     pub(crate) no_operator_hooks: bool,
     pub(crate) users: HashMap<&'static str, User<String>>,
-    pub(crate) orgs: HashMap<&'static str, Org<String>>,
+    pub(crate) orgs: HashMap<&'static str, Org>,
     /// Mapped hashes by `"{field}={value} {issuer or -}"`.
     pub(crate) mappings: HashMap<String, String>,
     pub(crate) keys: HashMap<&'static str, MappedKey<String>>,
@@ -420,11 +419,11 @@ impl AuthHost for ScriptedHost {
         self.record(format!("add_member {user_id} {team_id}"));
         Ok(())
     }
-    async fn org(&self, org_id: &str) -> Result<Option<Org<String>>, Error> {
+    async fn org(&self, org_id: &str) -> Result<Option<Org>, Error> {
         self.record(format!("org {org_id}"));
         Ok(self.orgs.get(org_id).cloned())
     }
-    async fn org_by_alias(&self, alias: &str) -> Result<Option<Org<String>>, Error> {
+    async fn org_by_alias(&self, alias: &str) -> Result<Option<Org>, Error> {
         self.record(format!("org_alias {alias}"));
         Ok(self.orgs.get(alias).cloned())
     }
