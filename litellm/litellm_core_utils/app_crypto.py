@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from typing import Final
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -15,7 +16,7 @@ class AppCrypto:
             raise ValueError("Master key must be 32 bytes for AES-256-GCM")
         self.key = master_key
 
-    def encrypt_json(self, data: object, aad: bytes | None = None) -> dict:
+    def encrypt_json(self, data: object, aad: bytes | None = None) -> dict[str, str]:
         aes: Final = AESGCM(self.key)
         nonce: Final = os.urandom(12)
         plaintext: Final = json.dumps(data).encode("utf-8")
@@ -27,7 +28,7 @@ class AppCrypto:
             "tag": base64.b64encode(tag).decode(),
         }
 
-    def decrypt_json(self, enc: dict, aad: bytes | None = None) -> object:
+    def decrypt_json(self, enc: Mapping[str, str], aad: bytes | None = None) -> object:
         aes: Final = AESGCM(self.key)
         nonce: Final = base64.b64decode(enc["nonce"])
         ct: Final = base64.b64decode(enc["ciphertext"])

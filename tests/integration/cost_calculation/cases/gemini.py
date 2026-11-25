@@ -2687,7 +2687,7 @@ GEMINI_EMBEDDINGS_002: Final = CostTrackingTestCase(
             "usageMetadata": {"promptTokenCount": 7, "totalTokenCount": 7},
         },
     ),
-    expected=ExactExpected(spend=3.24e-06, input_cost=3.24e-06, output_cost=0.0, prompt_tokens=3, completion_tokens=0),
+    expected=ExactExpected(spend=7.56e-06, input_cost=7.56e-06, output_cost=0.0, prompt_tokens=7, completion_tokens=0),
 )
 
 
@@ -3408,25 +3408,21 @@ GEMINI_GEMINI_4_ARGON_INPUT_TEXT: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT, "gemini-gemini-4-argon-input_text", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}]},
-    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_STREAM: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_STREAM, "gemini-gemini-4-argon-stream", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}]},
-    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_CACHE_READ: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_CACHE_READ, "gemini-gemini-4-argon-cache_read", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00693968, input_cost=0.00275968, output_cost=0.00418, prompt_tokens=12928, completion_tokens=380),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 380}]},
-    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_REASONING: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_REASONING, "gemini-gemini-4-argon-reasoning", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.047168, input_cost=0.002728, output_cost=0.04444, prompt_tokens=1240, completion_tokens=4040),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 560}]},
-    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_SERVICE_TIER_FLEX: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,

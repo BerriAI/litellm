@@ -5,7 +5,11 @@ from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    DecisionsResponseValidationError,
+    decisions_text,
+)
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -64,7 +68,7 @@ _SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
 )
 
 
-def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
+def openai_input_to_ir(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
     if isinstance(decision_input, str):
         return DecisionsIRState(state=decision_input)
     return DecisionsIRMessages(messages=tuple(decision_input))
@@ -105,7 +109,7 @@ def _nonempty_prompt_cache_options(
 
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
-        input=_ir_input(request.input),
+        input=openai_input_to_ir(request.input),
         audio=request.audio,
         videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
@@ -261,13 +265,40 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
             return DecisionsIRRefusal()
 
 
+def _unmatched_answers(reason: str) -> DecisionsResponseValidationError:
+    return DecisionsResponseValidationError(
+        status_code=500,
+        message=f"Decisions provider returned answers that cannot be matched to the requested questions: {reason}",
+    )
+
+
+def _answers_in_question_order(
+    questions: Sequence[DecisionsIRQuestion], answers: Sequence[OpenAIDecisionAnswer]
+) -> tuple[OpenAIDecisionAnswer | None, ...] | DecisionsResponseValidationError:
+    question_names: Final = tuple(question.name for question in questions)
+    answer_names: Final = tuple(answer.name for answer in answers)
+    if answer_names == question_names[: len(answer_names)]:
+        return (*answers, *(None for _ in questions[len(answers) :]))
+    unknown: Final = tuple(name for name in answer_names if name not in question_names)
+    if unknown:
+        return _unmatched_answers(f"no requested question is named {unknown[0]!r}")
+    ambiguous: Final = tuple(
+        name for name in answer_names if answer_names.count(name) > 1 or question_names.count(name) > 1
+    )
+    if ambiguous:
+        return _unmatched_answers(f"answers are out of order and the name {ambiguous[0]!r} is used more than once")
+    by_name: Final = {answer.name: answer for answer in answers}
+    return tuple(by_name.get(name) for name in question_names)
+
+
 def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    answers: Final = response.answers
+    answers: Final = _answers_in_question_order(request.questions, response.answers)
+    if isinstance(answers, DecisionsResponseValidationError):
+        raise answers
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(
-            _ir_answer(question, answers[index] if index < len(answers) else None)
-            for index, question in enumerate(request.questions)
+            _ir_answer(question, answer) for question, answer in zip(request.questions, answers, strict=True)
         ),
         usage=DecisionsIRUsage(
             input_tokens=response.usage.input_tokens,
@@ -356,6 +387,7 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     supports_prompt_cache = True
     supports_developer_and_system_messages = True
     supports_images = True
+    supports_json_input = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"

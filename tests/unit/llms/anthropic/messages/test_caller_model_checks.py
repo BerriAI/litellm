@@ -34,6 +34,7 @@ from litellm.router import Router
 from litellm.types.agents import AgentResponse
 from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 CLASSIFIER: Final = "classifier"
 CLASSIFIER_BUDGET: Final = {CLASSIFIER: {"max_budget": 0.1, "budget_duration": "1d"}}
@@ -243,8 +244,16 @@ _ProxyRow = (
     ],
 )
 async def test_the_proxys_own_access_checks_decide_the_classifier_for_every_scope(
-    proxy_auth_state: ProxyAuthState, caller: UserAPIKeyAuth, rows: Sequence[_ProxyRow], verdict: str
+    proxy_auth_state: ProxyAuthState,
+    monkeypatch: pytest.MonkeyPatch,
+    caller: UserAPIKeyAuth,
+    rows: Sequence[_ProxyRow],
+    verdict: str,
 ) -> None:
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(team_membership=FakeTeamMembershipStore(rows={("u-1", "t-1"): ConnectionError("db down")})),
+    )
     proxy_auth_state.seed(*rows)
 
     assert await caller_model_verdict(caller, CLASSIFIER, llm_router=None) == verdict

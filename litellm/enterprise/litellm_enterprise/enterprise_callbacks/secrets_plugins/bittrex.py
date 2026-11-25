@@ -15,7 +15,7 @@ class BittrexDetector(RegexBasedDetector):
         return "Bittrex Secrets"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Bittrex Access Key
             re.compile(

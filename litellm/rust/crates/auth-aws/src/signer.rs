@@ -292,6 +292,7 @@ impl RequestSigner for SigV4Signer {
             Error::NonAsciiHeader { .. } => litellm_http::Error::unsignable_header(error),
             Error::ExpiredCredentials
             | Error::Credentials { .. }
+            | Error::ProfileNotFound { .. }
             | Error::WebIdentityTokenReference
             | Error::MissingWebIdentityToken
             | Error::WebIdentityToken(_)

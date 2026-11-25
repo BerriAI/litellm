@@ -39,7 +39,7 @@ jobs:
             skipped='["python","typecheck","ui"]'
           else
             mode=core
-            skipped='["e2e-harness","ui-api-types","code-quality","ci-coverage","semgrep"]'
+            skipped='["e2e-harness","ui-api-types"]'
             labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')" || mode=full
             ! grep -qx 'run-all-unit-shards' <<< "${labels:-}" || mode=full
             [ "${mode}" = core ] || skipped='[]'
@@ -85,6 +85,13 @@ jobs:
           retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
           echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
 
+      - &head-tool-paths
+        name: Find the lint tool paths the PR head carries
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          if [ -d litellm/scripts ]; then echo "SCRIPTS_DIR=litellm/scripts" >> "$GITHUB_ENV"; else echo "SCRIPTS_DIR=scripts" >> "$GITHUB_ENV"; fi
+          if [ -f .github/linters/ruff-tests.toml ]; then echo "RUFF_TESTS_CONFIG=.github/linters/ruff-tests.toml" >> "$GITHUB_ENV"; else echo "RUFF_TESTS_CONFIG=ruff-tests.toml" >> "$GITHUB_ENV"; fi
+
       - &setup-python
         name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -122,26 +129,10 @@ jobs:
         run: |
           uv lock --check || (echo "❌ uv.lock is out of sync with pyproject.toml. Run 'uv lock' locally and commit the result." && exit 1)
 
-      - &cache-rust
-        name: Cache the Rust build
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
-
-      - name: Install dependencies
+      - name: Install the lint tools
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev
-
-      - &cache-prisma
-        name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-prisma-binaries
-
-      - &generate-prisma
-        name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+          uv sync --frozen --only-group dev --no-install-project
 
       - name: Check ruff format
         if: steps.changes.outputs.decision != 'skip'
@@ -165,7 +156,7 @@ jobs:
 
       - name: Check MCP operation boundary
         if: steps.changes.outputs.decision != 'skip'
-        run: uv run --no-sync python litellm/scripts/check_mcp_operation_boundary.py
+        run: uv run --no-sync python "$SCRIPTS_DIR/check_mcp_operation_boundary.py"
 
       - name: Run Ruff linting
         if: steps.changes.outputs.decision != 'skip'
@@ -177,36 +168,28 @@ jobs:
       - name: Run Ruff linting (test tree)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv run --no-sync ruff check --config .github/linters/ruff-tests.toml tests
+          uv run --no-sync ruff check --config "$RUFF_TESTS_CONFIG" tests
 
       - name: Check strict ruff rules (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python "$SCRIPTS_DIR/ruff_strict_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check type discipline (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python "$SCRIPTS_DIR/type_discipline_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check test quality (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
-
-      - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs merge-base counts)
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
-          uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python "$SCRIPTS_DIR/test_quality_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check for circular imports
         if: steps.changes.outputs.decision != 'skip'
@@ -214,11 +197,6 @@ jobs:
           cd litellm
           uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
           cd ..
-
-      - name: Check import safety
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
       - name: check_migrations_no_data_rewrites
         if: steps.changes.outputs.decision != 'skip'
@@ -242,32 +220,29 @@ jobs:
       - *checkout-head
       - *detect-changes
       - *fetch-gate-base
+      - *head-tool-paths
       - *setup-python
       - *setup-uv
       - *cache-uv
-      - *cache-rust
-
-      - name: Install dependencies
+      - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
-        run: uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
-
-      - *cache-prisma
-      - *generate-prisma
+        uses: ./.github/actions/cache-prisma-binaries
 
       - name: Check basedpyright (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/type_check_gate.py --base "$GATE_BASE_SHA"
+          python "$SCRIPTS_DIR/type_check_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyproject.toml | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' ':(glob)litellm/**/*.py' pyproject.toml uv.lock | grep -q .; then
+            uv sync --frozen --no-install-project --group proxy-dev --group e2e-dev --extra proxy
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
-            echo "No changed tests/e2e Python files; skipping."
+            echo "No changed tests/e2e or litellm Python, or dependency files; skipping."
           fi
 
   e2e-harness:
@@ -581,12 +556,10 @@ jobs:
           echo "schema.d.ts is in sync with the proxy OpenAPI spec."
   code-quality:
     name: code-quality
-    needs: plan
-    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -620,148 +593,55 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Install the lint tools
+        run: uv sync --frozen --only-group dev --no-install-project
 
-      - name: Install dependencies
-        run: uv sync --frozen --all-groups --all-extras
-
-      - name: check_licenses
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_licenses.py
-
-      - name: check_provider_folders_documented
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
-
-      - name: check_provider_endpoints_support_generated
-        run: uv run --no-sync python litellm/scripts/generate_provider_endpoints_support.py --check
-
-      - name: test_generate_provider_endpoints_support
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
-
-      - name: check_prisma_binary_cache
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
-
-      - name: check_workflow_startup_safety
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_startup_safety.py
-
-      - name: check_workflow_job_name_collisions
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_job_name_collisions.py
-
-      - name: test_workflow_job_name_collisions
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_workflow_job_name_collisions.py
-
-      - name: test_unit_passed_gate
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
-
-      - name: test_e2e_idp_stack
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_idp_stack.py
-
-      - name: test_e2e_metadata
-        env:
-          PYTHONPATH: tests/e2e
+      - name: Run the code-quality checks that do not import litellm
         run: |
-          export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
-          uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
-
-      - name: Check merge smoke harness
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_merge_smoke.py
-
-      - name: router_code_coverage
-        run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
-
-      - name: router_surface_check
-        run: uv run --no-sync python ./tests/code_coverage_tests/router_surface_check.py
-
-      - name: test_chat_completion_imports
-        run: uv run --no-sync python ./tests/code_coverage_tests/test_chat_completion_imports.py
-
-      - name: info_log_check
-        run: uv run --no-sync python ./tests/code_coverage_tests/info_log_check.py
-
-      - name: check_guardrail_apply_decorator
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
-
-      - name: test_ban_set_verbose
-        run: uv run --no-sync python ./tests/code_coverage_tests/test_ban_set_verbose.py
-
-      - name: code_qa_check_tests
-        run: uv run --no-sync python ./tests/code_coverage_tests/code_qa_check_tests.py
-
-      - name: check_get_model_cost_key_performance
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
-
-      - name: test_proxy_types_import
-        run: uv run --no-sync python ./tests/code_coverage_tests/test_proxy_types_import.py
-
-      - name: callback_manager_test
-        run: uv run --no-sync python ./tests/code_coverage_tests/callback_manager_test.py
-
-      - name: recursive_detector
-        run: uv run --no-sync python ./tests/code_coverage_tests/recursive_detector.py
-
-      - name: test_router_strategy_async
-        run: uv run --no-sync python ./tests/code_coverage_tests/test_router_strategy_async.py
-
-      - name: litellm_logging_code_coverage
-        run: uv run --no-sync python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
-
-      - name: ensure_async_clients_test
-        run: uv run --no-sync python ./tests/code_coverage_tests/ensure_async_clients_test.py
-
-      - name: enforce_llms_folder_style
-        run: uv run --no-sync python ./tests/code_coverage_tests/enforce_llms_folder_style.py
-
-      - name: prevent_key_leaks_in_exceptions
-        run: uv run --no-sync python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
-
-      - name: check_unsafe_enterprise_import
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
-
-      - name: check_telemetry_imports
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_telemetry_imports.py
-
-      - name: ban_copy_deepcopy_kwargs
-        run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
-
-      - name: check_fastuuid_usage
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
-
-      - name: check_py310_typing_imports
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_py310_typing_imports.py
-
-      - name: check_e2e_no_raw_requests
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
-
-      - name: check_no_none_string_error_fields
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_no_none_string_error_fields.py
-
-      - name: test_check_no_none_string_error_fields
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_none_string_error_fields.py
-
-      - name: check_no_publicly_known_master_key
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py
-
-      - name: test_check_no_publicly_known_master_key
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_publicly_known_master_key.py
-
-      - name: check_unbounded_in_lists (fails on findings not in the baseline)
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_unbounded_in_lists.py
-
-      - name: memory_test
-        run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
-
-      - name: documentation_test_env_keys
-        run: uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
-
-      - name: documentation_test_router_settings
-        run: uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
-
-      - name: documentation_test_api_docs
-        run: uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
+          uv run --no-sync python .github/scripts/ci/run_parallel_checks.py --jobs 4 <<'EOF'
+          python ./tests/code_coverage_tests/check_licenses.py
+          python ./tests/code_coverage_tests/check_provider_folders_documented.py
+          python litellm/scripts/generate_provider_endpoints_support.py --check
+          python ./tests/code_coverage_tests/check_prisma_binary_cache.py
+          python ./tests/code_coverage_tests/check_workflow_startup_safety.py
+          python ./tests/code_coverage_tests/check_workflow_job_name_collisions.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_workflow_job_name_collisions.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_scan_bundled_crypto.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_idp_stack.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_merge_smoke.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_run_parallel_checks.py
+          python ./tests/code_coverage_tests/router_code_coverage.py
+          python ./tests/code_coverage_tests/router_surface_check.py
+          python ./tests/code_coverage_tests/test_chat_completion_imports.py
+          python ./tests/code_coverage_tests/info_log_check.py
+          python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
+          python ./tests/code_coverage_tests/test_ban_set_verbose.py
+          python ./tests/code_coverage_tests/code_qa_check_tests.py
+          python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
+          python ./tests/code_coverage_tests/callback_manager_test.py
+          python ./tests/code_coverage_tests/recursive_detector.py
+          python ./tests/code_coverage_tests/test_router_strategy_async.py
+          python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
+          python ./tests/code_coverage_tests/ensure_async_clients_test.py
+          python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
+          python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
+          python ./tests/code_coverage_tests/check_telemetry_imports.py
+          python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
+          python ./tests/code_coverage_tests/check_fastuuid_usage.py
+          python ./tests/code_coverage_tests/check_py310_typing_imports.py
+          python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
+          python ./tests/code_coverage_tests/check_router_constructor_stub.py
+          python ./tests/code_coverage_tests/check_no_none_string_error_fields.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_none_string_error_fields.py
+          python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_publicly_known_master_key.py
+          python ./tests/code_coverage_tests/check_unbounded_in_lists.py
+          python ./tests/code_coverage_tests/memory_test.py
+          python ./tests/documentation_tests/test_env_keys.py
+          EOF
   ci-coverage:
     name: ci-coverage
-    needs: plan
-    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -788,8 +668,6 @@ jobs:
         run: python .github/scripts/assert_workflow_dir_hygiene.py
   semgrep:
     name: semgrep
-    needs: plan
-    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest

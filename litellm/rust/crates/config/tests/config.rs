@@ -58,6 +58,23 @@ fn loads_and_redacts_the_master_key(#[case] key: &str) {
 }
 
 #[rstest]
+fn loads_and_redacts_the_litellm_license() {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  litellm_license: secret-license\n")
+            .unwrap();
+    assert_eq!(
+        config
+            .general_settings
+            .litellm_license
+            .as_ref()
+            .unwrap()
+            .expose(),
+        "secret-license"
+    );
+    assert!(!format!("{config:?}").contains("secret-license"));
+}
+
+#[rstest]
 fn missing_general_settings_has_no_master_key() {
     let config = Config::from_yaml("model_list: []").unwrap();
     assert!(config.general_settings.master_key.is_none());
@@ -120,7 +137,7 @@ fn empty_config_matches_python_defaults() {
     );
     assert_eq!(
         config.general_settings.proxy_config_reload_interval_seconds,
-        30
+        None
     );
     assert_eq!(config.general_settings.health_check_interval, 300);
 }
@@ -187,11 +204,9 @@ future_section:
     assert!(model.litellm_params.extra.contains_key("future_param"));
     assert!(model.additional_fields.contains_key("access_groups"));
     assert_eq!(config.router_settings.allowed_fails, Some(2));
-    assert!(
-        config
-            .router_settings
-            .additional_fields
-            .contains_key("redis_host")
+    assert_eq!(
+        config.router_settings.redis.redis_host.as_deref(),
+        Some("cache.internal")
     );
     assert!(
         config

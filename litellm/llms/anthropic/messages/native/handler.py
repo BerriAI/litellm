@@ -32,6 +32,12 @@ from litellm.integrations.custom_logger_v2.legacy import (
 )
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -72,10 +78,12 @@ from ..safeguards import (
     proxy_serves_safeguards,
     with_safeguard_results,
 )
+from ..utils import RESPONSES_API_PROVIDERS
 from .interceptors import get_messages_interceptors
 from .utils import (
     AnthropicMessagesRequestUtils,
     continues_message_thread,
+    diagnostics_refusal,
     message_thread_not_found_body,
     message_thread_unsupported_body,
     mock_response,
@@ -84,9 +92,6 @@ from .utils import (
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
-# Providers that are routed directly to the OpenAI Responses API instead of
-# going through chat/completions.
-_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -205,7 +210,7 @@ def _should_route_to_responses_api(
         return False
     if stop_sequences:
         return False
-    if custom_llm_provider in _RESPONSES_API_PROVIDERS:
+    if custom_llm_provider in RESPONSES_API_PROVIDERS:
         return True
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
@@ -359,11 +364,11 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 async def _execute_pre_request_hooks(
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
+    messages: list[dict[str, object]],
+    tools: object,
     stream: bool | None,
     custom_llm_provider: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict:
     """
     Execute pre-request hooks from CustomLogger callbacks.
@@ -457,8 +462,8 @@ async def _try_websearch_short_circuit(
     tools: list[dict] | None,
     custom_llm_provider: str | None,
     stream: bool | None,
-    kwargs: dict | None = None,
-) -> AnthropicMessagesResponse | AsyncIterator | None:
+    kwargs: Mapping[str, object] | None = None,
+) -> AnthropicMessagesResponse | AsyncIterator[object] | None:
     """
     Attempt to short-circuit a web-search-only request.
 
@@ -554,13 +559,13 @@ async def anthropic_messages(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
@@ -702,7 +707,7 @@ async def anthropic_messages(
         )
 
 
-def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
+def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict[str, object] | None:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
 
@@ -718,17 +723,17 @@ def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict | None = None,
+    container: dict[str, object] | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,
@@ -877,6 +882,18 @@ def anthropic_messages_handler(
             custom_llm_provider,
         )
         kwargs.pop("thread")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
+    rejects_diagnostics: Final = (
+        anthropic_messages_provider_config is not None and not anthropic_messages_provider_config.supports_diagnostics()
+    )
+    if (
+        rejects_diagnostics
+        and kwargs.get("diagnostics") is not None  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
+        and "diagnostics" not in additional_drop_paths(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs of the handler is untyped
+    ):
+        refusal: Final = diagnostics_refusal(custom_llm_provider, model, litellm_params.drop_params)
+        if refusal is not None:
+            raise refusal
+        kwargs.pop("diagnostics")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
@@ -908,6 +925,9 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
+        chat_kwargs: Final = bridged_audio_output_request(kwargs, model, custom_llm_provider)
+        if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
+            raise_audio_output_refusal(chat_kwargs, "/v1/messages")
         # The in-gateway context_management polyfill runs inside
         # ``async_anthropic_messages_handler`` so it can ``await`` the
         # summarization model for ``compact_20260112``. ``context_management``
@@ -933,7 +953,7 @@ def anthropic_messages_handler(
             api_base=bridge.api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            **chat_kwargs,  # pyright: ignore[reportArgumentType]  # output_format only arrives through untyped **kwargs
         )
 
     if custom_llm_provider is None:

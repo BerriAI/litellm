@@ -219,7 +219,12 @@ def test_included_metadata_fields_are_the_only_ones_stored_besides_always_kept(
 ) -> None:
     row, _ = _stored_row_after_one_chat(gateway, tmp_path, {"include": ["user_api_key_alias"]})
 
-    assert set(object_value(row["metadata"])) == {"status", "cold_storage_object_key", "user_api_key_alias"}
+    assert set(object_value(row["metadata"])) == {
+        "status",
+        "cold_storage_object_key",
+        "litellm_previous_response_ids",
+        "user_api_key_alias",
+    }
 
 
 def test_guardrail_usage_is_tracked_when_guardrail_information_is_not_stored(gateway: Gateway, tmp_path: Path) -> None:
