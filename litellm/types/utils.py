@@ -4960,6 +4960,7 @@ class LlmProviders(str, Enum):
     WALLY = "wally"
     HUAWEI_MAAS = "huawei_maas"
     SARVAM = "sarvam"
+    PHASE_ROUTER = "phase_router"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
