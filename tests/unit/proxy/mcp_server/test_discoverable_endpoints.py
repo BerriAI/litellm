@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy._types import LiteLLM_JWTAuth, UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -64,8 +65,6 @@ def _stored_grant(access_token="access-token", refresh_token=None, expires_in_se
         ({"expires_in_seconds": 30}, False),
         ({"expires_in_seconds": -300}, False),
         ({"expires_in_seconds": -300, "refresh_token": ""}, False),
-        ({"expires_in_seconds": 30, "refresh_token": "refresh-token"}, True),
-        ({"expires_in_seconds": -300, "refresh_token": "refresh-token"}, True),
     ],
 )
 async def test_vendor_credential_state_agrees_with_egress_token_resolution(
@@ -15559,6 +15558,223 @@ async def test_connect_is_absent_while_a_refused_scope_waits_until_the_grant_is_
     assert await endpoints._vendor_credential_state("owner", "other-server") == "present"
     await db.store_user_oauth_credential(credentials_prisma, "owner", "server", "new-token", scopes=["repo"])
     assert await endpoints._vendor_credential_state("owner", "server") == "present"
+
+
+def _vendor_server(is_byok: bool = False) -> "MCPServer":
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id="vendor",
+        name="vendor",
+        url="https://mcp.vendor.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+        token_url="https://idp.vendor.example/token",
+        client_id="client",
+        client_secret="secret",
+        oauth2_flow="authorization_code",
+        is_byok=is_byok,
+    )
+
+
+def _connect_page_manager(
+    monkeypatch: pytest.MonkeyPatch,
+    server: "MCPServer | None",
+    token_store: "_CountingTokenStore | _FailingTokenStore | None" = None,
+) -> "MCPServerManager":
+    from litellm.proxy.mcp_server import mcp_server_manager as manager_module
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = manager_module.MCPServerManager(per_user_oauth_token_store=token_store)
+    if server is not None:
+        manager.registry[server.server_id] = server
+    monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
+    return manager
+
+
+def _token_endpoint_reply(refresh: str) -> "httpx.Response":
+    import httpx
+
+    replies: Final = {
+        "refreshed": httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 3600}),
+        "unavailable": httpx.Response(503, text="upstream unavailable"),
+        "invalid_client": httpx.Response(401, json={"error": "invalid_client"}),
+        "unrecognised": httpx.Response(400, json={"error": "temporarily_broken"}),
+    }
+    return replies[refresh]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("expires_in", "marked", "refresh", "connected", "refresh_posts"),
+    [
+        (-3600, False, "unavailable", "absent", 1),
+        (-3600, False, "invalid_client", "absent", 1),
+        (-3600, False, "unrecognised", "absent", 1),
+        (-3600, False, "refreshed", "present", 1),
+        (30, False, "unavailable", "absent", 1),
+        (30, False, "refreshed", "present", 1),
+        (3600, True, "refreshed", "present", 1),
+        (3600, True, "unavailable", "absent", 1),
+        (None, True, "invalid_client", "absent", 1),
+        (3600, False, "unavailable", "present", 0),
+        (None, False, "unavailable", "present", 0),
+    ],
+)
+async def test_connect_offers_the_vendor_sign_in_when_the_saved_login_cannot_be_refreshed(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    expires_in: int | None,
+    marked: bool,
+    refresh: str,
+    connected: str,
+    refresh_posts: int,
+) -> None:
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    _connect_page_manager(monkeypatch, _vendor_server())
+    token_endpoint: Final = respx_mock.post("https://idp.vendor.example/token").mock(
+        return_value=_token_endpoint_reply(refresh)
+    )
+    await db.store_user_oauth_credential(
+        credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=expires_in
+    )
+    if marked:
+        await db.record_oauth_access_rejection(credentials_prisma, "owner", "vendor", "at-1")
+
+    state: Final = await endpoints._vendor_credential_state("owner", "vendor")
+    saved: Final = await db.get_user_oauth_credential(credentials_prisma, "owner", "vendor")
+
+    assert state == connected
+    assert token_endpoint.call_count == refresh_posts
+    assert saved is not None
+    assert saved["access_token"] == ("at-2" if refresh == "refreshed" else "at-1"), "the page saves a good refresh"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row_goes_stale_by", ["provider_rejection", "expiry"])
+async def test_connect_does_not_trust_this_workers_cached_copy_of_a_stale_login(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    row_goes_stale_by: str,
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    server: Final = _vendor_server()
+    manager: Final = _connect_page_manager(monkeypatch, server)
+    respx_mock.post("https://idp.vendor.example/token").mock(return_value=_token_endpoint_reply("unavailable"))
+    await db.store_user_oauth_credential(
+        credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=3600
+    )
+    assert await manager.has_user_oauth_token(server, UserAPIKeyAuth(user_id="owner"))
+    if row_goes_stale_by == "provider_rejection":
+        await db.record_oauth_access_rejection(credentials_prisma, "owner", "vendor", "at-1")
+    else:
+        await db.store_user_oauth_credential(
+            credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=-3600
+        )
+
+    assert await endpoints._vendor_credential_state("owner", "vendor") == "absent"
+
+
+@pytest.mark.asyncio
+async def test_connect_view_of_a_stale_login_keeps_the_servers_shared_tool_list(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy.mcp_server.mcp_server_manager import _UpstreamToolListing
+
+    manager: Final = _connect_page_manager(monkeypatch, _vendor_server())
+    listing: Final = ListToolsResult(tools=[])
+    manager._tool_discovery_cache.keep(
+        ("vendor", None), _UpstreamToolListing(page=listing, ttl_ms=60_000, upstream_instructions=None)
+    )
+    respx_mock.post("https://idp.vendor.example/token").mock(return_value=_token_endpoint_reply("unavailable"))
+    await db.store_user_oauth_credential(
+        credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+
+    assert await endpoints._vendor_credential_state("owner", "vendor") == "absent"
+    assert manager._tool_discovery_cache.holds("vendor"), "one user's stale login must not flush every user's tools"
+
+
+class _FailingTokenStore:
+    async def fetch(self, user_id: str, server_id: str) -> None:
+        raise RuntimeError("database connection lost")
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_connect_is_unavailable_when_the_refresh_cannot_read_the_saved_login(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    _connect_page_manager(monkeypatch, _vendor_server(), _FailingTokenStore())
+    await db.store_user_oauth_credential(
+        credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+
+    assert await endpoints._vendor_credential_state("owner", "vendor") == "unavailable"
+
+
+class _CountingTokenStore:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def fetch(self, user_id: str, server_id: str) -> None:
+        self.calls += 1
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        self.calls += 1
+
+
+@pytest.mark.asyncio
+async def test_connect_reads_nothing_beyond_the_row_for_a_login_that_is_still_valid(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    token_store: Final = _CountingTokenStore()
+    _connect_page_manager(monkeypatch, _vendor_server(), token_store)
+    await db.store_user_oauth_credential(
+        credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=3600
+    )
+
+    assert await endpoints._vendor_credential_state("owner", "vendor") == "present"
+    assert token_store.calls == 0, "a valid login must not touch the token cache or the provider"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registered", ["byok", "none"])
+async def test_connect_keeps_the_saved_login_rule_for_a_byok_or_unregistered_server(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter", registered: str
+) -> None:
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    _connect_page_manager(monkeypatch, _vendor_server(is_byok=True) if registered == "byok" else None)
+    token_endpoint: Final = respx_mock.post("https://idp.vendor.example/token").mock(
+        return_value=_token_endpoint_reply("unavailable")
+    )
+    await db.store_user_oauth_credential(
+        credentials_prisma, "owner", "vendor", "at-1", refresh_token="rt-1", expires_in=-3600, skip_byok_guard=True
+    )
+
+    assert await endpoints._vendor_credential_state("owner", "vendor") == "present"
+    assert token_endpoint.call_count == 0
 
 
 @pytest.mark.parametrize(

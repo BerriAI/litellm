@@ -7201,12 +7201,15 @@ class MCPServerManager:
         """Drop every cached token for ``(user_id, server_id)`` after the credential row changes
         (re-auth, revoke, config-change purge): the v2 chain's cache and the legacy per-user token
         cache, so the next resolve reads the new row instead of serving the replaced token until its
-        cache TTL, whichever path resolves it. This is the single invalidation point for per-user
-        OAuth tokens; callers must not evict individual caches directly. Best-effort: a cache-drop
-        failure is logged, never raised, because the DB write already succeeded and the TTL remains
-        the backstop.
+        cache TTL, whichever path resolves it. It also drops the server's discovery lists, which
+        ``drop_cached_user_oauth_token`` keeps. Callers must not evict individual caches directly.
+        Best-effort: a cache-drop failure is logged, never raised, because the DB write already
+        succeeded and the TTL remains the backstop.
         """
         self.invalidate_discovery_lists(server_id)
+        await self.drop_cached_user_oauth_token(user_id, server_id)
+
+    async def drop_cached_user_oauth_token(self, user_id: str, server_id: str) -> None:
         try:
             await self._per_user_oauth_token_store.invalidate(user_id, server_id)
         except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop

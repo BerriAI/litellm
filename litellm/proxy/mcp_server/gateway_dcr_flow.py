@@ -37,6 +37,7 @@ egress by user id.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import html
@@ -1080,11 +1081,13 @@ async def _describe_multi_server_flow(
     if any(server is None for _, server in targets):
         return _unscoped_or_stale_description(flow, "stale")
     described: Final = tuple(
-        [
-            await _describe_connect_flow_server(flow.user_id, server, state == "interactive", lookup_vendor_credential)
-            for state, server in targets
-            if server is not None
-        ]
+        await asyncio.gather(
+            *(
+                _describe_connect_flow_server(flow.user_id, server, state == "interactive", lookup_vendor_credential)
+                for state, server in targets
+                if server is not None
+            )
+        )
     )
     unavailable: Final = next((item for item in described if isinstance(item, Response)), None)
     if unavailable is not None:
@@ -1155,20 +1158,22 @@ async def _describe_upstream_scope_flow(
     if any(state != "interactive" or server is None for state, server in targets):
         return _oauth_error(400, "invalid_scope", "an upstream permission target is unavailable")
     descriptions: Final = tuple(
-        [
-            await _describe_interactive_target(
-                flow,
-                server,
-                tuple(
-                    dict.fromkeys(
-                        item.permission for item in flow.upstream_scopes if item.server_id == server.server_id
-                    )
-                ),
-                lookup_vendor_credential,
+        await asyncio.gather(
+            *(
+                _describe_interactive_target(
+                    flow,
+                    server,
+                    tuple(
+                        dict.fromkeys(
+                            item.permission for item in flow.upstream_scopes if item.server_id == server.server_id
+                        )
+                    ),
+                    lookup_vendor_credential,
+                )
+                for _, server in targets
+                if server is not None
             )
-            for _, server in targets
-            if server is not None
-        ]
+        )
     )
     for description in descriptions:
         if isinstance(description, Response) or not description["connected"]:
