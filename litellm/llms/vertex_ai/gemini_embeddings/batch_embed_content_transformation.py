@@ -4,10 +4,14 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
+from decimal import Decimal
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
+from typing_extensions import Self
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
@@ -142,12 +146,62 @@ def _is_data_url(s: str) -> bool:
     return s.startswith("data:") and ";base64," in s
 
 
+_DEFAULT_VIDEO_FPS: Final = 1.0
+_HALF_FRAME: Final = Decimal("0.5")
+_DURATION_SECONDS: Final = re.compile(r"\s*([+-]?[0-9]+(?:\.[0-9]*)?)s")
+
+
+def _duration_seconds(duration: str) -> Decimal | None:
+    parsed: Final = _DURATION_SECONDS.fullmatch(duration)
+    return Decimal(parsed.group(1)) if parsed else None
+
+
+def _window_seconds(start_offset: str | None, end_offset: str | None) -> tuple[Decimal, Decimal] | None:
+    end: Final = _duration_seconds(end_offset) if end_offset is not None else None
+    given_start: Final = _duration_seconds(start_offset if start_offset is not None else "0s")
+    if end is None or given_start is None:
+        return None
+    return max(Decimal(0), given_start), end
+
+
 class _EmbeddingVideoMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    fps: float | None = None
+    fps: Annotated[float, Field(allow_inf_nan=False)] | None = None
     start_offset: str | None = None
     end_offset: str | None = None
+
+    @model_validator(mode="after")
+    def _window_ends_after_it_starts(self) -> Self:
+        window: Final = _window_seconds(self.start_offset, self.end_offset)
+        if window is not None and window[1] <= window[0]:
+            raise PydanticCustomError(
+                "window_ends_before_it_starts",
+                "end_offset ({end_offset}) must be later than the window start ({start})",
+                {"end_offset": self.end_offset, "start": f"{window[0]:g}s"},
+            )
+        return self
+
+
+def _video_frame_error(video_metadata: _EmbeddingVideoMetadata) -> str | None:
+    fps: Final = video_metadata.fps if video_metadata.fps is not None else _DEFAULT_VIDEO_FPS
+    if fps <= 0:
+        return f"file.video_metadata.fps: must be greater than 0, got {fps:g}"
+    window: Final = _window_seconds(video_metadata.start_offset, video_metadata.end_offset)
+    if window is None:
+        return None
+    start, end = window
+    if (end - start) * Decimal(fps) >= _HALF_FRAME:
+        return None
+    return (
+        f"file.video_metadata: end_offset - start_offset ({end - start:g}s) at {fps:g} fps rounds to 0 frames, "
+        "so widen the window or raise fps"
+    )
+
+
+def _is_video_part(part: PartType) -> bool:
+    media: Final = part.get("inline_data") or part.get("file_data")
+    return media is not None and media["mime_type"].lower().startswith("video/")
 
 
 class _EmbeddingFile(LiteLLMBaseModel):
@@ -370,6 +424,9 @@ def _build_part_for_input(
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
         return part
+    frame_error: Final = _video_frame_error(block.file.video_metadata) if _is_video_part(part) else None
+    if frame_error is not None:
+        raise _invalid_input(f"Invalid file content block in embedding input: {frame_error}")
     video_metadata: Final = _gemini_video_metadata(block.file.video_metadata)
     if not video_metadata:
         return part

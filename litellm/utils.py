@@ -96,7 +96,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -3516,7 +3516,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
     return None
 
 
-def is_generalized_model_info(model_info: ModelInfo) -> bool:
+def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
     Detected as the resolved key missing ``litellm.model_cost`` while matching a
@@ -3533,14 +3533,27 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
 _REGISTRATION_ATTEMPTS: Final = 3
 
 
-def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+_ModelInfoT: Final = TypeVar("_ModelInfoT", bound=ModelInfoBase)
+
+
+def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT | ModelInfoLookupMiss:
     try:
-        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info: Final = lookup()
     except ModelNotMappedError:
         return ModelInfoLookupMiss(tripped=False)
     except Exception:
         return ModelInfoLookupMiss(tripped=True)
     return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(lambda: get_model_info(model=model, custom_llm_provider=custom_llm_provider))
+
+
+def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> ModelInfoBase | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(
+        lambda: get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)
+    )
 
 
 def _get_builtin_model_info_for_registration(
@@ -3651,6 +3664,13 @@ _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # muta
 def durable_model_cost_registration(key: str) -> Mapping[str, object] | None:
     """What ``register_model`` recorded for ``key`` to replay on reload, never a router deployment's registration."""
     return _runtime_registered_model_cost.get(key)
+
+
+def catalog_row_with_runtime_registrations(key: str) -> Mapping[str, object] | None:
+    """The loaded catalog row plus ``register_model`` calls, without what routers register for their deployments."""
+    loaded: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    registered: Final = durable_model_cost_registration(key)
+    return loaded if registered is None else {**(loaded or {}), **registered}
 
 
 def runtime_model_cost_registrations(
@@ -4002,6 +4022,25 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: str | None) -> str:
     return size_to_aspect_ratio.get(size, "1:1")  # Default to square if size not recognized
 
 
+_EXTRA_BODY_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _without_dropped_extra_body_params(
+    optional_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
+) -> Mapping[str, object]:
+    extra_body: Final = optional_params.get("extra_body")
+    if not additional_drop_params or not isinstance(extra_body, dict):
+        return optional_params
+    return {
+        **optional_params,
+        "extra_body": {
+            key: value
+            for key, value in _EXTRA_BODY_FIELDS.validate_python(extra_body).items()
+            if key not in additional_drop_params
+        },
+    }
+
+
 def _takes_openai_image_params_unmapped(custom_llm_provider: str | None) -> bool:
     if custom_llm_provider in ("openai", "azure") or custom_llm_provider in litellm.openai_compatible_providers:
         return True
@@ -4131,7 +4170,9 @@ def get_optional_params_image_gen(
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
-        k: v for k, v in optional_params.items() if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
+        k: v
+        for k, v in _without_dropped_extra_body_params(optional_params, additional_drop_params).items()
+        if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
     }
     return optional_params
 
@@ -4851,6 +4892,21 @@ def pre_process_optional_params(
     return optional_params
 
 
+def catalog_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
+    return None if isinstance(info, ModelInfoLookupMiss) else GetModelCostMap.loaded_model_cost_map().get(info["key"])
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    return catalog_entry(model, custom_llm_provider) is not None
+
+
+def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tuple[str, ...]:
+    from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts
+
+    return (declared_reasoning_efforts(model_info) if model_info is not None else None) or ()
+
+
 def _map_params_with_provider_config(
     provider_config: BaseConfig,
     *,
@@ -4859,16 +4915,37 @@ def _map_params_with_provider_config(
     optional_params: dict[str, object],  # mutable-ok: map_openai_params fills and returns the caller's dict
     model: str,
     drop_params: bool,
+    model_info: Mapping[str, object] | None,
     base_model: str | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(model_info),
+        )
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             base_model=base_model,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
+    if isinstance(provider_config, litellm.OpenAIConfig):
+        return provider_config.map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
@@ -5012,7 +5089,8 @@ def get_optional_params(
         else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
-        supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
+        fallback_config: Final = litellm.OpenAIConfig().config_for_openai_compatible_provider(model=model)
+        supported_params = fallback_config.get_supported_openai_params(model=model)
 
     supported_params = supported_params or []
     supported_params.extend(allowed_openai_param_names(allowed_openai_params))
@@ -5294,13 +5372,6 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
         )
-    elif custom_llm_provider == "nvidia_nim":
-        optional_params = litellm.NvidiaNimConfig().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=bool(drop_params),
-        )
     elif custom_llm_provider == "cerebras":
         optional_params = litellm.CerebrasConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -5412,11 +5483,22 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "openai":
-        optional_params = litellm.OpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            litellm.openaiOSeriesConfig.map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+            )
+            if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+            else litellm.OpenAIConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     elif custom_llm_provider == "nebius":
         optional_params = litellm.NebiusConfig().map_openai_params(
@@ -5433,6 +5515,8 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
             )
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
@@ -5468,6 +5552,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            model_info=model_info,
             base_model=base_model,
             allowed_openai_params=allowed_openai_params,
         )
@@ -6509,6 +6594,8 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    *,
+    catalog_only: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -6544,7 +6631,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if not catalog_only and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6568,7 +6655,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if not catalog_only and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
@@ -9365,7 +9452,7 @@ class ProviderConfigManager:
 
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
                 return litellm.openaiOSeriesConfig
-            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            if litellm.OpenAIGPT5Config.is_openai_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
             if not OpenAIGPTConfig.is_openai_catalog_model(model):
                 return OpenAIUnknownModelConfig()
@@ -9843,6 +9930,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.responses.transformation import VertexAIMuseResponsesAPIConfig
+
+            return VertexAIMuseResponsesAPIConfig.for_model(model)
         elif litellm.LlmProviders.SAIL == provider:
             from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
 
@@ -10354,6 +10445,10 @@ class ProviderConfigManager:
             return get_modelscope_image_generation_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIImageGenerationConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_generation import MinimaxImageGenerationConfig
+
+            return MinimaxImageGenerationConfig()
         return None
 
     @staticmethod
@@ -10462,6 +10557,8 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        drop_params: bool = False,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -10471,6 +10568,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod
@@ -10528,6 +10629,10 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_edit import MinimaxImageEditConfig
+
+            return MinimaxImageEditConfig()
         elif LlmProviders.FAL_AI == provider:
             from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 

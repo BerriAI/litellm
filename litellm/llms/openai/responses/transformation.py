@@ -28,6 +28,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnl
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import (
     is_gpt_reasoning_series_name,
+    is_openai_chat_latest_model,
     unsupported_reasoning_effort_message,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
@@ -102,7 +103,7 @@ class _DropParamsSetting(BaseModel):
     drop_params: object = None
 
 
-def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+def drops_params(litellm_params: GenericLiteLLMParams) -> bool:
     setting: Final = _DropParamsSetting.model_validate(litellm_params)
     return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
 
@@ -307,7 +308,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         The same row the chat gate reads, so a level the row refuses is refused on both wires
         and a new model needs its row, not code. This surface stays opt-out for every level,
         xhigh included, since it never refused a level the row omits; max is the exception, a
-        level the row cannot gate because the same model takes it here and refuses it on chat.
+        level no flag can gate because the same model takes it here and refuses it on chat, so only
+        a row that lists its reasoning_effort_levels refuses it.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
         from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -329,7 +331,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
-    def _supports_reasoning_param(model: str) -> bool:
+    def supports_reasoning_param(model: str) -> bool:
         from litellm.utils import get_model_info_helper
 
         try:
@@ -403,7 +405,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if (
             self.custom_llm_provider == LlmProviders.OPENAI
             and self._requests_reasoning_effort(params.get("reasoning"))
-            and not self._supports_reasoning_param(model=model)
+            and not self.supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
                 params.pop("reasoning", None)
@@ -418,7 +420,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
 
         lookup_name: Final = self._model_map_lookup_name(model)
-        if self._is_gpt_5_model(model=lookup_name):
+        if self._is_gpt_5_model(model=lookup_name) or (
+            self.custom_llm_provider == LlmProviders.OPENAI and is_openai_chat_latest_model(lookup_name)
+        ):
             reasoning: Final = params.get("reasoning") or {}
             requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
             if (
@@ -558,7 +562,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
         callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
-        if callers_own_search or not _drops_params(litellm_params) or _runs_tool_search(model, tools):
+        if callers_own_search or not drops_params(litellm_params) or _runs_tool_search(model, tools):
             return tools_with_anthropic_tool_search_mapped(tools)
         verbose_logger.warning(
             "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "

@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_lookaround_regex_patterns,
+    invalid_type_message,
     is_object_schema,
     native_redacted_thinking_data,
     parse_content_for_reasoning,
@@ -56,6 +57,7 @@ from litellm.llms.anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
     tools_without_unsupported_tool_search,
+    without_malformed_thinking_blocks,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
@@ -295,6 +297,32 @@ def _is_guarded_turn_outside_user_turns(message: object) -> bool:
 
 def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
     return next((index for index, message in enumerate(messages) if not is_system_message(message)), len(messages))
+
+
+def _has_numeric_thinking_blocks(message: object) -> bool:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    return message_field(message, "role") == "assistant" and isinstance(thinking_blocks, (int, float))
+
+
+def _numeric_thinking_blocks_error(messages: Sequence[object]) -> BedrockError | None:
+    index: Final = next(
+        (position for position, message in enumerate(messages) if _has_numeric_thinking_blocks(message)), None
+    )
+    if index is None:
+        return None
+    return BedrockError(
+        status_code=400,
+        message=invalid_type_message(
+            f"messages[{index}].thinking_blocks", message_field(messages[index], "thinking_blocks"), "a list"
+        ),
+    )
+
+
+def _without_numeric_thinking_blocks(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    return [
+        without_malformed_thinking_blocks(message) if _has_numeric_thinking_blocks(message) else message
+        for message in messages
+    ]
 
 
 def _invalid_system_part(part: object, model: str | None) -> BadRequestError:
@@ -2390,7 +2418,12 @@ class AmazonConverseConfig(BaseConfig):
         capability_model: Final = bedrock_capability_model(model, base_model)
         typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
         sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
-        sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
+        requested_messages: Final = (
+            _without_numeric_thinking_blocks(messages)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else messages
+        )
+        sendable_messages: Final = _sendable_messages(requested_messages, sends_guarded_text)
         guards_user_input: Final = self._guards_user_input(sendable_messages, typed_optional_params)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             sendable_messages, typed_optional_params, guards_user_input=guards_user_input
@@ -2420,24 +2453,30 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        built_messages: Final = list(
-            with_mistral_tool_use_ids(
-                place_tool_result_images(
-                    await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-                        messages=messages,
-                        model=capability_model,
-                        deployment_model=model,
-                        llm_provider="bedrock_converse",
-                        user_continue_message=litellm_params.pop("user_continue_message", None),
-                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                        sends_guarded_assistant_parts=sends_guarded_text,
-                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+        try:
+            built_messages: Final = list(
+                with_mistral_tool_use_ids(
+                    place_tool_result_images(
+                        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                            messages=messages,
+                            model=capability_model,
+                            deployment_model=model,
+                            llm_provider="bedrock_converse",
+                            user_continue_message=litellm_params.pop("user_continue_message", None),
+                            base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                            sends_guarded_assistant_parts=sends_guarded_text,
+                            drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                        ),
+                        capability_model,
                     ),
                     capability_model,
-                ),
-                capability_model,
+                )
             )
-        )
+        except TypeError as error:
+            thinking_blocks_error: Final = _numeric_thinking_blocks_error(requested_messages)
+            if thinking_blocks_error is None:
+                raise
+            raise thinking_blocks_error from error
         bedrock_messages: Final = (
             list(messages_with_guard_content_as_text(built_messages)) if keeps_full_input_check else built_messages
         )
@@ -2490,7 +2529,12 @@ class AmazonConverseConfig(BaseConfig):
         capability_model: Final = bedrock_capability_model(model, base_model)
         typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
         sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
-        sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
+        requested_messages: Final = (
+            _without_numeric_thinking_blocks(messages)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else messages
+        )
+        sendable_messages: Final = _sendable_messages(requested_messages, sends_guarded_text)
         guards_user_input: Final = self._guards_user_input(sendable_messages, typed_optional_params)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             sendable_messages, typed_optional_params, guards_user_input=guards_user_input
@@ -2520,24 +2564,30 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        built_messages: Final[list[MessageBlock]] = list(
-            with_mistral_tool_use_ids(
-                place_tool_result_images(
-                    _bedrock_converse_messages_pt(
-                        messages=messages,
-                        model=capability_model,
-                        deployment_model=model,
-                        llm_provider="bedrock_converse",
-                        user_continue_message=litellm_params.pop("user_continue_message", None),
-                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                        sends_guarded_assistant_parts=sends_guarded_text,
-                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+        try:
+            built_messages: Final[list[MessageBlock]] = list(
+                with_mistral_tool_use_ids(
+                    place_tool_result_images(
+                        _bedrock_converse_messages_pt(
+                            messages=messages,
+                            model=capability_model,
+                            deployment_model=model,
+                            llm_provider="bedrock_converse",
+                            user_continue_message=litellm_params.pop("user_continue_message", None),
+                            base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                            sends_guarded_assistant_parts=sends_guarded_text,
+                            drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                        ),
+                        capability_model,
                     ),
                     capability_model,
-                ),
-                capability_model,
+                )
             )
-        )
+        except TypeError as error:
+            thinking_blocks_error: Final = _numeric_thinking_blocks_error(requested_messages)
+            if thinking_blocks_error is None:
+                raise
+            raise thinking_blocks_error from error
         bedrock_messages: Final = (
             list(messages_with_guard_content_as_text(built_messages)) if keeps_full_input_check else built_messages
         )

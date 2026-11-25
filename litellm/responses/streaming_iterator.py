@@ -1015,6 +1015,9 @@ class BaseResponsesAPIStreamingIterator:
         if pending:
             await asyncio.wait(pending)
 
+    def record_relayed_tool_arguments(self, arguments: str) -> None:
+        self._generated_tool_arguments += arguments
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream,

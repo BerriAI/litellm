@@ -152,6 +152,24 @@ class TestBedrockFilesTransformation:
 
         assert result[0]["modelInput"]["system"] == [{"text": "be brief"}]
 
+    def test_claude_row_drop_params_decides_whether_a_malformed_thinking_blocks_fails_the_file(self):
+        messages: Final = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello", "thinking_blocks": "abc"},
+            {"role": "user", "content": "Go on"},
+        ]
+        model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+        with pytest.raises(Exception, match=r"messages\[1\]\.thinking_blocks"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(model=model, messages=messages, max_tokens=10)]
+            )
+
+        dropped: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model=model, messages=messages, max_tokens=10, drop_params=True)]
+        )
+        assert dropped[0]["modelInput"]["messages"][1]["content"] == [{"type": "text", "text": "Hello"}]
+
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(

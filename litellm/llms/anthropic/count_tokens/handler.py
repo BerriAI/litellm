@@ -69,6 +69,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                api_base=api_base,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -79,7 +80,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers
-            headers: Final = self.get_count_tokens_headers(auth_header)
+            headers: Final = self.get_count_tokens_headers(auth_header, messages)
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
