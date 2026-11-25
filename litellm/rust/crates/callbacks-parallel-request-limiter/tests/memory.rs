@@ -8,9 +8,10 @@ use std::{
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Candidate, Code, Ctx, Descriptor, Engine, FailureFacts, LimiterState, ModelFacts,
+    Candidate, Code, Ctx, Descriptor, Engine, FailureFacts, LimiterState, LoggedCall, ModelFacts,
     ParallelRequestLimiter, Policy, PostCallFailureFacts, PreCallFacts, PriorResponse,
-    RateLimitedModel, Settings, SocketClose, SuccessFacts, TargetFacts,
+    RateLimitedModel, Resolved, Settings, SocketClose, SuccessFacts, TargetFacts,
+    TokenRateLimitType,
 };
 use litellm_redis_client::{
     Credentials, Namespace, RedisClient, RedisConfig, RedisUrl, Script, Target, Timeouts, commands,
@@ -359,6 +360,55 @@ async fn a_refused_fallback_hop_counts_toward_its_own_model_limit_on_the_key() {
     assert_eq!(
         count(&store, "model_per_key", "k:gpt", Kind::Tokens),
         Some(Local::Number(Number::Int(0)))
+    );
+}
+
+fn billed_refusal(prompt_tokens: i64) -> LoggedCall {
+    serde_json::from_value(json!({
+        "call_id": "call",
+        "provider_billed": true,
+        "combined": {"kind": "usage", "usage": {"kind": "chat", "members": {
+            "prompt_tokens": prompt_tokens, "completion_tokens": 0, "total_tokens": prompt_tokens,
+        }}},
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::reserved(true)]
+#[case::unreserved(false)]
+#[tokio::test]
+async fn every_billed_refusal_of_a_fallback_chain_counts_toward_project_itpm_under_an_output_limit(
+    #[case] reservation: bool,
+) {
+    let (limiter, store, _) = limiter(reservation);
+    let admitted: PreCallFacts = serde_json::from_value(json!({
+        "call_id": "call",
+        "requested_model": "gpt",
+        "descriptors": [{"key": "model_per_project_itpm", "value": "p:gpt",
+                         "rate_limit": {"tokens_per_unit": 10_000}}],
+        "io_estimate": {"input_tokens": 300, "output_tokens": 50},
+    }))
+    .unwrap();
+    let state = LimiterState::default();
+    assert_eq!(limiter.pre_call(&state, admitted, None).await, None);
+
+    for prompt_tokens in [777, 900] {
+        limiter
+            .log_failure(
+                Some(&state),
+                false,
+                billed_refusal(prompt_tokens),
+                &Resolved::default(),
+                TokenRateLimitType::Output,
+                None,
+            )
+            .await;
+    }
+
+    assert_eq!(
+        count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Float(777.0 + 900.0)))
     );
 }
 

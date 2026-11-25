@@ -1542,7 +1542,7 @@ impl ParallelRequestLimiter {
         request: Option<&RequestRedis>,
     ) {
         match state {
-            Some(state) if !turn && call.provider_billed && call.recovered(kind).0 > 0 => {
+            Some(state) if !turn && call.billed_with_usage() => {
                 self.release_for_settlement(state, call.call_id.as_deref(), request)
                     .await;
                 self.settle_billed_failure(

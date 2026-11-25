@@ -462,6 +462,12 @@ impl LoggedCall {
         }
     }
 
+    pub fn billed_with_usage(&self) -> bool {
+        self.provider_billed
+            && reconciled(self.combined_usage())
+                .is_some_and(|usage| usage.prompt_tokens > 0 || usage.completion_tokens > 0)
+    }
+
     pub fn failure_facts(&self, kind: TokenRateLimitType) -> FailureFacts {
         let (tpm_actual, cached_tokens_left_out, partial_usage) = self.recovered(kind);
         FailureFacts {
