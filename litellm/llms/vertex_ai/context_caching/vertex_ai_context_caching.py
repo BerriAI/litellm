@@ -137,11 +137,11 @@ def _prompt_cache_min_tokens(models: Sequence[str], custom_llm_provider: str) ->
     )
 
 
-_GEMINI_4_MODEL: Final = re.compile(r"(?:^|/)gemini-4(?:[.-]|$)", re.IGNORECASE)
+_GEMINI_4_OR_NEWER_MODEL: Final = re.compile(r"(?:^|/)gemini-[4-9](?:[.-]|$)", re.IGNORECASE)
 
 
 def _is_implicit_caching_only(model: str) -> bool:
-    return _GEMINI_4_MODEL.search(model) is not None
+    return _GEMINI_4_OR_NEWER_MODEL.search(model) is not None
 
 
 def _context_caching_skip_reason(
