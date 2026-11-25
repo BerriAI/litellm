@@ -9343,7 +9343,7 @@
   },
   "shared": {
     "semanticCaching": {
-      "title": "Semantic cache",
+      "title": "Response cache",
       "mode": "Cache mode",
       "inherit": "Inherit",
       "enabled": "Enabled",

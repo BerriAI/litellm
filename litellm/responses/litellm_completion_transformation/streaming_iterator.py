@@ -200,7 +200,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         tool_call_provider_fields: bool = False,
         compaction_summary: CompactionSummaryStream | None = None,
     ):
@@ -265,7 +265,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_tools: Final = self.responses_api_request.get("tools")
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
-            LiteLLMCompletionResponsesConfig.request_tools(self.responses_api_request)
+            LiteLLMCompletionResponsesConfig.request_tools(self.responses_api_request), request_input
         )
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
@@ -461,10 +461,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _responses_namespace_tool_call_fields(self, fn_name: str) -> tuple[str, str | None]:
         mapped: Final = self._namespace_tool_names.get(fn_name)
-        if mapped:
-            namespace, tool_name = mapped
-            return tool_name, namespace
-        return fn_name, None
+        if mapped is None:
+            return fn_name, None
+        return mapped.name, mapped.returned_namespace
 
     def _tool_call_item_kwargs(self, call_id: str, fn_name: str, arguments: str, status: str) -> dict[str, str]:
         item_kwargs: Final = build_tool_call_item_kwargs(call_id, fn_name, arguments, status, self._custom_tool_names)
@@ -1005,7 +1004,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self._pending_response_events.extend(events)
 
-    def _merge_provider_specific_fields(self, src: dict) -> None:
+    def _merge_provider_specific_fields(self, src: Mapping[str, object]) -> None:
         """Merge provider_specific_fields using last-value-wins for lists.
 
         List-valued keys (web_search_results, tool_results,

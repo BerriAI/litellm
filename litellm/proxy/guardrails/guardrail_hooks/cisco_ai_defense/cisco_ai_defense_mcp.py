@@ -5,7 +5,7 @@ The public guardrail class imports this private mixin from
 while preserving the existing public import path.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Optional
 
@@ -67,7 +67,7 @@ class _CiscoAIDefenseMcpMixin:
         _PROVIDER_NAME: str
         guardrail_name: str | None
 
-        def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool: ...
+        def should_run_guardrail(self, data: dict[str, object], event_type: GuardrailEventHooks) -> bool: ...
 
         async def _post_inspection(self, url: str, payload: dict[str, object], surface: str) -> object: ...
 
@@ -75,7 +75,7 @@ class _CiscoAIDefenseMcpMixin:
             self,
             error: Exception,
             *,
-            request_data: dict | None = ...,
+            request_data: dict[str, object] | None = ...,
             start_time: datetime | None = ...,
             surface: str = ...,
             direction: str = ...,
@@ -84,7 +84,7 @@ class _CiscoAIDefenseMcpMixin:
         def _finalize_inspection(
             self,
             inspect_response: object,
-            request_data: dict,
+            request_data: dict[str, object],
             context: "_ScanContext",
             start_time: datetime,
             response_obj: object = ...,
@@ -96,7 +96,7 @@ class _CiscoAIDefenseMcpMixin:
 
     async def async_post_mcp_tool_call_hook(
         self,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         response_obj: "MCPPostCallResponseObject",
         start_time: datetime,
         end_time: datetime,

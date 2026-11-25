@@ -45,6 +45,10 @@ def native_health_check_mode(
         from litellm.llms.soniox.common_utils import soniox_health_check_mode
 
         return soniox_health_check_mode(model)
+    if custom_llm_provider == "elevenlabs":
+        from litellm.llms.elevenlabs.common_utils import elevenlabs_health_check_mode
+
+        return elevenlabs_health_check_mode(model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
@@ -158,7 +162,7 @@ class HealthCheckHelpers:
     async def ahealth_check_wildcard_models(
         model: str,
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         litellm_logging_obj: "Logging",
     ) -> dict[str, object]:
         from litellm import acompletion
@@ -178,8 +182,8 @@ class HealthCheckHelpers:
 
     @staticmethod
     def update_model_params_with_health_check_tracking_information(
-        model_params: dict,
-    ) -> dict:
+        model_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Updates the health check model params with tracking information.
 
@@ -222,7 +226,7 @@ class HealthCheckHelpers:
     @staticmethod
     async def _batch_health_check(
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         filtered_model_params: dict,
     ) -> object:
         """

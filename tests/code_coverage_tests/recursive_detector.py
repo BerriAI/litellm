@@ -8,6 +8,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 )
 
 IGNORE_FUNCTIONS = [
+    "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
     "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_ids_to_walk",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
@@ -38,6 +39,9 @@ IGNORE_FUNCTIONS = [
     "filter_value_from_dict",  # max depth set.
     "normalize_json_schema_types",  # max depth set.
     "_extract_fields_recursive",  # max depth set.
+    "_node_blocks",  # bedrock tool call arguments, bounded by MAX_STRUCTURED_CONTENT_SCAN_DEPTH.
+    "_json_text_with_masks",  # walks a tree _node_blocks already admitted within the depth bound.
+    "_value_with_masks",  # walks a tree _node_blocks already admitted within the depth bound.
     "remove_json_schema_refs",  # max depth set.,
     "_convert_schema_types",  # max depth set.,
     "_fix_enum_empty_strings",  # max depth set.,

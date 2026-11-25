@@ -123,12 +123,16 @@ class Golden:
     def anchor(self, start: datetime) -> None:
         self.origin = start.timestamp()
 
-    def agree(self, native: object, context: object = None) -> None:
+    def upcoming(self, context: object = None) -> object:
         expected: Final = self.expected.get(self.case)
         assert expected is not None, f"{self.case} has no recorded golden values"
         assert self.position < len(expected), (self.case, self.position, context)
+        return expected[self.position]
+
+    def agree(self, native: object, context: object = None) -> None:
+        expected: Final = self.upcoming(context)
         actual: Final = plain(native, self.origin)
-        assert matches(expected[self.position], actual), (self.case, self.position, context, expected[self.position])
+        assert matches(expected, actual), (self.case, self.position, context, expected, actual)
         self.position += 1
 
     def finish_case(self) -> None:

@@ -1,8 +1,8 @@
-"""tool_use_streaming x AWS Bedrock Mantle (GPT-5.6).
+"""tool_use_streaming x AWS Bedrock Mantle (GPT-6).
 
 Drive the real `claude` CLI in headless `--output-format stream-json`
 mode against a running LiteLLM proxy that routes Anthropic Messages
-requests to OpenAI's GPT-5.6 family (Sol, Terra, Luna) on AWS
+requests to OpenAI's GPT-6 family (Sol, Terra, Luna, Astra) on AWS
 Bedrock's Mantle endpoint, ask the model to invoke a built-in tool
 (`Bash`), and assert that the upstream (a) emitted a `tool_use`
 content block and (b) streamed the tool input incrementally as
@@ -44,9 +44,10 @@ from claude_code.cli_driver import (
 )
 
 BEDROCK_MANTLE_MODELS = [
-    "gpt-5-6-sol-bedrock-mantle",
-    "gpt-5-6-terra-bedrock-mantle",
-    "gpt-5-6-luna-bedrock-mantle",
+    "gpt-6-2-sol-bedrock-mantle",
+    "gpt-6-1-terra-bedrock-mantle",
+    "gpt-6-luna-bedrock-mantle",
+    "gpt-6-2-astra-bedrock-mantle",
 ]
 
 TOOL_USE_PROMPT = (

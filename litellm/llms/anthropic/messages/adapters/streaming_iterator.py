@@ -66,7 +66,9 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
-_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_THINKING_BLOCK: Final[TypeAdapter[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = TypeAdapter(
+    ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 _AnthropicStreamEvent: TypeAlias = dict[str, object] | MessageBlockDelta | ContentBlockDelta

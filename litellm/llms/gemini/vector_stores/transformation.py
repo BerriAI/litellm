@@ -123,7 +123,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """Supported parameters for Gemini File Search."""
         return ["max_num_results", "filters"]
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """Validate and set up headers for Gemini API."""
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
@@ -144,7 +146,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         return join_api_base(GeminiModelInfo.get_api_base(api_base), "v1beta")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> GeminiError:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> GeminiError:
         """Return Gemini-specific error class."""
         return GeminiError(
             status_code=status_code,

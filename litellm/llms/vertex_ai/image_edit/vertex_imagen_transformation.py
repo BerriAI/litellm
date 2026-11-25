@@ -114,12 +114,12 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = headers or {}
         litellm_params = litellm_params or {}
 
@@ -140,7 +140,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Vertex AI Imagen predict API

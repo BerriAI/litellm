@@ -24,7 +24,12 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, keyword_arguments
-from litellm.litellm_core_utils.tool_fields import declared_function_name, qualified_member_name
+from litellm.litellm_core_utils.tool_fields import (
+    BridgedTool,
+    declared_function_name,
+    qualified_member_name,
+    recorded_bridged_tools,
+)
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -180,6 +185,18 @@ def _namespace_members(tool: object) -> Sequence[object]:
 def _returned_namespace(tool_call: ChatCompletionMessageToolCall) -> str | None:
     tags: Final = as_str_mapping(attribute_or_none(tool_call, "provider_specific_fields"))
     return _non_empty_string(tags.get("namespace")) if tags is not None else None
+
+
+def _bridged_tools(data: object) -> Mapping[str, BridgedTool]:
+    fields: Final = _object_mapping(data)
+    logging_obj: Final = fields.get("litellm_logging_obj") if fields is not None else None
+    return recorded_bridged_tools(attribute_or_none(logging_obj, "model_call_details"))
+
+
+def _as_the_caller_named_it(target: _ToolTarget, bridged: Mapping[str, BridgedTool]) -> _ToolTarget:
+    name, tool_type = target
+    tool: Final = bridged.get(name) if name is not None else None
+    return target if tool is None else (tool.full_name, tool_type)
 
 
 def _judged_call_names(
@@ -1052,10 +1069,13 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
 
     def _returned_call_names(self, data: Mapping[str, object]) -> _JudgedCalls:
+        bridged_calls: Final = MappingProxyType(
+            {sent_name: ((tool.full_name, tool.name),) for sent_name, tool in _bridged_tools(data).items()}
+        )
         sent_tools: Final = _sent_tools(_REQUEST_DATA.validate_python(data))
         member_names: Final = tuple(chain.from_iterable(map(self._bare_member_names, sent_tools)))
         if not member_names:
-            return MappingProxyType({})
+            return bridged_calls
         top_level_tools: Final = (tool for tool in sent_tools if not _is_namespace(tool))
         top_level_names: Final = frozenset(name for name in map(declared_function_name, top_level_tools) if name)
         listed: Final = frozenset(name for name, _ in self._collect_request_tools(data) if name is not None)
@@ -1068,8 +1088,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
         return MappingProxyType(
             {
-                name: (*members, *(((name, name),) if name in own_names else ()))
-                for name, members in returned_members.items()
+                **{
+                    name: (*members, *(((name, name),) if name in own_names else ()))
+                    for name, members in returned_members.items()
+                },
+                **bridged_calls,
             }
         )
 
@@ -1569,9 +1592,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """ """
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook")
 
@@ -1590,11 +1613,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
             )
             return data
 
-        member_names: Final = tuple(
-            chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data))))
+        bridged: Final = _bridged_tools(_REQUEST_DATA.validate_python(data))
+        member_names: Final = (
+            *chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data)))),
+            *((tool.full_name, tool.name) for tool in bridged.values()),
         )
         bare_names: Final = _grouped_values(member_names)
-        decisions: Final = tuple((target, self._check_target_permission(target, bare_names)) for target in new_tools)
+        decisions: Final = tuple(
+            (target, self._check_target_permission(_as_the_caller_named_it(target, bridged), bare_names))
+            for target in new_tools
+        )
         denied: Final = tuple(
             (target, message)
             for target, (is_allowed, _, message) in decisions
@@ -1622,7 +1650,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):

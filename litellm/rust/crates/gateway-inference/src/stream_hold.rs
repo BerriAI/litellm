@@ -8,6 +8,8 @@
 //! attempt's own timeout, which bounds the whole upstream response, is what ends a stream that
 //! sends nothing.
 
+use std::time::SystemTime;
+
 use futures_util::{
     StreamExt,
     stream::{self, BoxStream, Fuse},
@@ -76,8 +78,8 @@ impl<E: Send + 'static> Failed<E> {
 /// How a held stream settled.
 pub(crate) enum Held<E> {
     /// Content began, the stream ended, or it sent more than is held: the stream from its first
-    /// byte, which nothing may answer in place of any more.
-    Committed(Chunks<E>),
+    /// byte, which nothing may answer in place of any more, and when its first event arrived.
+    Committed(Chunks<E>, Option<SystemTime>),
     Failed(Failed<E>),
 }
 
@@ -92,6 +94,7 @@ pub(crate) async fn hold<E: Send + 'static>(
     let mut rest = chunks.fuse();
     let mut before = Vec::new();
     let mut bytes = 0;
+    let mut first_event = None;
     while before.len() < budget.blocks && bytes < budget.bytes {
         let block = match rest.next().await {
             None => break,
@@ -105,6 +108,9 @@ pub(crate) async fn hold<E: Send + 'static>(
                 });
             }
         };
+        if block.event.is_some() {
+            first_event.get_or_insert_with(SystemTime::now);
+        }
         match block.event.as_ref().map(|event| read(&event.data).kind) {
             Some(Kind::Failed { status, answer }) => {
                 let cause = Cause::ErrorEvent {
@@ -128,7 +134,8 @@ pub(crate) async fn hold<E: Send + 'static>(
             }
         }
     }
-    Held::Committed(stream::iter(before.into_iter().map(Ok)).chain(rest).boxed())
+    let sent = stream::iter(before.into_iter().map(Ok)).chain(rest).boxed();
+    Held::Committed(sent, first_event)
 }
 
 #[cfg(test)]
@@ -180,7 +187,7 @@ mod tests {
         });
         let chunks = sse::blocks(chunks).boxed();
         let (failure, sent) = match hold(chunks, read_event, budget).await {
-            Held::Committed(sent) => (None, sent),
+            Held::Committed(sent, _) => (None, sent),
             Held::Failed(failed) => {
                 let failure = match &failed.cause {
                     Cause::ErrorEvent { status, .. } => Failure::ErrorEvent(*status),
@@ -248,5 +255,26 @@ mod tests {
         let chunks = [Ok(PING), Ok(PING), Ok(OVERLOADED)];
 
         assert_eq!(settled(&chunks, budget).await, (None, bytes(&chunks)));
+    }
+
+    /// A held stream reports when its first event arrived, not when it is replayed, and a
+    /// comment that carries no event is no first event.
+    #[rstest]
+    #[case::an_event(vec![Ok(START), Ok(PING)], true)]
+    #[case::only_a_comment(vec![Ok(": keepalive\n\n")], false)]
+    #[tokio::test]
+    async fn a_held_stream_tells_when_its_first_event_arrived(
+        #[case] chunks: Vec<Result<&'static str, Dropped>>,
+        #[case] timed: bool,
+    ) {
+        let before = SystemTime::now();
+        let blocks = sse::blocks(stream::iter(bytes(&chunks))).boxed();
+        let Held::Committed(_, first_event) = hold(blocks, read_event, HELD).await else {
+            panic!("the stream failed");
+        };
+        assert_eq!(
+            first_event.map(|at| at >= before && at <= SystemTime::now()),
+            timed.then_some(true)
+        );
     }
 }

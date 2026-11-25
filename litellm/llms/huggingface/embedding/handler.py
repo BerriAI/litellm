@@ -143,7 +143,7 @@ class HuggingFaceEmbedding(BaseLLM):
 
         return data
 
-    def _process_optional_params(self, data: dict, optional_params: Mapping[str, object]) -> dict:
+    def _process_optional_params(self, data: dict, optional_params: Mapping[str, object]) -> dict[str, object]:
         special_options_keys: Final = config.get_special_options_params()
         special_parameters_keys: Final = [
             "min_length",
@@ -269,10 +269,10 @@ class HuggingFaceEmbedding(BaseLLM):
         model_response: litellm.utils.EmbeddingResponse,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_base: str,
         api_key: str | None,
-        headers: dict,
+        headers: dict[str, object],
         encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
     ):
@@ -332,8 +332,8 @@ class HuggingFaceEmbedding(BaseLLM):
         model: str,
         input: Sequence[object],
         model_response: EmbeddingResponse,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         encoding: _SupportsTokenEncode,
         api_key: str | None = None,

@@ -36,7 +36,9 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
         return join_api_base(base_url, "chat/completions")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
             status_code=status_code,
@@ -45,11 +47,11 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         return mapped_openai_params
 
@@ -58,9 +60,9 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)

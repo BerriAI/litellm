@@ -114,9 +114,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         """
         Transform request to Vertex Gemma format.
@@ -252,16 +252,16 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
         custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: dict[str, object],
         acompletion: bool,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         logger_fn: Callable[..., object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
