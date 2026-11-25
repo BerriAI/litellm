@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import orjson
 import pytest
+import respx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -1205,6 +1206,67 @@ def test_a_failed_image_fallback_counts_toward_its_cooldown(monkeypatch: pytest.
 
     assert response.status_code == 503, response.text
     assert len(set(get_cooldown_deployments(router, None)) & {"b1", "b2"}) == 1
+
+
+_REFUSED_IMAGE_TOKENS: Final = 1110
+
+
+def _group_usage_once_settled(
+    router: litellm.Router, expected: tuple[int | None, int | None], timeout: float = 5.0
+) -> tuple[int | None, int | None]:
+    deadline: Final = time.monotonic() + timeout
+    while time.monotonic() < deadline and asyncio.run(router.get_model_group_usage("A")) != expected:
+        time.sleep(0.05)
+    return asyncio.run(router.get_model_group_usage("A"))
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_a_refused_gemini_image_counts_toward_its_model_group_usage(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    app: Final = _image_regression_app(monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {})
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "A",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://google.invalid/v1",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    refusal: Final[Mapping[str, object]] = {
+        "candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"parts": []}}],
+        "usageMetadata": {
+            "promptTokenCount": _REFUSED_IMAGE_TOKENS - 333,
+            "candidatesTokenCount": 333,
+            "totalTokenCount": _REFUSED_IMAGE_TOKENS,
+        },
+    }
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream, TestClient(app, raise_server_exceptions=False) as client:
+            upstream.post(url__startswith="https://google.invalid/").mock(
+                return_value=httpx.Response(200, json=refusal)
+            )
+            response: Final = send(client)
+            usage: Final = _group_usage_once_settled(router, (_REFUSED_IMAGE_TOKENS, 1))
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 400, response.text
+    assert usage == (_REFUSED_IMAGE_TOKENS, 1)
 
 
 @pytest.mark.parametrize(

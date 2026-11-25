@@ -25,6 +25,7 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -3742,6 +3743,92 @@ async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_u
         end_time=None,
     )
     assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 27
+
+
+def _billed_refusal() -> ImageRefusalError:
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://generativelanguage.googleapis.com")),
+        provider_specific_fields={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_failure_event_settles_tpm_reservation_at_a_billed_image_refusal_without_output_v3():
+    _api_key = hash_token("sk-billed-image-refusal")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refused-call")
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "refused-call",
+            "exception": _billed_refusal(),
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 777
+
+
+@pytest.mark.asyncio
+async def test_fallback_served_after_a_billed_image_refusal_keeps_both_hops_tokens_v3():
+    _api_key = hash_token("sk-billed-image-refusal-then-served")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refused-then-served")
+    hop_kwargs = {
+        "litellm_call_id": "refused-then-served",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+    }
+
+    await handler.async_log_failure_event(
+        kwargs={
+            **hop_kwargs,
+            "exception": _billed_refusal(),
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await handler.async_log_success_event(
+        kwargs={**hop_kwargs, "model": "gpt-4o-mini"},
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=400, completion_tokens=600, total_tokens=1000)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 1777
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_settles_reservation_at_a_billed_image_refusal_without_output_v3():
+    _api_key = hash_token("sk-billed-image-refusal-post-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "refused-post-call")
+
+    await handler.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "refused-post-call",
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        original_exception=_billed_refusal(),
+        user_api_key_dict=UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000),
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 777
 
 
 @pytest.mark.asyncio

@@ -85,6 +85,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -9202,10 +9203,15 @@ class Router:
         """
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
-        deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
+        call_details: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+        call_params: Final = as_str_mapping(call_details.get("litellm_params")) or {}
+        router_metadata: Final = (
+            as_str_mapping(call_params.get("litellm_metadata")) or as_str_mapping(call_params.get("metadata")) or {}
+        )
+        deployment_name: Final = router_metadata.get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
-        model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+        model_group: Final = router_metadata.get("model_group", None)
         model_info: Final = kwargs["litellm_params"].get("model_info", {}) or {}
         id = model_info.get("id", None)
         if model_group is None or id is None:
@@ -9226,7 +9232,7 @@ class Router:
                 parent_otel_span=parent_otel_span,
                 ttl=RoutingArgs.ttl.value,
             )
-        billed: Final = billed_deployment_tokens(cast("dict[str, object]", kwargs))  # cast-ok: untyped kwargs dict
+        billed: Final = billed_deployment_tokens(call_details)
         if billed is not None:
             await self._increment_deployment_usage(
                 deployment_id=f"{id}",
