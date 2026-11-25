@@ -329,10 +329,9 @@ def test_redis_semantic_cache_warns_when_the_installed_redisvl_is_outside_the_su
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
     _install_redisvl_distribution(monkeypatch, tmp_path, installed_redisvl)
-    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
 
-    with _fake_redisvl_modules(MagicMock(), MagicMock()), caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        _ = redis_semantic_cache.llmcache
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        _ = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
 
     warned: Final = any(
         f"found {installed_redisvl}, install one with `pip install 'redisvl>=0.26.0,<1.0'`" in record.getMessage()
@@ -341,8 +340,9 @@ def test_redis_semantic_cache_warns_when_the_installed_redisvl_is_outside_the_su
     assert warned is warns
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("installed_redisvl", ["0.5.1", "0.12.1"])
-def test_redis_semantic_cache_refuses_redisvl_whose_async_lookups_return_hits_for_other_prompts(
+async def test_redis_semantic_cache_stays_off_without_embedding_on_redisvl_whose_async_lookups_return_other_hits(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
@@ -352,22 +352,40 @@ def test_redis_semantic_cache_refuses_redisvl_whose_async_lookups_return_hits_fo
 
     _install_redisvl_distribution(monkeypatch, tmp_path, installed_redisvl)
     semantic_cache_cls: Final = MagicMock()
-    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+    messages: Final = [{"role": "user", "content": "What is the capital of France?"}]
+    sync_metadata: Final[dict[str, object]] = {}
+    async_metadata: Final[dict[str, object]] = {}
 
     with _fake_redisvl_modules(semantic_cache_cls, MagicMock()), caplog.at_level(logging.ERROR, logger="LiteLLM"):
-        with pytest.raises(ImportError, match=f"redisvl {installed_redisvl} returns async semantic-cache hits"):
-            _ = redis_semantic_cache.llmcache
+        redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+        redis_semantic_cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+        redis_semantic_cache._get_async_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
+        redis_semantic_cache.set_cache(key="k", value="Paris", messages=messages)
+        sync_hit: Final = redis_semantic_cache.get_cache(key="k", messages=messages, metadata=sync_metadata)
+        await redis_semantic_cache.async_set_cache(key="k", value="Paris", messages=messages)
+        async_hit: Final = await redis_semantic_cache.async_get_cache(
+            key="k", messages=messages, metadata=async_metadata
+        )
+        index_info: Final = await redis_semantic_cache._index_info()
 
+    assert sync_hit is None and async_hit is None
+    assert sync_metadata["semantic-similarity"] == 0.0
+    assert async_metadata["semantic-similarity"] == 0.0
+    redis_semantic_cache._get_embedding.assert_not_called()
+    redis_semantic_cache._get_async_embedding.assert_not_called()
     semantic_cache_cls.assert_not_called()
-    assert any(
+    refusal: Final = (
         f"redisvl {installed_redisvl} returns async hits for other prompts, "
-        "install a fixed one with `pip install 'redisvl>=0.26.0,<1.0'`" in record.getMessage()
-        for record in caplog.records
+        "install a fixed one with `pip install 'redisvl>=0.26.0,<1.0'`"
     )
+    assert [record.getMessage() for record in caplog.records if refusal in record.getMessage()] == [
+        f"Redis semantic cache is off because {refusal}"
+    ]
+    assert index_info == {"error": f"Redis semantic cache is off because {refusal}"}
 
 
-@pytest.mark.parametrize("installed_redisvl", ["0.4.1", "0.13.0"])
-def test_redis_semantic_cache_builds_on_redisvl_outside_the_wrong_async_hit_range(
+@pytest.mark.parametrize("installed_redisvl", ["0.4.1", "0.5.0", "0.13.0"])
+def test_redis_semantic_cache_looks_up_on_redisvl_outside_the_wrong_async_hit_range(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     installed_redisvl: str,
@@ -376,10 +394,31 @@ def test_redis_semantic_cache_builds_on_redisvl_outside_the_wrong_async_hit_rang
 
     _install_redisvl_distribution(monkeypatch, tmp_path, installed_redisvl)
     semantic_cache_cls: Final = MagicMock()
-    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+    semantic_cache_cls.return_value.check.return_value = []
 
     with _fake_redisvl_modules(semantic_cache_cls, MagicMock()):
-        assert redis_semantic_cache.llmcache is semantic_cache_cls.return_value
+        redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+        redis_semantic_cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+        _ = redis_semantic_cache.get_cache(key="k", messages=[{"role": "user", "content": "Capital of France?"}])
+
+    semantic_cache_cls.return_value.check.assert_called_once()
+
+
+def test_redis_semantic_cache_builds_without_logging_when_redisvl_has_no_distribution_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    semantic_cache_cls: Final = MagicMock()
+    with _fake_redisvl_modules(semantic_cache_cls, MagicMock()), caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        monkeypatch.setattr(sys, "path", [str(tmp_path)])
+        redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+        llmcache: Final = redis_semantic_cache.llmcache
+
+    assert llmcache is semantic_cache_cls.return_value
+    assert [record.getMessage() for record in caplog.records if "redisvl" in record.getMessage()] == []
 
 
 def test_redis_semantic_cache_matches_bytes_cache_key():
