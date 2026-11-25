@@ -126970,5 +126970,29 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "fal_ai/krea/v3/text-to-image/lora": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills krea/v3/text-to-image/lora at $0.05 per megapixel (1 MP = 1024x1024 pixels), counting the output and reference images. The per-pixel rate is used when Fal reports the output size, and the flat per-image price is the price of one megapixel like the sibling krea/v3 entries. The default image_size auto renders at about 2048x2048, about 4 MP"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "output_cost_per_pixel": 4.76837158203125e-08,
+        "source": "https://fal.ai/models/krea/v3/text-to-image/lora",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/krea/v3/edit/lora": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills krea/v3/edit/lora at $0.05 per megapixel (1 MP = 1024x1024 pixels), counting the output and reference images. The per-pixel rate is used when Fal reports the output size, and the flat per-image price is the price of one megapixel like the sibling krea/v3 entries. The default image_size auto renders at about 2048x2048, about 4 MP"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "output_cost_per_pixel": 4.76837158203125e-08,
+        "source": "https://fal.ai/models/krea/v3/edit/lora",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     }
 }
