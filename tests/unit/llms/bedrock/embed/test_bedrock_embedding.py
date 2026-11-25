@@ -2336,6 +2336,63 @@ def _nova_usage_and_cost(
     return response.usage, response._hidden_params["response_cost"]
 
 
+def _nova_deployment_clip_cost(respx_mock: respx.MockRouter, **prices: float) -> float:
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": "0"},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for embedding_type in ("AUDIO", "VIDEO")
+        ]
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "nova",
+                "litellm_params": {
+                    "model": f"bedrock/{_NOVA_MODEL_ID}",
+                    "api_key": "test-bearer-token",
+                    "aws_region_name": "us-east-1",
+                    **prices,
+                },
+            }
+        ]
+    )
+    response: Final = router.embedding(
+        model="nova",
+        input=[f"data:audio/wav;base64,{_wav_base64(2.5)}", f"data:video/mp4;base64,{_mp4_base64(1000, 6500)}"],
+    )
+    return response._hidden_params["response_cost"]
+
+
+def test_bedrock_nova_deployment_with_only_a_token_price_bills_clips_by_length_at_the_listed_rates(
+    respx_mock: respx.MockRouter,
+) -> None:
+    listed: Final = litellm.model_cost[_NOVA_MODEL_ID]
+
+    assert _nova_deployment_clip_cost(respx_mock, input_cost_per_token=0.001) == pytest.approx(
+        2.5 * listed["input_cost_per_audio_per_second"] + 6.5 * listed["input_cost_per_video_per_second"]
+    )
+
+
+def test_bedrock_nova_deployment_bills_a_clip_kind_it_does_not_price_at_the_listed_rate(
+    respx_mock: respx.MockRouter,
+) -> None:
+    listed: Final = litellm.model_cost[_NOVA_MODEL_ID]
+
+    assert _nova_deployment_clip_cost(
+        respx_mock, input_cost_per_token=0.001, input_cost_per_audio_per_second=2.0
+    ) == pytest.approx(2.5 * 2.0 + 6.5 * listed["input_cost_per_video_per_second"])
+
+
+def test_bedrock_nova_deployment_priced_at_zero_per_token_bills_clips_at_nothing(
+    respx_mock: respx.MockRouter,
+) -> None:
+    assert _nova_deployment_clip_cost(respx_mock, input_cost_per_token=0.0) == 0.0
+
+
 def test_bedrock_nova_embedding_bills_inline_audio_by_its_length(respx_mock: respx.MockRouter) -> None:
     usage, cost = _nova_usage_and_cost(
         respx_mock,
@@ -2350,40 +2407,6 @@ def test_bedrock_nova_embedding_bills_inline_audio_by_its_length(respx_mock: res
     prices: Final = litellm.model_cost[_NOVA_MODEL_ID]
     assert (usage.prompt_tokens, usage.prompt_tokens_details.audio_length_seconds) == (0, 6.5)
     assert cost == pytest.approx(6.5 * prices["input_cost_per_audio_per_second"] + prices["input_cost_per_image"])
-
-
-def test_bedrock_nova_embedding_bills_clips_by_tokens_when_the_deployment_sets_only_a_token_price(
-    respx_mock: respx.MockRouter,
-) -> None:
-    usage, cost = _nova_usage_and_cost(
-        respx_mock,
-        ("AUDIO", "VIDEO"),
-        input=[f"data:audio/wav;base64,{_wav_base64(2.5)}", f"data:video/mp4;base64,{_mp4_base64(1000, 6500)}"],
-        input_cost_per_token=0.001,
-    )
-
-    assert (usage.prompt_tokens, usage.prompt_tokens_details) == (2 * 768, None)
-    assert cost == pytest.approx(2 * 768 * 0.001)
-
-
-def test_bedrock_nova_embedding_bills_only_the_clip_kind_the_deployment_prices_by_the_second(
-    respx_mock: respx.MockRouter,
-) -> None:
-    usage, cost = _nova_usage_and_cost(
-        respx_mock,
-        ("AUDIO", "VIDEO"),
-        input=[f"data:audio/wav;base64,{_wav_base64(2.5)}", f"data:video/mp4;base64,{_mp4_base64(1000, 6500)}"],
-        input_cost_per_token=0.001,
-        input_cost_per_audio_per_second=2.0,
-    )
-
-    details: Final = usage.prompt_tokens_details
-    assert (usage.prompt_tokens, details.audio_length_seconds, getattr(details, "video_length_seconds", None)) == (
-        768,
-        2.5,
-        None,
-    )
-    assert cost == pytest.approx(2.5 * 2.0 + 768 * 0.001)
 
 
 @pytest.mark.parametrize(
