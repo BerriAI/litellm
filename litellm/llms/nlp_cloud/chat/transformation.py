@@ -141,7 +141,7 @@ class NLPCloudConfig(BaseConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_length"] = value

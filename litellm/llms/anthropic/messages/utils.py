@@ -38,6 +38,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 REASONING_EFFORT_OFF: Final = "none"
 KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_PROVIDERS_ROUNDING_REASONING_EFFORT: Final = frozenset({"zai"})
 _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
 
@@ -506,6 +507,14 @@ def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, depl
     )
 
 
+def _provider_rounds_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return provider in _PROVIDERS_ROUNDING_REASONING_EFFORT
+
+
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
@@ -515,7 +524,8 @@ def normalize_reasoning_effort_value(
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
 
     A deployment whose own reasoning_effort_levels name a strength tier keeps the tier as sent, since
-    completion() and responses() round it onto those levels.
+    completion() and responses() round it onto those levels. So does a provider whose chat config rounds
+    the tier onto its models' levels itself, like zai.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
@@ -533,7 +543,9 @@ def normalize_reasoning_effort_value(
 
     from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 
-    if deployment_rounds_reasoning_effort(deployment_model_info):
+    if deployment_rounds_reasoning_effort(deployment_model_info) or _provider_rounds_reasoning_effort(
+        model, custom_llm_provider
+    ):
         return effort
 
     supported: Final = model_reasoning_efforts(model, custom_llm_provider)

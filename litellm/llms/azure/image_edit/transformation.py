@@ -12,6 +12,9 @@ from litellm.utils import add_path_to_api_base
 
 
 class AzureImageEditConfig(OpenAIImageEditConfig):
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
+        return [param for param in super().get_supported_openai_params(model) if param != "markup"]
+
     @staticmethod
     def azure_deployment_image_edit_form_data(data: dict[str, object], request_url: str) -> dict[str, object]:
         """

@@ -492,6 +492,8 @@ def _derived_ui_setting_value(key: str) -> object:
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",

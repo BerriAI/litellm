@@ -1,4 +1,5 @@
 mod auth;
+pub mod db;
 mod environment;
 mod error;
 mod layer;

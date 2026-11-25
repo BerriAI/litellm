@@ -297,7 +297,7 @@ class GenAIMetricRecorder:
 
     def _common_attributes(self, kwargs: _MetricKwargs) -> dict:
         params: Final = kwargs.get("litellm_params") or {}
-        common_attrs: Final[dict] = {
+        common_attrs: Final[dict[str, object]] = {
             GenAI.OPERATION_NAME: resolve_operation(
                 kwargs.get("call_type"), kwargs.get(PASSTHROUGH_OPERATION_KEY)
             ).value,

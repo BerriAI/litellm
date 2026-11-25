@@ -20,7 +20,10 @@ use litellm_python_compat::datetime::UtcDateTime;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use super::parallel_request_limiter::{MASTER_KEY_ALIAS, PROXY_ADMIN_NAME};
+use super::{
+    parallel_request_limiter::{MASTER_KEY_ALIAS, PROXY_ADMIN_NAME},
+    spend_log_input::{self, Served},
+};
 use crate::host::NativeRows;
 
 const MODEL: &str = "model";
@@ -222,6 +225,24 @@ fn timing(entries: &CallState) -> AttemptTiming {
     }
 }
 
+/// The spend log callback's input for a served call. A failed call has none yet.
+fn spend_log_input(entries: &CallState) -> Option<Value> {
+    let call_type = entries.call_type()?;
+    let provider = provider(entries);
+    spend_log_input::success(&Served {
+        call_type,
+        route: route(call_type),
+        charged: entries.charged(),
+        call_id: entries.call_id(),
+        trace_id: entries.trace_id(),
+        stream: entries.stream(),
+        start: entries.start(),
+        end: entries.end()?,
+        provider: provider.as_deref(),
+        call: entries.served()?,
+    })
+}
+
 fn read(entries: &CallState, field: Field) -> Option<Value> {
     match field {
         Field::Model => entries.model().map(Value::from),
@@ -235,6 +256,7 @@ fn read(entries: &CallState, field: Field) -> Option<Value> {
         Field::Deployment => record(served_deployment(entries)?),
         Field::AttemptTiming => record(timing(entries)),
         Field::SpendLogId => record(spend_log_id(entries)),
+        Field::SpendLogInput => spend_log_input(entries),
         Field::LoggedModelGroup => record(LoggedModelGroup {
             value: Some(Scalar::Text(entries.served()?.model_group.clone())),
             ..LoggedModelGroup::default()
@@ -475,6 +497,29 @@ mod tests {
             spend_log_id(entries).id
         });
         assert_eq!(logged.as_deref(), id);
+    }
+
+    #[rstest]
+    #[case::a_served_call(Some(served(Some("msg_1"))), Some("success"))]
+    #[case::a_failed_call(None, None)]
+    fn only_a_served_call_is_handed_a_spend_log_input(
+        #[case] served: Option<ServedCall>,
+        #[case] kind: Option<&str>,
+    ) {
+        let input = on_a_call(|entries| {
+            entries.release();
+            match served {
+                Some(served) => entries.serve(served),
+                None => entries.fail(),
+            }
+            input(
+                entries,
+                Hook::AttemptEnded,
+                FieldSet::of(&[Field::SpendLogInput]),
+            )
+        });
+        let read = input.fields.raw(Field::SpendLogInput).unwrap();
+        assert_eq!(read.and_then(|input| input["kind"].as_str()), kind);
     }
 
     #[rstest]

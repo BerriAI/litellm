@@ -69,6 +69,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
+    tool_calls_in_guardrail_scope,
     unappliable_request_rewrite,
 )
 from litellm.types.llms.anthropic import (
@@ -1132,6 +1133,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                include_tool_calls=tool_calls_in_guardrail_scope(guardrail_to_apply),
             )
             for msg_idx, message in enumerate(messages)
         )
@@ -1491,6 +1493,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        include_tool_calls: bool = True,
     ) -> ExtractedInput:
         """Extract text content and images from a message.
 
@@ -1526,7 +1529,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         tool_use_blocks: Final = (
             ()
-            if scan_only_tool_results
+            if not include_tool_calls
             else tuple(
                 (content_idx, content_item)
                 for content_idx, content_item in enumerate(content)

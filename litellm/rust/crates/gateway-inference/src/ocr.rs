@@ -132,7 +132,7 @@ impl RouteAttempt for OcrAttempt<'_> {
             OcrConnectionInputs {
                 api_key: deployment.params.api_key.clone(),
                 api_base: deployment.params.api_base.clone(),
-                timeout: routing::timeout(attempt, false),
+                timeout: routing::timeout(attempt, false, None),
                 ..Default::default()
             },
         )?;

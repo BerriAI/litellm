@@ -160,7 +160,7 @@ class HumanloopLogger(CustomLogger):
     ) -> tuple[
         str,
         list[AllMessageValues],
-        dict,
+        dict[str, object],
     ]:
         humanloop_api_key = dynamic_callback_params.get("humanloop_api_key") or get_secret_str("HUMANLOOP_API_KEY")
 
