@@ -26,6 +26,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
@@ -52,7 +53,7 @@ READ_THROUGH_MISS_TTL_SECONDS: Final = 2.0
 READ_THROUGH_RESYNC_WINDOW_SECONDS: Final = 5.0
 READ_THROUGH_MAX_RESYNCS_PER_WINDOW: Final = 20
 READ_THROUGH_MAX_WAIT_SECONDS: Final = 1.0
-READ_THROUGH_MAX_STALE_SECONDS: Final = 10.0
+READ_THROUGH_MAX_STALE_SECONDS: Final = float(PROXY_CONFIG_RELOAD_INTERVAL_SECONDS)
 
 VectorStoreIndexLookup: TypeAlias = Literal["managed", "unmanaged", "unknown"]
 
@@ -128,12 +129,12 @@ class ThrottledTableReload:
     __slots__ = (
         "_clock",
         "_finished_at",
-        "_last_success_started_at",
         "_max_wait_seconds",
         "_min_interval_seconds",
         "_reload",
         "_started_at",
         "_succeeded",
+        "_succeeded_at",
         "_task",
     )
 
@@ -151,13 +152,13 @@ class ThrottledTableReload:
         self._task: asyncio.Task[bool] | None = None
         self._started_at = float("-inf")
         self._finished_at = float("-inf")
-        self._last_success_started_at = float("-inf")
         self._succeeded = False
+        self._succeeded_at = float("-inf")
 
     async def reload_if_stale(self, max_stale_seconds: float = 0.0) -> bool:
         if self._task is None and self._clock() - self._finished_at >= self._min_interval_seconds:
             self._started_at = self._clock()
-            self._task = asyncio.create_task(self._run(self._started_at))
+            self._task = asyncio.create_task(self._run())
         task: Final = self._task
         if task is None:
             return self._succeeded or self._succeeded_within(max_stale_seconds)
@@ -166,13 +167,13 @@ class ThrottledTableReload:
         return (task in done and not task.cancelled() and task.result()) or self._succeeded_within(max_stale_seconds)
 
     def _succeeded_within(self, seconds: float) -> bool:
-        return self._clock() - self._last_success_started_at < seconds
+        return self._clock() - self._succeeded_at < seconds
 
-    async def _run(self, started_at: float) -> bool:
+    async def _run(self) -> bool:
         try:
             await self._reload()
             self._succeeded = True
-            self._last_success_started_at = started_at
+            self._succeeded_at = self._clock()
         except Exception as e:  # noqa: BLE001  # a failed reload must answer "unknown" to callers, not a 500
             verbose_proxy_logger.warning("registry table reload failed: %s", e)
             self._succeeded = False

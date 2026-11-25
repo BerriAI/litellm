@@ -1055,14 +1055,16 @@ async def test_slow_table_reload_frees_callers_at_the_wait_cap_and_cools_down_fr
 
 
 @pytest.mark.asyncio
-async def test_slow_table_reload_answers_from_a_successful_read_started_inside_the_callers_stale_window():
+async def test_slow_table_reload_answers_from_a_read_that_finished_inside_the_callers_stale_window():
     clock: Final = FakeClock()
     gate: Final = asyncio.Event()
-    gate.set()
     spy: Final = ReloadSpy(gate=gate)
     reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, max_wait_seconds=0.01, clock=clock)
 
-    assert await reload.reload_if_stale() is True
+    assert await reload.reload_if_stale(max_stale_seconds=10.0) is False
+    clock.advance(5.0)
+    gate.set()
+    await spy.finished.wait()
     gate.clear()
     spy.finished.clear()
     clock.advance(9.5)
