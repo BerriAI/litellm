@@ -425,9 +425,11 @@ class AnthropicMessagesStreamingResponse:
         self,
         completion_stream: AsyncIterator[bytes],
         hidden_params: AnthropicMessagesStreamHiddenParams,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
     ) -> None:
         self.completion_stream = completion_stream
         self._hidden_params = hidden_params
+        self.litellm_logging_obj: Final = litellm_logging_obj
 
     @property
     def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
