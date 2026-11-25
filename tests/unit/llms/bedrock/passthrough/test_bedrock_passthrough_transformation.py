@@ -980,6 +980,39 @@ def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
     )
 
 
+PIXTRAL_MODEL: Final = "us.mistral.pixtral-large-2502-v1:0"
+
+
+def _pixtral_chunk(content: str, stop_reason: str | None = None, usage: dict[str, int] | None = None) -> bytes:
+    return _invoke_chunk(
+        {
+            "object": "chat.completion.chunk",
+            "model": "pixtral-large-2502",
+            "choices": [{"index": 0, "message": {"role": None, "content": content}, "stop_reason": stop_reason}],
+            "usage": usage,
+        }
+    )
+
+
+def test_mistral_chat_invoke_stream_collector_logs_text_and_bedrock_usage():
+    endpoint: Final = f"/model/{PIXTRAL_MODEL}/invoke-with-response-stream"
+    collector: Final = BedrockPassthroughConfig().create_stream_collector(
+        model=PIXTRAL_MODEL, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+    _feed(
+        collector,
+        _pixtral_chunk("Bon")
+        + _pixtral_chunk("jour")
+        + _pixtral_chunk(" !", "length", {"prompt_tokens": 17, "total_tokens": 81, "completion_tokens": 64}),
+    )
+
+    response: Final = collector.build_logged_response(_stream_logging_obj(endpoint, model=PIXTRAL_MODEL))
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Bonjour !"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (17, 64)
+
+
 def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     collector = BedrockPassthroughConfig().create_stream_collector(
         model=CONVERSE_MODEL, custom_llm_provider="bedrock", endpoint=f"/model/{CONVERSE_MODEL}/rerank"
