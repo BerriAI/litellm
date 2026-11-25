@@ -58,7 +58,7 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   }, [availableCallbacks, onTest, onEdit, onDelete, t]);
 
   return (
-    <div className="mt-4 flex w-full flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <h3 className="text-lg font-semibold tracking-tight text-foreground">
         {t("loggingAndAlerts.loggingCallbacks.table.title")}
       </h3>

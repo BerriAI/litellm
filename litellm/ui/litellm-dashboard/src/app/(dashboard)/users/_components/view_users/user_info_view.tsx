@@ -30,7 +30,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
+import { availableRoleDisplayLabel, hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
@@ -49,7 +49,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
-import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { UserSpendCard } from "./UserSpendCard";
 
 interface UserInfoViewProps {
   userId: string;
@@ -74,6 +74,9 @@ interface TeamOption {
   team_id: string;
   team_alias: string;
 }
+
+const shouldRefreshBudget = (user: UserInfoV2Response, changes: Record<string, unknown>) =>
+  user.rollover_max_budget != null || changes.rollover_max_budget !== undefined;
 
 export default function UserInfoView({
   userId,
@@ -137,7 +140,7 @@ export default function UserInfoView({
           try {
             const teamPromises = data.teams.map(async (teamId: string) => {
               try {
-                const teamData = await teamInfoCall(accessToken, teamId);
+                const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
                 return {
                   team_id: teamId,
                   team_alias: teamData?.team_info?.team_alias || null,
@@ -213,7 +216,7 @@ export default function UserInfoView({
       if (data.teams && data.teams.length > 0) {
         const teamPromises = data.teams.map(async (teamId: string) => {
           try {
-            const teamData = await teamInfoCall(accessToken, teamId);
+            const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
             return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
           } catch {
             return { team_id: teamId, team_alias: null };
@@ -254,7 +257,7 @@ export default function UserInfoView({
       if (data.teams && data.teams.length > 0) {
         const teamPromises = data.teams.map(async (teamId: string) => {
           try {
-            const teamData = await teamInfoCall(accessToken, teamId);
+            const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
             return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
           } catch {
             return { team_id: teamId, team_alias: null };
@@ -324,35 +327,42 @@ export default function UserInfoView({
       if (!accessToken || !userData) return;
 
       const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
+      const skills: string[] | undefined = formValues.skills;
+      const objectPermission =
+        mcpEntitlement || skills !== undefined ? { ...mcpEntitlement, ...(skills !== undefined && { skills }) } : null;
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
+          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions" && field !== "skills",
         ),
       );
 
       await userUpdateUserCall(
         accessToken,
-        mcpEntitlement ? { ...userFields, object_permission: mcpEntitlement } : userFields,
+        objectPermission ? { ...userFields, object_permission: objectPermission } : userFields,
         null,
       );
 
       // Update local state with new values
-      setUserData({
-        ...userData,
-        user_email: formValues.user_email ?? userData.user_email,
-        user_alias: formValues.user_alias ?? userData.user_alias,
-        models: formValues.models ?? userData.models,
-        max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
-        tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
-        budget_duration:
-          formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
-        metadata: formValues.metadata ?? userData.metadata,
-        model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
-        object_permission: mcpEntitlement
-          ? { ...userData.object_permission, ...mcpEntitlement }
-          : userData.object_permission,
-      });
+      if (shouldRefreshBudget(userData, formValues)) {
+        setUserData(await userGetInfoV2(accessToken, userData.user_id));
+      } else
+        setUserData({
+          ...userData,
+          user_email: formValues.user_email ?? userData.user_email,
+          user_alias: formValues.user_alias ?? userData.user_alias,
+          user_role: formValues.user_role ?? userData.user_role,
+          models: formValues.models ?? userData.models,
+          max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+          tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
+          rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
+          budget_duration:
+            formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
+          metadata: formValues.metadata ?? userData.metadata,
+          model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
+          object_permission: objectPermission
+            ? { ...userData.object_permission, ...objectPermission }
+            : userData.object_permission,
+        });
 
       toast.success(t("users.userInfo.toasts.updated"));
       setIsEditing(false);
@@ -364,7 +374,7 @@ export default function UserInfoView({
 
   if (isLoading) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -376,7 +386,7 @@ export default function UserInfoView({
 
   if (!userData) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -397,9 +407,7 @@ export default function UserInfoView({
   };
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
-  const unlimitedLabel = t("users.userInfo.unlimited");
-  const budgetLimit =
-    userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
+  const unlimited = t("users.userInfo.unlimited");
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -411,6 +419,7 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      rollover_max_budget: userData.rollover_max_budget,
       tpm_limit: userData.tpm_limit,
       rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
@@ -422,8 +431,9 @@ export default function UserInfoView({
     },
   };
 
+  const roleId = userData.user_role;
   return (
-    <div className="p-4">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -475,7 +485,7 @@ export default function UserInfoView({
           { label: t("users.userInfo.deleteModal.userId"), value: userData.user_id, code: true },
           {
             label: t("users.userInfo.deleteModal.globalProxyRole"),
-            value: (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) || userData.user_role || "-",
+            value: (roleId && availableRoleDisplayLabel(roleId, possibleUIRoles?.[roleId]?.ui_label)) || "-",
           },
           {
             label: t("users.userInfo.deleteModal.totalSpend"),
@@ -525,21 +535,7 @@ export default function UserInfoView({
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <Card className="block p-6">
-              <p>
-                {t("users.userInfo.overview.spend")}
-                <BudgetPeriodTooltip
-                  spend={userData.spend}
-                  maxBudget={userData.max_budget}
-                  budgetDuration={userData.budget_duration}
-                  budgetResetAt={userData.budget_reset_at}
-                />
-              </p>
-              <div className="mt-2">
-                <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
-                <p>{t("users.userInfo.overview.budgetOf", { budget: budgetLimit })}</p>
-              </div>
-            </Card>
+            <UserSpendCard user={userData} />
 
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-2">
@@ -677,7 +673,7 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.globalProxyRole")}</p>
-                  <p>{userData.user_role || t("users.userInfo.details.notSet")}</p>
+                  <p>{availableRoleDisplayLabel(roleId || "") || t("users.userInfo.details.notSet")}</p>
                 </div>
 
                 <div>
@@ -710,7 +706,7 @@ export default function UserInfoView({
                   <p>
                     {userData.max_budget !== null && userData.max_budget !== undefined
                       ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : unlimitedLabel}
+                      : unlimited}
                   </p>
                 </div>
 
@@ -724,6 +720,14 @@ export default function UserInfoView({
                   <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                     {JSON.stringify(userData.metadata || {}, null, 2)}
                   </pre>
+                </div>
+
+                <div>
+                  <p className="font-medium mb-2">{t("objectPermissionsView.skills.title")}</p>
+                  <p>
+                    {userData.object_permission?.skills?.join(", ") ||
+                      t("objectPermissionsView.skills.noneGrantedDirectly")}
+                  </p>
                 </div>
 
                 <div>

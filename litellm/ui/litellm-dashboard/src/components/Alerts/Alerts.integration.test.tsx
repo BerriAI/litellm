@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { act, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
+import {
+  act,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../tests/test-utils";
 import Alerts from "./Alerts";
 import type { SavedAlert } from "./alertPresentation";
 
@@ -23,14 +31,106 @@ const alert: SavedAlert = {
     { date: "2026-01-08", value: 21 },
   ],
 };
+const cacheIncident: SavedAlert = {
+  id: "42",
+  type: "prompt_cache",
+  resource_type: "deployment",
+  resource_id: "claude-east-1",
+  status: "open",
+  window_start: "2026-01-08T10:00:00Z",
+  window_end: "2026-01-08T10:00:02Z",
+  created_at: "2026-01-08T10:00:03Z",
+  updated_at: "2026-01-08T10:00:03Z",
+  evidence: {
+    config_fingerprint: "config-fingerprint-1",
+    prefix_fingerprint: "prefix-fingerprint-1",
+    provider: "anthropic",
+    provider_model: "claude-sonnet-5-5",
+    consecutive_misses: 3,
+    proven_write_tokens: 2048,
+    ttl_seconds: 300,
+  },
+};
+let cacheIncidents: SavedAlert[] = [];
+let cacheNextCursor: string | null = null;
 const calls: { path: string; query: URLSearchParams; method: string; body: unknown }[] = [];
 let status = "open";
 let rejectWrite = false;
 let rejectHistory = false;
-let monitoring = { enabled: true, alerts_used: 0, alert_limit: 5 as number | null, disabled_by_config: false };
+let includeDeprecation = false;
+let deprecationStatus = "open";
+const thresholds = {
+  spend: { multiplier: 3, minimum_increase: 50 },
+  traffic: { multiplier: 10, minimum_increase: 1000 },
+  latency: { multiplier: 3, minimum_increase: 500 },
+  reliability: { multiplier: 3, minimum_increase: 0.02 },
+};
+let monitoring = {
+  model_deprecations_enabled: true,
+  enabled: true,
+  alerts_used: 0,
+  alert_limit: 5 as number | null,
+  disabled_by_config: false,
+  thresholds,
+};
 let rejectMonitoring = false;
 function response(data: unknown, code = 200) {
   return new Response(JSON.stringify(data), { status: code, headers: { "Content-Type": "application/json" } });
+}
+
+function promptCacheResponse(url: URL): Response | undefined {
+  if (url.pathname === `/alerts/${cacheIncident.id}`) return response({ ...cacheIncident, status });
+  if (url.pathname !== "/alerts" || url.searchParams.get("type") !== "prompt_cache") return undefined;
+  if (url.searchParams.has("cursor"))
+    return response({ data: [{ ...cacheIncident, id: "41", resource_id: "claude-east-2" }], next_cursor: null });
+  return response({
+    data: cacheIncidents.filter((incident) => incident.status === url.searchParams.get("status")),
+    next_cursor: cacheNextCursor,
+  });
+}
+
+function deprecationResponse(path: string, method: string, body: { status?: string } | null) {
+  if (path === "/model/deprecations")
+    return response({
+      deprecated: [],
+      imminent: includeDeprecation
+        ? [
+            {
+              model_name: "example-model",
+              litellm_model: "example/model",
+              deprecation_date: "2026-12-01",
+              status: "imminent",
+            },
+          ]
+        : [],
+    });
+  if (path === "/user/daily/activity/aggregated")
+    return response({
+      results: [{ date: "2026-11-16", breakdown: { models: { "example/model": { metrics: { api_requests: 10 } } } } }],
+    });
+  if (path === "/alerting/model-deprecations/state") {
+    if (method === "PUT") deprecationStatus = body?.status ?? "open";
+    const state = {
+      model: "example/model",
+      deprecation_date: "2026-12-01",
+      status: deprecationStatus,
+      last_seen_date: "2026-11-16",
+      last_seen_requests: 10,
+    };
+    return response(state);
+  }
+  return undefined;
+}
+
+function updateAlertResponse(url: URL, body: { status: string; type?: string }) {
+  if (rejectWrite) return response({ detail: "Unavailable" }, 503);
+  status = body.status;
+  if (url.pathname === "/alerts") {
+    if (!body.type || body.type === "prompt_cache")
+      cacheIncidents = cacheIncidents.map((incident) => ({ ...incident, status }));
+    return response({ updated: 30 });
+  }
+  return response({ ...(url.pathname === `/alerts/${cacheIncident.id}` ? cacheIncident : alert), status });
 }
 
 describe("Alerts", () => {
@@ -40,32 +140,42 @@ describe("Alerts", () => {
     status = "open";
     rejectWrite = false;
     rejectHistory = false;
+    includeDeprecation = false;
+    deprecationStatus = "open";
     rejectMonitoring = false;
-    monitoring = { enabled: true, alerts_used: 0, alert_limit: 5, disabled_by_config: false };
+    monitoring = {
+      model_deprecations_enabled: true,
+      enabled: true,
+      alerts_used: 0,
+      alert_limit: 5,
+      disabled_by_config: false,
+      thresholds,
+    };
     role = "proxy_admin";
+    cacheIncidents = [];
+    cacheNextCursor = null;
     document.cookie = `token=${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ key: "example-session", exp: 4102444800 }))}.example; path=/`;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const url = new URL(request.url);
-      const body = request.method === "PATCH" ? await request.clone().json() : null;
+      const body = ["PATCH", "PUT"].includes(request.method) ? await request.clone().json() : null;
       const call = { path: url.pathname, query: url.searchParams, method: request.method, body };
       calls.push(call);
       if (url.pathname === "/litellm/.well-known/litellm-ui-config") return response({});
       if (url.pathname === "/management/v1/users/me") return response({ user_id: "example-admin", user_role: role });
-      if (url.pathname === "/model/deprecations") return response({ deprecated: [], imminent: [] });
+      const retirement = deprecationResponse(url.pathname, request.method, body);
+      if (retirement) return retirement;
       if (url.pathname === "/alerts/monitoring") {
         if (rejectMonitoring) return response({ detail: "Unavailable" }, 503);
         if (request.method === "PATCH") {
           if (rejectWrite) return response({ detail: "Unavailable" }, 503);
-          monitoring = { ...monitoring, enabled: body.enabled };
+          monitoring = { ...monitoring, ...body };
         }
         return response(monitoring);
       }
-      if (request.method === "PATCH") {
-        if (rejectWrite) return response({ detail: "Unavailable" }, 503);
-        status = body.status;
-        return response({ ...alert, status });
-      }
+      if (request.method === "PATCH") return updateAlertResponse(url, body);
+      const promptCache = promptCacheResponse(url);
+      if (promptCache) return promptCache;
       if (url.pathname === `/alerts/${alert.id}`)
         return response({ ...alert, status, history: rejectHistory ? null : alert.history });
       if (url.pathname === "/alerts") {
@@ -144,7 +254,100 @@ describe("Alerts", () => {
     expect(await screen.findByText("No resolved alerts.")).toBeInTheDocument();
   });
 
-  it("keeps deprecation email setup accessible from the inbox", async () => {
+  it("lists prompt cache incidents in All without changing the performance query", async () => {
+    cacheIncidents = [cacheIncident];
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-1" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    expect(
+      screen.getByText(/3 observed requests to claude-sonnet-5-5 reported no cache usage.*not necessarily consecutive/),
+    ).toBeInTheDocument();
+    expect(
+      calls
+        .filter((call) => call.path === "/alerts")
+        .map((call) => call.query.get("type"))
+        .sort(),
+    ).toEqual(["performance", "prompt_cache"]);
+  });
+
+  it("pages prompt cache and performance alerts in All from their own cursors", async () => {
+    cacheIncidents = [cacheIncident];
+    cacheNextCursor = cacheIncident.id;
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("button", { name: /Spend on Second key/ })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-2" }),
+    ).toBeInTheDocument();
+    expect(
+      calls
+        .filter((call) => call.path === "/alerts" && call.query.has("cursor"))
+        .map((call) => [call.query.get("type"), call.query.get("cursor")])
+        .sort(),
+    ).toEqual([
+      ["performance", "8"],
+      ["prompt_cache", cacheIncident.id],
+    ]);
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
+  it("drops prompt cache alerts already loaded for All once Performance is chosen", async () => {
+    cacheIncidents = [cacheIncident];
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-1" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Alert type" }));
+    await user.click(await screen.findByRole("option", { name: "Performance" }));
+    expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Prompt cache usage advisory for/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the Performance filter to metric alerts", async () => {
+    cacheIncidents = [cacheIncident];
+    renderWithProviders(<Alerts />, { searchParams: { type: "performance" } });
+    expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    expect(calls.filter((call) => call.path === "/alerts").map((call) => call.query.get("type"))).toEqual([
+      "performance",
+    ]);
+    expect(screen.queryByRole("button", { name: /Prompt cache usage advisory for/ })).not.toBeInTheDocument();
+  });
+
+  it("shows what a prompt cache incident observed, without a metric chart or prompt identity", async () => {
+    renderWithProviders(<Alerts />, { searchParams: { alert: cacheIncident.id } });
+    expect(
+      await screen.findByRole("heading", { name: "Prompt cache usage advisory for claude-east-1" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/not necessarily consecutive and do not prove a caching outage/)).toBeInTheDocument();
+    const evidence = screen.getByRole("region", { name: "What was observed" });
+    expect(within(evidence).getByText("claude-east-1")).toBeInTheDocument();
+    expect(within(evidence).getByText("claude-sonnet-5-5")).toBeInTheDocument();
+    expect(within(evidence).getByText("2048 tokens")).toBeInTheDocument();
+    expect(within(evidence).getByText("5 minutes")).toBeInTheDocument();
+    expect(within(evidence).getByText(/to .* UTC$/)).toBeInTheDocument();
+    expect(within(evidence).getByText(/Prefixes never confirmed as cached are not assessed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Daily history is unavailable/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("prefix-fingerprint-1");
+    expect(document.body).not.toHaveTextContent("config-fingerprint-1");
+  });
+
+  it("dismisses and reopens a prompt cache incident through the existing status controls", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />, { searchParams: { alert: cacheIncident.id } });
+    await user.click(await screen.findByRole("button", { name: "Dismiss" }));
+    await user.click(await screen.findByRole("button", { name: "Reopen" }));
+    expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(calls.filter((call) => call.method === "PATCH")).toMatchObject([
+      { path: `/alerts/${cacheIncident.id}`, body: { status: "dismissed" } },
+      { path: `/alerts/${cacheIncident.id}`, body: { status: "open" } },
+    ]);
+  });
+
+  it("keeps alert email setup accessible from the inbox", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
     await user.click(await screen.findByRole("button", { name: "Set up email reminders" }));
@@ -154,6 +357,122 @@ describe("Alerts", () => {
     );
   });
 
+  it.each(["Resolve all", "Dismiss all"])("%s updates the selected category beyond the loaded page", async (action) => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />, { searchParams: { type: "spend" } });
+    await screen.findByRole("button", { name: /Spend on Research agent/ });
+    await user.click(screen.getByRole("button", { name: action }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("including results you have not loaded");
+    await user.click(within(dialog).getByRole("button", { name: action }));
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([
+      expect.objectContaining({
+        path: "/alerts",
+        body: { status: action === "Resolve all" ? "resolved" : "dismissed", type: "spend" },
+      }),
+    ]);
+  });
+
+  it("keeps bulk failures retryable and leaves open alerts visible", async () => {
+    rejectWrite = true;
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await screen.findByRole("button", { name: /Spend on Research agent/ });
+    await user.click(screen.getByRole("button", { name: "Dismiss all" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Dismiss all" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Some alerts could not be updated");
+    rejectWrite = false;
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Dismiss all" }));
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
+  });
+
+  it("resolves performance, prompt cache, and retirement alerts together in All alerts", async () => {
+    includeDeprecation = true;
+    cacheIncidents = [cacheIncident];
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await screen.findByRole("button", { name: /example\/model retires/ });
+    await user.click(screen.getByRole("button", { name: "Resolve all" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Resolve all" }));
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
+    expect(calls.filter((call) => ["PATCH", "PUT"].includes(call.method))).toEqual([
+      expect.objectContaining({ path: "/alerts", body: { status: "resolved" } }),
+      expect.objectContaining({
+        path: "/alerting/model-deprecations/state",
+        body: {
+          model: "example/model",
+          deprecation_date: "2026-12-01",
+          status: "resolved",
+          last_seen_date: "2026-11-16",
+          last_seen_requests: 10,
+        },
+      }),
+    ]);
+  });
+
+  it("shows the current thresholds to free admins without an edit action", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    expect(await screen.findByText("At least 3× the usual spend and $50 higher.")).toBeInTheDocument();
+    expect(screen.getByText("Editing thresholds requires Enterprise.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit thresholds" })).not.toBeInTheDocument();
+  });
+
+  it("edits Enterprise thresholds with explicit units and saves the values", async () => {
+    monitoring.alert_limit = null;
+    monitoring.thresholds = { ...thresholds, latency: { multiplier: 1.005, minimum_increase: 500 } };
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    await user.click(await screen.findByRole("button", { name: "Edit thresholds" }));
+    const spend = screen.getByRole("group", { name: "Spend" });
+    const multiplier = within(spend).getByRole("spinbutton", { name: "Times the usual value" });
+    fireEvent.change(multiplier, { target: { value: "1" } });
+    await user.click(screen.getByRole("button", { name: "Save thresholds" }));
+    expect(multiplier).toBeInvalid();
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([]);
+    fireEvent.change(multiplier, {
+      target: { value: "4" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Minimum increase ($)" }), { target: { value: "75" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Minimum increase (percentage points)" }), {
+      target: { value: "3.5" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save thresholds" }));
+    expect(await screen.findByText("Thresholds saved.")).toBeInTheDocument();
+    expect(screen.getByText("At least 4× the usual spend and $75 higher.")).toBeInTheDocument();
+    expect(screen.getByText("At least 3× the usual error rate and 3.5 percentage points higher.")).toBeInTheDocument();
+    expect(calls.find((call) => call.method === "PATCH")).toMatchObject({
+      path: "/alerts/monitoring",
+      body: {
+        thresholds: {
+          ...thresholds,
+          spend: { multiplier: 4, minimum_increase: 75 },
+          latency: { multiplier: 1.005, minimum_increase: 500 },
+          reliability: { multiplier: 3, minimum_increase: 0.035 },
+        },
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Edit thresholds" }));
+    expect(screen.getByRole("spinbutton", { name: "Minimum increase ($)" })).toHaveValue(75);
+    expect(screen.getByRole("spinbutton", { name: "Minimum increase (percentage points)" })).toHaveValue(3.5);
+  });
+
+  it("shows free thresholds without editing and hides bulk actions for viewers", async () => {
+    role = "proxy_admin_viewer";
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await screen.findByRole("button", { name: /Spend on Research agent/ });
+    expect(screen.queryByRole("button", { name: "Resolve all" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss all" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage alerts" }));
+    expect(await screen.findByText("At least 3× the usual spend and $50 higher.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit thresholds" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+  });
+
   it("lets viewers read the evidence without write controls", async () => {
     role = "proxy_admin_viewer";
     renderWithProviders(<Alerts />, { searchParams: { alert: alert.id } });
@@ -161,12 +480,36 @@ describe("Alerts", () => {
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
+  it("keeps notification opt-in separate from the model deprecation toggle", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByText(
+        "Model deprecation alerts are unlimited. Performance monitoring includes 5 free alerts, then requires Enterprise.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage alerts" }));
+    const toggle = await screen.findByRole("switch", { name: "Model deprecations" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([
+      expect.objectContaining({ path: "/alerts/monitoring", body: { model_deprecations_enabled: false } }),
+    ]);
+    expect(screen.getByRole("switch", { name: "Performance monitoring" })).toBeChecked();
+    expect(screen.getByText(/Opt in to Performance Alerts in email or Slack settings/)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+  });
+
   it("defaults on and persists opting out through the monitoring API", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     const toggle = await screen.findByRole("switch", { name: "Performance monitoring" });
     expect(toggle).toBeChecked();
-    expect(screen.getByText("0 of 5 free alerts used.")).toBeInTheDocument();
+    expect(screen.getByText("0 of 5 free alerts generated.")).toBeInTheDocument();
     await user.click(toggle);
     expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
     expect(toggle).not.toBeChecked();
@@ -174,15 +517,15 @@ describe("Alerts", () => {
       path: "/alerts/monitoring",
       body: { enabled: false },
     });
-    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
     await user.click(toggle);
-    expect(await screen.findByText("0 of 5 free alerts used.")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 5 free alerts generated.")).toBeInTheDocument();
   });
 
   it("explains exhaustion without blocking saved alerts or model deprecations", async () => {
     monitoring.alerts_used = 5;
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     expect(
       await screen.findByText("You’ve used all 5 free alerts. New performance alerts are paused."),
     ).toBeInTheDocument();
@@ -190,8 +533,6 @@ describe("Alerts", () => {
       "href",
       "https://www.litellm.ai/enterprise",
     );
-    expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Set up email reminders" })).toBeInTheDocument();
     await user.click(screen.getByRole("switch", { name: "Performance monitoring" }));
     expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
@@ -200,6 +541,7 @@ describe("Alerts", () => {
   it("keeps the saved toggle value when an older refresh finishes later", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     const toggle = await screen.findByRole("switch", { name: "Performance monitoring" });
     const originalFetch = vi.mocked(globalThis.fetch).getMockImplementation()!;
     const staleResponse = response(monitoring);
@@ -211,7 +553,9 @@ describe("Alerts", () => {
       }
       return originalFetch(input, init);
     });
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await act(async () => {
+      void testQueryClient.invalidateQueries({ queryKey: ["alert-monitoring"] });
+    });
     await user.click(toggle);
     expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
     await act(async () => {
@@ -227,6 +571,7 @@ describe("Alerts", () => {
     monitoring.alert_limit = null;
     monitoring.alerts_used = 5;
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     expect(await screen.findByText("On with Enterprise.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
   });
@@ -236,22 +581,26 @@ describe("Alerts", () => {
     monitoring.alerts_used = 5;
     monitoring.enabled = false;
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     expect(await screen.findByText("Disabled in proxy settings.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Performance monitoring" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("lets viewers see monitoring status without a toggle", async () => {
+  it("lets viewers inspect alert settings without changing them", async () => {
     role = "proxy_admin_viewer";
     renderWithProviders(<Alerts />);
-    expect(await screen.findByText("0 of 5 free alerts used.")).toBeInTheDocument();
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    expect(await screen.findByText("0 of 5 free alerts generated.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Performance monitoring" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("switch", { name: "Model deprecations" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("keeps the saved preference when a monitoring change fails", async () => {
     rejectWrite = true;
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     await user.click(await screen.findByRole("switch", { name: "Performance monitoring" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not save monitoring settings");
     expect(screen.getByRole("switch", { name: "Performance monitoring" })).toBeChecked();
@@ -261,10 +610,12 @@ describe("Alerts", () => {
     rejectMonitoring = true;
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load monitoring settings");
-    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent(
+      "Could not load monitoring settings",
+    );
     rejectMonitoring = false;
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("switch", { name: "Performance monitoring" })).toBeChecked();
   });
 });

@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "litellm/deploy/terraform/provider/**"
+      - ".github/actions/cache-go-build/**"
       - ".github/workflows/test-terraform-provider.yml"
   pull_request:
     branches:
@@ -12,7 +13,9 @@ on:
     paths:
       - "litellm/deploy/terraform/provider/**"
       - "litellm/proxy/**"
+      - "litellm/integrations/lens/proxy/**"
       - "litellm/enterprise/**"
+      - ".github/actions/cache-go-build/**"
       - ".github/workflows/test-terraform-provider.yml"
 
 permissions:
@@ -38,8 +41,12 @@ jobs:
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: litellm/deploy/terraform/provider/go.mod
-          cache: true
-          cache-dependency-path: litellm/deploy/terraform/provider/go.sum
+          cache: false
+
+      - name: Cache the Go build
+        uses: ./.github/actions/cache-go-build
+        with:
+          dependency-path: litellm/deploy/terraform/provider/go.sum
 
       - name: gofmt
         run: |
@@ -120,8 +127,12 @@ jobs:
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: litellm/deploy/terraform/provider/go.mod
-          cache: true
-          cache-dependency-path: litellm/deploy/terraform/provider/go.sum
+          cache: false
+
+      - name: Cache the Go build
+        uses: ./.github/actions/cache-go-build
+        with:
+          dependency-path: litellm/deploy/terraform/provider/go.sum
 
       - name: Audit provider endpoints against the schema
         working-directory: litellm/deploy/terraform/provider

@@ -7,6 +7,7 @@ Handles image edit requests for Bedrock stability models.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -14,6 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
@@ -30,7 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import BearerPreparedRequest
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import FileTypes, ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from ..common_utils import BedrockError
@@ -74,15 +76,15 @@ class BedrockImageEdit(BaseAWSLLM):
     def image_edit(
         self,
         model: str,
-        image: list,
+        image: Sequence[FileTypes | None],
         prompt: str | None,
         model_response: ImageResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LitellmLogging,
         timeout: float | httpx.Timeout | None,
         aimage_edit: bool = False,
         api_base: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_key: str | None = None,
     ):
@@ -189,11 +191,11 @@ class BedrockImageEdit(BaseAWSLLM):
     def _prepare_request(
         self,
         model: str,
-        image: list,
+        image: Sequence[FileTypes | None],
         prompt: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_base: str | None,
-        extra_headers: dict | None,
+        extra_headers: dict[str, object] | None,
         logging_obj: LitellmLogging,
         api_key: str | None,
     ) -> BedrockImageEditPreparedRequest:
@@ -214,7 +216,10 @@ class BedrockImageEdit(BaseAWSLLM):
             BedrockImageEditPreparedRequest: The prepared request object
         """
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
-            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+            optional_params,
+            model,
+            bearer_token=bedrock_bearer_token(api_key),
+            litellm_params=as_str_mapping(getattr(logging_obj, "litellm_params", None)),
         )
 
         # Use the existing ARN-aware provider detection method
@@ -274,10 +279,10 @@ class BedrockImageEdit(BaseAWSLLM):
     def _get_request_body(
         self,
         model: str,
-        image: list,
+        image: Sequence[FileTypes | None],
         prompt: str | None,
-        optional_params: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Get the request body for the Bedrock Image Edit API
 
@@ -305,7 +310,7 @@ class BedrockImageEdit(BaseAWSLLM):
         logging_obj: LitellmLogging,
         prompt: str | None,
         response: httpx.Response,
-        data: dict,
+        data: Mapping[str, object],
     ) -> ImageResponse:
         """
         Transforms the Image Edit response from Bedrock to OpenAI format

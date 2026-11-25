@@ -257,6 +257,240 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
     assert 123 not in standard_logging_object["request_tags"]
 
 
+_CHAT_PROMPT: Final[Mapping[str, object]] = {"messages": [{"role": "user", "content": "PROMPT-CANARY"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "prompt_fields", "logged_beside_optional_params"),
+    [
+        ("/v1/chat/completions", _CHAT_PROMPT, _CHAT_PROMPT),
+        ("/v1/chat/completions", {"messages": "PROMPT-CANARY"}, {"messages": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}, {"prompt": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}, {"prompt": ["first", "PROMPT-CANARY"]}),
+        ("/v1/embeddings", {"input": ["first", "PROMPT-CANARY"]}, {"input": ["first", "PROMPT-CANARY"]}),
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": ""}),
+        ("/v1/chat/completions", {**_CHAT_PROMPT, "prompt": "second"}, {**_CHAT_PROMPT, "prompt": "second"}),
+    ],
+    ids=["messages", "malformed_messages", "prompt", "prompt_list", "input_list", "input_text", "messages_and_prompt"],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    logged_beside_optional_params: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    body: Final[dict[str, object]] = {"model": "gpt-4o", "stream": True, **prompt_fields}
+    logging_object: Final = (
+        {
+            "litellm_logging_obj": litellm.utils.function_setup(
+                original_function="acompletion",
+                rules_obj=litellm.utils.Rules(),
+                start_time=real_datetime.datetime.now(),
+                model="gpt-4o",
+                litellm_call_id="rejected-after-setup",
+            )[0]
+        }
+        if with_logging_object
+        else {}
+    )
+    request_data: Final[dict[str, object]] = {**body, **logging_object}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=429, detail="rate limited"),
+    )
+
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert details["optional_params"] == {"stream": True}
+    assert {key: details[key] for key in prompt_fields} == dict(logged_beside_optional_params)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "prompt_fields", "logged_messages"),
+    [
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/v1/responses",
+            {"input": [{"role": "user", "content": "PROMPT-CANARY"}]},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/v1/completions",
+            {"prompt": ["first", "PROMPT-CANARY"]},
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/embeddings", {"input": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/embeddings",
+            {"input": ["first", "PROMPT-CANARY"]},
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/responses", {}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/completions", {}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": ""}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/images/generations", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/responses", {"input": 7}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": {"text": "PROMPT-CANARY"}}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/completions", {"prompt": [15339, 1917]}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": [[15339, 1917], [1]]}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/responses", {"input": ["PROMPT-CANARY", 7]}, [{"role": "user", "content": "default-message-value"}]),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": True},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/completions",
+            {"prompt": "PROMPT-CANARY", "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/embeddings",
+            {
+                "input": "PROMPT-CANARY",
+                "proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}},
+            },
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": False},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": "false"},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        (
+            "/v1/completions",
+            {"prompt": "PROMPT-CANARY", "turn_off_message_logging": "True"},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+    ],
+    ids=[
+        "responses_text",
+        "responses_items",
+        "completions_text",
+        "completions_list",
+        "embeddings_text",
+        "embeddings_list",
+        "responses_without_input",
+        "completions_without_prompt",
+        "embeddings_with_empty_input",
+        "image_generation_unchanged",
+        "responses_with_number_input",
+        "embeddings_with_object_input",
+        "completions_with_token_ids",
+        "embeddings_with_token_id_batches",
+        "responses_with_mixed_list",
+        "responses_with_redaction_flag",
+        "completions_with_redaction_header_in_metadata",
+        "embeddings_with_redaction_header_on_the_request",
+        "responses_with_redaction_flag_off",
+        "responses_with_redaction_flag_off_as_text",
+        "completions_with_redaction_flag_as_text",
+    ],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    logged_messages: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **prompt_fields}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+    )
+
+    assert request_data["litellm_logging_obj"].model_call_details["messages"] == logged_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "prompt_fields"),
+    [
+        ("/v1/completions", {"prompt": [15339, 1917]}),
+        ("/v1/completions", {"prompt": [[15339, 1917], [1]]}),
+        ("/v1/embeddings", {"input": [[15339, 1917]]}),
+        ("/v1/responses", {"input": [15339, 1917]}),
+        ("/v1/responses", {"input": [{"role": "user", "content": "PROMPT-CANARY"}]}),
+        ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}),
+    ],
+    ids=[
+        "completions_token_ids",
+        "completions_token_id_batches",
+        "embeddings_token_id_batches",
+        "responses_token_ids",
+        "responses_items",
+        "completions_list",
+    ],
+)
+async def test_proxy_only_error_log_gives_the_otel_callback_messages_it_can_read(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(
+        config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True), tracer_provider=provider
+    )
+    monkeypatch.setattr(litellm, "callbacks", [otel])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level("ERROR")
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data={"model": "gpt-4o", **prompt_fields},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+        error_type=ProxyErrorTypes.auth_error,
+    )
+    for _ in range(40):
+        if any(span.name == "litellm_request" for span in exporter.get_finished_spans()):
+            break
+        await asyncio.sleep(0.05)
+
+    request_span: Final = next(span for span in exporter.get_finished_spans() if span.name == "litellm_request")
+    assert request_span.attributes is not None
+    assert "gen_ai.operation.name" in request_span.attributes
+    assert "gen_ai.input.messages" in request_span.attributes
+    assert [record.getMessage() for record in caplog.records if "set_attributes" in record.getMessage()] == []
+
+
 @pytest.mark.asyncio
 async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
     """LIT-7836: a route that already stamped the caller's litellm_call_id must
@@ -936,11 +1170,19 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("request_data", "route", "endpoint_call_type"),
+        ("request_data", "route", "endpoint_call_type", "dispatched_call_type"),
         [
-            ({"model": "gemini-tts", "input": "Hello there", "voice": "Kore"}, "/v1/audio/speech", "aspeech"),
-            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation"),
-            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription"),
+            (
+                {"model": "gemini-tts", "input": "Hello there", "voice": "Kore"},
+                "/v1/audio/speech",
+                "aspeech",
+                "aspeech",
+            ),
+            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation", "aspeech"),
+            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription", "atranscription"),
+            ({"model": "test"}, "/v1/responses/compact", "acompact_responses", None),
+            ({"model": "test"}, "/v1beta/interactions", "acreate_interaction", None),
+            ({"model": "test"}, "/v1/videos", "avideo_generation", "avideo_generation"),
         ],
     )
     async def test_request_rejected_by_the_proxy_records_the_endpoint_call_type(
@@ -949,6 +1191,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         request_data: dict[str, object],
         route: str,
         endpoint_call_type: str,
+        dispatched_call_type: str | None,
     ):
         from types import SimpleNamespace
 
@@ -967,7 +1210,8 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
                     request_data=dict(request_data),
                     original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
                     user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=route),
-                    dispatched_call_type=endpoint_call_type,
+                    route=route,
+                    dispatched_call_type=dispatched_call_type,
                 )
         finally:
             ProxyLogging._callback_capabilities_cache.clear()
@@ -2695,6 +2939,82 @@ def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monk
     assert response_cost == pytest.approx(prompt_tokens * expected_rate)
 
 
+PER_QUERY_RERANK_MODEL: Final = "cohere/rerank-v3.5"
+
+
+def _rerank_router_deployment(monkeypatch, deployment_id: str, extra_litellm_params: Mapping[str, object]) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-rerank",
+                "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", **extra_litellm_params},
+                "model_info": {"id": deployment_id},
+            }
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+
+
+def _rerank_failure_input_cost(deployment_id: str) -> float:
+    from litellm.proxy.utils import _estimated_input_cost
+
+    return _estimated_input_cost(
+        model_call_details={"model": "team-rerank", "custom_llm_provider": "cohere", "call_type": "arerank"},
+        prompt_tokens=40,
+        deployment_id=deployment_id,
+        base_model=None,
+    )
+
+
+def test_a_failed_rerank_on_a_per_query_model_bills_the_one_query_at_the_cost_map_rate(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-cost-map", {})
+    published_rate: Final = litellm.get_model_info(model=PER_QUERY_RERANK_MODEL)["input_cost_per_query"]
+
+    assert published_rate
+    assert _rerank_failure_input_cost("dep-rerank-cost-map") == pytest.approx(published_rate)
+
+
+def test_a_failed_rerank_bills_the_per_query_rate_its_deployment_declares(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-own-query-rate", {"input_cost_per_query": 0.5})
+
+    assert _rerank_failure_input_cost("dep-rerank-own-query-rate") == pytest.approx(0.5)
+
+
+def test_a_failed_rerank_on_a_deployment_priced_per_token_bills_the_estimated_tokens(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-own-token-rate", {"input_cost_per_token": 0.001})
+
+    assert _rerank_failure_input_cost("dep-rerank-own-token-rate") == pytest.approx(40 * 0.001)
+
+
+def _failed_rerank_prompt_tokens(query: str, documents: list[object]) -> int:
+    from litellm.proxy.utils import _estimated_prompt_usage
+    from litellm.types.utils import CallTypes
+
+    request_body: Final = {"model": PER_QUERY_RERANK_MODEL, "query": query, "documents": documents}
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function=CallTypes.arerank.value,
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="failed-rerank-estimate",
+        **request_body,
+    )
+    usage: Final = _estimated_prompt_usage(logging_obj.model_call_details, request_body, CallTypes.arerank.value)
+    assert usage is not None
+    return usage.prompt_tokens
+
+
+@pytest.mark.parametrize("documents", [["short"], [{"text": "short"}]])
+def test_a_failed_rerank_counts_the_documents_it_sent_next_to_the_query(documents):
+    longer_documents: Final = [*documents, "a much longer document " * 200]
+
+    assert _failed_rerank_prompt_tokens("which?", documents) < _failed_rerank_prompt_tokens("which?", longer_documents)
+    assert _failed_rerank_prompt_tokens("which?", []) < _failed_rerank_prompt_tokens("which?", documents)
+
+
+def test_a_failed_rerank_counts_the_query_it_sent():
+    assert _failed_rerank_prompt_tokens("which?", ["short"]) < _failed_rerank_prompt_tokens("which? " * 200, ["short"])
+
+
 def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(monkeypatch):
     """The router leaves one RetryAttemptRecord per failed attempt in metadata.previous_models, the
     final attempt included; the earlier Timeout ones are billed (each at the deployment that served
@@ -2732,6 +3052,199 @@ def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(mo
     assert attempts[0].response_cost > 0
     assert attempts[1].response_cost == pytest.approx(24 * 0.25)
     assert all(a.usage is usage for a in attempts)
+
+
+def _failed_fallback_metadata() -> dict[str, object]:  # mutable-ok: the router's metadata dict
+    """What the router leaves when group ``lit45-primary`` timed out twice and its fallback
+    ``lit45-fallback`` then timed out twice: the client gets the primary's last error, which the
+    router names as ``client_seen_attempt``, while the routing fields describe the fallback's last call."""
+    return {
+        "original_model_group": "lit45-primary",
+        "model_group": "lit45-fallback",
+        "attempted_retries": 1,
+        "model_info": {"id": "dep-lit45-fallback"},
+        "previous_models": (
+            {
+                "model_group": "lit45-primary",
+                "deployment_id": "dep-lit45-primary",
+                "model": "lit45-primary-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 0,
+            },
+            {
+                "model_group": "lit45-primary",
+                "deployment_id": "dep-lit45-primary",
+                "model": "lit45-primary-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 1,
+            },
+            {
+                "model_group": "lit45-fallback",
+                "deployment_id": "dep-lit45-fallback",
+                "model": "lit45-fallback-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 0,
+            },
+        ),
+        "failed_fallback_attempts": (
+            {
+                "model_group": "lit45-fallback",
+                "deployment_id": "dep-lit45-fallback",
+                "model": "lit45-fallback-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 1,
+            },
+        ),
+        "client_seen_attempt": {
+            "model_group": "lit45-primary",
+            "deployment_id": "dep-lit45-primary",
+            "model": "lit45-primary-model",
+            "exception_type": "Timeout",
+            "attempted_retries": 1,
+        },
+    }
+
+
+def test_after_a_failed_fallback_every_timed_out_call_but_the_one_the_client_saw_is_an_attempt_row():
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={"metadata": _failed_fallback_metadata()},
+        estimated_usage=litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24),
+        base_model=None,
+        deployment_id="dep-lit45-fallback",
+    )
+
+    assert [(a.deployment_id, a.attempted_retries) for a in attempts] == [
+        ("dep-lit45-primary", 0),
+        ("dep-lit45-fallback", 0),
+        ("dep-lit45-fallback", 1),
+    ]
+
+
+def test_a_fallback_that_failed_without_timing_out_adds_no_attempt_row_for_the_call_the_client_saw():
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    metadata = _failed_fallback_metadata()
+    primary_first, primary_last, _ = metadata["previous_models"]
+    (fallback_last,) = metadata["failed_fallback_attempts"]
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                **metadata,
+                "attempted_retries": 0,
+                "previous_models": (primary_first, primary_last),
+                "failed_fallback_attempts": ({**fallback_last, "exception_type": "InternalServerError"},),
+            }
+        },
+        estimated_usage=litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24),
+        base_model=None,
+        deployment_id="dep-lit45-fallback",
+    )
+
+    assert [(a.deployment_id, a.attempted_retries) for a in attempts] == [("dep-lit45-primary", 0)]
+
+
+def test_the_failure_row_after_a_failed_fallback_is_priced_at_the_deployment_the_client_saw_fail(monkeypatch):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    for deployment_id, input_rate in (("dep-lit45-primary", 0.02), ("dep-lit45-fallback", 0.5)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": input_rate},
+        )
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL, get_litellm_params(metadata=_failed_fallback_metadata())
+    )
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    prompt_tokens = lifted["combined_usage_object"].prompt_tokens
+    assert prompt_tokens > 0
+    assert lifted["response_cost"] == pytest.approx(prompt_tokens * 0.02)
+    assert [a.response_cost for a in lifted["billed_failed_attempts"]] == [
+        pytest.approx(prompt_tokens * 0.02),
+        pytest.approx(prompt_tokens * 0.5),
+        pytest.approx(prompt_tokens * 0.5),
+    ]
+
+
+def _failure_row_and_attempt_rows(monkeypatch, metadata):
+    """``(main row cost per prompt token, [(deployment, attempt) of each attempt row])`` for a failed
+    request whose router metadata is ``metadata``, with the primary priced at 0.02 and the fallback at 0.5."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    for deployment_id, input_rate in (("dep-lit45-primary", 0.02), ("dep-lit45-fallback", 0.5)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": input_rate},
+        )
+    logging_obj = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params(metadata=metadata))
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+    return (
+        lifted["response_cost"] / lifted["combined_usage_object"].prompt_tokens,
+        [(a.deployment_id, a.attempted_retries) for a in lifted["billed_failed_attempts"]],
+    )
+
+
+def test_a_failure_no_attempt_raised_keeps_the_failure_row_on_the_call_that_was_running(monkeypatch):
+    """A deadline that cuts a fallback call short reaches the client as no attempt's own error, so
+    the router names no ``client_seen_attempt`` and the running fallback call stays the failure row."""
+    metadata = {
+        key: value
+        for key, value in _failed_fallback_metadata().items()
+        if key not in ("client_seen_attempt", "failed_fallback_attempts")
+    }
+
+    rate, attempt_rows = _failure_row_and_attempt_rows(monkeypatch, metadata)
+
+    assert rate == pytest.approx(0.5)
+    assert attempt_rows == [("dep-lit45-primary", 0), ("dep-lit45-primary", 1), ("dep-lit45-fallback", 0)]
+
+
+def test_a_fallbacks_error_that_reached_the_client_makes_the_fallbacks_call_the_failure_row(monkeypatch):
+    """Ordered deployments can hand the client the fallback's last error instead of the requested group's."""
+    metadata = _failed_fallback_metadata()
+    (fallback_last,) = metadata["failed_fallback_attempts"]
+
+    rate, attempt_rows = _failure_row_and_attempt_rows(monkeypatch, {**metadata, "client_seen_attempt": fallback_last})
+
+    assert rate == pytest.approx(0.5)
+    assert attempt_rows == [("dep-lit45-primary", 0), ("dep-lit45-primary", 1), ("dep-lit45-fallback", 0)]
+
+
+def test_a_forwarded_credential_clone_does_not_bill_its_final_timed_out_attempt_as_an_earlier_one():
+    """A request carrying its own credential runs on a clone whose id the retry records carry, while
+    pricing reads the configured deployment's id. The clone's final attempt is still the failure row's."""
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    usage: Final = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+    attempts: Final = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                "attempted_retries": 1,
+                "model_info": {"id": "clone-of-configured", "original_model_id": "configured"},
+                "previous_models": (
+                    {"deployment_id": "clone-of-configured", "exception_type": "Timeout", "attempted_retries": 0},
+                    {"deployment_id": "clone-of-configured", "exception_type": "Timeout", "attempted_retries": 1},
+                ),
+            }
+        },
+        estimated_usage=usage,
+        base_model=None,
+        deployment_id="configured",
+    )
+
+    assert [(a.attempted_retries, a.deployment_id) for a in attempts] == [(0, "clone-of-configured")]
 
 
 def test_an_earlier_attempt_on_another_model_is_priced_at_that_models_rate_not_the_final_models(monkeypatch):
@@ -3970,10 +4483,10 @@ def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
 async def test_a_dispatched_failure_is_counted_off_the_event_loop():
     from unittest.mock import AsyncMock, patch
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -3984,7 +4497,7 @@ async def test_a_dispatched_failure_is_counted_off_the_event_loop():
                 "first_api_call_start_time": 1700000000.0,
                 "call_type": "acompletion",
                 "model": "claude-fable-5",
-                "messages": [{"role": "user", "content": text * 100}],
+                "messages": [{"role": "user", "content": uncounted_text()}],
             }
         ),
         "metadata": {},
@@ -4430,3 +4943,65 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
     assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
+
+
+class _NativeHookMCPGuardrail(_RecordingMCPGuardrail):
+    use_native_lifecycle_hooks = True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringPostMCPCall(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringOtherHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringNoHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("guardrail_class", "expected_calls", "expected_text"),
+    [
+        (_NativeHookDeclaringPostMCPCall, 1, "<MASKED>"),
+        (_NativeHookDeclaringOtherHooks, 0, "jane@example.com"),
+        (_NativeHookDeclaringNoHooks, 0, "jane@example.com"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_a_native_hook_guardrail_only_when_it_supports_post_mcp_call(
+    restore_callbacks, guardrail_class, expected_calls, expected_text
+):
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = guardrail_class(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]  # test-quality-ok: post_mcp_call_hook reads litellm.callbacks, restore_callbacks undoes it
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert (guardrail.call_count, [item.text for item in returned.content]) == (expected_calls, [expected_text])

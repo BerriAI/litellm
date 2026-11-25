@@ -14,6 +14,23 @@ from pydantic import TypeAdapter
 Schema = Mapping[str, Mapping[str, str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
 DROPPED_UNUSED_MODELS: Final = frozenset({"LiteLLM_AccountingDelivery", "LiteLLM_AccountingEvent"})
+RENAMED_UNRELEASED_FIELDS: Final = frozenset(
+    {
+        ("LiteLLM_CustomerMemberTable", "budget_template_id"),
+        ("LiteLLM_CustomerMemberTable", "budget_template"),
+        ("LiteLLM_BudgetTable", "customer_member_templates"),
+        ("LiteLLM_CustomerOrganizationTable", "budget_ids"),
+        ("LiteLLM_CustomerOrganizationTable", "budget_names"),
+        ("LiteLLM_CustomerOrganizationTable", "default_budget_id"),
+        ("LiteLLM_CustomerOrganizationTable", "default_budget"),
+        ("LiteLLM_CustomerTeamTable", "members"),
+        ("LiteLLM_CustomerMemberTable", "parent_team_id"),
+        ("LiteLLM_CustomerMemberTable", "parent_team"),
+        ("LiteLLM_CustomerOrganizationTable", "budget_reset_at"),
+        ("LiteLLM_CustomerTeamTable", "budget_reset_at"),
+        ("LiteLLM_CustomerMemberTable", "budget_reset_at"),
+    }
+)
 
 
 def parse_model_fields(schema: str) -> Schema:
@@ -26,6 +43,8 @@ def parse_model_fields(schema: str) -> Schema:
 
 def _field_changes(model: str, field: str, old_type: str, new_fields: Mapping[str, str]) -> Iterator[str]:
     if field not in new_fields:
+        if (model, field) in RENAMED_UNRELEASED_FIELDS:
+            return
         yield f"Breaking: Field {model}.{field} was removed"
         return
     old_base: Final = old_type.split()[0]
@@ -73,9 +92,7 @@ def main() -> int:
     previous: Final = (
         canonical.stdout
         if canonical.returncode == 0
-        else subprocess.run(
-            ("git", "show", f"{base}:schema.prisma"), capture_output=True, text=True, check=True
-        ).stdout
+        else subprocess.run(("git", "show", f"{base}:schema.prisma"), capture_output=True, text=True, check=True).stdout
     )
     changes: Final = check_breaking_changes(
         parse_model_fields(previous), parse_model_fields(Path("litellm/schema.prisma").read_text())

@@ -1,32 +1,50 @@
+import email.policy
+import io
 import itertools
 import json
-from typing import Final, List, Optional
+import tempfile
+import tracemalloc
+from collections import Counter
+from collections.abc import Callable, Collection, Iterable, Iterator
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.parser import BytesParser
+from types import SimpleNamespace
+from typing import IO, Final, List, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 import respx
 import httpx
+import openai
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
 
 import litellm
-from litellm import Router
+from litellm import CreateFileRequest, Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import extract_file_data
+from litellm.llms.openai.common_utils import CreatedOnSomeDeployments
+from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
     FileContentStreamingHandler,
 )
+from litellm.proxy.openai_files_endpoints.files_endpoints import route_create_file
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import (
     FileListPage,
+    FileTypes,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
 )
+from litellm.types.utils import ExtractedFileData
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -582,6 +600,132 @@ def test_create_file_batch_streams_from_upload_spool(monkeypatch, llm_router: Ro
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+_UPSTREAM_FILE_UPLOAD: Final = httpx.Request("POST", "https://api.openai.com/v1/files")
+
+
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+_FILE_MAY_EXIST_NOTICE: Final = (
+    "\n\nThe provider may already have created this file, so check your newest files before you send it again"
+)
+
+
+@pytest.mark.parametrize(
+    "upload_error, status_code, should_retry",
+    [
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_FILE_UPLOAD), httpx.ReadTimeout("no answer in time")
+            ),
+            500,
+            "false",
+            id="read-timeout",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+                httpx.RemoteProtocolError("the server closed the connection before it answered"),
+            ),
+            500,
+            "false",
+            id="connection-dropped",
+        ),
+        pytest.param(
+            lambda: openai.InternalServerError(
+                "the gateway gave up waiting", response=httpx.Response(504, request=_UPSTREAM_FILE_UPLOAD), body=None
+            ),
+            504,
+            "false",
+            id="504",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_FILE_UPLOAD), httpx.ConnectTimeout("no connection in time")
+            ),
+            500,
+            None,
+            id="connect-timeout",
+        ),
+        pytest.param(
+            lambda: openai.RateLimitError(
+                "slow down", response=httpx.Response(429, request=_UPSTREAM_FILE_UPLOAD), body=None
+            ),
+            429,
+            None,
+            id="rate-limited",
+        ),
+        pytest.param(
+            lambda: openai.AuthenticationError(
+                "invalid x-api-key",
+                response=httpx.Response(401, headers={"x-should-retry": "false"}, request=_UPSTREAM_FILE_UPLOAD),
+                body=None,
+            ),
+            401,
+            None,
+            id="rejected-with-should-retry-false",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+                CreatedOnSomeDeployments(openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD)),
+            ),
+            500,
+            "false",
+            id="refused-by-one-deployment-after-another-created-it",
+        ),
+    ],
+)
+def test_create_file_tells_the_caller_not_to_resend_only_an_upload_the_provider_may_have_made(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    upload_error: Callable[[], Exception],
+    status_code: int,
+    should_retry: str | None,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    error: Final = upload_error()
+
+    async def failing_route_create_file(**_: object) -> OpenAIFileObject:
+        raise error
+
+    monkeypatch.setattr(fe, "route_create_file", failing_route_create_file)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+    )
+
+    response: Final = client.post(
+        "/v1/files",
+        files={
+            "file": (
+                "batch.jsonl",
+                b'{"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions",'
+                b' "body": {"model": "gpt-batch", "messages": [{"role": "user", "content": "hi"}]}}\n',
+                "application/jsonl",
+            )
+        },
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    notice: Final = _FILE_MAY_EXIST_NOTICE if should_retry == "false" else ""
+    assert response.status_code == status_code
+    assert response.headers.get("x-should-retry") == should_retry
+    assert response.json()["error"]["message"] == getattr(error, "message", str(error)) + notice
+
+
 @pytest.mark.flaky(retries=3, delay=2)
 def test_target_storage_invokes_storage_backend(
     mocker: MockerFixture, monkeypatch, llm_router: Router
@@ -707,8 +851,9 @@ BATCH_JSONL_LINE = (
 )
 
 
-def _router_with_executed_batch_model() -> Router:
+def _router_with_executed_batch_model(default_litellm_params: dict[str, object] | None = None) -> Router:
     return Router(
+        default_litellm_params=default_litellm_params,
         model_list=[
             {
                 "model_name": "my-vllm",
@@ -734,16 +879,29 @@ def _router_with_executed_batch_model() -> Router:
                 "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
                 "model_info": {"id": "vertex-batch-keep-id"},
             },
+            {
+                "model_name": "gpt-5.4-nano-batch",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-openai"},
+                "model_info": {"id": "gpt-5.4-nano-batch-id"},
+            },
+            {
+                "model_name": "azure-batch",
+                "litellm_params": {
+                    "model": "azure/my-deployment",
+                    "api_key": "sk-azure",
+                    "api_base": "https://azure.test",
+                },
+                "model_info": {"id": "azure-batch-id"},
+            },
         ]
     )
 
 
 @pytest.fixture
-def batch_upload_seams(mocker: MockerFixture, monkeypatch):
+def batch_upload_proxy(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles
 
-    llm_router = _router_with_executed_batch_model()
+    llm_router: Final = _router_with_executed_batch_model()
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
@@ -752,6 +910,14 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.fixture
+def batch_upload_seams(batch_upload_proxy: None, mocker: MockerFixture):
     uploaded = OpenAIFileObject(
         id="file-kept",
         object="file",
@@ -768,20 +934,17 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
     provider_upload = mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
         "litellm.acreate_file", new=mocker.AsyncMock(return_value=uploaded)
     )
-    try:
-        with respx.mock(assert_all_called=False) as upstream:
-            upstream_files_route = upstream.get("http://vllm.test/v1/files").mock(
-                return_value=httpx.Response(404, json={"detail": "Not Found"})
-            )
-            yield stored, provider_upload, upstream_files_route
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream_files_route = upstream.get("http://vllm.test/v1/files").mock(
+            return_value=httpx.Response(404, json={"detail": "Not Found"})
+        )
+        yield stored, provider_upload, upstream_files_route
 
 
-def _upload_batch_file(headers: dict[str, str], form: dict[str, str]):
+def _upload_batch_file(headers: dict[str, str], form: dict[str, str], content: bytes = BATCH_JSONL_LINE):
     return client.post(
         "/v1/files",
-        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
         data={"purpose": "batch", **form},
         headers={"Authorization": "Bearer test-key", **headers},
     )
@@ -1014,6 +1177,68 @@ def test_batch_upload_for_a_provider_model_without_deployment_drop_params_sends_
     assert "drop_params" not in provider_upload.call_args.kwargs
 
 
+@pytest.mark.parametrize("model", ["vertex-batch-keep", "gemini-2.0-flash"])
+def test_batch_upload_carries_the_router_default_drop_params_over_the_deployment(
+    batch_upload_seams, monkeypatch, model: str
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model({"drop_params": True})
+    )
+
+    response = _upload_batch_file({"x-litellm-model": model}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is True
+
+
+@pytest.mark.parametrize(
+    ("router_default", "expected"),
+    [({"drop_params": True}, {"drop_params": True}), ({"drop_params": False}, {"drop_params": False}), (None, {})],
+    ids=["router-drops", "router-keeps", "router-unset"],
+)
+def test_batch_upload_without_a_model_carries_the_router_default_drop_params(
+    batch_upload_seams, monkeypatch, router_default: dict[str, object] | None, expected: dict[str, object]
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model(router_default))
+
+    response = client.post(
+        "/vertex_ai/v1/files",
+        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "vertex_ai"
+    assert {key: value for key, value in provider_upload.call_args.kwargs.items() if key == "drop_params"} == expected
+
+
+def test_batch_upload_without_a_model_gives_a_null_files_settings_drop_params_the_router_default(
+    batch_upload_seams, monkeypatch
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model({"drop_params": True})
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+        [{"custom_llm_provider": "openai", "api_key": "sk-test", "drop_params": None}],
+    )
+
+    response = client.post(
+        "/openai/v1/files",
+        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "openai"
+    assert provider_upload.call_args.kwargs["drop_params"] is True
+
+
 def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_upload_seams):
     _, provider_upload, _ = batch_upload_seams
 
@@ -1021,6 +1246,434 @@ def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_up
 
     assert response.status_code == 200, response.text
     assert provider_upload.call_args.kwargs["drop_params"] is True
+
+
+def _batch_row(custom_id: str, model: str) -> bytes:
+    return json.dumps(
+        {
+            "custom_id": custom_id,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        }
+    ).encode()
+
+
+def _file_part_of(request: httpx.Request) -> ExtractedFileData:
+    form: Final = BytesParser(policy=email.policy.HTTP).parsebytes(
+        b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n" + request.content
+    )
+    part: Final = next(p for p in form.iter_parts() if p.get_param("name", header="content-disposition") == "file")
+    return ExtractedFileData(
+        filename=part.get_filename(),
+        content=part.get_payload(decode=True),
+        content_type=part.get_content_type(),
+        headers={},
+    )
+
+
+@pytest.fixture
+def uploads_at_the_provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[ExtractedFileData]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    received: Final[list[ExtractedFileData]] = []
+
+    def read_the_upload_like_a_provider(request: httpx.Request) -> httpx.Response:
+        received.append(_file_part_of(request))
+        return httpx.Response(
+            200,
+            json={
+                "id": "file-kept",
+                "object": "file",
+                "purpose": "batch",
+                "created_at": 0,
+                "bytes": 0,
+                "filename": "batch.jsonl",
+                "status": "uploaded",
+            },
+        )
+
+    with respx.mock(assert_all_called=False) as provider:
+        provider.post("https://api.openai.com/v1/files").mock(side_effect=read_the_upload_like_a_provider)
+        provider.post(url__startswith="https://azure.test/").mock(side_effect=read_the_upload_like_a_provider)
+        yield received
+
+
+@pytest.fixture
+def files_the_provider_received(
+    batch_upload_proxy: None, uploads_at_the_provider: list[ExtractedFileData]
+) -> list[ExtractedFileData]:
+    return uploads_at_the_provider
+
+
+@pytest.fixture
+def files_handed_to_the_vertex_upload(
+    batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route],
+) -> list[ExtractedFileData]:
+    _, provider_upload, _ = batch_upload_seams
+    received: Final[list[ExtractedFileData]] = []
+
+    async def read_the_upload_like_a_provider(**kwargs: object) -> OpenAIFileObject:
+        received.append(extract_file_data(kwargs["file"]))
+        return provider_upload.return_value
+
+    provider_upload.side_effect = read_the_upload_like_a_provider
+    return received
+
+
+def _compact_batch_row(custom_id: str, model: str) -> bytes:
+    return json.dumps(
+        {
+            "custom_id": custom_id,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "日本語"}]},
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
+def _models_named_by_rows(received: ExtractedFileData) -> list[str]:
+    return [json.loads(line)["body"]["model"] for line in received["content"].splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize(
+    "headers, form",
+    [({"x-litellm-model": "gpt-5.4-nano-batch"}, {}), ({}, {"model": "gpt-5.4-nano-batch"})],
+    ids=["x-litellm-model header", "model form field"],
+)
+def test_model_routed_batch_upload_names_the_deployment_model_on_rows_naming_the_alias(
+    files_the_provider_received: list[ExtractedFileData], headers: dict[str, str], form: dict[str, str]
+):
+    content: Final = _batch_row("first", "gpt-5.4-nano-batch") + b"\n" + _batch_row("second", "gpt-5.4-nano-batch")
+
+    response: Final = _upload_batch_file(headers, form, content)
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "gpt-5.4-nano"]
+
+
+def test_model_routed_batch_upload_leaves_a_row_naming_another_model_for_the_limiter_to_check(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content: Final = _batch_row("alias", "gpt-5.4-nano-batch") + b"\n" + _batch_row("other", "another-model")
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "another-model"]
+
+
+def test_model_routed_batch_upload_without_an_alias_row_reaches_the_provider_byte_for_byte(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content: Final = (
+        '{"custom_id":"r","method":"POST","url":"/v1/chat/completions",'
+        '"body":{"model":"gpt-5.4-nano","messages":[{"role":"user","content":"こんにちは"}]}}\r\n'
+    ).encode()
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+def test_model_routed_batch_upload_changes_only_the_model_of_alias_rows_and_keeps_other_rows_as_written(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    alias_row: Final = (
+        '{"custom_id":"alias","method":"POST","url":"/v1/chat/completions",'
+        '"body":{"model":"gpt-5.4-nano-batch","messages":[{"role":"user","content":"日本語"}]}}'
+    ).encode()
+    other_row: Final = (
+        '{"custom_id": "other", "method": "POST", "url": "/v1/chat/completions", '
+        '"body": {"model": "another-model", "messages": [{"role": "user", "content": "日本語"}]}}'
+    ).encode()
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, alias_row + b"\n" + other_row)
+
+    assert response.status_code == 200, response.text
+    rewritten_row, kept_row = files_the_provider_received[0]["content"].splitlines()
+    assert kept_row == other_row
+    assert rewritten_row == alias_row.replace(b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"')
+
+
+def test_model_routed_batch_upload_strips_the_provider_prefix_from_the_deployment_model(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    response: Final = _upload_batch_file({"x-litellm-model": "azure-batch"}, {}, _batch_row("r", "azure-batch"))
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["my-deployment"]
+
+
+@pytest.mark.parametrize(
+    "deployment_name, requested_model",
+    [("*", "gpt-x"), ("openai/*", "openai/gpt-x")],
+    ids=["catch-all", "provider wildcard"],
+)
+def test_wildcard_routed_batch_upload_names_the_requested_model(
+    files_the_provider_received: list[ExtractedFileData],
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_name: str,
+    requested_model: str,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": deployment_name,
+                    "litellm_params": {"model": "openai/*", "api_key": "sk-openai"},
+                    "model_info": {"id": "wildcard-id"},
+                }
+            ]
+        ),
+    )
+
+    response: Final = _upload_batch_file({"x-litellm-model": requested_model}, {}, _batch_row("r", requested_model))
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-x"]
+
+
+def test_model_routed_batch_upload_keeps_the_callers_filename_and_content_type(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, _batch_row("r", "gpt-5.4-nano-batch"))
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["filename"] == "batch.jsonl"
+    assert files_the_provider_received[0]["content_type"] == "application/jsonl"
+
+
+def test_model_routed_upload_with_another_purpose_keeps_the_callers_bytes(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content: Final = b'{"body":   {"model":   "gpt-5.4-nano-batch"}}\n'
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {"purpose": "assistants"}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+def test_model_routed_passthrough_upload_keeps_the_callers_bytes(
+    files_handed_to_the_vertex_upload: list[ExtractedFileData],
+):
+    content: Final = b'{"request":   {"contents": []}, "body":   {"model": "native"}}\n'
+
+    response: Final = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {"passthrough": "true"}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_handed_to_the_vertex_upload[0]["content"] == content
+
+
+def _alias_rows_around_blank_lines(model: str) -> bytes:
+    return (
+        _compact_batch_row("first", model)
+        + b"\r\n\r\n"
+        + _batch_row("other", "another-model")
+        + b"\r\n"
+        + _compact_batch_row("second", model)
+        + b"\n"
+    )
+
+
+def test_model_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the_rewritten_rows(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content: Final = _alias_rows_around_blank_lines("gpt-5.4-nano-batch")
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content.replace(
+        b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"'
+    )
+
+
+def test_vertex_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the_rewritten_rows(
+    files_handed_to_the_vertex_upload: list[ExtractedFileData],
+):
+    content: Final = _alias_rows_around_blank_lines("vertex-batch-keep")
+
+    response: Final = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_handed_to_the_vertex_upload[0]["content"] == content.replace(
+        b'"model":"vertex-batch-keep"', b'"model":"gemini-2.5-flash"'
+    )
+
+
+def test_batch_upload_routed_by_a_model_named_like_its_deployment_reaches_the_provider_byte_for_byte(
+    files_the_provider_received: list[ExtractedFileData], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.4-mini",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-openai"},
+                    "model_info": {"id": "same-name-id"},
+                }
+            ]
+        ),
+    )
+    content: Final = _batch_row("r", "gpt-5.4-mini") + b"\n"
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-mini"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="restricted-user", models=["gemini-2.0-flash"]
+    )
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {})
+
+    assert response.status_code == 403, response.text
+    assert "gpt-5.4-nano-batch" in response.text
+    assert files_the_provider_received == []
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    ["utf-16", "utf-16-le"],
+    ids=["with a byte order mark", "without a byte order mark"],
+)
+def test_batch_upload_the_rewrite_cannot_read_reaches_the_provider_whole(
+    files_the_provider_received: list[ExtractedFileData], encoding: str
+):
+    content: Final = _batch_row("r", "gpt-5.4-nano-batch").decode().encode(encoding)
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+async def _route_model_upload(uploads_at_the_provider: list[ExtractedFileData], file: FileTypes) -> ExtractedFileData:
+    await _route_alias_upload(_router_with_executed_batch_model(), file)
+    return uploads_at_the_provider[-1]
+
+
+async def _route_alias_upload(llm_router: Router, file: FileTypes) -> None:
+    await route_create_file(
+        llm_router=llm_router,
+        _create_file_request=CreateFileRequest(file=file, purpose="batch"),
+        purpose="batch",
+        proxy_logging_obj=MagicMock(get_proxy_hook=MagicMock(return_value=None)),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+        target_model_names_list=[],
+        is_router_model=False,
+        router_model=None,
+        custom_llm_provider="openai",
+        model="gpt-5.4-nano-batch",
+    )
+
+
+MALFORMED_TRAILING_BATCH_CONTENT: Final = (
+    _compact_batch_row("complete", "gpt-5.4-nano-batch") + b'\n{"custom_id": "truncated", "body": {"model": "gpt-5.4-nano-batch"'
+)
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        ("batch.jsonl", io.BytesIO(MALFORMED_TRAILING_BATCH_CONTENT), "application/jsonl"),
+        io.BytesIO(MALFORMED_TRAILING_BATCH_CONTENT),
+        ("batch.jsonl", MALFORMED_TRAILING_BATCH_CONTENT, "application/jsonl"),
+    ],
+    ids=["tuple handle", "bare handle", "tuple bytes"],
+)
+@pytest.mark.asyncio
+async def test_route_create_file_rewrites_complete_alias_rows_and_keeps_malformed_trailing_content_as_written(
+    uploads_at_the_provider: list[ExtractedFileData], file: FileTypes
+):
+    received: Final = await _route_model_upload(uploads_at_the_provider, file)
+
+    assert received["content"] == MALFORMED_TRAILING_BATCH_CONTENT.replace(
+        b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"', 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_rewrites_a_bare_upload_to_the_deployment_model(
+    uploads_at_the_provider: list[ExtractedFileData],
+):
+    received: Final = await _route_model_upload(uploads_at_the_provider, _batch_row("r", "gpt-5.4-nano-batch"))
+
+    assert _models_named_by_rows(received) == ["gpt-5.4-nano"]
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it_after_the_upload(
+    mocker: MockerFixture,
+):
+    row: Final = _batch_row("r", "gpt-5.4-nano-batch").replace(b'"hi"', b'"' + b"x" * 4096 + b'"')
+    rows: Final = 4096
+    rows_per_model: Final[list[Counter[str]]] = []
+    uploaded_handles: Final[list[IO[bytes]]] = []
+    upload_allocations: Final[list[int]] = []
+    upload_filters: Final[list[tracemalloc.Filter]] = [
+        tracemalloc.Filter(True, function.__code__.co_filename, all_frames=True)
+        for function in (route_create_file, rewrite_rows_naming_model)
+    ]
+
+    def record_upload_allocations() -> None:
+        snapshot: Final = tracemalloc.take_snapshot().filter_traces(upload_filters)
+        upload_allocations.append(sum(trace.size for trace in snapshot.traces))
+
+    rollover: Final[Callable[[tempfile.SpooledTemporaryFile[bytes]], None]] = tempfile.SpooledTemporaryFile.rollover
+
+    def record_before_rollover(spool: tempfile.SpooledTemporaryFile[bytes]) -> None:
+        record_upload_allocations()
+        rollover(spool)
+
+    async def stream_the_upload_like_a_provider(*, file: tuple[str, IO[bytes], str], **_: object) -> OpenAIFileObject:
+        if tracemalloc.is_tracing():
+            record_upload_allocations()
+        uploaded_handles.append(file[1])
+        rows_per_model.append(Counter(json.loads(line)["body"]["model"] for line in file[1]))
+        return OpenAIFileObject(
+            id="file-kept",
+            object="file",
+            purpose="batch",
+            created_at=0,
+            bytes=0,
+            filename="batch.jsonl",
+            status="uploaded",
+        )
+
+    mocker.patch(  # test-quality-ok: the memory bound needs the handle the route passes on, and an HTTP mock reads the whole body into memory
+        "litellm.acreate_file", new=stream_the_upload_like_a_provider
+    )
+    llm_router: Final = _router_with_executed_batch_model()
+    await _route_alias_upload(llm_router, ("warm-up.jsonl", io.BytesIO(row), "application/jsonl"))
+    mocker.patch.object(tempfile.SpooledTemporaryFile, "rollover", new=record_before_rollover)
+    with tempfile.TemporaryFile() as upload:
+        upload.write(b"\n".join(itertools.repeat(row, rows)))
+        upload_size: Final = upload.tell()
+        upload.seek(0)
+        tracemalloc.start(10)
+        try:
+            await _route_alias_upload(llm_router, ("batch.jsonl", upload, "application/jsonl"))
+            peak: Final = max(upload_allocations)
+        finally:
+            tracemalloc.stop()
+
+    assert rows_per_model[-1] == Counter({"gpt-5.4-nano": rows})
+    assert peak < upload_size // 4
+    assert uploaded_handles[-1].closed
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")
@@ -4997,11 +5650,13 @@ def _managed_file_row(
     team_id: Optional[str] = None,
     model_mappings: Optional[dict[str, str]] = None,
     storage_backend: Optional[str] = None,
+    expires_at: int | None = None,
 ) -> MagicMock:
     file_object = OpenAIFileObject(
         id=stored_file_id or unified_file_id,
         bytes=100,
         created_at=1700000000,
+        expires_at=expires_at,
         filename="batch.jsonl",
         object="file",
         purpose="batch",
@@ -5017,12 +5672,21 @@ def _managed_file_row(
     )
 
 
+def _field_matches(value: object, expected: object) -> bool:
+    match expected:
+        case {"in": Collection() as allowed}:
+            return value in allowed
+        case {"hasSome": Iterable() as wanted} if isinstance(value, Iterable):
+            return not set(value).isdisjoint(wanted)
+    return value == expected
+
+
 def _row_matches_where(row, where) -> bool:
     for field, expected in where.items():
         if field == "OR":
             if not any(_row_matches_where(row, clause) for clause in expected):
                 return False
-        elif getattr(row, field) != expected:
+        elif not _field_matches(getattr(row, field), expected):
             return False
     return True
 
@@ -5038,6 +5702,32 @@ class _ManagedFileTableOverRows:
 
     async def find_first(self, where):
         return next(iter(self._owned_rows(where)), None)
+
+    async def delete(self, where: dict[str, str]) -> object:
+        deleted_row: Final = await self.find_first(where)
+        self.rows = [row for row in self.rows if row is not deleted_row]
+        return deleted_row
+
+    async def upsert(self, where: dict[str, str], data: dict[str, dict[str, object]]) -> SimpleNamespace:
+        created: Final = data["create"]
+        existing_row: Final = next((row for row in self.rows if row.unified_file_id == where["unified_file_id"]), None)
+        row: Final = SimpleNamespace(
+            unified_file_id=where["unified_file_id"],
+            file_object=json.loads(created["file_object"]),
+            model_mappings=json.loads(created["model_mappings"]),
+            flat_model_file_ids=created["flat_model_file_ids"],
+            created_by=created["created_by"] if existing_row is None else existing_row.created_by,
+            team_id=created["team_id"] if existing_row is None else existing_row.team_id,
+            storage_backend=None,
+        )
+        self.rows = [row, *(existing for existing in self.rows if existing.unified_file_id != row.unified_file_id)]
+        return row
+
+    async def delete_many(self, where: dict[str, str]) -> int:
+        remaining_rows: Final = [row for row in self.rows if not _row_matches_where(row, where)]
+        deleted_count: Final = len(self.rows) - len(remaining_rows)
+        self.rows = remaining_rows
+        return deleted_count
 
     async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
         owned_rows: Final = self._owned_rows(where)
@@ -5185,15 +5875,20 @@ def test_unscoped_list_files_does_not_leak_another_callers_files(
     assert [file["id"] for file in response.json()["data"]] == ["unified-mine"]
 
 
-def test_scoped_list_files_still_resolves_deployment_credentials(
+def test_scoped_list_files_still_resolves_deployment_credentials_for_an_admin(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
-    """target_model_names keeps routing to the provider on deployment credentials, so
+    """target_model_names keeps routing an admin to the provider on deployment credentials, so
     the unscoped path does not swallow that route."""
+    import litellm.proxy.proxy_server as ps
+
     _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
         mocker, monkeypatch, llm_router, [_managed_file_row("unified-file-1")]
     )
     provider_list.return_value = []
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
 
     response = _get_unscoped_list_files("?target_model_names=gpt-3.5-turbo")
 
@@ -5201,6 +5896,30 @@ def test_scoped_list_files_still_resolves_deployment_credentials(
     provider_list.assert_awaited_once()
     assert provider_list.await_args.kwargs["custom_llm_provider"] == "openai"
     assert provider_list.await_args.kwargs["api_key"] == "openai_api_key"
+
+
+def test_scoped_list_files_lists_only_the_callers_files_for_a_non_admin(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [
+            _managed_file_row("unified-mine", model_mappings={"gpt-3.5-turbo-id": "file-mine"}),
+            _managed_file_row("unified-theirs", created_by="other-user", model_mappings={"gpt-3.5-turbo-id": "f"}),
+        ],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user"
+    )
+
+    response: Final = _get_unscoped_list_files("?target_model_names=gpt-3.5-turbo")
+
+    assert _listed_ids(response) == ["unified-mine"]
+    provider_list.assert_not_awaited()
 
 
 def _post_user_data_file() -> httpx.Response:
@@ -5759,9 +6478,9 @@ def _setup_managed_file_route_answering_404(
     )
 
 
-def _call_managed_file_route(method: str, path: str) -> httpx.Response:
+def _call_managed_file_route(method: str, path: str, extra_headers: dict[str, str] | None = None) -> httpx.Response:
     try:
-        return client.request(method, path, headers={"Authorization": "Bearer test-key"})
+        return client.request(method, path, headers={"Authorization": "Bearer test-key", **(extra_headers or {})})
     finally:
         import litellm.proxy.proxy_server as ps
 
@@ -5836,6 +6555,579 @@ def test_get_file_content_reports_a_missing_managed_file_as_a_404(
 
     assert response.status_code == 404, response.text
     assert response.json() == _missing_managed_file_error(file_id)
+
+
+_ROUTING_HINTS: Final = pytest.mark.parametrize(
+    ("routing_headers", "routing_query"),
+    [({"x-litellm-model": "gpt-3.5-turbo"}, ""), ({}, "?model=gpt-3.5-turbo")],
+    ids=["x-litellm-model header", "model query param"],
+)
+
+_MANAGED_ID_ROUTING_HINTS: Final = pytest.mark.parametrize(
+    ("routing_headers", "routing_query"),
+    [
+        ({"x-litellm-model": "gpt-3.5-turbo"}, ""),
+        ({}, "?model=gpt-3.5-turbo"),
+        ({"x-litellm-model": "azure-gpt-3-5-turbo"}, ""),
+        ({}, "?model=azure-gpt-3-5-turbo"),
+    ],
+    ids=[
+        "header naming the file's model",
+        "query naming the file's model",
+        "header naming another model",
+        "query naming another model",
+    ],
+)
+
+
+@pytest.fixture
+def stored_managed_file_table(monkeypatch: pytest.MonkeyPatch, llm_router: Router):
+    """Wire the single-file routes to the real managed files hook, registered as a callback the way the
+    proxy registers it, over one stored file the router's gpt-3.5-turbo deployment holds as file-victim-abc123."""
+    import litellm.proxy.proxy_server as ps
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    managed_files: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=MagicMock())
+    managed_file_table: Final = _ManagedFileTableOverRows(
+        [
+            LiteLLM_ManagedFileTable(
+                unified_file_id=_unified_managed_file_id(),
+                file_object=OpenAIFileObject(
+                    id="file-victim-abc123",
+                    object="file",
+                    bytes=27,
+                    created_at=1234567890,
+                    filename="hello.txt",
+                    purpose="user_data",
+                    status="processed",
+                ),
+                model_mappings={"gpt-3.5-turbo-id": "file-victim-abc123"},
+                flat_model_file_ids=["file-victim-abc123"],
+                created_by="test-user",
+            )
+        ]
+    )
+    managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
+    setup_proxy_logging_object(monkeypatch, llm_router).proxy_hook_mapping["managed_files"] = managed_files
+    monkeypatch.setattr(litellm, "callbacks", [managed_files])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    ProxyLogging._callback_capabilities_cache.clear()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    yield managed_file_table
+    app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _openai_answering_404_for(upstream: respx.MockRouter, file_id: str) -> respx.Route:
+    return upstream.route(url__startswith=f"https://api.openai.com/v1/files/{file_id}").mock(
+        return_value=httpx.Response(
+            status_code=404,
+            json={"error": {"message": f"No such File object: {file_id}", "type": "invalid_request_error"}},
+        )
+    )
+
+
+@_MANAGED_ID_ROUTING_HINTS
+def test_retrieve_managed_file_ignores_a_model_routing_hint(
+    stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
+):
+    """A model named by the x-litellm-model header or ?model= routes a raw provider file id, so a managed
+    id sent with one still resolves through the managed files hook instead of reaching the provider as is."""
+    file_id: Final = _unified_managed_file_id()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        managed_id_upstream: Final = _openai_answering_404_for(upstream, file_id)
+        response: Final = _call_managed_file_route("GET", f"/v1/files/{file_id}{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": file_id,
+        "object": "file",
+        "bytes": 27,
+        "created_at": 1234567890,
+        "filename": "hello.txt",
+        "purpose": "user_data",
+        "status": "processed",
+        "expires_at": None,
+        "status_details": None,
+    }
+    assert managed_id_upstream.call_count == 0
+
+
+@_MANAGED_ID_ROUTING_HINTS
+def test_get_managed_file_content_ignores_a_model_routing_hint(
+    stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
+):
+    file_id: Final = _unified_managed_file_id()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        managed_id_upstream: Final = _openai_answering_404_for(upstream, file_id)
+        provider_content: Final = upstream.get("https://api.openai.com/v1/files/file-victim-abc123/content").mock(
+            return_value=httpx.Response(status_code=200, content=b"hello from the managed file")
+        )
+        response: Final = _call_managed_file_route(
+            "GET", f"/v1/files/{file_id}/content{routing_query}", routing_headers
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.content == b"hello from the managed file"
+    assert provider_content.call_count == 1
+    assert managed_id_upstream.call_count == 0
+
+
+@_MANAGED_ID_ROUTING_HINTS
+def test_delete_managed_file_ignores_a_model_routing_hint(
+    stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
+):
+    file_id: Final = _unified_managed_file_id()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        managed_id_upstream: Final = _openai_answering_404_for(upstream, file_id)
+        provider_delete: Final = upstream.delete("https://api.openai.com/v1/files/file-victim-abc123").mock(
+            return_value=httpx.Response(
+                status_code=200, json={"id": "file-victim-abc123", "object": "file", "deleted": True}
+            )
+        )
+        response: Final = _call_managed_file_route("DELETE", f"/v1/files/{file_id}{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": file_id, "object": "file", "deleted": True}
+    assert provider_delete.call_count == 1
+    assert managed_id_upstream.call_count == 0
+    assert stored_managed_file_table.rows == []
+
+
+def _retrieve_and_delete_provider_bodies(file_id: str) -> pytest.MarkDecorator:
+    return pytest.mark.parametrize(
+        ("method", "provider_body"),
+        [
+            (
+                "GET",
+                {
+                    "id": file_id,
+                    "object": "file",
+                    "bytes": 27,
+                    "created_at": 1234567890,
+                    "filename": "hello.txt",
+                    "purpose": "user_data",
+                    "status": "processed",
+                    "expires_at": None,
+                    "status_details": None,
+                },
+            ),
+            ("DELETE", {"id": file_id, "object": "file", "deleted": True}),
+        ],
+        ids=["retrieve", "delete"],
+    )
+
+
+@_retrieve_and_delete_provider_bodies("file-raw-xyz789")
+@_ROUTING_HINTS
+def test_raw_provider_file_id_still_goes_to_the_hinted_model_when_managed_files_are_on(
+    stored_managed_file_table: _ManagedFileTableOverRows,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    provider_body: dict[str, object],
+    routing_headers: dict[str, str],
+    routing_query: str,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "litellm_proxy/gpt-3.5-turbo",
+                        "api_key": "upstream-proxy-key",
+                        "api_base": "https://upstream-proxy.test",
+                    },
+                    "model_info": {"id": "upstream-gpt-3.5-turbo-id"},
+                }
+            ]
+        ),
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        provider_file: Final = upstream.route(
+            method=method, url__startswith="https://upstream-proxy.test/files/file-raw-xyz789"
+        ).mock(return_value=httpx.Response(status_code=200, json=provider_body))
+        response: Final = _call_managed_file_route(method, f"/v1/files/file-raw-xyz789{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == provider_body
+    assert provider_file.call_count == 1
+    assert provider_file.calls.last.request.headers["authorization"] == "Bearer upstream-proxy-key"
+
+
+_PLAIN_UPLOAD_ID: Final = "file-team-a-payroll"
+
+
+@dataclass(frozen=True, slots=True)
+class _SharedAccount:
+    provider: str
+    files_url: str
+    file_body: dict[str, object]
+    deleted_body: dict[str, object]
+
+
+_OPENAI_ACCOUNT: Final = _SharedAccount(
+    provider="openai",
+    files_url="https://api.openai.com/v1/files",
+    file_body={
+        "id": _PLAIN_UPLOAD_ID,
+        "object": "file",
+        "bytes": 15,
+        "created_at": 1234567890,
+        "filename": "payroll-private.jsonl",
+        "purpose": "user_data",
+        "status": "processed",
+    },
+    deleted_body={"id": _PLAIN_UPLOAD_ID, "object": "file", "deleted": True},
+)
+_ANTHROPIC_ACCOUNT: Final = _SharedAccount(
+    provider="anthropic",
+    files_url="https://api.anthropic.com/v1/files",
+    file_body={
+        "id": _PLAIN_UPLOAD_ID,
+        "type": "file",
+        "filename": "payroll-private.jsonl",
+        "mime_type": "application/jsonl",
+        "size_bytes": 15,
+        "created_at": "2026-01-01T00:00:00Z",
+    },
+    deleted_body={"id": _PLAIN_UPLOAD_ID, "type": "file_deleted"},
+)
+_SHARED_ACCOUNTS: Final = pytest.mark.parametrize(
+    "account", [_OPENAI_ACCOUNT, _ANTHROPIC_ACCOUNT], ids=lambda account: account.provider
+)
+
+
+_LISTING_NOW: Final = datetime.fromtimestamp(2000000000, tz=timezone.utc)
+
+
+@pytest.fixture
+def plain_upload_proxy(monkeypatch: pytest.MonkeyPatch, llm_router: Router) -> Iterator[_ManagedFileTableOverRows]:
+    """The real managed files hook over an empty table at a fixed clock, with require_managed_files left at its
+    default and every upload, list, read and delete answered by a shared OpenAI or Anthropic account."""
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    import litellm.proxy.proxy_server as ps
+
+    managed_files: Final = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=DualCache(), prisma_client=MagicMock(), clock=lambda: _LISTING_NOW
+    )
+    managed_file_table: Final = _ManagedFileTableOverRows([])
+    managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
+    managed_files.prisma_client.db.query_raw = managed_file_table.query_raw
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    monkeypatch.setattr(litellm, "callbacks", [managed_files])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr("litellm.require_managed_files", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-shared-account")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shared-account")
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+        [
+            {"custom_llm_provider": "openai", "api_key": "sk-shared-account"},
+            {"custom_llm_provider": "anthropic", "api_key": "sk-ant-shared-account"},
+        ],
+    )
+    ProxyLogging._callback_capabilities_cache.clear()
+    yield managed_file_table
+    app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _as_team_member(user_id: str, team_id: str) -> dict[str, str]:
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key=f"sk-{user_id}", user_role=LitellmUserRoles.INTERNAL_USER, user_id=user_id, team_id=team_id
+    )
+    return {"Authorization": f"Bearer sk-{user_id}"}
+
+
+def _mock_shared_account(upstream: respx.MockRouter, account: _SharedAccount) -> dict[str, respx.Route]:
+    file_url: Final = f"{account.files_url}/{_PLAIN_UPLOAD_ID}"
+    return {
+        "upload": upstream.post(account.files_url).mock(
+            return_value=httpx.Response(status_code=200, json=account.file_body)
+        ),
+        "list": upstream.get(account.files_url).mock(
+            return_value=httpx.Response(
+                status_code=200, json={"object": "list", "data": [account.file_body], "has_more": False}
+            )
+        ),
+        "retrieve": upstream.get(file_url).mock(return_value=httpx.Response(status_code=200, json=account.file_body)),
+        "content": upstream.get(f"{file_url}/content").mock(
+            return_value=httpx.Response(status_code=200, content=b'{"salary": 100}')
+        ),
+        "delete": upstream.delete(file_url).mock(
+            return_value=httpx.Response(status_code=200, json=account.deleted_body)
+        ),
+    }
+
+
+def _upload_payroll_as_team_a(account: _SharedAccount) -> httpx.Response:
+    return client.post(
+        f"/v1/files?provider={account.provider}",
+        files={"file": ("payroll-private.jsonl", b'{"salary": 100}', "application/jsonl")},
+        data={"purpose": "user_data"},
+        headers=_as_team_member("user-a", "team-a"),
+    )
+
+
+def _listed_ids(response: httpx.Response) -> list[str]:
+    assert response.status_code == 200, response.text
+    return [file["id"] for file in response.json()["data"]]
+
+
+@_SHARED_ACCOUNTS
+def test_another_team_cannot_list_read_or_delete_a_plain_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, account: _SharedAccount
+) -> None:
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, account)
+        uploaded: Final = _upload_payroll_as_team_a(account)
+        listed: Final = client.get(
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
+        )
+        retrieved: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
+        )
+        read: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider={account.provider}",
+            headers=_as_team_member("user-b", "team-b"),
+        )
+        deleted: Final = client.delete(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
+        )
+
+    assert uploaded.status_code == 200, uploaded.text
+    assert _listed_ids(listed) == []
+    assert shared_account["list"].call_count == 0
+    assert retrieved.status_code == 403, retrieved.text
+    assert shared_account["retrieve"].call_count == 0
+    assert read.status_code == 403, read.text
+    assert deleted.status_code == 403, deleted.text
+    assert shared_account["content"].call_count == 0
+    assert shared_account["delete"].call_count == 0
+
+
+@_SHARED_ACCOUNTS
+def test_the_uploading_team_lists_reads_and_deletes_its_plain_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, account: _SharedAccount
+) -> None:
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, account)
+        uploaded: Final = _upload_payroll_as_team_a(account)
+        listed: Final = client.get(
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-c", "team-a")
+        )
+        read: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider={account.provider}",
+            headers=_as_team_member("user-c", "team-a"),
+        )
+        deleted: Final = client.delete(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
+        )
+        listed_after_delete: Final = client.get(
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
+        )
+
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["id"] == _PLAIN_UPLOAD_ID
+    assert _listed_ids(listed) == [_PLAIN_UPLOAD_ID]
+    assert read.status_code == 200, read.text
+    assert read.content == b'{"salary": 100}'
+    assert deleted.status_code == 200, deleted.text
+    assert shared_account["delete"].call_count == 1
+    assert _listed_ids(listed_after_delete) == []
+
+
+def _upload_payroll_through_the_shared_model_as_team_a() -> httpx.Response:
+    return client.post(
+        "/v1/files",
+        files={"file": ("payroll-private.jsonl", b'{"salary": 100}', "application/jsonl")},
+        data={"purpose": "user_data", "model": "gpt-3.5-turbo"},
+        headers=_as_team_member("user-a", "team-a"),
+    )
+
+
+def test_wildcard_upload_is_listed_for_its_model_and_provider(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},
+                {"model_name": "explicit", "litellm_params": {"model": "anthropic/test", "api_key": "test-key"}},
+            ]
+        ),
+    )
+    owner: Final = _as_team_member("user-a", "team-a")
+    with respx.mock(assert_all_called=False) as upstream:
+        _mock_shared_account(upstream, _OPENAI_ACCOUNT)
+        _mock_shared_account(upstream, _ANTHROPIC_ACCOUNT)
+
+        def upload(model: str) -> str:
+            response: Final = client.post(
+                "/v1/files",
+                data={"purpose": "user_data", "model": model},
+                files={"file": ("test.txt", b"test", "text/plain")},
+                headers=owner,
+            )
+            assert response.status_code == 200, response.text
+            return str(response.json()["id"])
+
+        older, explicit, newer = (upload(model) for model in ("routed-a", "explicit", "routed-b"))
+        assert _listed_ids(client.get("/v1/files?model=routed-a", headers=owner)) == [older]
+        assert _listed_ids(client.get("/v1/files?provider=anthropic", headers=owner)) == [explicit]
+        first: Final = client.get("/v1/files?provider=openai&limit=1", headers=owner)
+        assert _listed_ids(first) == [newer]
+        assert first.json()["has_more"] is True
+        next_page: Final = client.get("/v1/files", params={"provider": "openai", "after": newer}, headers=owner)
+        assert _listed_ids(next_page) == [older]
+        assert next_page.json()["has_more"] is False
+        assert _listed_ids(client.get("/v1/files?provider=openai", headers=_as_team_member("user-b", "team-b"))) == []
+
+
+def test_managed_listing_skips_expired_rows_in_both_cursor_directions(
+    plain_upload_proxy: _ManagedFileTableOverRows,
+) -> None:
+    now: Final = int(_LISTING_NOW.timestamp())
+    plain_upload_proxy.rows.extend(
+        _managed_file_row(f"f{index}", model_mappings={"gpt-3.5-turbo-id": f"p{index}"}, expires_at=expiry)
+        for index, expiry in enumerate((now - 1, None, now, now + 1, now - 1))
+    )
+    owner: Final = _as_team_member("test-user", "team-a")
+
+    def page(**params: str) -> tuple[list[str], bool]:
+        response: Final = client.get("/v1/files", params={"provider": "openai", "limit": "1", **params}, headers=owner)
+        return _listed_ids(response), response.json()["has_more"]
+
+    assert page() == (["f1"], True)
+    assert page(after="f1") == (["f3"], False)
+    assert page(before_id="f3") == (["f1"], False)
+    assert page(after="f3") == ([], False)
+
+
+def test_managed_listing_keeps_an_expired_first_copy_while_another_copy_lives(
+    plain_upload_proxy: _ManagedFileTableOverRows,
+) -> None:
+    plain_upload_proxy.rows.append(
+        _managed_file_row(
+            "two-copies",
+            model_mappings={"gpt-3.5-turbo-id": "p1", "other-deployment-id": "p2"},
+            expires_at=int(_LISTING_NOW.timestamp()) - 1,
+        )
+    )
+
+    listed: Final = client.get("/v1/files?provider=openai", headers=_as_team_member("test-user", "team-a"))
+
+    assert _listed_ids(listed) == ["two-copies"]
+
+
+@pytest.mark.parametrize("id_kind", ["raw provider id", "model-routed id"])
+def test_another_team_cannot_read_or_delete_a_model_routed_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, id_kind: str
+) -> None:
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, _OPENAI_ACCOUNT)
+        uploaded: Final = _upload_payroll_through_the_shared_model_as_team_a()
+        assert uploaded.status_code == 200, uploaded.text
+        routed_id: Final = uploaded.json()["id"]
+        file_id: Final = _PLAIN_UPLOAD_ID if id_kind == "raw provider id" else routed_id
+        read: Final = client.get(
+            f"/v1/files/{file_id}/content?model=gpt-3.5-turbo", headers=_as_team_member("user-b", "team-b")
+        )
+        deleted: Final = client.delete(
+            f"/v1/files/{file_id}?model=gpt-3.5-turbo", headers=_as_team_member("user-b", "team-b")
+        )
+        teammate_read: Final = client.get(
+            f"/v1/files/{routed_id}/content?model=gpt-3.5-turbo", headers=_as_team_member("user-c", "team-a")
+        )
+        owner_listed: Final = client.get("/v1/files?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a"))
+        owner_deleted: Final = client.delete(
+            f"/v1/files/{file_id}?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+        )
+        listed_after_delete: Final = client.get(
+            "/v1/files?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+        )
+
+    assert routed_id != _PLAIN_UPLOAD_ID
+    assert read.status_code == 403, read.text
+    assert deleted.status_code == 403, deleted.text
+    assert teammate_read.status_code == 200, teammate_read.text
+    assert teammate_read.content == b'{"salary": 100}'
+    assert shared_account["content"].call_count == 1
+    assert _listed_ids(owner_listed) == [routed_id]
+    assert owner_deleted.status_code == 200, owner_deleted.text
+    assert shared_account["delete"].call_count == 1
+    assert _listed_ids(listed_after_delete) == []
+
+
+def test_another_team_cannot_read_a_load_balanced_batch_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "enable_loadbalancing_on_batch_endpoints", True)
+    batch_row: Final = (
+        b'{"custom_id": "r", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, _OPENAI_ACCOUNT)
+        uploaded: Final = client.post(
+            "/v1/files?provider=openai",
+            files={"file": ("payroll-private.jsonl", batch_row, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers=_as_team_member("user-a", "team-a"),
+        )
+        read: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider=openai", headers=_as_team_member("user-b", "team-b")
+        )
+
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["id"] == _PLAIN_UPLOAD_ID
+    assert read.status_code == 403, read.text
+    assert shared_account["content"].call_count == 0
+
+
+@_retrieve_and_delete_provider_bodies(_unified_managed_file_id())
+@_ROUTING_HINTS
+def test_proxy_without_managed_files_forwards_a_managed_id_to_the_hinted_model(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    method: str,
+    provider_body: dict[str, object],
+    routing_headers: dict[str, str],
+    routing_query: str,
+):
+    """A proxy with no database loads no managed files hook, so a managed id it sees belongs to whatever
+    the hinted model points at, like an upstream LiteLLM proxy, and goes there as is."""
+    import litellm.proxy.proxy_server as ps
+
+    file_id: Final = _unified_managed_file_id()
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream_file: Final = upstream.route(method=method, url=f"https://api.openai.com/v1/files/{file_id}").mock(
+            return_value=httpx.Response(status_code=200, json=provider_body)
+        )
+        response: Final = _call_managed_file_route(method, f"/v1/files/{file_id}{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == provider_body
+    assert upstream_file.call_count == 1
 
 
 def _setup_managed_file_stored_in_an_unknown_storage_backend(

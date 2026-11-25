@@ -149,7 +149,7 @@ else
   header "Quick start:"
   echo ""
   info "  litellm --setup          # interactive wizard"
-  info "  litellm --model gpt-4o   # single-model quickstart"
+  info "  litellm --model gpt-6.1-sol   # single-model quickstart"
   echo ""
   info "Docs: https://docs.litellm.ai"
   echo ""

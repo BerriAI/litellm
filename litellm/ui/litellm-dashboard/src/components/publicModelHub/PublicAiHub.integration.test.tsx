@@ -1,15 +1,21 @@
-import { fireEvent, within } from "@testing-library/react";
+import { fireEvent, render, within } from "@testing-library/react";
+import { Tabs } from "@base-ui/react/tabs";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Plugin } from "@/components/claude_code_plugins/types";
 import type { apiClient } from "@/components/networking";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 
 import { chooseSelectOption, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import PublicAiHub from "./PublicAiHub";
+import { CatalogNavbar } from "./CatalogNavbar";
+import { CatalogFilters } from "./CatalogFilters";
 
-const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo } = vi.hoisted(() => ({
+const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo, theme } = vi.hoisted(() => ({
+  theme: { resolvedTheme: undefined as string | undefined, setTheme: vi.fn() },
   apiGetMock: vi.fn(),
   realGet: {
     current: (..._args: Parameters<typeof apiClient.get>): Promise<unknown> => Promise.reject(new Error("unset")),
@@ -25,18 +31,18 @@ const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo } = vi
   },
 }));
 
+vi.mock("next-themes", () => ({ useTheme: () => theme }));
+
 vi.mock("next/navigation", () => ({
   useSearchParams: () => navigation.params,
   usePathname: () => "/model_hub_table",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
-vi.mock("next/font/local", () => ({ default: () => ({ variable: "catalog-display-font" }) }));
-
-vi.mock("@/components/navbar", () => ({
-  default: ({ publicNavigation }: { publicNavigation?: ReactNode }) => (
-    <nav aria-label="Top bar">{publicNavigation}</nav>
-  ),
+vi.mock("next/font/google", () => ({
+  DM_Sans: () => ({ variable: "catalog-sans-font" }),
+  IBM_Plex_Mono: () => ({ variable: "catalog-mono-font" }),
+  Barlow_Condensed: () => ({ variable: "catalog-display-font" }),
 }));
 
 vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn() }));
@@ -178,6 +184,7 @@ const tokenExpiringIn = (seconds: number) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  theme.resolvedTheme = undefined;
   testQueryClient.clear();
   uiSettings.values = {};
   navigation.params = new URLSearchParams();
@@ -191,6 +198,96 @@ beforeEach(() => {
 });
 
 describe("PublicAiHub", () => {
+  it("server-renders the narrow filter action as collapsed before the viewport is known", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(
+      <CatalogFilters count={0} onClear={vi.fn()}>
+        <fieldset>Capabilities</fieldset>
+      </CatalogFilters>,
+    );
+
+    expect(within(container).getByRole("button", { name: "Filters" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it.each([
+    { savedTheme: "dark", label: "Switch to light mode" },
+    { savedTheme: "light", label: "Switch to dark mode" },
+  ])("hydrates the theme action consistently with saved $savedTheme mode", ({ savedTheme, label }) => {
+    const navbar = (
+      <ThemeProvider>
+        <ThemeToggle />
+        <Tabs.Root defaultValue="models">
+          <CatalogNavbar title="Model Hub" search="" onSearchChange={vi.fn()} />
+        </Tabs.Root>
+      </ThemeProvider>
+    );
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(navbar);
+    document.body.appendChild(container);
+    theme.resolvedTheme = savedTheme;
+    const consoleError = vi.spyOn(console, "error");
+
+    render(navbar, { container, hydrate: true });
+
+    const toggles = within(container).getAllByRole("button", { name: label });
+    expect(toggles).toHaveLength(2);
+    expect(consoleError).not.toHaveBeenCalled();
+    for (const toggle of toggles) {
+      expect(toggle).toHaveAttribute("title", label);
+      fireEvent.click(toggle);
+      expect(theme.setTheme).toHaveBeenCalledWith(savedTheme === "dark" ? "light" : "dark");
+    }
+    consoleError.mockRestore();
+  });
+
+  it.each([
+    {
+      name: "a configured logo URL",
+      settings: { values: { logo_url: "https://assets.example.test/logo.svg" } },
+      expected: "https://assets.example.test/logo.svg",
+    },
+    {
+      name: "a logo served by the gateway",
+      settings: { values: { logo_url: null }, logo_url_via_proxy: true },
+      expected: "https://gateway.example.com/get_image",
+    },
+  ])("retains custom branding with $name", async ({ settings, expected }) => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(settings)));
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await waitFor(() => expect(screen.getByAltText("LiteLLM Brand")).toHaveAttribute("src", expected));
+  });
+
+  it.each([
+    { name: "Clinical NER", path: "/clinical-ner", methods: null, method: "POST", body: true },
+    { name: "LPR Catalog", path: "/lpr-catalog", methods: ["GET"], method: "GET", body: false },
+  ])("shows a route-specific curl example without the chat SDK for $name", async (endpoint) => {
+    failModelsWith(() =>
+      Promise.resolve(
+        page([
+          {
+            model_group: endpoint.name,
+            mode: "passthrough",
+            providers: [],
+            pass_through_path: endpoint.path,
+            pass_through_methods: endpoint.methods,
+          },
+        ]),
+      ),
+    );
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    fireEvent.click(await screen.findByRole("link", { name: new RegExp(endpoint.name) }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Details" });
+    expect(dialog).toHaveTextContent(`curl -X "${endpoint.method}" "https://gateway.example.com${endpoint.path}"`);
+    expect(dialog).toHaveTextContent("Passthrough");
+    expect(dialog.textContent?.includes(`-d '{"input": "Hello, how are you?"}'`)).toBe(endpoint.body);
+    expect(dialog).not.toHaveTextContent("import openai");
+    expect(dialog).not.toHaveTextContent("chat.completions");
+    expect(dialog).not.toHaveTextContent("/v1/chat/completions");
+  });
+
   it("shows only Models and Skills without selecting an item or reading retired hubs", async () => {
     const user = userEvent.setup();
     renderWithProviders(<PublicAiHub accessToken={null} />);
@@ -201,6 +298,7 @@ describe("PublicAiHub", () => {
     expect(screen.getByRole("tab", { name: "Model Hub" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Skills Hub" })).toHaveAttribute("aria-selected", "false");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Quick start with LiteLLM" }));
     expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("https://gateway.example.com");
 
     await user.click(screen.getByRole("tab", { name: "Skills Hub" }));
@@ -241,10 +339,55 @@ describe("PublicAiHub", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("searches models from the header while viewing skills and keeps both search fields in sync", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await user.click(await screen.findByRole("tab", { name: "Skills Hub" }));
+    expect(await screen.findByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
+
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(search).toHaveFocus();
+    fireEvent.change(search, { target: { value: "claude" } });
+
+    expect(await screen.findByText("1 model")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /claude-sonnet/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /gpt-5/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Model Hub" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("textbox", { name: "Search models" })).toHaveValue("claude");
+
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(await screen.findByRole("link", { name: /gpt-5/ })).toBeInTheDocument();
+    expect(search).toHaveValue("");
+  });
+
+  it("keeps documentation, blog, and community destinations available in the overflow menu", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await user.click(screen.getByRole("button", { name: "More navigation" }));
+
+    expect(await screen.findByRole("menuitem", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/",
+    );
+    expect(screen.getByRole("menuitem", { name: "Blog" })).toHaveAttribute("href", "https://docs.litellm.ai/blog");
+    expect(screen.getByRole("menuitem", { name: "LiteLLM on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/BerriAI/litellm",
+    );
+    expect(screen.getByRole("menuitem", { name: "Join Slack" })).toHaveAttribute(
+      "href",
+      "https://www.litellm.ai/support",
+    );
+  });
+
   it("lists the admin's links and the gateway version", async () => {
     const user = userEvent.setup();
     renderWithProviders(<PublicAiHub accessToken={null} />);
 
+    await user.click(screen.getByRole("button", { name: "Quick start with LiteLLM" }));
     await user.click(await screen.findByRole("button", { name: "Links" }));
 
     expect(await screen.findByRole("menuitem", { name: "Getting started" })).toHaveAttribute(
@@ -364,7 +507,7 @@ describe("PublicAiHub", () => {
 
     expect(within(freeRow).getAllByRole("cell", { name: "Free" })).toHaveLength(2);
     expect(within(freeRow).getByRole("cell", { name: "0" })).toBeInTheDocument();
-    expect(within(pricedRow).getByRole("cell", { name: "$3.00" })).toBeInTheDocument();
+    expect(within(pricedRow).getByRole("cell", { name: "$3.00/M" })).toBeInTheDocument();
     expect(within(pricedRow).getByRole("cell", { name: "-" })).toBeInTheDocument();
     expect(within(pricedRow).queryByRole("cell", { name: "Free" })).not.toBeInTheDocument();
   });
@@ -496,9 +639,11 @@ describe("PublicAiHub", () => {
     renderWithProviders(<PublicAiHub accessToken={null} />);
     await screen.findByRole("link", { name: /claude-sonnet-4-5/ });
 
-    await user.click(screen.getByRole("checkbox", { name: /OpenAI/ }));
+    await user.click(screen.getByRole("combobox", { name: "All providers" }));
+    await user.click(await screen.findByRole("option", { name: "OpenAI" }));
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("checkbox", { name: "Vision" }));
-    await user.click(screen.getByRole("checkbox", { name: "Chat" }));
+    await user.click(screen.getByRole("button", { name: "Chat", exact: true }));
     fireEvent.change(screen.getByRole("textbox", { name: "Search models" }), { target: { value: "gpt" } });
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Sort by" }), "Input price");
 
@@ -529,6 +674,23 @@ describe("PublicAiHub", () => {
         expect.objectContaining({ query: expect.objectContaining({ sort: "-input_cost_per_token", q: "gpt" }) }),
       ),
     );
+    await user.click(screen.getByRole("button", { name: "All", exact: true }));
+
+    await waitFor(() =>
+      expect(apiGetMock).toHaveBeenLastCalledWith(
+        MODEL_HUB_PATH,
+        expect.objectContaining({
+          query: {
+            page: 1,
+            page_size: 50,
+            q: "gpt",
+            sort: "-input_cost_per_token",
+            "filter[providers][in]": "openai",
+            "filter[features][in]": "vision",
+          },
+        }),
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
 
     await waitFor(() =>
@@ -537,9 +699,10 @@ describe("PublicAiHub", () => {
         expect.objectContaining({ query: { page: 1, page_size: 50, q: "gpt", sort: "-input_cost_per_token" } }),
       ),
     );
-    expect(screen.getByRole("checkbox", { name: /OpenAI/ })).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: "All providers" })).toHaveValue("");
     expect(screen.getByRole("checkbox", { name: "Vision" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Chat" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("combines skill domain and search filters and clears an empty result", async () => {
@@ -585,15 +748,26 @@ describe("PublicAiHub", () => {
   it("opens the chosen skill with its source and install commands and updates the URL", async () => {
     const onUrlUpdate = vi.fn();
     const user = userEvent.setup();
+    const source = {
+      source: "git-subdir",
+      url: "https://gitlab.com/team/nested/research-tools.git",
+      ref: "release-2",
+      path: "plugins/research",
+    };
+    apiGetMock.mockImplementation((path: string, options?: Query) =>
+      path === SKILL_HUB_PATH ? Promise.resolve({ plugins: [{ ...SKILLS[0], source }] }) : respond(path, options),
+    );
     renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { tab: "skills" }, onUrlUpdate });
     await user.click(await screen.findByRole("link", { name: /research-assistant/ }));
 
     const dialog = await screen.findByRole("dialog", { name: "Details" });
     expect(within(dialog).getByRole("heading", { name: "research-assistant", level: 2 })).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "github.com/example/research-tools" })).toHaveAttribute(
-      "href",
-      "https://github.com/example/research-tools",
-    );
+    expect(
+      within(dialog).getByRole("button", {
+        name: "gitlab.com/team/nested/research-tools/-/tree/release-2/plugins/research",
+        exact: true,
+      }),
+    ).toHaveAttribute("href", "https://gitlab.com/team/nested/research-tools/-/tree/release-2/plugins/research");
     expect(within(dialog).getByText("knowledge")).toBeInTheDocument();
     expect(within(dialog).getByText("Research")).toBeInTheDocument();
     expect(
@@ -637,7 +811,14 @@ it("filters skills by tag and scan status, searches people, and scopes filters t
   fireEvent.change(screen.getByRole("textbox", { name: /Search skills/ }), {
     target: { value: "reviewer@example.test" },
   });
-  expect(await screen.findByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        queryString: expect.stringContaining("skills_search=reviewer@example.test"),
+      }),
+    ),
+  );
+  expect(screen.getByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
   await waitFor(() =>
     expect(onUrlUpdate).toHaveBeenLastCalledWith(
       expect.objectContaining({

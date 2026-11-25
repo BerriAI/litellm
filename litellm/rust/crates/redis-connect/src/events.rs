@@ -4,7 +4,7 @@ use std::{
 };
 
 use litellm_circuit_breaker::{State, Transition};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_redis_client::{CallEvent, FailureKind, Outcome, RedisEvents};
 
 const DEFAULT_TIMEOUT_LOG_INTERVAL: Duration = Duration::from_secs(5);

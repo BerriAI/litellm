@@ -8,6 +8,7 @@ import os
 from typing import List
 
 from litellm._logging import verbose_logger
+from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -27,7 +28,7 @@ class SendGridEmailLogger(BaseEmailLogger):
     - SENDGRID_API_KEY
     """
 
-    def __init__(self, internal_usage_cache=None, **kwargs):
+    def __init__(self, internal_usage_cache: DualCache | None = None, **kwargs: object):
         super().__init__(internal_usage_cache=internal_usage_cache, **kwargs)
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback

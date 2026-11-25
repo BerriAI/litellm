@@ -12,7 +12,6 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
@@ -28,13 +27,9 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-)
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -42,12 +37,14 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     handle_update_object_permission_common,
     set_object_permission,
 )
+from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
-from litellm.repositories.table_repositories import EndUserRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -58,7 +55,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
     UnblockUsersResponse,
 )
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
 
@@ -130,7 +127,7 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
     customer keeps being served unrestricted until the TTL expires: auth reads end users
     cache-first, and the cached restricted-id registry decides whether the row is read at all.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -140,7 +137,7 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
 
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
     """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
-    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+    return (*(AuthObject.end_user(user_id).key for user_id in user_ids), AuthObject.end_user_restricted_registry().key)
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -185,7 +182,7 @@ async def block_user(data: BlockUsers):
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        records: Final = []
+        records: Final[list[PrismaEndUserRow]] = []
         if prisma_client is not None:
             for id in data.user_ids:
                 record = await _typed_table(EndUserRepository(prisma_client)).upsert(
@@ -287,9 +284,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
         budget_request: Final = BudgetNewRequest.model_validate(budget_kv_pairs)
         validate_budget_duration(budget_request.budget_duration)
         if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
-            budget_request.budget_reset_at = datetime.utcnow() + timedelta(
-                seconds=duration_in_seconds(duration=budget_request.budget_duration)
-            )
+            budget_request.budget_reset_at = get_budget_reset_time(budget_duration=budget_request.budget_duration)
         return budget_request
     return None
 
@@ -466,6 +461,7 @@ async def new_end_user(
 
             new_end_user_obj["budget_id"] = budget_record.budget_id
         elif data.budget_id is not None:
+            await validate_scalar_budget_attachment(prisma_client, data.budget_id)
             new_end_user_obj["budget_id"] = data.budget_id
 
         _user_data: Final = _STR_OBJECT_DICT.validate_python(data.dict(exclude_none=True))
@@ -556,10 +552,11 @@ def customer_daily_activity_is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     dependencies=[Depends(user_api_key_auth)],
 )
 async def end_user_info(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     end_user_id: str = fastapi.Query(description="End User ID in the request parameters"),
 ) -> CustomerResponse:
     """
-    Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+    [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
 
     Parameters:
     - end_user_id (str, required): The unique identifier for the end-user
@@ -572,6 +569,12 @@ async def end_user_info(
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
+
+        if not customer_daily_activity_is_admin(user_api_key_dict):
+            raise HTTPException(
+                status_code=401,
+                detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+            )
 
         if prisma_client is None:
             raise HTTPException(
@@ -679,6 +682,7 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
         sent_fields: Final = data.fields_set()
         non_default_values: Final[dict[str, object]] = {
             k: v for k, v in data_json.items() if _should_update_field(k, v, sent_fields)

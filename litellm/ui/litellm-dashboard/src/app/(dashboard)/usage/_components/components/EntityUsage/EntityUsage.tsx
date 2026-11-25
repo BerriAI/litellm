@@ -12,6 +12,7 @@ import {
 } from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { hasCapability, type Capability } from "@/utils/capabilities";
+import { hasProxyWideSpendView } from "@/utils/roles";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Bot, Boxes, ChevronDown, ChevronRight, ExternalLink, Info, KeyRound, Layers, Server } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -717,9 +718,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <UsageExportHeader
           dateValue={dateValue}
           entityType={entityType}
-          onExport={(exportType, format) =>
+          onExport={(exportType, format, includeMetadata) =>
             request
-              ? api.exportRows(request, exportType, format)
+              ? api.exportRows(request, exportType, format, includeMetadata)
               : Promise.reject(new Error("Select a date range to export"))
           }
           showFilters={filterSlot === undefined && entityList !== null}
@@ -730,6 +731,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           onFiltersChange={setSelectedTags}
           filterOptions={getAllTags() || undefined}
           teams={teamList}
+          canIncludeMetadata={hasProxyWideSpendView(userRole)}
         />
       </div>
       <Tabs defaultValue={tabs[0].key} className="gap-3">
