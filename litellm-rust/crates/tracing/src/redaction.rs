@@ -38,7 +38,7 @@ fn secret_patterns(minimum_custom_key_length: usize) -> String {
         ),
         concat!(
             r#"\bauthorization['"]\s*[:=]\s*['"]?"#,
-            r#"(?!(?:null|None|true|false)\b|(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]*\*{3})"#,
+            r#"(?!(?:null|None|true|false)(?![^\s,'"})\]{}>])|(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]*\*{3})"#,
             r#"(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]+"#,
         ),
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
@@ -156,6 +156,10 @@ mod tests {
     #[case::literal_authorization_value_is_kept(
         r#"{"authorization": null}"#,
         r#"{"authorization": null}"#
+    )]
+    #[case::authorization_that_only_starts_with_a_literal(
+        r#"{"authorization": "null-opaque-mcp-credential"}"#,
+        r#"{"REDACTED"}"#
     )]
     #[case::bearer_mcp_tool_authorization(
         r#"{"authorization": "Bearer opaque-mcp-credential"}"#,
