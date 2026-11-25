@@ -493,6 +493,15 @@ def _invoke_embedding_response(model: str, httpx_response: Response, has_input_i
     )
 
 
+def _invoke_reply_parser_model(model: str, model_call_details: Mapping[str, object]) -> str:
+    if BaseAWSLLM.get_bedrock_invoke_provider(strip_bedrock_routing_prefix(model)) is not None:
+        return model
+    from litellm.utils import get_base_model_from_metadata
+
+    base_model: Final = get_base_model_from_metadata(model_call_details)
+    return model if base_model is None else strip_bedrock_routing_prefix(base_model)
+
+
 def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
     if service_tier is None:
         return response
@@ -698,8 +707,11 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         if embedding_response is not None:
             return embedding_response
 
+        parser_model: Final = (
+            _invoke_reply_parser_model(model, logging_obj.model_call_details) if "invoke" in endpoint else model
+        )
         if "invoke" in endpoint:
-            chat_config_model = "invoke/" + strip_bedrock_routing_prefix(model)
+            chat_config_model = "invoke/" + strip_bedrock_routing_prefix(parser_model)
         elif "converse" in endpoint:
             chat_config_model = "converse/" + strip_bedrock_routing_prefix(model)
         else:
@@ -714,7 +726,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             raise ValueError(f"No provider config found for model: {model}")
 
         litellm_model_response: Final[ModelResponse] = provider_chat_config.transform_response(
-            model=model,
+            model=parser_model,
             messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
             raw_response=httpx_response,
             model_response=ModelResponse(),

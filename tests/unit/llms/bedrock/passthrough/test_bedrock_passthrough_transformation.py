@@ -1173,6 +1173,48 @@ def test_converse_reply_on_a_route_pinned_deployment_is_priced_like_an_unpinned_
     assert pinned_cost == pytest.approx(_logged_converse_reply_cost(CONVERSE_MODEL))
 
 
+APP_PROFILE_ARN = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+
+
+def _logged_invoke_reply_cost(deployment_model: str, litellm_params: dict[str, object]) -> float:
+    endpoint: Final = f"/model/{deployment_model}/invoke"
+    reply: Final = httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "content": [{"type": "text", "text": "pong"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 25, "output_tokens": 12},
+        },
+    )
+    logging_obj: Final = _stream_logging_obj(endpoint)
+    logging_obj.update_environment_variables(litellm_params=litellm_params, optional_params={})
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=deployment_model,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={},
+        logging_obj=logging_obj,
+        endpoint=endpoint,
+    )
+    return litellm.completion_cost(model=f"bedrock/{CONVERSE_MODEL}", completion_response=logged)
+
+
+@pytest.mark.parametrize("route", ["", "invoke/"])
+def test_invoke_reply_on_an_app_profile_deployment_is_priced_by_its_base_model(route: str) -> None:
+    base_model_params: Final[dict[str, object]] = {
+        "metadata": {"model_info": {"base_model": f"bedrock/{CONVERSE_MODEL}"}}
+    }
+
+    profile_cost: Final = _logged_invoke_reply_cost(f"{route}{APP_PROFILE_ARN}", base_model_params)
+
+    assert profile_cost > 0
+    assert profile_cost == pytest.approx(_logged_invoke_reply_cost(f"invoke/{CONVERSE_MODEL}", {}))
+
+
 class _ImmediateExecutor:
     def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
         fn(*args, **kwargs)
