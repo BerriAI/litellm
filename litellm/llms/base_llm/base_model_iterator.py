@@ -166,8 +166,10 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
-            raise_on_upstream_abort(stripped_json_chunk)
-            return self.chunk_parser(chunk=stripped_json_chunk)
+            parsed_chunk: Final = self.chunk_parser(chunk=stripped_json_chunk)
+            if '"abort"' in str_line:
+                raise_on_upstream_abort(stripped_json_chunk)
+            return parsed_chunk
         else:
             return GenericStreamingChunk(
                 text="",
