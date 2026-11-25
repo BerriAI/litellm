@@ -15,6 +15,7 @@ import litellm
 from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -24,12 +25,16 @@ from litellm.litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.elevenlabs.common_utils import ElevenLabsException
+from litellm.llms.elevenlabs.realtime.transformation import ElevenLabsRealtimeConfig
+from litellm.types.llms.elevenlabs import ElevenLabsRealtimeOptions
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -2567,6 +2572,29 @@ async def test_deferred_setup_sends_session_update_before_buffered_audio(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_deferred_transcription_update_configures_backend_after_early_audio():
+    client_ws: Final = MagicMock()
+    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+    update: Final = json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}})
+    client_ws.receive_text = AsyncMock(side_effect=[audio, update, ConnectionClosed(None, None)])
+    backend_ws: Final = MagicMock(spec=RealtimeBackend)
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=ElevenLabsRealtimeConfig(),
+        model="scribe_v2_realtime",
+    )
+
+    await streaming.client_ack_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "configure"
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_flush_buffers_audio_received_during_flush():
     import asyncio
 
@@ -2748,6 +2776,7 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
 
     client_ws = MagicMock()
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     logging_obj: Final = _mock_logging()
@@ -3189,6 +3218,7 @@ async def test_session_close_flushes_unbilled_transcription_usage():
     provider_config: Final = MagicMock()
     provider_config.transform_realtime_response = MagicMock(return_value=transcript_frame)
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=usage)
+    provider_config.session_refusal = MagicMock(return_value=None)
 
     streaming: Final = RealTimeStreaming(
         client_ws,
@@ -3322,10 +3352,14 @@ def _backend_ws_closing_with(*frames: bytes | Exception) -> MagicMock:
     return backend_ws
 
 
-def _relay_session(client_ws: MagicMock, backend_ws: MagicMock) -> _RelaySession:
+def _relay_session(
+    client_ws: MagicMock, backend_ws: MagicMock, provider_config: BaseRealtimeConfig | None = None
+) -> _RelaySession:
     logging: Final = _RecordingLogging()
     worker: Final = _InlineLoggingWorker()
-    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging, model="gpt-realtime", logging_worker=worker)
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging, provider_config=provider_config, model="gpt-realtime", logging_worker=worker
+    )
     return _RelaySession(streaming=streaming, logging=logging, worker=worker)
 
 
@@ -3387,6 +3421,57 @@ async def test_bidirectional_forward_maps_abnormal_upstream_close_to_internal_er
     assert client_ws.close.await_args.kwargs["code"] == 1011
 
 
+class _TranscriptionConfigRejectingSessionUpdates(_PassthroughRealtimeConfig):
+    def __init__(self, *, defers_setup: bool) -> None:
+        self._defers_setup: Final = defers_setup
+
+    def requires_session_configuration(self) -> bool:
+        return not self._defers_setup
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> Sequence[str | bytes]:
+        if json.loads(message).get("type") == "session.update":
+            raise RealtimeTranscriptionProtocolError("requires pcm16 input audio")
+        return (message,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defers_setup,client_frames_read,audio_reaches_backend",
+    ((True, 1, False), (False, 3, True)),
+    ids=["deferred_setup_session_ends", "eager_setup_session_continues"],
+)
+async def test_a_rejected_transcription_session_update_sends_an_error_and_ends_only_a_deferred_setup_session(
+    defers_setup: bool, client_frames_read: int, audio_reaches_backend: bool
+):
+    append: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAE="})
+    client_ws: Final = MagicMock()
+    client_ws.headers = {}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[json.dumps({"type": "session.update", "session": {"type": "transcription"}}), append, RuntimeError]
+    )
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _RecordingLogging(),
+        provider_config=_TranscriptionConfigRejectingSessionUpdates(defers_setup=defers_setup),
+        model="chirp_3",
+        logging_worker=_InlineLoggingWorker(),
+    )
+
+    await asyncio.wait_for(streaming.client_ack_messages(), timeout=2)
+
+    assert _error_events_sent_to(client_ws) == [
+        {"type": "error", "error": {"type": "invalid_request_error", "message": "requires pcm16 input audio"}}
+    ]
+    assert client_ws.receive_text.await_count == client_frames_read
+    assert (append in [call.args[0] for call in backend_ws.send.await_args_list]) is audio_reaches_backend
+
+
 @pytest.mark.asyncio
 async def test_bidirectional_forward_relays_normal_upstream_close_without_error_event():
     client_ws: Final = _client_ws_that_never_sends()
@@ -3408,6 +3493,54 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
 
     assert session.logging.logged_failures == (upstream_close,)
     assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_error_before_session_started_logs_a_failure_and_no_success():
+    provider_config: Final = ElevenLabsRealtimeConfig()
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "auth_error", "error": "Invalid API key"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    (failure,) = session.logging.logged_failures
+    assert isinstance(failure, ElevenLabsException)
+    assert (failure.status_code, failure.message) == (401, "ElevenLabs realtime transcription failed: auth_error")
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_keyterm_session_records_its_priced_addon_for_cost_tracking():
+    provider_config: Final = ElevenLabsRealtimeConfig(options=ElevenLabsRealtimeOptions(keyterms=("LiteLLM",)))
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "session_started", "session_id": "el_sess_1"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    addons: Final = session.logging.model_call_details[REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY]
+    assert len(session.logging.logged_sessions) == 1
+    assert isinstance(addons, tuple) and len(addons) == 1
+    assert (litellm.get_model_info(addons[0])["input_cost_per_second"] or 0) > 0
 
 
 @pytest.mark.asyncio
@@ -3598,6 +3731,44 @@ async def test_transformed_transcription_completion_never_sends_response_create(
 
     assert json.loads(client_ws.send_text.await_args.args[0]) == completed_event
     backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_client_disconnect_before_the_completed_event_still_logs_its_usage():
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = [
+        {"type": "conversation.item.input_audio_transcription.delta", "item_id": "turn_1", "delta": "Hello"},
+        {"type": "input_audio_buffer.speech_stopped", "item_id": "turn_1"},
+        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "turn_1", "transcript": "Hello.", "usage": usage},
+    ]
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.transform_realtime_response.return_value = {
+        "response": batch,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock(side_effect=asyncio.CancelledError)
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        MagicMock(),
+        MagicMock(),
+        provider_config=provider_config,
+        model="scribe_v2_realtime",
+        force_transcription_model="scribe_v2_realtime",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await streaming._handle_provider_config_message("{}")
+
+    logged: Final = [dict(message) for message in streaming.messages]
+    assert {"type": "conversation.item.input_audio_transcription.completed", "usage": usage} in logged
 
 
 @pytest.mark.asyncio
@@ -3954,3 +4125,61 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
     assert sent_to_backend == [], sent_to_backend
     assert backend_ws.close.await_count == (1 if expect_session_closed else 0)
+
+
+def _transcription_completed(usage: Mapping[str, object]) -> str:
+    return json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "content_index": 0,
+            "transcript": "hello",
+            "usage": dict(usage),
+        }
+    )
+
+
+class _BatchRealtimeConfig(_PassthroughRealtimeConfig):
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        passthrough: Final = super().transform_realtime_response(
+            message, model, logging_obj, realtime_response_transform_input
+        )
+        return {**passthrough, "response": json.loads(message)}
+
+
+def _billed_transcriptions(streaming: RealTimeStreaming) -> tuple[object, ...]:
+    return tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and "usage" in message
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_drops_mid_batch_still_has_the_batch_transcription_billed() -> None:
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = json.dumps(
+        [
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "item_1", "audio_end_ms": 0},
+            json.loads(_transcription_completed(usage)),
+        ]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.send_text = AsyncMock(side_effect=RuntimeError("client went away"))
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), provider_config=_BatchRealtimeConfig(), model="scribe_v2_realtime"
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [message["usage"] for message in _billed_transcriptions(streaming)] == [usage]

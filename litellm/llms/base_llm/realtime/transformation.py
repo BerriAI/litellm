@@ -97,6 +97,12 @@ class BaseRealtimeConfig(ABC):
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
 
+    def transcription_addon_pricing_models(self) -> tuple[str, ...]:
+        return ()
+
+    def session_refusal(self) -> Exception | None:
+        return None
+
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None
 
