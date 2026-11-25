@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
@@ -42,6 +43,9 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
@@ -634,6 +638,68 @@ def _peer_add_calls(peer: McpPeer) -> tuple[dict[str, object], ...]:
         for call in tool_calls(peer.drain())
         if isinstance(call["body"], dict) and isinstance(call["body"].get("params"), dict)
     )
+
+
+def _viewer_session(scenario: Scenario, *team_ids: str, models: Sequence[str] = ()) -> str:
+    user_id: Final = scenario.user(user_role="internal_user_viewer", teams=list(team_ids), models=list(models))
+    with pytest.MonkeyPatch.context() as environment:
+        environment.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
+        return ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=user_id, user_role="internal_user_viewer", models=list(models))
+        )
+
+
+@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
+def test_dashboard_viewer_runs_a_team_granted_tool(gateway: Gateway, surface: Surface, stream: bool) -> None:
+    with _rig(gateway, surface) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
+
+        assert response.status_code == 200, response.text
+        reply: Final = response.text if stream else rig.final_text(response.json())
+        assert ANSWER in reply, reply
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        model_team: Final = rig.scenario.team(models=[rig.model])
+        tool_team: Final = rig.scenario.team(
+            models=["no-default-models"], object_permission={"mcp_servers": [rig.server_id]}
+        )
+        session: Final = _viewer_session(rig.scenario, tool_team, model_team, models=("no-default-models",))
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}])
+
+        assert response.status_code == 200, response.text
+        assert rig.final_text(response.json()) == ANSWER, response.text
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+def test_dashboard_viewer_without_a_grant_cannot_run_a_tool(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        session: Final = _viewer_session(rig.scenario, rig.scenario.team())
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}])
+
+        assert response.status_code == 403 and rig.alias in response.text, response.text
+        assert rig.upstream_tools() == ()
+        assert _peer_add_calls(rig.peer) == ()
+
+
+def test_dashboard_viewer_only_offers_tools_in_the_requested_toolset(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        other_server: Final = register_mcp(rig.scenario, rig.peer, "other" + uuid.uuid4().hex[:8])
+        toolset_name: Final = "ts" + uuid.uuid4().hex[:8]
+        toolset_id: Final = create_toolset(rig.scenario, ((rig.server_id, "add"),), toolset_name=toolset_name)
+        team_id: Final = rig.scenario.team(
+            object_permission={"mcp_servers": [rig.server_id, other_server], "mcp_toolsets": [toolset_id]}
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{toolset_name}"}])
+
+        assert response.status_code == 200, response.text
+        assert rig.upstream_tools() == ((rig.tool,), (rig.tool,))
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
 @pytest.mark.parametrize("surface", SURFACES)

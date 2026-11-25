@@ -2,6 +2,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
@@ -387,6 +388,7 @@ class LiteLLM_Proxy_MCP_Handler:
             List of MCP tools
             List names of allowed MCP servers
         """
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import is_mcp_admitted_user_subject
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -416,56 +418,62 @@ class LiteLLM_Proxy_MCP_Handler:
         resolved_toolset_ids: Final = tuple(value for kind, value in resolutions if kind == "toolset")
         denied_toolset_names: Final = tuple(value for kind, value in resolutions if kind == "denied_toolset")
 
-        # Apply all resolved toolsets at once (union), avoiding permission overwrite.
+        asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
+        if denied_toolset_names and not (asks_whole_gateway or resolved_mcp_servers or resolved_toolset_ids):
+            raise_generic_mcp_access_denial(denied_toolset_names)
+
+        async def list_scope(
+            auth: "UserAPIKeyAuth | None", server_filter: Sequence[str] | None
+        ) -> tuple[Sequence[MCPTool], Sequence[str]]:
+            listing: Final = await _get_tools_from_mcp_servers(
+                user_api_key_auth=auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=list(server_filter) if server_filter is not None else None,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                log_list_tools_to_spendlogs=True,
+                list_tools_log_source="responses",
+                litellm_trace_id=litellm_trace_id,
+                request_trace_id=request_trace_id,
+                request_tags=request_tags,
+                raw_headers=raw_headers,
+            )
+            server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(auth)
+            servers: Final = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=server_filter,
+                allowed_mcp_servers=global_mcp_server_manager.get_mcp_servers_from_ids(server_ids),
+            )
+            names: Final = (
+                getattr(server, "server_name", None) or getattr(server, "alias", None) or getattr(server, "name", None)
+                for server in servers
+                if server is not None
+            )
+            return listing.tools, tuple(name for name in names if isinstance(name, str))
+
+        if resolved_toolset_ids and is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
+            # Rewriting object_permission does not constrain an admitted user's team sources.
+            direct: Final = (await list_scope(user_api_key_auth, resolved_mcp_servers),) if resolved_mcp_servers else ()
+            toolsets: Final = tuple(
+                [
+                    await list_scope(user_api_key_auth.model_copy(update={"mcp_toolset_id": toolset_id}), None)
+                    for toolset_id in dict.fromkeys(resolved_toolset_ids)
+                ]
+            )
+            listings: Final = (*direct, *toolsets)
+            return list(chain.from_iterable(tools for tools, _ in listings)), list(
+                dict.fromkeys(chain.from_iterable(names for _, names in listings))
+            )
+
         if resolved_toolset_ids and user_api_key_auth is not None:
-            user_api_key_auth = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+            scoped_auth: Final = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
                 resolved_toolset_ids=resolved_toolset_ids,
                 resolved_mcp_servers=resolved_mcp_servers,
                 user_api_key_auth=user_api_key_auth,
             )
-
-        # When toolsets were resolved we updated object_permission.mcp_servers to the
-        # full union (toolset server IDs + direct server names).  Passing a name-based
-        # filter here would exclude those toolset server IDs (which are UUIDs, not
-        # names), so use None and let the auth object's mcp_servers do the filtering.
-        asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
-        if denied_toolset_names and not (asks_whole_gateway or resolved_mcp_servers or resolved_toolset_ids):
-            raise_generic_mcp_access_denial(denied_toolset_names)
-        effective_server_filter: Final = None if resolved_toolset_ids else (list(resolved_mcp_servers) or None)
-
-        listing: Final = await _get_tools_from_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=effective_server_filter,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            log_list_tools_to_spendlogs=True,
-            list_tools_log_source="responses",
-            litellm_trace_id=litellm_trace_id,
-            request_trace_id=request_trace_id,
-            request_tags=request_tags,
-            raw_headers=raw_headers,
-        )
-        tools: Final = listing.tools
-
-        allowed_mcp_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(allowed_mcp_server_ids)
-
-        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
-            mcp_servers=effective_server_filter,
-            allowed_mcp_servers=allowed_mcp_servers,
-        )
-
-        server_names: Final = [
-            server_name
-            for server in allowed_mcp_servers
-            if server is not None
-            for server_name in (
-                getattr(server, "server_name", None) or getattr(server, "alias", None) or getattr(server, "name", None),
-            )
-            if isinstance(server_name, str)
-        ]
-
-        return tools, server_names
+            tools, names = await list_scope(scoped_auth, None)
+        else:
+            server_filter: Final = None if resolved_toolset_ids else (resolved_mcp_servers or None)
+            tools, names = await list_scope(user_api_key_auth, server_filter)
+        return list(tools), list(names)
 
     @staticmethod
     def _deduplicate_mcp_tools(
