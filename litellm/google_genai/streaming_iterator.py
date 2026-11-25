@@ -88,28 +88,25 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
 
     async def log_collected_stream(self) -> bool:
         """Dispatch success logging for the chunks collected so far, at most once per stream.
-        Returns False when nothing was streamed."""
+        Returns whether a success event was dispatched for this stream."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
 
-        if self._stream_logged:
-            return True
-        if not self.collected_chunks:
-            return False
-        self._stream_logged = True
-        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
-            litellm_logging_obj=self.litellm_logging_obj,
-            passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-            url_route="/v1/generateContent",
-            request_body=self.request_body or {},
-            endpoint_type=self.endpoint_type,
-            start_time=self.start_time,
-            raw_bytes=tuple(self.collected_chunks),
-            end_time=datetime.now(),
-            model=self.model,
-        )
-        return True
+        if not self._stream_logged and self.collected_chunks:
+            self._stream_logged = True
+            await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+                litellm_logging_obj=self.litellm_logging_obj,
+                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+                url_route="/v1/generateContent",
+                request_body=self.request_body or {},
+                endpoint_type=self.endpoint_type,
+                start_time=self.start_time,
+                raw_bytes=tuple(self.collected_chunks),
+                end_time=datetime.now(),
+                model=self.model,
+            )
+        return self.litellm_logging_obj.model_call_details.get("has_dispatched_final_stream_success") is True
 
     async def _handle_async_streaming_logging(
         self,

@@ -325,3 +325,35 @@ async def test_a_client_that_disconnects_after_the_stream_ended_is_not_logged_tw
     await drain_logging_tasks()
 
     assert (yielded, len(recorder.logged)) == (2, 1)
+
+
+@pytest.mark.parametrize(
+    "stream_body, success_event_dispatched",
+    [
+        (_gemini_event("Hel") + _gemini_event("lo", "STOP"), True),
+        ('data: {"error": {"code": 500, "message": "boom", "status": "INTERNAL"}}\n\n', False),
+        ("", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_logging_a_collected_stream_reports_whether_a_success_event_was_dispatched(
+    stream_body: str, success_event_dispatched: bool
+):
+    recorder: Final = _SuccessRecorder()
+    iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=httpx.Response(200, content=stream_body.encode()),
+        model="gemini-3.1-flash",
+        logging_obj=_logging_obj(recorder=recorder),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+    _ = await anext(iterator, None)
+
+    reported: Final = (await iterator.log_collected_stream(), await iterator.log_collected_stream())
+    await drain_logging_tasks()
+
+    assert (reported, len(recorder.logged)) == (
+        (success_event_dispatched, success_event_dispatched),
+        int(success_event_dispatched),
+    )
