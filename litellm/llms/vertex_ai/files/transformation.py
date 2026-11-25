@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -141,6 +142,19 @@ _JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS: Final = frozenset(
 )
 _INLINABLE_JSON_SCHEMA_REF: Final = re.compile(r"#/(\$defs|definitions)/[^/]+")
 _INLINED_REF_SIBLINGS: Final = JSON_SCHEMA_KEPT_REF_SIBLINGS | frozenset({"$ref", "$defs", "definitions"})
+_BIGQUERY_COLUMN_NAME_SYMBOLS: Final = frozenset("&%=+:'<>#|")
+_BIGQUERY_COLUMN_NAME_CATEGORIES: Final = frozenset({"Pc", "Pd"})
+_BIGQUERY_COLUMN_NAME_CATEGORY_GROUPS: Final = frozenset({"L", "M", "N"})
+_BIGQUERY_COLUMN_NAME_MAX_LENGTH: Final = 300
+_BIGQUERY_RESERVED_COLUMN_NAME_PREFIXES: Final = (
+    "_PARTITION",
+    "_TABLE_",
+    "_FILE_",
+    "_ROW_TIMESTAMP",
+    "__ROOT__",
+    "_COLIDENTIFIER",
+    "__DREMEL_PK_MERGED_STRUCT_",
+)
 
 
 class _GcsObjectMetadataJson(TypedDict, total=False):
@@ -943,15 +957,7 @@ def _bigquery_loadable_literal(value: object) -> object:
 
 
 def _bigquery_loadable_named_schemas(value: object) -> object:
-    if not isinstance(value, _SchemaObject):
-        return value
-    refused: Final = sorted(name for name, _ in value.pairs if "$" in name)
-    if refused:
-        raise ValueError(
-            f"json_schema property names {refused} cannot go in a Vertex AI batch, because BigQuery column names "
-            "cannot hold '$'"
-        )
-    return dict(value.pairs)
+    return dict(value.pairs) if isinstance(value, _SchemaObject) else value
 
 
 def _schema_child(key: str, value: object) -> object:
@@ -983,22 +989,11 @@ def _inlinable_schema_object(pairs: tuple[tuple[str, object], ...], drop_params:
 
 
 def _bigquery_loadable_schema_object(pairs: tuple[tuple[str, object], ...], drop_params: bool) -> Mapping[str, object]:
-    annotations: Final = frozenset(
-        key for key, value in pairs if key in _JSON_SCHEMA_ANNOTATIONS and isinstance(value, str)
-    )
-    refused: Final = sorted(key for key, _ in pairs if "$" in key and key not in annotations)
-    if refused:
-        raise ValueError(
-            f"json_schema keys {refused} cannot go in a Vertex AI batch, because BigQuery column names cannot hold "
-            "'$'. Refs into $defs are inlined, so these are recursive refs, refs to a name no $defs block defines, "
-            "a nested $defs block, or other '$' keywords"
-        )
-    if annotations and not drop_params:
-        raise ValueError(
-            f"json_schema keys {sorted(annotations)} cannot go in a Vertex AI batch, because BigQuery column names "
-            "cannot hold '$'. Remove them, or set drop_params to drop them"
-        )
-    return {key: _schema_child(key, value) for key, value in pairs if key not in annotations}
+    return {
+        key: _schema_child(key, value)
+        for key, value in pairs
+        if not (drop_params and key in _JSON_SCHEMA_ANNOTATIONS and isinstance(value, str))
+    }
 
 
 def _walked_schema_node(
@@ -1023,12 +1018,107 @@ def _walked_schema(
     )
 
 
-def _bigquery_loadable_schema(json_schema: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+def _is_bigquery_column_name_character(character: str) -> bool:
+    category: Final = unicodedata.category(character)
+    return (
+        character.isspace()
+        or character in _BIGQUERY_COLUMN_NAME_SYMBOLS
+        or category in _BIGQUERY_COLUMN_NAME_CATEGORIES
+        or category[0] in _BIGQUERY_COLUMN_NAME_CATEGORY_GROUPS
+    )
+
+
+def _is_bigquery_column_name(name: str) -> bool:
+    return (
+        len(name) <= _BIGQUERY_COLUMN_NAME_MAX_LENGTH
+        and all(map(_is_bigquery_column_name_character, name))
+        and not name.upper().startswith(_BIGQUERY_RESERVED_COLUMN_NAME_PREFIXES)
+    )
+
+
+def _json_children(node: object) -> Sequence[object]:
+    mapping: Final = as_str_mapping(node)
+    if mapping is not None:
+        return tuple(mapping.values())
+    return as_object_list(node) or ()
+
+
+def _next_json_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(_json_children, level)))
+
+
+def _json_objects(node: object) -> Iterator[Mapping[str, object]]:
+    levels: Final = itertools.accumulate(itertools.repeat(None), _next_json_level, initial=(node,))
+    nodes: Final = itertools.chain.from_iterable(itertools.takewhile(bool, levels))
+    return (mapping for mapping in map(as_str_mapping, nodes) if mapping is not None)
+
+
+def _keys_differing_only_in_case(mapping: Mapping[str, object]) -> Iterator[str]:
+    groups: Final = (tuple(group) for _, group in itertools.groupby(sorted(mapping, key=str.lower), key=str.lower))
+    return itertools.chain.from_iterable(group for group in groups if len(group) > 1)
+
+
+def _keys_bigquery_cannot_name(loadable: Mapping[str, object]) -> Sequence[str]:
+    keys: Final = itertools.chain.from_iterable(_json_objects(loadable))
+    return sorted(frozenset(key for key in keys if not _is_bigquery_column_name(key)))
+
+
+def _bigquery_refused_keys_message(
+    unnamable: Sequence[str], case_duplicates: Sequence[str], droppable: Sequence[str]
+) -> str:
+    refs_hint: Final = (
+        ". Refs into $defs are inlined, so a $ref or $defs left is a recursive ref, a ref to a name no $defs block "
+        "defines, or a nested $defs block"
+        if "$ref" in unnamable or "$defs" in unnamable
+        else ""
+    )
+    drop_params_hint: Final = f". Remove {list(droppable)}, or set drop_params to drop them" if droppable else ""
+    reasons: Final = (
+        (
+            f"json_schema keys {list(unnamable)} cannot go in a Vertex AI batch, because BigQuery column names take "
+            "only letters, marks, numbers, underscores, dashes, whitespace and & % = + : ' < > # |, at most "
+            f"{_BIGQUERY_COLUMN_NAME_MAX_LENGTH} of them, and no prefix in "
+            f"{list(_BIGQUERY_RESERVED_COLUMN_NAME_PREFIXES)} in any case "
+            f"(https://cloud.google.com/bigquery/docs/schemas#column_names){refs_hint}{drop_params_hint}"
+            if unnamable
+            else ""
+        ),
+        (
+            f"json_schema keys {list(case_duplicates)} cannot go in a Vertex AI batch, because BigQuery column names "
+            "in one object must differ by more than case"
+            if case_duplicates
+            else ""
+        ),
+    )
+    return ". ".join(reason for reason in reasons if reason)
+
+
+def _bigquery_loadable_schema_tree(json_schema: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
     inlinable: Final = _walked_schema(json_schema, partial(_inlinable_schema_object, drop_params=drop_params))
     return _walked_schema(
         defs_unpacked(inlinable, keep_ref_siblings=True),
         partial(_bigquery_loadable_schema_object, drop_params=drop_params),
     )
+
+
+def _bigquery_loadable_schema(json_schema: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    loadable: Final = _bigquery_loadable_schema_tree(json_schema, drop_params)
+    unnamable: Final = _keys_bigquery_cannot_name(loadable)
+    case_duplicates: Final = sorted(
+        frozenset(itertools.chain.from_iterable(map(_keys_differing_only_in_case, _json_objects(loadable))))
+    )
+    if not unnamable and not case_duplicates:
+        return loadable
+    droppable: Final = (
+        ()
+        if drop_params
+        else sorted(
+            frozenset(unnamable).difference(
+                _keys_bigquery_cannot_name(_bigquery_loadable_schema_tree(json_schema, drop_params=True))
+            )
+        )
+    )
+    raise ValueError(_bigquery_refused_keys_message(unnamable, case_duplicates, droppable))
 
 
 def _with_json_schema_config_in_its_own_column(
@@ -1038,9 +1128,9 @@ def _with_json_schema_config_in_its_own_column(
     Vertex loads a batch file into one BigQuery table, so each row's `generationConfig` gains a null for every key
     another row sets. `response_json_schema` is a `google.protobuf.Value`, so its null counts as set and fails the
     row. Proto JSON takes both spellings of the field, so a row with a schema uses the one no other row shares.
-    BigQuery column names cannot hold `$` either, so the schema's `$defs` are inlined and any other `$` key is
-    dropped under drop_params when it is an annotation, else refused, and always refused inside a literal value.
-    Keys next to a `$ref` that do not carry over to its inlined target follow the same drop_params rule.
+    BigQuery column names take only some characters, so the schema's `$defs` are inlined, its `$` annotations are
+    dropped under drop_params, and a schema still holding a key BigQuery cannot name answers 400 naming every such
+    key. Keys next to a `$ref` that do not carry over to its inlined target follow the same drop_params rule.
     """
     generation_config: Final = vertex_request_body.get("generationConfig")
     if not isinstance(generation_config, Mapping) or "response_json_schema" not in generation_config:

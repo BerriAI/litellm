@@ -4,9 +4,11 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 """
 
 import base64
+import functools
 import io
 import json
 import re
+import sys
 import urllib.parse
 import wave
 from collections.abc import Mapping, Sequence
@@ -3270,9 +3272,91 @@ def test_a_dollar_key_inside_a_json_schema_literal_answers_400_even_with_drop_pa
         "properties": {"answer": {"type": "object", **literal}},
         "$defs": {"City": {"type": "object", "properties": {"name": {"type": "string"}}}},
     }
-    with pytest.raises(VertexAIError, match=r"line 1 .*\$.*inside a const") as exc_info:
+    with pytest.raises(VertexAIError, match=r"line 1 .*json_schema keys \['\$") as exc_info:
         _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["@type", "user.name", "a~b", "price(usd)", "tags[0]", "a/b", "price€", "price😀", "_TABLE_x", "__root__id", "n" * 301],
+)
+def test_a_json_schema_property_name_bigquery_refuses_answers_400_even_with_drop_params(config, name: str) -> None:
+    """Vertex loads a batch file into BigQuery, so a property name that is not a BigQuery column name failed the
+    whole batch at import with errors=None instead of answering 400 at upload. Rules per
+    https://cloud.google.com/bigquery/docs/schemas#column_names and Vertex's own job errors, checked 2026-11-25"""
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    schema: Final = {"type": "object", "properties": {name: {"type": "string"}}, "required": [name]}
+    with pytest.raises(VertexAIError, match=rf"line 1 .*json_schema keys \[{re.escape(repr(name))}\]") as exc_info:
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+    assert exc_info.value.status_code == 400
+
+
+def test_one_400_names_every_json_schema_key_bigquery_refuses(config: VertexAIFilesConfig) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "$price": {"type": "number"},
+            "item": {"type": "object", "properties": {"$sku": {"type": "string"}, "@type": {"type": "string"}}},
+            "note": {"type": "object", "default": {"user.name": "ada"}},
+        },
+    }
+
+    with pytest.raises(VertexAIError, match=re.escape("json_schema keys ['$price', '$sku', '@type', 'user.name']")):
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+
+
+def test_json_schema_keys_differing_only_in_case_answer_400(config: VertexAIFilesConfig) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    schema: Final = {"type": "object", "properties": {"Name": {"type": "string"}, "name": {"type": "string"}}}
+    with pytest.raises(VertexAIError, match=re.escape("json_schema keys ['Name', 'name']")) as exc_info:
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+    assert "differ by more than case" in str(exc_info.value)
+    assert exc_info.value.status_code == 400
+
+
+def test_json_schema_property_names_bigquery_takes_reach_vertex_unchanged(config: VertexAIFilesConfig) -> None:
+    names: Final = ("#tag", "first name", "first-name", "1st", "a&b%c=d+e:f'g<h>i|j", "café", "名前", "n" * 300)
+    schema: Final = {"type": "object", "properties": {name: {"type": "string"} for name in names}}
+
+    assert _uploaded_json_schema(config, _GEMINI_DEPLOYMENT, schema) == schema
+
+
+def _nested_object_schema(depth: int, leaf: Mapping[str, object]) -> Mapping[str, object]:
+    return functools.reduce(lambda inner, _: {"type": "object", "properties": {"a": inner}}, range(depth), leaf)
+
+
+def test_refs_chained_deeper_than_the_python_recursion_limit_reach_vertex_inlined(config: VertexAIFilesConfig) -> None:
+    depth: Final = sys.getrecursionlimit() // 6
+    schema: Final = {
+        **_nested_object_schema(depth, {"$ref": "#/$defs/first"}),
+        "$defs": {
+            "first": _nested_object_schema(depth, {"$ref": "#/$defs/second"}),
+            "second": _nested_object_schema(depth, {"$ref": "#/$defs/third"}),
+            "third": _nested_object_schema(depth, {"type": "string"}),
+        },
+    }
+
+    assert _uploaded_json_schema(config, _GEMINI_DEPLOYMENT, schema) == _nested_object_schema(
+        4 * depth, {"type": "string"}
+    )
+
+
+def test_the_drop_params_advice_names_only_the_keys_drop_params_would_drop(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    schema: Final = {"type": "object", "$id": "answer", "properties": {"$price": {"type": "number"}}}
+
+    with pytest.raises(VertexAIError, match=re.escape("json_schema keys ['$id', '$price']")) as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_schema_entry(schema)])
+    assert "Remove ['$id'], or set drop_params to drop them" in str(exc_info.value)
 
 
 def test_drop_params_drops_annotations_inside_properties_named_like_json_schema_keywords(
