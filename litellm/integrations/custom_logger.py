@@ -78,10 +78,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     counts as one without setting this."""
 
     enforces_request_content: bool = False
-
-    def logs_failed_attempt(self, exception: BaseException) -> bool:
-        return self.logs_every_failed_attempt
-
     """
     Whether this hook's ``async_pre_call_hook`` judges the request payload itself.
 
@@ -98,6 +94,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
     consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
     """
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return self.logs_every_failed_attempt
 
     def __init__(
         self,

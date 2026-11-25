@@ -249,6 +249,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
+    FailureLoggedCost,
     GuardrailStatus,
     ImageResponse,
     LiteLLMBatch,
@@ -1312,11 +1313,15 @@ class Logging(LiteLLMLoggingBaseClass):
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
+        self._stream_success_refused: bool = False
+        self._stream_success_claimed: bool = False
         self._holding_stream_failure: bool = False
         self._held_stream_failure: Exception | None = None
         self._stash_owed_on_success: bool = False
+        self._stash_failure_logged: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
+        self._failure_logged_cost_owed_on_success: float = 0.0
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -3357,14 +3362,13 @@ class Logging(LiteLLMLoggingBaseClass):
         self._telemetry_failure_logged_attempt = marker
         callbacks: Final = tuple(
             callback
-            for callback in self.get_combined_callback_list(
-                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-                global_callbacks=litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Existing registry has no public accessor
-            )
+            for callback in self._async_failure_callbacks()
             if isinstance(callback, CustomLogger) and callback.logs_failed_attempt(exception)
         )
         if not callbacks:
             return
+        if any(not callback.logs_every_failed_attempt for callback in callbacks):
+            self._stash_failure_logged = True
         attempt: Final = self.attempt_scoped_copy()
         attempt.model_call_details.pop("standard_logging_object", None)
         attempt.model_call_details.pop(FAILED_PROMPT_TOKEN_ESTIMATE_KEY, None)
@@ -3449,6 +3453,8 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
+        failure_logged: Final = self._stash_failure_logged
+        self._stash_failure_logged = False
         if self._carry_parked_success():
             return
         usage: Final = self._model_call_details_view.get("combined_usage_object")
@@ -3472,6 +3478,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if not owed_on_success or billed_by_continuation:
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
+        if failure_logged:
+            self._failure_logged_cost_owed_on_success = self._failure_logged_cost_owed_on_success + attempt[1]
 
     def _carry_parked_success(self) -> bool:
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
@@ -3520,6 +3528,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not isinstance(own_cost, (int, float)):
             return combined_usage
         self.model_call_details["response_cost"] = own_cost + partial_cost
+        self.model_call_details["failure_logged_cost_billed_on_success"] = FailureLoggedCost(partial_cost)
         if self.cost_breakdown is not None:
             self.cost_breakdown = self.cost_breakdown | CostBreakdown(
                 total_cost=own_cost + partial_cost,
@@ -3546,6 +3555,11 @@ class Logging(LiteLLMLoggingBaseClass):
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
         self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
+        continued_partial_logged: Final = self.model_call_details.get("failure_logged_cost_billed_on_success")
+        self.model_call_details["failure_logged_cost_billed_on_success"] = FailureLoggedCost(
+            self._failure_logged_cost_owed_on_success
+            + (continued_partial_logged.cost if isinstance(continued_partial_logged, FailureLoggedCost) else 0.0)
+        )
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 
@@ -3578,6 +3592,35 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         self._stream_failure_claimed = True
         return True
+
+    def refuse_stream_success(self) -> None:
+        """A post-call hook refused this stream, so its failure log is its only spend row and a success log the
+        stream bills later, at teardown, is dropped."""
+        self._stream_success_refused = True
+
+    @property
+    def stream_success_refused(self) -> bool:
+        return self._stream_success_refused
+
+    async def mask_refused_stream_failure_log(self) -> None:
+        if should_redact_message_logging(self.model_call_details):
+            return
+        prepared: Final = _LogHookRun(details=self.model_call_details, result=None)
+        for callback in self._async_failure_callbacks():
+            if isinstance(callback, CustomGuardrail):
+                await self._async_logging_hook(prepared, callback)
+
+    def claim_stream_success(self) -> bool:
+        """The stream's success log is about to run, so a later refusal keeps it instead of billing a second row.
+        Returns False when a post-call hook already refused the stream."""
+        if self._stream_success_refused:
+            return False
+        self._stream_success_claimed = True
+        return True
+
+    @property
+    def stream_success_claimed(self) -> bool:
+        return self._stream_success_claimed
 
     def served_round(self, response: object) -> ServedRound | None:
         usage: Final = _billed_usage(response)
@@ -6028,11 +6071,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await self._offloaded_prompt_token_estimate()
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
-        callbacks: Final = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-            global_callbacks=litellm._async_failure_callback,
-        )
+        callbacks: Final = self._async_failure_callbacks()
 
+        self._stash_failure_logged = True
         self.mark_logging_complete(event_type="async_failure")
         await _run_callbacks(
             Hook.attempt_ended,
@@ -6265,6 +6306,14 @@ class Logging(LiteLLMLoggingBaseClass):
         return tuple(
             litellm.logging_callback_manager.without_custom_logger_keys(
                 global_callbacks, self.replaced_global_callback_keys
+            )
+        )
+
+    def _async_failure_callbacks(self) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        return tuple(
+            self.get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+                global_callbacks=litellm._async_failure_callback,
             )
         )
 

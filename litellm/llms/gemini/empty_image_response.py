@@ -17,8 +17,6 @@ from litellm.types.utils import ImageResponse, Usage
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
 _REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
-_LOGGED_FIELDS: Final = TypeAdapter(dict[str, object])
-_ATTEMPT_COSTS: Final = TypeAdapter(tuple[tuple[object, float], ...])
 _ATTEMPT_USAGES: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
 
@@ -54,14 +52,6 @@ def is_answer_without_an_image(exception: object) -> bool:
     return isinstance(exception, (ImageRefusalError, UnservedImageError))
 
 
-def bills_an_answer_without_an_image(kwargs: Mapping[str, object]) -> bool:
-    if not is_answer_without_an_image(kwargs.get("exception")):
-        return False
-    logged: Final = kwargs.get("standard_logging_object")
-    response_cost: Final = _LOGGED_FIELDS.validate_python(logged).get("response_cost") if logged is not None else None
-    return isinstance(response_cost, (int, float)) and response_cost > 0
-
-
 @dataclass(frozen=True, slots=True)
 class BilledDeploymentTokens:
     deployment_id: str
@@ -81,13 +71,6 @@ def billed_deployment_tokens(kwargs: Mapping[str, object]) -> BilledDeploymentTo
     if deployment_name is None or not isinstance(deployment_id, (str, int)) or not isinstance(tokens, int):
         return None
     return BilledDeploymentTokens(str(deployment_id), deployment_name, tokens)
-
-
-def cost_of_image_answers_billed_on_failure(kwargs: Mapping[str, object]) -> float:
-    if kwargs.get("call_type") not in IMAGE_CALL_TYPES:
-        return 0.0
-    carried: Final = _ATTEMPT_COSTS.validate_python(kwargs.get("failed_attempts_billed_on_success", ()))
-    return sum(cost for _, cost in carried)
 
 
 def tokens_of_image_answers_billed_on_failure(kwargs: object) -> int:

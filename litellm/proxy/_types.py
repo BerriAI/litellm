@@ -233,6 +233,7 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
 
 

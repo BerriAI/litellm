@@ -34,7 +34,6 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
-from litellm.llms.gemini.empty_image_response import cost_of_image_answers_billed_on_failure
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_budget_shared_windows import (
     PROXY_SHARED_WINDOWS,
@@ -42,7 +41,11 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
     SharedWindow,
     SharedWindows,
 )
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
+from litellm.router_strategy.budget_limiter import (
+    RouterBudgetLimiting,
+    budget_window_seconds,
+    cost_left_after_failed_attempts,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, LiteLLMRealtimeStreamLoggingObject, LlmProviders, StandardLoggingPayload
 
@@ -1302,11 +1305,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if model is None:
             return
 
-        response_cost: Final[float] = standard_logging_payload.get(
-            "response_cost", 0
-        ) - cost_of_image_answers_billed_on_failure(
-            kwargs  # pyright: ignore[reportUnknownArgumentType]  # callback kwargs are untyped
-        )
+        response_cost: Final = cost_left_after_failed_attempts(kwargs, standard_logging_payload.get("response_cost", 0))
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         team_member_user_id: Final = _metadata_string_value(
             payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped

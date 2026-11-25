@@ -35,14 +35,11 @@ from litellm.litellm_core_utils.batch_utils import (
     job_to_charge_once,
 )
 from litellm.litellm_core_utils.core_helpers import finite_cost
-from litellm.llms.gemini.empty_image_response import (
-    bills_an_answer_without_an_image,
-    cost_of_image_answers_billed_on_failure,
-    is_answer_without_an_image,
-)
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_strategy.budget_limiter import cost_left_after_failed_attempts
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -211,8 +208,8 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 return
 
             callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
-            response_cost: Final = (finite_cost(charged_poll_cost(callback_fields)) or 0.0) - (
-                cost_of_image_answers_billed_on_failure(callback_fields)
+            response_cost: Final = cost_left_after_failed_attempts(
+                callback_fields, finite_cost(charged_poll_cost(callback_fields)) or 0.0
             )
             if response_cost <= 0:
                 return
@@ -244,11 +241,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        if not bills_an_answer_without_an_image(kwargs):
-            return
-        await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # its kwargs is untyped
-            kwargs, response_obj, start_time, end_time
-        )
+        await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""

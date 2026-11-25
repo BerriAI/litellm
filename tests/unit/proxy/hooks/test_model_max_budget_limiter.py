@@ -8,13 +8,12 @@ from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
-import httpx
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
-from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows, SharedWindows
@@ -29,7 +28,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import ImageResponse, LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, Usage
+from litellm.types.utils import LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, ModelResponse, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
@@ -130,42 +129,6 @@ def _local_spend(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str)
 
 
 @pytest.mark.asyncio
-async def test_billed_image_refusals_count_toward_model_budgets_once_each():
-    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
-    refusal_cost: Final = 2.55e-05
-    served_cost: Final = 3.9e-05
-    reply: Final = httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid"))
-    refused: Final = {
-        **_event("aimage_generation", refusal_cost),
-        "exception": ImageRefusalError(
-            message="Gemini refused to return an image, finishReason=IMAGE_PROHIBITED_CONTENT",
-            model="gemini/gemini-3.1-flash-image",
-            llm_provider="gemini",
-            response=reply,
-            provider_specific_fields={"finish_reason": "IMAGE_PROHIBITED_CONTENT"},
-            billed_answer=ImageResponse(created=1, data=[]),
-        ),
-    }
-    rejected_prompt: Final = {
-        **_event("aimage_generation", refusal_cost),
-        "exception": litellm.ContentPolicyViolationError(
-            message="prompt rejected", model="gemini/gemini-3.1-flash-image", llm_provider="gemini"
-        ),
-    }
-    served_after_a_refusal: Final = {
-        **_event("aimage_generation", served_cost + refusal_cost),
-        "failed_attempts_billed_on_success": ((Usage(prompt_tokens=9, completion_tokens=7), refusal_cost),),
-    }
-
-    for failure in (refused, rejected_prompt, refused):
-        await limiter.async_log_failure_event(failure, response_obj=None, start_time=None, end_time=None)
-    await _log_success(limiter, served_after_a_refusal)
-
-    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(2 * refusal_cost + served_cost)
-    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(2 * refusal_cost + served_cost)
-
-
-@pytest.mark.asyncio
 async def test_team_member_budget_is_charged_and_enforced_after_success():
     budget: Final = {MODEL_GROUP: {"max_budget": 0.0005, "budget_duration": "1d"}}
     limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
@@ -188,6 +151,64 @@ async def test_team_member_budget_is_charged_and_enforced_after_success():
             team_member_model_max_budget=budget,
             model=MODEL_GROUP,
         )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_uses_up_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await limiter.async_log_failure_event(
+        _event("anthropic_messages", CHAT_COST), response_obj=None, start_time=None, end_time=None
+    )
+
+    with pytest.raises(litellm.BudgetExceededError, match=f"exceeded budget for model={MODEL_GROUP}"):
+        await limiter.is_key_within_model_budget(
+            _key({MODEL_GROUP: {"max_budget": 0.0001, "budget_duration": "1d"}}), MODEL_GROUP
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once_toward_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="key-model-retry",
+        function_id="key-model-retry",
+        dynamic_async_success_callbacks=[limiter],
+        dynamic_async_failure_callbacks=[limiter],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params={},
+        litellm_params={
+            "metadata": {
+                "model_group": MODEL_GROUP,
+                "user_api_key_hash": KEY_HASH,
+                "user_api_key_model_max_budget": {MODEL_GROUP: {"budget_limit": 10.0, "time_period": "1d"}},
+            }
+        },
+        custom_llm_provider="openai",
+    )
+    earlier_attempt: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+    served: Final = ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    now: Final = datetime.now()
+
+    logging_obj.record_served_rounds_for_failure((earlier_attempt,))
+    await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+    logging_obj.carry_failed_attempt_usage()
+    await logging_obj.async_success_handler(served, now, now)
+
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY, entity_id=KEY_HASH, budget_model=MODEL_GROUP, budget_duration="1d"
+    )
+    assert await _spend(limiter, spend_key) == pytest.approx(
+        earlier_attempt[1] + litellm.completion_cost(served, model="gpt-4o-mini")
+    )
 
 
 def test_team_member_budget_entity_id_is_unambiguous():
