@@ -4,6 +4,7 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+import itertools
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from decimal import Decimal
@@ -613,14 +614,21 @@ def transform_openai_input_gemini_content(
     """
     gemini_model_name: Final = f"models/{model}"
 
-    gemini_params: Final = _filter_embed_params(optional_params)
     extra_requests, extra_body = split_request_extra_body(extra_body_fields(optional_params), "requests")
 
     input_list: Final = _top_level_elements(input)
-    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
-    requests: Final[list[EmbedContentRequest]] = []
+    input_extra_bodies: Final = over_extra_body_items(
+        [extra_body] * len(input_list),
+        [
+            _STRING_KEYED_FIELDS.validate_python(item) if isinstance(item, Mapping) else {}
+            for _, item in zip(input_list, itertools.chain(extra_requests, itertools.repeat(None)))
+        ],
+    )
+    requests: Final[list[Mapping[str, object]]] = []
 
-    for element in input_list:
+    for element, input_extra_body in zip(input_list, input_extra_bodies):
+        input_params = {**optional_params, "extra_body": input_extra_body}
+        audio_track_extraction = audio_track_extraction_enabled(input_params)
         if isinstance(element, list):
             if not element:
                 raise ValueError("Nested input list must not be empty")
@@ -645,14 +653,14 @@ def transform_openai_input_gemini_content(
         request = EmbedContentRequest(
             model=gemini_model_name,
             content=ContentType(parts=parts),
-            **gemini_params,
+            **_filter_embed_params(input_params),
         )
-        requests.append(request)
+        requests.append(_STRING_KEYED_FIELDS.validate_python(request))
 
     return VertexAIBatchEmbeddingsRequestBody(
         requests=cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
             list[EmbedContentRequest],
-            over_extra_body_items([extra_body] * len(requests), over_extra_body_items(extra_requests, requests)),
+            over_extra_body_items(input_extra_bodies, requests),
         )
     )
 

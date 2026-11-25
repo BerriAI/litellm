@@ -760,6 +760,23 @@ class TestFileContentBlocks:
         request: Final = transform(input=[block], model=self.MODEL, optional_params=optional_params)
         assert parts_of(request)[0]["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
 
+    def test_audio_track_extraction_set_in_one_extra_body_request_applies_to_that_input_only(self) -> None:
+        video_metadata: Final = {"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
+        extra_body: Final = {"requests": [{"embedContentConfig": {"audioTrackExtraction": True}}]}
+
+        request: Final = transform_openai_input_gemini_content(
+            input=[block], model=self.MODEL, optional_params={"extra_body": extra_body}
+        )
+
+        assert request["requests"][0]["content"]["parts"][0]["video_metadata"] == gemini_video_metadata_from_openai(
+            video_metadata
+        )
+        with pytest.raises(BadRequestError, match="rounds to 0 frames"):
+            transform_openai_input_gemini_content(
+                input=["text", block], model=self.MODEL, optional_params={"extra_body": extra_body}
+            )
+
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
     )
@@ -952,6 +969,25 @@ def test_gemini_embedding_keeps_a_shared_extra_body_config_beside_the_config_of_
     assert [request["embedContentConfig"] for request in json.loads(route.calls.last.request.content)["requests"]] == [
         {"autoTruncate": False, "documentOcr": True},
         {"autoTruncate": False, "documentOcr": False},
+    ]
+
+
+def test_a_named_config_param_leaves_the_config_field_one_request_sets_over_the_shared_one() -> None:
+    body: Final = transform_openai_input_gemini_content(
+        input=["first", "second"],
+        model="gemini-embedding-2",
+        optional_params={
+            "auto_truncate": False,
+            "extra_body": {
+                "embedContentConfig": {"documentOcr": False},
+                "requests": [{"embedContentConfig": {"documentOcr": True, "autoTruncate": True}}],
+            },
+        },
+    )
+
+    assert [request["embedContentConfig"] for request in body["requests"]] == [
+        {"documentOcr": True, "autoTruncate": False},
+        {"documentOcr": False, "autoTruncate": False},
     ]
 
 
