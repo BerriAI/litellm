@@ -44,6 +44,7 @@ from litellm.llms.bedrock.common_utils import (
     without_safeguards_beta,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
@@ -226,17 +227,23 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
+        header_and_auto_betas: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
             optional_params=upstream_params,
             headers=headers,
-            body_betas=anthropic_body_betas(upstream_params.get("anthropic_beta")),
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
             ),
         )
+        body_safeguards_beta: Final = (
+            anthropic_body_betas(upstream_params.get("anthropic_beta"))
+            & {ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value}
+            if SAFEGUARDS in upstream_params
+            else frozenset[str]()
+        )
+        beta_list: Final = sorted({*header_and_auto_betas, *body_safeguards_beta}) if header_and_auto_betas else []
         upstream_betas: Final = list(without_safeguards_beta(beta_list)) if drops_safeguards else beta_list
         if upstream_betas:
             _anthropic_request["anthropic_beta"] = upstream_betas
@@ -336,7 +343,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict,
-        body_betas: frozenset[str],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
     ) -> list[str]:
@@ -347,7 +353,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
         is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
-        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers)) | body_betas
+        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         beta_set: Final = set(user_beta_set)
         auto_betas: Final = self.get_anthropic_beta_list(
             model=model,
