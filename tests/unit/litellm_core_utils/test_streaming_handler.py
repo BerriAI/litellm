@@ -23,7 +23,7 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsPa
 from openai.types.completion import Completion
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 import litellm
-from litellm import LlmProviders, verbose_logger
+from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
 from litellm.llms.azure_ai.chat.transformation import AzureAIChatCompletionResponseIterator
+from litellm.llms.base_llm.base_model_iterator import UPSTREAM_ABORT_MESSAGE
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.databricks.chat.transformation import DatabricksChatResponseIterator
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator as OpenAILikeModelResponseIterator
@@ -66,7 +67,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     Usage,
 )
-from litellm.utils import ModelResponseListIterator, ProviderConfigManager
+from litellm.utils import ModelResponseListIterator
 from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 from litellm import completion
 from typing import Tuple
@@ -1799,14 +1800,22 @@ def _transport_provider(transport: str) -> str:
     return _RAW_SSE_ITERATORS[transport][0]
 
 
+_ABORT_ERRORS_SHIPPED_BEFORE_THIS_CHANGE: Final = MappingProxyType(
+    {
+        "http_handler": (
+            f"litellm.InternalServerError: InternalServerError: Hosted_vllmException - {UPSTREAM_ABORT_MESSAGE}",
+            "OpenAIError",
+        ),
+    }
+)
+
+
 @pytest.mark.parametrize("async_stream", [False, True])
 @pytest.mark.parametrize("transport", ["sdk", *_RAW_SSE_ITERATORS, *_TEXT_COMPLETION_PROVIDERS])
-async def test_aborted_stream_logs_the_error_class_its_provider_raises(async_stream: bool, transport: str) -> None:
+async def test_aborted_stream_raises_on_every_route_and_keeps_the_error_a_route_already_raised(
+    async_stream: bool, transport: str
+) -> None:
     provider: Final = _transport_provider(transport)
-    provider_config: Final = ProviderConfigManager.get_provider_chat_config(
-        model="test-model", provider=LlmProviders(provider)
-    )
-    assert provider_config is not None
     recorder: Final = _FailureErrorClassRecorder()
     call_type: Final = "acompletion" if async_stream else "completion"
     logging_obj: Final = Logging(
@@ -1829,7 +1838,7 @@ async def test_aborted_stream_logs_the_error_class_its_provider_raises(async_str
     response: Final = _aborted_stream_wrapper(transport, client, logging_obj)
 
     try:
-        with pytest.raises(MidStreamFallbackError, match="abort"):
+        with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
             _chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
         await response.wait_for_failure_logging(timeout=5)
     finally:
@@ -1838,7 +1847,13 @@ async def test_aborted_stream_logs_the_error_class_its_provider_raises(async_str
         else:
             client.close()
 
-    assert recorder.error_classes.get(timeout=5) == type(provider_config.get_error_class("", 500, {})).__name__
+    expected_message, expected_error_class = _ABORT_ERRORS_SHIPPED_BEFORE_THIS_CHANGE.get(
+        transport, (f"litellm.InternalServerError: {UPSTREAM_ABORT_MESSAGE}", "InternalServerError")
+    )
+    assert isinstance(excinfo.value.original_exception, litellm.InternalServerError)
+    assert str(excinfo.value.original_exception) == expected_message
+    assert excinfo.value.original_exception.llm_provider == provider
+    assert recorder.error_classes.get(timeout=5) == expected_error_class
 
 
 @pytest.mark.parametrize("async_stream", [False, True])

@@ -70,7 +70,6 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
-    LlmProvidersSet,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -1089,16 +1088,12 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def _route_error(self, error: Exception) -> Exception:
-        provider: Final = self.custom_llm_provider
-        if not isinstance(error, UpstreamAbortError) or provider not in LlmProvidersSet:
+    def _surfaced_error(self, error: Exception) -> Exception:
+        if not isinstance(error, UpstreamAbortError):
             return error
-        provider_config: Final = litellm.ProviderConfigManager.get_provider_chat_config(
-            model=self.logging_obj.model, provider=LlmProviders(provider)
+        return litellm.InternalServerError(
+            message=error.message, model=self.logging_obj.model, llm_provider=self.custom_llm_provider
         )
-        if provider_config is None:
-            return error
-        return provider_config.get_error_class(error.message, error.status_code, {})
 
     def handle_openai_text_completion_chunk(self, chunk: object):
         try:
@@ -1961,7 +1956,11 @@ class CustomStreamWrapper:
             if isinstance(chunk, ChatCompletionChunk) and any(
                 str(choice.finish_reason) == "abort" for choice in chunk.choices or ()
             ):
-                raise upstream_abort_error()
+                raise litellm.InternalServerError(
+                    message="Upstream generation aborted (finish_reason=abort)",
+                    model=chunk.model,
+                    llm_provider=self.custom_llm_provider,
+                )
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -2770,13 +2769,15 @@ class CustomStreamWrapper:
                 # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
-            route_error: Final = self._route_error(e)
+            surfaced_error: Final = self._surfaced_error(e)
             traceback_exception: Final = traceback.format_exc()
             self._record_partial_usage_for_failure()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=self.logging_obj.failure_handler, args=(route_error, traceback_exception)).start()
+            threading.Thread(
+                target=self.logging_obj.failure_handler, args=(surfaced_error, traceback_exception)
+            ).start()
             self.close()
-            self._handle_stream_fallback_error(route_error)
+            self._handle_stream_fallback_error(surfaced_error)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -3001,9 +3002,9 @@ class CustomStreamWrapper:
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
-        route_error: Final = self._route_error(e)
-        self._dispatch_stream_failure(route_error, traceback.format_exc())
-        self._handle_stream_fallback_error(route_error)
+        surfaced_error: Final = self._surfaced_error(e)
+        self._dispatch_stream_failure(surfaced_error, traceback.format_exc())
+        self._handle_stream_fallback_error(surfaced_error)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
         self._record_partial_usage_for_failure()

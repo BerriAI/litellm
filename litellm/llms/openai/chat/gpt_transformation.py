@@ -162,6 +162,7 @@ def translate_developer_role_for_openai_compatible_endpoint(
 
 
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -1121,7 +1122,13 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message=error_message,
                     body=as_str_mapping(_OBJECT_MAPPING.validate_python(chunk).get("error")),
                 )
-            choices: Final = self._map_reasoning_to_reasoning_content(chunk.get("choices") or [])
+            raw_choices: Final = chunk.get("choices") or []
+            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
+                raise OpenAIError(
+                    status_code=500,
+                    message="Upstream generation aborted (finish_reason=abort)",
+                )
+            choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, object]] = {
