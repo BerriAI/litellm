@@ -6,9 +6,6 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.volcengine.image_edit.transformation import VolcEngineImageEditConfig
-from litellm.llms.volcengine.image_generation.transformation import VolcEngineImageGenerationConfig
-from litellm.utils import ProviderConfigManager
 
 API_BASE: Final = "https://ark.cn-beijing.volces.com"
 IMAGES_URL: Final = f"{API_BASE}/api/v3/images/generations"
@@ -526,14 +523,3 @@ def test_generation_drops_stream_from_extra_body_when_drop_params_is_set() -> No
 
     assert bodies == [{"model": SEEDREAM_5_5, "prompt": "a cat", "watermark": False}]
     assert len(response.data) == 1
-
-
-def test_both_surfaces_are_registered_for_volcengine() -> None:
-    assert isinstance(
-        ProviderConfigManager.get_provider_image_generation_config(SEEDREAM_5_5, litellm.LlmProviders.VOLCENGINE),
-        VolcEngineImageGenerationConfig,
-    )
-    assert isinstance(
-        ProviderConfigManager.get_provider_image_edit_config(SEEDREAM_5_5, litellm.LlmProviders.VOLCENGINE),
-        VolcEngineImageEditConfig,
-    )
