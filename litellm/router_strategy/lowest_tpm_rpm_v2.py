@@ -27,7 +27,7 @@ from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
-from litellm.llms.gemini.empty_image_response import billed_deployment_tokens
+from litellm.llms.gemini.empty_image_response import billed_deployment_tokens, is_answer_without_an_image
 from litellm.redis.stores.router_usage import (
     ROUTER_USAGE_TARGET,
     CounterIncrement,
@@ -388,6 +388,23 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             verbose_logger.exception(
                 "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - %s", e
             )
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        billed: Final = billed_deployment_tokens(kwargs)
+        if billed is None:
+            return
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        self.usage.increment_sync(
+            UsageCounter.for_deployment(billed.deployment_id, billed.deployment_name, "tpm", current_minute),
+            billed.tokens,
+            self.routing_args.ttl,
+        )
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_failure_event(
