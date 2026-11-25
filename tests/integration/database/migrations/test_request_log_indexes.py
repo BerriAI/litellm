@@ -661,9 +661,9 @@ def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_
     scratch_database: str,
 ) -> None:
     session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
+    attempt_started: Final = time.monotonic()
     reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
     left_behind: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
-    attempt_started: Final = time.monotonic()
     _start_a_ledger_row(left_behind, logs=None, applied_steps=0, age="0 seconds")
 
     with ThreadPoolExecutor(max_workers=1) as pool:
