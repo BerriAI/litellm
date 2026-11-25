@@ -90,7 +90,6 @@ class TestMCPRegistryFile:
         assert "/sse" not in linear["url"]
 
     def test_auth_type_defaults_are_supported_remote_auth_types(self, registry_path: str) -> None:
-        """A catalog entry's auth_type is preselected in the add-server form, so it must be one the proxy accepts."""
         from litellm.types.mcp import MCPAuth
 
         with open(registry_path, "r") as f:
