@@ -1150,14 +1150,21 @@ def _passthrough_route_model_id(
 
 
 def _bedrock_model_id(model_name: str) -> str:
+    from urllib.parse import unquote
+
     from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import split_bedrock_region_path
+    from litellm.passthrough.utils import CommonUtils
     from litellm.types.utils import LlmProviders
 
     _, model_id = split_bedrock_region_path(model_name)
     resolved: Final = resolve_model_latest_alias(model_id, LlmProviders.BEDROCK.value)
-    return BaseAWSLLM.get_bedrock_model_id({}, BaseAWSLLM.get_bedrock_invoke_provider(resolved), resolved)
+    aws_model_id: Final = BaseAWSLLM.get_bedrock_model_id(
+        {}, BaseAWSLLM.get_bedrock_invoke_provider(resolved), resolved
+    )
+    arn: Final = unquote(aws_model_id)
+    return CommonUtils.encode_bedrock_runtime_modelid_arn(arn) if arn.startswith("arn:") else aws_model_id
 
 
 def _generic_attempt(

@@ -1174,6 +1174,8 @@ def test_converse_reply_on_a_route_pinned_deployment_is_priced_like_an_unpinned_
 
 
 APP_PROFILE_ARN = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+APP_PROFILE_ARN_NAMED_LIKE_A_PROVIDER = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/nova2kq1zz9x"
+BASE_MODEL_PARAMS: Final[dict[str, object]] = {"metadata": {"model_info": {"base_model": f"bedrock/{CONVERSE_MODEL}"}}}
 
 
 def _logged_invoke_reply_cost(deployment_model: str, litellm_params: dict[str, object]) -> float:
@@ -1203,16 +1205,48 @@ def _logged_invoke_reply_cost(deployment_model: str, litellm_params: dict[str, o
     return litellm.completion_cost(model=f"bedrock/{CONVERSE_MODEL}", completion_response=logged)
 
 
+@pytest.mark.parametrize("profile_arn", [APP_PROFILE_ARN, APP_PROFILE_ARN_NAMED_LIKE_A_PROVIDER])
 @pytest.mark.parametrize("route", ["", "invoke/"])
-def test_invoke_reply_on_an_app_profile_deployment_is_priced_by_its_base_model(route: str) -> None:
-    base_model_params: Final[dict[str, object]] = {
-        "metadata": {"model_info": {"base_model": f"bedrock/{CONVERSE_MODEL}"}}
-    }
-
-    profile_cost: Final = _logged_invoke_reply_cost(f"{route}{APP_PROFILE_ARN}", base_model_params)
+def test_invoke_reply_on_an_app_profile_deployment_is_priced_by_its_base_model(route: str, profile_arn: str) -> None:
+    profile_cost: Final = _logged_invoke_reply_cost(f"{route}{profile_arn}", BASE_MODEL_PARAMS)
 
     assert profile_cost > 0
     assert profile_cost == pytest.approx(_logged_invoke_reply_cost(f"invoke/{CONVERSE_MODEL}", {}))
+
+
+async def _relayed_invoke_stream_cost(deployment_model: str, litellm_params: dict[str, object]) -> object:
+    callback: Final = _CaptureAsyncSuccessCallback()
+    endpoint: Final = f"/model/{deployment_model}/invoke-with-response-stream"
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=deployment_model)
+    logging_obj.update_environment_variables(litellm_params=litellm_params, optional_params={})
+    stream: Final = _invoke_text_stream(["po", "ng"])
+
+    async def provider_reply() -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/vnd.amazon.eventstream"},
+            content=stream,
+            request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{endpoint}"),
+        )
+
+    relay: Final = AsyncPassthroughStreamingResponse(
+        response=provider_reply(), litellm_logging_obj=logging_obj, provider_config=BedrockPassthroughConfig()
+    )
+
+    assert b"".join([chunk async for chunk in relay]) == stream
+    assert await relay.wait_for_spend_flush() is True
+    assert callback.kwargs is not None
+    return callback.kwargs["response_cost"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_arn", [APP_PROFILE_ARN, APP_PROFILE_ARN_NAMED_LIKE_A_PROVIDER])
+async def test_invoke_stream_on_an_app_profile_deployment_is_priced_by_its_base_model(profile_arn: str) -> None:
+    profile_cost: Final = await _relayed_invoke_stream_cost(profile_arn, BASE_MODEL_PARAMS)
+
+    assert isinstance(profile_cost, float)
+    assert profile_cost > 0
+    assert profile_cost == pytest.approx(await _relayed_invoke_stream_cost(CONVERSE_MODEL, {}))
 
 
 class _ImmediateExecutor:

@@ -37,6 +37,7 @@ from ..common_utils import (
     BedrockError,
     BedrockEventStreamDecoderBase,
     BedrockModelInfo,
+    bedrock_capability_model,
     served_service_tier,
     strip_bedrock_routing_prefix,
 )
@@ -493,15 +494,6 @@ def _invoke_embedding_response(model: str, httpx_response: Response, has_input_i
     )
 
 
-def _invoke_reply_parser_model(model: str, model_call_details: Mapping[str, object]) -> str:
-    if BaseAWSLLM.get_bedrock_invoke_provider(strip_bedrock_routing_prefix(model)) is not None:
-        return model
-    from litellm.utils import get_base_model_from_metadata
-
-    base_model: Final = get_base_model_from_metadata(model_call_details)
-    return model if base_model is None else strip_bedrock_routing_prefix(base_model)
-
-
 def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
     if service_tier is None:
         return response
@@ -697,7 +689,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         else:
             from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
-        from litellm.utils import ProviderConfigManager
+        from litellm.utils import ProviderConfigManager, get_base_model_from_metadata
 
         embedding_response: Final = (
             _invoke_embedding_response(model, httpx_response, has_input_image="inputImage" in request_data)
@@ -708,7 +700,9 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             return embedding_response
 
         parser_model: Final = (
-            _invoke_reply_parser_model(model, logging_obj.model_call_details) if "invoke" in endpoint else model
+            bedrock_capability_model(model, get_base_model_from_metadata(logging_obj.model_call_details))
+            if "invoke" in endpoint
+            else model
         )
         if "invoke" in endpoint:
             chat_config_model = "invoke/" + strip_bedrock_routing_prefix(parser_model)
@@ -749,28 +743,32 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         endpoint: str,
         *,
         response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
+        base_model: str | None = None,
     ) -> PassthroughStreamCollector:
         return BedrockEventStreamCollector(
             parse_event=self._parse_message_from_event,
-            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
+            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint, base_model=base_model),
             service_tier=served_service_tier(response_headers),
         )
 
-    def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:
+    def _get_event_stream_decoder(
+        self, model: str, endpoint: str, base_model: str | None
+    ) -> Optional["AWSEventStreamDecoder"]:
         from litellm.llms.bedrock.chat import get_bedrock_event_stream_decoder
         from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
             AmazonInvokeConfig,
         )
 
         if "invoke" in endpoint:
-            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
+            invoke_model: Final = bedrock_capability_model(model, base_model)
+            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(invoke_model)
             if invoke_provider is None:
                 verbose_logger.warning(
                     "Bedrock passthrough spend tracking skipped: no invoke provider for model %s", model
                 )
                 return None
             return get_bedrock_event_stream_decoder(
-                invoke_provider=invoke_provider, model=model, sync_stream=True, json_mode=False
+                invoke_provider=invoke_provider, model=invoke_model, sync_stream=True, json_mode=False
             )
         if "converse" in endpoint:
             return get_bedrock_event_stream_decoder(

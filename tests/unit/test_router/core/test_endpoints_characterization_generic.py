@@ -617,11 +617,15 @@ async def test_llm_passthrough_drops_the_region_path_from_a_bedrock_model(
     [
         (
             "bedrock/llama/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123def456",
-            "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aimported-model%2Fabc123def456/invoke",
+            "/model/arn:aws:bedrock:us-east-1:123456789012:imported-model%2Fabc123def456/invoke",
         ),
         (
             "bedrock/invoke/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123def456",
-            "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Acustom-model-deployment%2Fabc123def456/invoke",
+            "/model/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment%2Fabc123def456/invoke",
+        ),
+        (
+            "bedrock/us-west-2/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+            "/model/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile%2Fabc123/invoke",
         ),
     ],
 )
