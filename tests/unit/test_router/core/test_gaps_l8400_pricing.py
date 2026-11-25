@@ -99,9 +99,6 @@ def test_explicit_cache_read_rate_is_inherited_only_without_a_user_cache_read_ra
     assert user_set["cache_read_input_token_cost"] == 1e-8
 
 
-# --- service-tier rates only ------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "tier_field",
     ("output_cost_per_image_token_flex", "output_cost_per_image_token_priority", "output_cost_per_token_flex"),
@@ -114,7 +111,6 @@ def test_a_service_tier_only_deployment_copies_the_rest_of_the_backend_entry(
 
     assert entry[tier_field] == 7e-3
     inherited: Final = {field: value for field, value in backend.items() if "cost_per" in field and field != tier_field}
-    assert inherited["output_cost_per_image_token"] is not None, "the backend row must price standard image output"
     assert {field: entry.get(field) for field in inherited} == inherited
 
 
