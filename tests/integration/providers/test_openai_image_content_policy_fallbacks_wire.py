@@ -46,3 +46,27 @@ def test_moderation_blocked_image_prompt_triggers_content_policy_fallback(gatewa
             "/blocked/images/generations",
             "/fallback/images/generations",
         ]
+
+
+def test_moderation_blocked_chat_on_an_openai_compatible_provider_stays_a_bad_request(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        return Reply(status=400, body=json.dumps(_MODERATION_BLOCKED).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        blocked: Final = scenario.model(
+            model="hosted_vllm/served-model", api_base=f"{wire.url}/blocked", api_key="synthetic-vllm-key"
+        )
+        fallback: Final = scenario.model(
+            model="hosted_vllm/served-model", api_base=f"{wire.url}/fallback", api_key="synthetic-vllm-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": blocked,
+                "messages": [{"role": "user", "content": "describe a lighthouse"}],
+                "content_policy_fallbacks": [{blocked: [fallback]}],
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert [request.target for request in wire.drain()] == ["/blocked/chat/completions"]

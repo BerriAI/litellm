@@ -40,7 +40,7 @@ from litellm.llms.base_llm.chat.transformation import RelayOnlyBodyLLMException
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
 from litellm.llms.minimax.common_utils import minimax_safety_error
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 
 from ..exceptions import (
     APIConnectionError,
@@ -337,7 +337,25 @@ def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object
     return error if error is not None and error.get("code") == "cyber_policy" else None
 
 
-def _openai_moderation_blocked(original_exception: object, response: httpx.Response | None) -> bool:
+_OPENAI_IMAGE_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+    }
+)
+
+
+def _openai_moderation_blocked(
+    original_exception: object,
+    response: httpx.Response | None,
+    custom_llm_provider: str,
+    request_kwargs: Mapping[str, object],
+) -> bool:
+    call_type: Final[object] = getattr(request_kwargs.get("litellm_logging_obj"), "call_type", None)
+    if custom_llm_provider != "openai" or call_type not in _OPENAI_IMAGE_CALL_TYPES:
+        return False
     if getattr(original_exception, "status_code", None) != 400:
         return False
     error: Final = _openai_error_object(original_exception) or _reply_error_object(response)
@@ -563,7 +581,7 @@ def _map_openai_exception(
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
         or ("Invalid prompt" in error_str and "violating our usage policy" in error_str)
         or ("request was rejected as a result of the safety system" in error_str.lower())
-        or _openai_moderation_blocked(original_exception, response)
+        or _openai_moderation_blocked(original_exception, response, custom_llm_provider, request_kwargs)
     ):
         raise ContentPolicyViolationError(
             message=f"ContentPolicyViolationError: {exception_provider} - {message}",
