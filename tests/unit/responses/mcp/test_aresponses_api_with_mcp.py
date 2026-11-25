@@ -4394,6 +4394,92 @@ async def test_a_registered_hosted_mcp_url_answers_the_gateways_403_for_a_key_wi
     assert (server.opened, provider.call_count, mcp_client.call_tool.await_count) == ((), 0, 0)
 
 
+def _virtual_key(**permission: object) -> object:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+
+    key: Final = UserAPIKeyAuth(
+        api_key="sk-caller",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=(
+            LiteLLM_ObjectPermissionTable(object_permission_id="op-key", **permission) if permission else None
+        ),
+    )
+    return key.model_copy(update={"via_virtual_key": True})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("permission", "respects_mcp_scope", "denied"),
+    [
+        ({"mcp_servers": ["srv-other"]}, True, True),
+        ({"mcp_servers": ["no-mcp-servers"]}, False, True),
+        ({"mcp_servers": ["srv-other"]}, False, False),
+        ({}, True, False),
+    ],
+    ids=["scoped_key_under_respects_scope", "opted_out_key", "scoped_key_by_default", "unscoped_key"],
+)
+@respx.mock
+async def test_an_allowlisted_host_answers_the_gateways_403_to_a_key_kept_from_servers_open_to_every_key(
+    monkeypatch: pytest.MonkeyPatch, permission: Mapping[str, object], respects_mcp_scope: bool, denied: bool
+):
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"mcp_allow_all_keys_respects_mcp_scope": respects_mcp_scope}
+    )
+    provider: Final = _serve_responses(
+        respx.mock,
+        monkeypatch,
+        (_tool_call_round(_BEDROCK_MODEL, "deepwiki-ask_question"), _answer_round(_BEDROCK_MODEL)),
+        _BEDROCK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+    caller: Final = _virtual_key(**permission)
+
+    if denied:
+        with pytest.raises(HTTPException) as refused:
+            await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server, caller=caller)
+        assert (refused.value.status_code, refused.value.detail) == (
+            403,
+            {"error": "The key is not allowed to access the requested MCP servers: deepwiki"},
+        )
+        assert (server.opened, provider.call_count) == ((), 0)
+    else:
+        await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server, caller=caller)
+        assert [call.name for call in server.calls] == ["ask_question"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_allowlisted_tool_whose_description_a_guardrail_blocks_never_reaches_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import CallTypes
+
+    async def block_listed_descriptions(**kwargs: object) -> object:
+        if kwargs["call_type"] == CallTypes.list_mcp_tools.value:
+            raise HTTPException(status_code=400, detail={"error": "tool description blocked"})
+        return kwargs["data"]
+
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", block_listed_descriptions)
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_answer_round(_BEDROCK_MODEL),), _BEDROCK_URL)
+    server: Final = _ScriptedMCPServer()
+
+    response: Final = await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert "deepwiki-ask_question" not in _sent_tool_names(_sent_body(provider, 0))
+    assert [_item(item).get("tools") for item in response.output if _item(item)["type"] == "mcp_list_tools"] == [[]]
+    assert server.calls == ()
+
+
 _GITMCP_TOOL: Final = MappingProxyType(
     {"type": "mcp", "server_label": "gitmcp", "server_url": "https://gitmcp.io/docs", "require_approval": "never"}
 )
@@ -5565,18 +5651,29 @@ def _streamed_answer_round_from(chat_id: str) -> httpx.Response:
 async def _streamed_turn_running_a_tool(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, server: _ScriptedMCPServer
 ) -> tuple[tuple[ResponsesAPIStreamingResponse, ...], respx.Route, StandardLoggingPayload]:
-    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
-    _deepwiki_registered(monkeypatch)
-    provider: Final = _serve_responses(
+    turn: Final = await _streamed_turn(
         respx_mock,
         monkeypatch,
+        server,
         (
             _streamed_tool_call_round("gitmcp-ask_question"),
             _streamed_answer_round_from("chatcmpl-gateway-mcp-answer"),
             _answer_round(_DEEPSEEK_MODEL),
         ),
-        _DEEPSEEK_URL,
     )
+    assert [call.name for call in server.calls] == ["ask_question"]
+    return turn
+
+
+async def _streamed_turn(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    server: _ScriptedMCPServer,
+    rounds: tuple[httpx.Response, ...],
+) -> tuple[tuple[ResponsesAPIStreamingResponse, ...], respx.Route, StandardLoggingPayload]:
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(respx_mock, monkeypatch, rounds, _DEEPSEEK_URL)
     recorder: Final = _RoundRecorder()
     with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
         stream: Final = await litellm.aresponses(
@@ -5589,7 +5686,6 @@ async def _streamed_turn_running_a_tool(
         )
     events: Final = tuple([event async for event in stream])
     assert _event_type(events[-1]) == "response.completed"
-    assert [call.name for call in server.calls] == ["ask_question"]
     await _settle(lambda: len(recorder.logged) > 0)
     assert len(recorder.logged) == 1
     return events, provider, recorder.logged[0]
@@ -5666,6 +5762,27 @@ async def test_a_streamed_turn_that_runs_a_tool_stores_every_item_it_streamed_so
     )
     assert [_item_key(item) for item in stored] == [_item_key(item) for item in streamed]
     assert (stored[1]["arguments"], stored[1]["output"]) == (json.dumps(_ASK_ARGUMENTS), _ASK_OUTPUT)
+
+    follow_up: Final = await _follow_up_from_stored_row(monkeypatch, server, events[0].response.id, row)
+
+    assert _output_types(follow_up.output) == ("message",)
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_turn_that_runs_no_tool_stores_its_listing_so_a_follow_up_lists_nothing_again(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    server: Final = _ScriptedMCPServer()
+    events, _, row = await _streamed_turn(
+        respx_mock,
+        monkeypatch,
+        server,
+        (_streamed_answer_round_from("chatcmpl-gateway-mcp-answer"), _answer_round(_DEEPSEEK_MODEL)),
+    )
+    stored: Final = tuple(_item(item) for item in row["response"].get("output", ()))
+
+    assert server.calls == ()
+    assert _output_summary(stored) == (("mcp_list_tools", "gitmcp", None), ("message", None, None))
 
     follow_up: Final = await _follow_up_from_stored_row(monkeypatch, server, events[0].response.id, row)
 

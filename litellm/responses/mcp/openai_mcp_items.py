@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import reduce
 from itertools import chain, groupby
 from types import MappingProxyType
@@ -370,8 +370,10 @@ class OpenAIStreamShaper:
 
     items: OpenAIMCPItems
     listed: bool = False
-    indexes: Mapping[int, int] = MappingProxyType({})
-    withheld: Mapping[int, tuple[ResponsesAPIStreamingResponse, ...]] = MappingProxyType({})
+    indexes: Mapping[int, int] = field(default_factory=lambda: MappingProxyType({}))
+    withheld: Mapping[int, tuple[ResponsesAPIStreamingResponse, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     held: ResponsesAPIStreamingResponse | None = None
     sequence: int = 0
 

@@ -155,7 +155,13 @@ if TYPE_CHECKING:
     from fastapi import WebSocket
     from mcp.types import Tool as MCPTool
 
-    from litellm.responses.mcp.direct_url_claims import DirectClientFactory, DirectListing, HostedMCPClaims
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.responses.mcp.direct_url_claims import (
+        DirectClientFactory,
+        DirectListing,
+        DirectToolGuard,
+        HostedMCPClaims,
+    )
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
     from litellm.responses.mcp.openai_mcp_items import OpenAIMCPItems, OpenAIStreamShaper
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -429,7 +435,9 @@ async def _aresponses_api_with_mcp(
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
         raw_headers=discovery_raw_headers,
     )
-    direct_listing: Final = await _direct_listing(hosted_mcp_claims, dependencies.direct_client_factory)
+    direct_listing: Final = await _direct_listing(
+        hosted_mcp_claims, dependencies.direct_client_factory, user_api_key_auth, discovery_raw_headers
+    )
     client_ids: Final = previous_response_client_ids(previous_response_id, request_kwargs)
     turns_source: Final = (
         dependencies.stored_turns_source
@@ -905,15 +913,49 @@ def _hosted_mcp_claims(
     )
 
 
+def _tool_description_guard(
+    user_api_key_auth: "UserAPIKeyAuth | None", raw_headers: Mapping[str, str] | None
+) -> "DirectToolGuard":
+    from litellm.responses.mcp.direct_url_claims import DirectMCPServer, unregistered_mcp_server
+
+    async def guard(server: DirectMCPServer, tools: tuple[MCPTool, ...]) -> tuple[MCPTool, ...]:
+        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        return await global_mcp_server_manager.guard_tool_catalog(
+            unregistered_mcp_server(server), tools, proxy_logging_obj, user_api_key_auth, raw_headers
+        )
+
+    return guard
+
+
 async def _direct_listing(
-    claims: "HostedMCPClaims | None", client_factory: "DirectClientFactory | None"
+    claims: "HostedMCPClaims | None",
+    client_factory: "DirectClientFactory | None",
+    user_api_key_auth: object,
+    raw_headers: Mapping[str, str] | None,
 ) -> "DirectListing":
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.mcp.direct_url_claims import guarded_mcp_client, list_direct_tools
 
+    direct: Final = () if claims is None else claims.direct
+    caller: Final = user_api_key_auth if isinstance(user_api_key_auth, UserAPIKeyAuth) else None
+    if direct and not await _reaches_hosted_mcp_allowed_hosts(user_api_key_auth, caller):
+        from litellm.proxy.mcp_server.operations import raise_generic_mcp_access_denial
+
+        raise_generic_mcp_access_denial(tuple(server.server_label for server in direct))
     factory: Final = client_factory if callable(client_factory) else guarded_mcp_client
     allowed_hosts: Final = tuple(litellm.gateway_hosted_mcp_allowed_hosts)
     return await list_direct_tools(
-        () if claims is None else claims.direct, lambda server: factory(server, allowed_hosts)
+        direct, lambda server: factory(server, allowed_hosts), _tool_description_guard(caller, raw_headers)
+    )
+
+
+async def _reaches_hosted_mcp_allowed_hosts(user_api_key_auth: object, caller: "UserAPIKeyAuth | None") -> bool:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    return (user_api_key_auth is None or caller is not None) and (
+        await global_mcp_server_manager.reaches_hosted_mcp_allowed_hosts(caller)
     )
 
 

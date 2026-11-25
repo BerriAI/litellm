@@ -733,9 +733,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             else response_obj
         )
         logged_output: Final = (
-            self._stream_shaper.client_output(output_items(merged_response))
-            if self._stream_shaper is not None and (self._composed_output or self._ran_calls)
-            else None
+            None if self._stream_shaper is None else self._stream_shaper.client_output(output_items(merged_response))
         )
         client_response: Final = (
             merged_response

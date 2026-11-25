@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -5,13 +6,14 @@ from typing import Final
 
 import httpx2
 import pytest
-from mcp.types import CallToolRequestParams, CallToolResult
+from mcp.types import CallToolRequestParams, CallToolResult, ToolAnnotations
 from mcp.types import Tool as MCPTool
 
 from litellm.exceptions import APIError, UnsupportedParamsError
 from litellm.responses.mcp.direct_url_claims import (
+    AllowedTools,
     DirectMCPServer,
-    allowed_tool_names,
+    allowed_tools_filter,
     list_direct_tools,
     normalized_mcp_url,
     plan_hosted_mcp_claims,
@@ -126,7 +128,8 @@ def test_an_allowlisted_host_is_run_directly_with_only_the_callers_own_credentia
             server_label="wiki",
             server_url="https://mcp.example.com/mcp",
             headers={"X-Team": "a", "Authorization": "Bearer caller-token"},
-            allowed_tools=frozenset({"search"}),
+            allowed_tools=AllowedTools(names=frozenset({"search"})),
+            registered_hosts=frozenset({"mcp.deepwiki.com"}),
         ),
     )
 
@@ -218,21 +221,40 @@ def test_a_tool_that_needs_approval_on_an_unclaimed_url_is_not_answered_here():
     assert _plan([{**_mcp_tool("https://mcp.unknown.example.com/mcp"), "require_approval": "always"}]) is None
 
 
-@pytest.mark.parametrize(
-    ("allowed_tools", "names"),
-    [
-        (None, None),
-        (["search", "fetch"], frozenset({"search", "fetch"})),
-        ({"tool_names": ["search"]}, frozenset({"search"})),
-        ({"read_only": True}, frozenset()),
-        ("search", frozenset()),
-    ],
-    ids=["absent", "list", "filter", "read_only_filter", "malformed"],
+def _listed_tool(name: str, read_only: bool | None) -> MCPTool:
+    return MCPTool(
+        name=name,
+        inputSchema={"type": "object"},
+        annotations=None if read_only is None else ToolAnnotations(read_only_hint=read_only),
+    )
+
+
+_LISTED_TOOLS: Final = (
+    _listed_tool("search", read_only=True),
+    _listed_tool("delete", read_only=False),
+    _listed_tool("fetch", read_only=None),
 )
-def test_allowed_tool_names_fails_closed_on_a_filter_it_cannot_read(
-    allowed_tools: object, names: frozenset[str] | None
+
+
+@pytest.mark.parametrize(
+    ("allowed_tools", "admitted"),
+    [
+        (None, ("search", "delete", "fetch")),
+        (["search", "delete"], ("search", "delete")),
+        ({"tool_names": ["search"]}, ("search",)),
+        ({"read_only": True}, ("search",)),
+        ({"tool_names": ["search", "delete"], "read_only": True}, ("search",)),
+        ({"read_only": False}, ("search", "delete", "fetch")),
+        ("search", ()),
+    ],
+    ids=["absent", "list", "names", "read_only", "names_and_read_only", "read_only_off", "malformed"],
+)
+def test_allowed_tools_admits_named_and_read_only_tools_and_fails_closed_on_a_filter_it_cannot_read(
+    allowed_tools: object, admitted: tuple[str, ...]
 ):
-    assert allowed_tool_names({"allowed_tools": allowed_tools}) == names
+    allowed: Final = allowed_tools_filter({"allowed_tools": allowed_tools})
+
+    assert tuple(tool.name for tool in _LISTED_TOOLS if allowed.admits(tool)) == admitted
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,10 +271,14 @@ class _ListingClient:
         return CallToolResult(content=[])
 
 
-def _direct_server(allowed_tools: frozenset[str] | None = None) -> DirectMCPServer:
+def _direct_server(allowed_tools: AllowedTools = AllowedTools(), label: str = "wiki") -> DirectMCPServer:
     return DirectMCPServer(
-        server_label="wiki", server_url="https://mcp.example.com/mcp", headers={}, allowed_tools=allowed_tools
+        server_label=label, server_url="https://mcp.example.com/mcp", headers={}, allowed_tools=allowed_tools
     )
+
+
+async def _admit_every_tool(server: DirectMCPServer, tools: tuple[MCPTool, ...]) -> tuple[MCPTool, ...]:
+    return tools
 
 
 @pytest.mark.asyncio
@@ -260,9 +286,9 @@ async def test_direct_tools_are_listed_under_the_callers_label_within_allowed_to
     client: Final = _ListingClient(
         (MCPTool(name="search", inputSchema={"type": "object"}), MCPTool(name="delete", inputSchema={"type": "object"}))
     )
-    server: Final = _direct_server(frozenset({"search"}))
+    server: Final = _direct_server(AllowedTools(names=frozenset({"search"})))
 
-    listing: Final = await list_direct_tools([server], lambda _server: client)
+    listing: Final = await list_direct_tools([server], lambda _server: client, _admit_every_tool)
 
     assert [tool.name for tool in listing.tools] == ["wiki-search"]
     assert {name: (tool.server, tool.tool.name, tool.client) for name, tool in listing.by_name.items()} == {
@@ -276,7 +302,60 @@ async def test_a_direct_server_that_cannot_list_its_tools_answers_424():
     client: Final = _ListingClient((), failure=httpx2.ConnectError("refused"))
 
     with pytest.raises(APIError) as failed:
-        await list_direct_tools([_direct_server()], lambda _server: client)
+        await list_direct_tools([_direct_server()], lambda _server: client, _admit_every_tool)
 
     assert failed.value.status_code == 424
     assert "`wiki`" in failed.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_tool_the_guard_withholds_never_reaches_the_listing_and_the_guard_sees_only_allowed_tools():
+    client: Final = _ListingClient(_LISTED_TOOLS)
+    seen: Final[list[tuple[str, ...]]] = []
+
+    async def withhold_delete(server: DirectMCPServer, tools: tuple[MCPTool, ...]) -> tuple[MCPTool, ...]:
+        seen.append(tuple(tool.name for tool in tools))
+        return tuple(tool for tool in tools if tool.name != "delete")
+
+    listing: Final = await list_direct_tools(
+        [_direct_server(AllowedTools(names=frozenset({"search", "delete"})))], lambda _server: client, withhold_delete
+    )
+
+    assert seen == [("search", "delete")]
+    assert [tool.name for tool in listing.tools] == ["wiki-search"]
+    assert list(listing.by_name) == ["wiki-search"]
+    assert [tool.name for tool in listing.server_tools["wiki"]] == ["search"]
+
+
+@dataclass(frozen=True, slots=True)
+class _ListingAfterClient:
+    started: asyncio.Event
+    waits_for: asyncio.Event
+
+    async def list_tools(self, raise_on_error: bool = False) -> Sequence[MCPTool]:
+        self.started.set()
+        await self.waits_for.wait()
+        return (_listed_tool("search", read_only=True),)
+
+    async def call_tool(self, call_tool_request_params: CallToolRequestParams) -> CallToolResult:
+        return CallToolResult(content=[])
+
+
+@pytest.mark.asyncio
+async def test_direct_servers_are_listed_at_the_same_time():
+    first_started, second_started = asyncio.Event(), asyncio.Event()
+    clients: Final = {
+        "first": _ListingAfterClient(started=first_started, waits_for=second_started),
+        "second": _ListingAfterClient(started=second_started, waits_for=first_started),
+    }
+
+    listing: Final = await asyncio.wait_for(
+        list_direct_tools(
+            [_direct_server(label="first"), _direct_server(label="second")],
+            lambda server: clients[server.server_label],
+            _admit_every_tool,
+        ),
+        timeout=5,
+    )
+
+    assert [tool.name for tool in listing.tools] == ["first-search", "second-search"]

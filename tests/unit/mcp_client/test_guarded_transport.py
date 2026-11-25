@@ -1,11 +1,17 @@
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Final
 
 import httpcore2
 import httpx2
 import pytest
 
-from litellm.mcp_client.guarded_transport import GuardedNetworkBackend, GuardedTransport, Resolver, SocketOption
+from litellm.mcp_client.guarded_transport import (
+    CallerHeaders,
+    GuardedNetworkBackend,
+    GuardedTransport,
+    Resolver,
+    SocketOption,
+)
 
 PUBLIC_ADDRESS: Final = "93.184.215.14"
 
@@ -76,10 +82,15 @@ async def test_a_public_host_is_connected_at_the_address_that_was_checked():
 
 
 def _guarded_client(
-    allowed_hosts: tuple[str, ...], table: Mapping[str, tuple[str, ...]], connector: _RecordingBackend
+    allowed_hosts: tuple[str, ...],
+    table: Mapping[str, tuple[str, ...]],
+    connector: _RecordingBackend,
+    registered_hosts: frozenset[str] = frozenset(),
 ) -> httpx2.AsyncClient:
     transport: Final = GuardedTransport(
-        allowed_hosts, network_backend=GuardedNetworkBackend(_resolver(table), connect=connector)
+        allowed_hosts,
+        network_backend=GuardedNetworkBackend(_resolver(table), connect=connector),
+        registered_hosts=registered_hosts,
     )
     return httpx2.AsyncClient(transport=transport, follow_redirects=True)
 
@@ -132,3 +143,86 @@ async def test_a_redirect_to_a_refused_destination_never_connects_there(location
         await client.get("https://mcp.example.com/mcp")
 
     assert connector.hosts == (PUBLIC_ADDRESS,)
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_to_an_allowlisted_host_serving_a_registered_mcp_server_never_connects_there():
+    connector: Final = _RecordingBackend(_http_response(302, {"Location": "https://registered.example.com/mcp"}))
+    client: Final = _guarded_client(
+        ("mcp.example.com", "registered.example.com"),
+        {"mcp.example.com": (PUBLIC_ADDRESS,), "registered.example.com": ("93.184.215.15",)},
+        connector,
+        registered_hosts=frozenset({"registered.example.com"}),
+    )
+
+    with pytest.raises(httpx2.ConnectError, match="registered MCP server"):
+        await client.get("https://mcp.example.com/mcp")
+
+    assert connector.hosts == (PUBLIC_ADDRESS,)
+
+
+class _WriteRecordingStream(httpcore2.AsyncMockStream):
+    def __init__(self, buffer: list[bytes], record: Callable[[bytes], None]) -> None:
+        super().__init__(buffer)
+        self._record = record
+
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._record(buffer)
+
+
+class _PerAddressBackend(httpcore2.AsyncMockBackend):
+    def __init__(self, responses: Mapping[str, tuple[bytes, ...]]) -> None:
+        super().__init__([])
+        self._responses = responses
+        self.sent: tuple[tuple[str, bytes], ...] = ()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SocketOption] | None = None,
+    ) -> httpcore2.AsyncNetworkStream:
+        def record(buffer: bytes) -> None:
+            self.sent = (*self.sent, (host, buffer))
+
+        return _WriteRecordingStream([chunk for chunk in self._responses[host] if chunk], record)
+
+    def sent_to(self, address: str) -> bytes:
+        return b"".join(buffer for host, buffer in self.sent if host == address).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("location", "reaches_second_address"),
+    [("https://other.example.com/mcp", True), ("https://mcp.example.com/mcp/", False)],
+    ids=["another_origin", "same_origin"],
+)
+async def test_the_callers_headers_follow_a_redirect_only_within_the_origin_they_were_sent_for(
+    location: str, reaches_second_address: bool
+):
+    other_address: Final = "93.184.215.16"
+    backend: Final = _PerAddressBackend(
+        {
+            PUBLIC_ADDRESS: (*_http_response(307, {"Location": location}), *_http_response(200, {}, b"ok")),
+            other_address: _http_response(200, {}, b"ok"),
+        }
+    )
+    transport: Final = GuardedTransport(
+        ("mcp.example.com", "other.example.com"),
+        network_backend=GuardedNetworkBackend(
+            _resolver({"mcp.example.com": (PUBLIC_ADDRESS,), "other.example.com": (other_address,)}), connect=backend
+        ),
+        caller_headers=CallerHeaders(server_url="https://mcp.example.com/mcp", names=frozenset({"x-api-key"})),
+    )
+    client: Final = httpx2.AsyncClient(transport=transport, follow_redirects=True, headers={"X-Api-Key": "caller-key"})
+
+    response: Final = await client.get("https://mcp.example.com/mcp")
+
+    assert response.text == "ok"
+    assert backend.sent_to(PUBLIC_ADDRESS).count(b"x-api-key: caller-key") == (1 if reaches_second_address else 2)
+    assert (b"x-api-key" in backend.sent_to(other_address), bool(backend.sent_to(other_address))) == (
+        False,
+        reaches_second_address,
+    )

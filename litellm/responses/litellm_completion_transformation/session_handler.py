@@ -2,7 +2,7 @@ import asyncio
 import json
 from bisect import bisect_left
 from collections.abc import Awaitable, Callable, Container, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial, reduce
 from itertools import chain, repeat
 from types import MappingProxyType
@@ -1140,7 +1140,7 @@ class TurnReplay:
     request's tools give each server's tool, so an mcp_call the gateway ran goes back under that name."""
 
     stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id
-    mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES
+    mcp_call_names: McpCallNames = field(default_factory=lambda: NO_MCP_CALL_NAMES)
 
 
 DEFAULT_TURN_REPLAY: Final = TurnReplay()

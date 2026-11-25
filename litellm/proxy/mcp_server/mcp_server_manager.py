@@ -3840,6 +3840,48 @@ class MCPServerManager:
         resource_server_ids: Final = user_api_key_auth.mcp_session_resource_server_ids
         return None if resource_server_ids is None else frozenset(resource_server_ids)
 
+    async def reaches_hosted_mcp_allowed_hosts(
+        self, user_api_key_auth: UserAPIKeyAuth | None, general_settings: Mapping[str, object] | None = None
+    ) -> bool:
+        """Whether the caller may reach a host gateway_hosted_mcp_allowed_hosts opens to every key. The rules that keep
+        an allow_all_keys server from a caller apply: its MCP opt-out, a toolset or explicit-grants scope, a session's
+        resource scope, and mcp_allow_all_keys_respects_mcp_scope for a key any MCP server list restricts."""
+        if user_api_key_auth is None:
+            return True
+        if MCPServerManager._kept_from_mcp_servers_open_to_every_key(user_api_key_auth):
+            return False
+        if not (user_api_key_auth.via_virtual_key and MCPServerManager._respects_mcp_scope(general_settings)):
+            return True
+        return (await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)).scope == "unscoped"
+
+    @staticmethod
+    def _kept_from_mcp_servers_open_to_every_key(user_api_key_auth: UserAPIKeyAuth) -> bool:
+        permission: Final = user_api_key_auth.object_permission
+        opted_out: Final = (
+            not is_mcp_admitted_user_subject(user_api_key_auth)
+            and permission is not None
+            and SpecialMCPServerNames.no_mcp_servers.value in (permission.mcp_servers or [])
+        )
+        return (
+            opted_out
+            or user_api_key_auth.mcp_toolset_id is not None
+            or user_api_key_auth.mcp_explicit_grants_only
+            or MCPServerManager._admitted_session_resource_scope(user_api_key_auth) is not None
+        )
+
+    @staticmethod
+    def _respects_mcp_scope(general_settings: Mapping[str, object] | None) -> bool:
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
+        )
+
+        resolved_general_settings: Final = (
+            _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
+            if general_settings is None
+            else general_settings
+        )
+        return bool(resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False))
+
     async def get_allowed_mcp_servers(
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -4725,7 +4767,7 @@ class MCPServerManager:
                 registered_names: Final = MappingProxyType(
                     {t.name.removeprefix(registry_prefix): t.name for t in registered}
                 )
-                guarded_openapi: Final = await self._guard_tool_catalog(
+                guarded_openapi: Final = await self.guard_tool_catalog(
                     server=server,
                     tools=[t.model_copy(update={"name": t.name.removeprefix(registry_prefix)}) for t in registered],
                     proxy_logging_obj=proxy_logging_obj,
@@ -4765,7 +4807,7 @@ class MCPServerManager:
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
 
-            guarded_tools: Final = await self._guard_tool_catalog(
+            guarded_tools: Final = await self.guard_tool_catalog(
                 server=server,
                 tools=tools,
                 proxy_logging_obj=proxy_logging_obj,
@@ -6048,7 +6090,7 @@ class MCPServerManager:
             "attempts; the 3-character prefix space is too crowded."
         )
 
-    async def _guard_tool_catalog(
+    async def guard_tool_catalog(
         self,
         server: MCPServer,
         tools: Sequence[MCPTool],

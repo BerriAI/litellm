@@ -1,4 +1,5 @@
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -39,12 +40,27 @@ _GATEWAY_OWNED_HEADERS: Final = frozenset(
 )
 
 
-class _ToolNames(BaseModel):
+class _ToolFilter(BaseModel):
     model_config = ConfigDict(frozen=True)
-    tool_names: tuple[str, ...]
+    tool_names: tuple[str, ...] | None = None
+    read_only: bool | None = None
 
 
-_ALLOWED_TOOLS: Final[TypeAdapter[tuple[str, ...] | _ToolNames]] = TypeAdapter(tuple[str, ...] | _ToolNames)
+_ALLOWED_TOOLS: Final[TypeAdapter[tuple[str, ...] | _ToolFilter]] = TypeAdapter(tuple[str, ...] | _ToolFilter)
+
+
+@dataclass(frozen=True, slots=True)
+class AllowedTools:
+    names: frozenset[str] | None = None
+    read_only: bool = False
+
+    def admits(self, tool: MCPTool) -> bool:
+        return (self.names is None or tool.name in self.names) and (
+            not self.read_only or (tool.annotations is not None and tool.annotations.read_only_hint is True)
+        )
+
+
+ADMIT_ALL_TOOLS: Final = AllowedTools()
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +68,8 @@ class DirectMCPServer:
     server_label: str
     server_url: str
     headers: Mapping[str, str]
-    allowed_tools: frozenset[str] | None
+    allowed_tools: AllowedTools = ADMIT_ALL_TOOLS
+    registered_hosts: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +91,7 @@ class DirectMCPClient(Protocol):
 
 
 DirectClientFactory: TypeAlias = Callable[[DirectMCPServer, Sequence[str]], DirectMCPClient]
+DirectToolGuard: TypeAlias = Callable[[DirectMCPServer, tuple[MCPTool, ...]], Awaitable[tuple[MCPTool, ...]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,15 +216,19 @@ def _caller_headers(tool: Mapping[str, object]) -> Mapping[str, str]:
     return MappingProxyType({**sent, **bearer})
 
 
-def allowed_tool_names(tool: Mapping[str, object]) -> frozenset[str] | None:
+def allowed_tools_filter(tool: Mapping[str, object]) -> AllowedTools:
     allowed: Final = tool.get("allowed_tools")
     if allowed is None:
-        return None
+        return ADMIT_ALL_TOOLS
     try:
         parsed: Final = _ALLOWED_TOOLS.validate_python(allowed)
     except ValidationError:
-        return frozenset()
-    return frozenset(parsed.tool_names if isinstance(parsed, _ToolNames) else parsed)
+        return AllowedTools(names=frozenset())
+    if not isinstance(parsed, _ToolFilter):
+        return AllowedTools(names=frozenset(parsed))
+    return AllowedTools(
+        names=None if parsed.tool_names is None else frozenset(parsed.tool_names), read_only=parsed.read_only is True
+    )
 
 
 def _registered_matches(url: str, servers: Collection[MCPServer]) -> tuple[MCPServer, ...]:
@@ -218,8 +240,8 @@ def _url_host(url: str | None) -> str | None:
     return None if normalized is None else urlsplit(normalized).hostname
 
 
-def _on_registered_host(url: str, servers: Collection[MCPServer]) -> bool:
-    return _url_host(url) in {_url_host(server.url) for server in servers}
+def _registered_hosts(servers: Collection[MCPServer]) -> frozenset[str]:
+    return frozenset(host for host in (_url_host(server.url) for server in servers) if host is not None)
 
 
 def _served_proxy_path(tool: Mapping[str, object], servers: Collection[MCPServer]) -> bool:
@@ -250,7 +272,12 @@ def direct_mcp_labels(tools: Iterable[Mapping[str, object]]) -> frozenset[str]:
     return frozenset(_text_field(tool, "server_label") or "unlabeled" for tool in tools if _names_a_reachable_url(tool))
 
 
-def _claim(tool: Mapping[str, object], servers: Collection[MCPServer], allowed_hosts: Sequence[str]) -> _Claim:
+def _claim(
+    tool: Mapping[str, object],
+    servers: Collection[MCPServer],
+    allowed_hosts: Sequence[str],
+    registered_hosts: frozenset[str],
+) -> _Claim:
     server_url: Final = _text_field(tool, "server_url")
     url: Final = None if server_url is None else normalized_mcp_url(server_url)
     if tool.get("type") != "mcp" or server_url is None or url is None:
@@ -261,7 +288,7 @@ def _claim(tool: Mapping[str, object], servers: Collection[MCPServer], allowed_h
     matches: Final = _registered_matches(url, servers)
     if matches:
         return _registered_claim(tool, label, matches)
-    if _on_registered_host(url, servers) or not is_url_destination_allowed_by_host(server_url, list(allowed_hosts)):
+    if _url_host(url) in registered_hosts or not is_url_destination_allowed_by_host(server_url, list(allowed_hosts)):
         return _Unclaimed(tool=tool)
     return _DirectClaim(
         tool=tool,
@@ -269,7 +296,8 @@ def _claim(tool: Mapping[str, object], servers: Collection[MCPServer], allowed_h
             server_label=label,
             server_url=server_url,
             headers=_caller_headers(tool),
-            allowed_tools=allowed_tool_names(tool),
+            allowed_tools=allowed_tools_filter(tool),
+            registered_hosts=registered_hosts,
         ),
     )
 
@@ -306,7 +334,8 @@ def plan_hosted_mcp_claims(
     tool that needs approval answers 400, or under drop_params is left for the hosted MCP strip to drop. None when
     nothing is claimed, so the request keeps its current path."""
     allowed_origins: Final = hosted_mcp_allowed_origins(allowed_hosts)
-    claims: Final = tuple(_claim(tool, servers, allowed_origins) for tool in tools)
+    registered_hosts: Final = _registered_hosts(servers)
+    claims: Final = tuple(_claim(tool, servers, allowed_origins, registered_hosts) for tool in tools)
     needs_approval: Final = tuple(claim for claim in claims if not _runs_without_approval(claim))
     if needs_approval and not drops_unsupported_params(drop_params):
         raise hosted_mcp_approval_error(
@@ -329,13 +358,19 @@ def plan_hosted_mcp_claims(
 
 def guarded_mcp_client(server: DirectMCPServer, allowed_hosts: Sequence[str]) -> DirectMCPClient:
     from litellm.mcp_client.client import MCPClient
-    from litellm.mcp_client.guarded_transport import GuardedTransport
+    from litellm.mcp_client.guarded_transport import CallerHeaders, GuardedTransport
 
     return MCPClient(
         server_url=server.server_url,
         transport_type=MCPTransport.http,
         extra_headers=dict(server.headers),
-        upstream_transport=GuardedTransport(hosted_mcp_allowed_origins(allowed_hosts)),
+        upstream_transport=GuardedTransport(
+            hosted_mcp_allowed_origins(allowed_hosts),
+            registered_hosts=server.registered_hosts,
+            caller_headers=CallerHeaders(
+                server_url=server.server_url, names=frozenset(name.lower() for name in server.headers)
+            ),
+        ),
     )
 
 
@@ -348,12 +383,14 @@ def _listing_error(server: DirectMCPServer, error: Exception) -> APIError:
     )
 
 
-async def _server_tools(server: DirectMCPServer, client: DirectMCPClient) -> tuple[MCPTool, ...]:
+async def _server_tools(
+    server: DirectMCPServer, client: DirectMCPClient, guard: DirectToolGuard
+) -> tuple[MCPTool, ...]:
     try:
         listed: Final = await client.list_tools(raise_on_error=True)
     except Exception as error:
         raise _listing_error(server, error) from error
-    return tuple(tool for tool in listed if server.allowed_tools is None or tool.name in server.allowed_tools)
+    return await guard(server, tuple(filter(server.allowed_tools.admits, listed)))
 
 
 def direct_tool_name(server_label: str, tool_name: str) -> str:
@@ -369,10 +406,15 @@ def _named_tools(
 
 
 async def list_direct_tools(
-    servers: Sequence[DirectMCPServer], client_for: Callable[[DirectMCPServer], DirectMCPClient]
+    servers: Sequence[DirectMCPServer],
+    client_for: Callable[[DirectMCPServer], DirectMCPClient],
+    guard: DirectToolGuard,
 ) -> DirectListing:
     clients: Final = tuple((server, client_for(server)) for server in servers)
-    listed: Final = tuple([(server, client, await _server_tools(server, client)) for server, client in clients])
+    server_tools: Final = await asyncio.gather(*(_server_tools(server, client, guard) for server, client in clients))
+    listed: Final = tuple(
+        (server, client, tools) for (server, client), tools in zip(clients, server_tools, strict=True)
+    )
     direct_tools: Final = tuple(chain.from_iterable(_named_tools(*entry) for entry in listed))
     return DirectListing(
         tools=tuple(tool.model_copy(update={"name": name}) for name, tool, _ in direct_tools),
