@@ -70,6 +70,11 @@ def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
     return float(cost) if isinstance(cost, int | float) else 0.0
 
 
+def cost_left_after_failed_attempts(kwargs: Mapping[str, object], response_cost: float) -> float:
+    already_counted: Final = kwargs.get("failure_logged_cost_billed_on_success")
+    return max(response_cost - already_counted, 0.0) if isinstance(already_counted, int | float) else response_cost
+
+
 def _model_info_id(deployment: Mapping[str, object]) -> object:
     return require_attributes(deployment.get("model_info", {}), _SupportsGet, "get").get("id")
 
@@ -580,9 +585,10 @@ class RouterBudgetLimiting(CustomLogger):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        polled_response, response_cost = _JOB_CHARGE_VALUES.validate_python(
+        polled_response, billed_cost = _JOB_CHARGE_VALUES.validate_python(
             (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
         )
+        response_cost: Final = cost_left_after_failed_attempts(callback_fields, billed_cost)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 

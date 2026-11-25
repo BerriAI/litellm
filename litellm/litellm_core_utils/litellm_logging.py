@@ -1288,7 +1288,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
-        self.on_stream_refused: Callable[[], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
         self._stream_success_refused: bool = False
         self._stream_success_claimed: bool = False
@@ -1297,6 +1296,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._stash_owed_on_success: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
+        self._failure_logged_cost_owed_on_success: float = 0.0
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -3403,6 +3403,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not owed_on_success or billed_by_continuation:
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
+        self._failure_logged_cost_owed_on_success = self._failure_logged_cost_owed_on_success + attempt[1]
 
     def _carry_parked_success(self) -> bool:
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
@@ -3449,6 +3450,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not isinstance(own_cost, (int, float)):
             return combined_usage
         self.model_call_details["response_cost"] = own_cost + partial_cost
+        self.model_call_details["failure_logged_cost_billed_on_success"] = partial_cost
         if self.cost_breakdown is not None:
             self.cost_breakdown = self.cost_breakdown | CostBreakdown(
                 total_cost=own_cost + partial_cost,
@@ -3474,6 +3476,10 @@ class Logging(LiteLLMLoggingBaseClass):
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
         self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
+        continued_partial_logged: Final = self.model_call_details.get("failure_logged_cost_billed_on_success")
+        self.model_call_details["failure_logged_cost_billed_on_success"] = self._failure_logged_cost_owed_on_success + (
+            continued_partial_logged if isinstance(continued_partial_logged, float) else 0.0
+        )
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 

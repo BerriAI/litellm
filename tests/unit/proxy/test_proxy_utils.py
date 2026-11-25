@@ -4096,22 +4096,17 @@ async def test_stream_refused_after_its_success_was_logged_is_billed_once_and_st
     assert rows[0][1:3] == (30, 20)
 
 
-async def _native_pump_stream_refused_after(
+async def _bridged_stream_refused_after(
     monkeypatch: pytest.MonkeyPatch,
     frames_read: int,
-    provider_holds_after: int | None,
-    served_as: str = "native_pump",
+    provider_holds_after: int,
+    served_as: str,
 ) -> tuple[list[tuple[str, int, int, float]], bool]:
     """Streams a native /v1/messages answer through a post-call hook that refuses it after reading ``frames_read``
-    frames, the provider sending every frame at once or, with ``provider_holds_after``, holding its stream open
-    after that many. ``served_as`` picks the Python handler's provider pump, the bare byte stream the Rust bridge
-    hands the proxy, or that byte stream wrapped as the bridge's public stream. Returns the spend rows and whether
-    the provider stream was closed."""
+    frames, the provider holding its stream open after ``provider_holds_after``. ``served_as`` picks the bare byte stream the Rust bridge hands the proxy, or that byte stream
+    wrapped as the bridge's public stream. Returns the spend rows and whether the provider stream was closed."""
     from litellm.caching.caching import DualCache
-    from litellm.llms.anthropic.messages.native.streaming_iterator import (
-        AnthropicMessagesStreamingResponse,
-        BaseAnthropicMessagesStreamingIterator,
-    )
+    from litellm.llms.anthropic.messages.native.streaming_iterator import AnthropicMessagesStreamingResponse
     from litellm.proxy.utils import ProxyLogging
 
     class RefusingHook(CustomLogger):
@@ -4145,12 +4140,6 @@ async def _native_pump_stream_refused_after(
 
     provider_stream: Final = provider()
     served: Final = {
-        "native_pump": lambda: AnthropicMessagesStreamingResponse(
-            completion_stream=BaseAnthropicMessagesStreamingIterator(
-                litellm_logging_obj=logging_obj, request_body={"model": "claude-sonnet-4-5"}
-            ).async_sse_wrapper(provider_stream),
-            hidden_params={},
-        ),
         "rust_bridge_byte_stream": lambda: provider_stream,
         "rust_bridge_public_stream": lambda: AnthropicMessagesStreamingResponse(
             completion_stream=provider_stream, hidden_params={}
@@ -4169,18 +4158,10 @@ async def _native_pump_stream_refused_after(
 
 
 @pytest.mark.asyncio
-async def test_refused_native_messages_stream_bills_every_frame_the_provider_sent(monkeypatch):
-    rows, _ = await _native_pump_stream_refused_after(monkeypatch, frames_read=2, provider_holds_after=None)
-
-    assert [row[:3] for row in rows] == [("failure", 30, 20)]
-    assert rows[0][3] > 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("served_as", ["native_pump", "rust_bridge_byte_stream", "rust_bridge_public_stream"])
+@pytest.mark.parametrize("served_as", ["rust_bridge_byte_stream", "rust_bridge_public_stream"])
 async def test_refused_messages_stream_closes_the_provider_stream_still_sending(monkeypatch, served_as):
     rows, provider_closed = await asyncio.wait_for(
-        _native_pump_stream_refused_after(monkeypatch, frames_read=4, provider_holds_after=4, served_as=served_as),
+        _bridged_stream_refused_after(monkeypatch, frames_read=4, provider_holds_after=4, served_as=served_as),
         timeout=10,
     )
 

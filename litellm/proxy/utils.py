@@ -5817,9 +5817,9 @@ class ProxyLogging:
     ) -> bool:
         """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
         as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: the
-        provider stream is stopped, a native one billed for every chunk it sent and any other for the bytes the hooks
-        read. Returns False when the error is not one, when the stream's success log already ran, or when the stream
-        parked an assembled chat response instead, so the caller handles it as a chat stream."""
+        provider stream is closed and billed for the bytes the hooks read. Returns False when the error is not one,
+        when the stream's success log already ran, or when the stream parked an assembled chat response instead, so
+        the caller handles it as a chat stream."""
         from litellm.litellm_core_utils.asyncify import asyncify
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
             AnthropicPassthroughLoggingHandler,
@@ -5841,11 +5841,6 @@ class ProxyLogging:
         logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
         logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
-        stop_provider_stream: Final = logging_obj.on_stream_refused
-        logging_obj.on_stream_refused = None
-        if stop_provider_stream is not None:
-            await stop_provider_stream()
-            return True
         try:
             await read_tap.aclose()
         except Exception as exc:  # noqa: BLE001  # closing is best-effort, so the refusal still reaches the client
