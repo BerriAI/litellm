@@ -42,6 +42,7 @@ export default function UsageOverview({
   const { t } = useTranslation();
   return (
     <div className="grid gap-3">
+      {accountingNotice}
       <UsageStatStrip
         results={results}
         totals={totals}
@@ -51,7 +52,6 @@ export default function UsageOverview({
         spendDetails={<SpendDisplayCurrency usdSpend={totals.spend} loading={loading} />}
       />
 
-      {accountingNotice}
       {subscriptionCosts}
 
       <UsageBreakdownChart results={results} loading={loading} />
