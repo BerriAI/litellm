@@ -1091,6 +1091,14 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
         ),
         pytest.param("resp_abc", True, id="unwrapped-native-turn"),
         pytest.param(
+            ResponsesAPIRequestUtils._build_responses_api_response_id(
+                "xai", "native-3", "3f1c6a2e-8b4d-4e7a-9c1f-2d5b7e9a0c13"
+            ),
+            True,
+            id="native-xai-turn",
+        ),
+        pytest.param("3f1c6a2e-8b4d-4e7a-9c1f-2d5b7e9a0c13", False, id="unwrapped-id-from-an-unknown-provider"),
+        pytest.param(
             ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "bridged-1", "chatcmpl-abc"),
             False,
             id="openai-chat-bridge-turn",
