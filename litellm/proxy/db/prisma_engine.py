@@ -91,7 +91,20 @@ def _unblock_signals() -> None:
     signal.pthread_sigmask(signal.SIG_UNBLOCK, (signal.SIGINT, signal.SIGTERM))
 
 
-def initialize_query_engine(client: "Prisma") -> None:
+def _launch_engine(argv: tuple[str, ...], environment: Mapping[str, str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        argv,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,
+        preexec_fn=None if sys.platform == "win32" else _unblock_signals,
+    )
+
+
+def initialize_query_engine(
+    client: "Prisma",
+    launch: Callable[[tuple[str, ...], Mapping[str, str]], subprocess.Popen[bytes]] = _launch_engine,
+) -> None:
     from prisma._constants import DEFAULT_CONNECT_TIMEOUT
     from prisma.client import PACKAGED_SCHEMA_PATH
     from prisma.engine import errors
@@ -123,7 +136,7 @@ def initialize_query_engine(client: "Prisma") -> None:
                 ),
                 **({"LOG_QUERIES": "y"} if self._log_queries else {}),
             }
-            self.process = subprocess.Popen(
+            self.process = launch(
                 (
                     str(file.absolute()),
                     "-p",
@@ -132,10 +145,7 @@ def initialize_query_engine(client: "Prisma") -> None:
                     "--enable-raw-queries",
                     *(("--enable-playground",) if playground else ()),
                 ),
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=sys.stderr,
-                preexec_fn=None if sys.platform == "win32" else _unblock_signals,
+                environment,
             )
             stream: Final = self.process.stdout
             if stream is None:

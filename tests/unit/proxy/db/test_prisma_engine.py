@@ -1,4 +1,7 @@
 import asyncio
+import io
+import json
+import subprocess
 from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
@@ -8,9 +11,15 @@ import pytest
 from prisma import Prisma
 from prisma.engine.errors import EngineConnectionError
 from prisma.engine.query import QueryEngine
+from prisma.types import DatasourceOverride
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.db.prisma_engine import _connect_when_listening, _engine_http_options, _listening_url
+from litellm.proxy.db.prisma_engine import (
+    _connect_when_listening,
+    _engine_http_options,
+    _listening_url,
+    initialize_query_engine,
+)
 
 
 @pytest.mark.parametrize(
@@ -134,3 +143,28 @@ def test_the_client_http_options_reach_either_engine_constructor(
 ) -> None:
     built: Final = engine(dml_path=Path("schema.prisma"), **_engine_http_options(engine, {"timeout": 5}))
     assert built.http == {"timeout": 5}
+
+
+class _EngineThatExitsWithoutListening(subprocess.Popen[bytes]):
+    def __init__(self, argv: tuple[str, ...], environment: Mapping[str, str]) -> None:
+        self.argv: Final = argv
+        self.environment: Final = environment
+        self.stdout = io.BytesIO(b"query-engine banner that is not JSON\n")
+        self.returncode = 1
+
+
+@pytest.mark.asyncio
+async def test_spawn_hands_the_engine_its_datasource_override_and_reports_an_exit_before_listening() -> None:
+    client: Final = Prisma(http={"timeout": 5}, datasource={"url": "postgresql://unused@localhost/unused"})
+    initialize_query_engine(client, launch=_EngineThatExitsWithoutListening)
+    engine: Final = client._engine  # pyright: ignore[reportPrivateUsage]  # the engine initialize_query_engine installed
+    assert isinstance(engine, QueryEngine)
+    override: Final = DatasourceOverride(name="db", url="postgresql://litellm@db.internal:5432/litellm")
+
+    with pytest.raises(EngineConnectionError, match="exited before publishing its listening address"):
+        await engine.spawn(Path("query-engine"), timedelta(seconds=30), [override])
+
+    process: Final = engine.process
+    assert isinstance(process, _EngineThatExitsWithoutListening)
+    assert process.argv[:3] == (str(Path("query-engine").absolute()), "-p", "0")
+    assert json.loads(process.environment["OVERWRITE_DATASOURCES"]) == [override]
