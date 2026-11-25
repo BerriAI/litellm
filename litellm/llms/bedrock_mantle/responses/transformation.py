@@ -19,9 +19,11 @@ from collections.abc import Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import with_sanitized_schema_at
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -29,6 +31,10 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
+    drop_schema_keywords_gemma_4_rejects,
+    live_model_cost,
+    mantle_supports_all_json_schema_keywords,
+    with_values_gemma_4_accepts,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -55,6 +61,9 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
     {"function", "mcp", "custom", "namespace", "tool_search", "web_search"}
 )
 
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
@@ -203,13 +212,48 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             if hoisted.hoisted
             else response_api_optional_request_params
         )
-        return super().transform_responses_api_request(
-            model=model,
-            input=normalized_input,
-            response_api_optional_request_params=request_params,
-            litellm_params=litellm_params,
-            headers=headers,
+        request: Final = _REQUEST_BODY.validate_python(
+            super().transform_responses_api_request(
+                model=model,
+                input=normalized_input,
+                response_api_optional_request_params=request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         )
+        return dict(self._with_schemas_model_accepts(request, model, litellm_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return self._with_schemas_model_accepts(
+            super().transform_extra_body(extra_body, request, model, litellm_params), model, litellm_params
+        )
+
+    @classmethod
+    def _with_schemas_model_accepts(
+        cls, params: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams
+    ) -> Mapping[str, object]:
+        region: Final = cls._resolve_region(
+            {"aws_region_name": litellm_params.aws_region_name, "api_base": litellm_params.api_base}
+        )
+        if mantle_supports_all_json_schema_keywords(model, region, litellm_params, live_model_cost()):
+            return params
+        return with_values_gemma_4_accepts(params, model, cls._value_gemma_4_accepts)
+
+    @classmethod
+    def _value_gemma_4_accepts(cls, key: str, value: object) -> object:
+        if key == "tools" and isinstance(value, list):
+            return cls._sanitized_tools(_JSON_ARRAY.validate_python(value), drop_schema_keywords_gemma_4_rejects)
+        if key == "text" and isinstance(value, dict):
+            return with_sanitized_schema_at(
+                _JSON_OBJECT.validate_python(value), ("format", "schema"), drop_schema_keywords_gemma_4_rejects
+            )
+        return value
 
     @classmethod
     def _params_with_hoisted_tools(

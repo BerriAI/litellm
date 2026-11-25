@@ -28,6 +28,7 @@ from litellm.types.utils import CallTypes, Usage
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
     Span = _Span
@@ -41,19 +42,32 @@ def _precise_minute(now: datetime) -> str:
     return now.strftime("%Y-%m-%d-%H-%M")
 
 
-def _response_total_tokens(response_obj: object) -> int:
-    if not isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
-        return 0
-    response_usage: Final = getattr(response_obj, "usage", None)
-    return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
+SLOT_RELEASED_BEFORE_LOGGING: Final = "parallel_request_slot_released_before_logging"
+
+
+def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -> int:
+    response_usage: Final = (
+        getattr(response_obj, "usage", None)
+        if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse))
+        else None
+    )
+    usage: Final = (
+        kwargs.get("combined_usage_object")
+        if response_usage is None and kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
+        else response_usage
+    )
+    return usage.total_tokens if isinstance(usage, Usage) else 0
 
 
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
 
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:
-    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
-    return 0 if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES else 1
+    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect.
+    A row whose slot was released before it logged releases nothing again."""
+    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True:
+        return 0
+    return 1
 
 
 class CacheObject(TypedDict):
@@ -556,7 +570,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             precise_minute: Final = _precise_minute(self._clock())
 
-            total_tokens: int = _response_total_tokens(response_obj)
+            total_tokens: Final = _response_total_tokens(
+                kwargs,  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+                response_obj,
+            )
 
             # ------------
             # Update usage - API Key
@@ -571,7 +588,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -612,7 +629,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -630,17 +647,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - User
             # ------------
             if user_api_key_user_id is not None:
-                total_tokens = _response_total_tokens(response_obj)
-
                 request_count_api_key = f"{user_api_key_user_id}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
-                    "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_requests": released,
+                    "current_tpm": 0,
+                    "current_rpm": released,
                 }
 
                 new_val = {
@@ -656,17 +671,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None:
-                total_tokens = _response_total_tokens(response_obj)
-
                 request_count_api_key = f"{user_api_key_team_id}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
-                    "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_requests": released,
+                    "current_tpm": 0,
+                    "current_rpm": released,
                 }
 
                 new_val = {
@@ -682,17 +695,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - End User
             # ------------
             if user_api_key_end_user_id is not None:
-                total_tokens = _response_total_tokens(response_obj)
-
                 request_count_api_key = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
-                    "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_requests": released,
+                    "current_tpm": 0,
+                    "current_rpm": released,
                 }
 
                 new_val = {
@@ -762,7 +773,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -810,6 +821,19 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             start_time=now,
             end_time=now,
         )
+
+    @with_service_target("rate_limits")
+    async def async_release_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        now: Final = self._clock()
+        details: Final[Mapping[str, object]] = logging_obj.model_call_details
+        await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
+            kwargs={"litellm_params": details.get("litellm_params"), "user": details.get("user")},
+            response_obj=None,
+            start_time=now,
+            end_time=now,
+        )
+        released: Final = {SLOT_RELEASED_BEFORE_LOGGING: True}
+        logging_obj.model_call_details |= released  # rebind-ok: the row's details reach its later success callback
 
     async def get_internal_user_object(
         self,

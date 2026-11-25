@@ -990,6 +990,7 @@
         "audio_transcriptions": false,
         "audio_speech": true,
         "moderations": false,
+        "realtime": true,
         "batches": false,
         "rerank": false,
         "a2a": true,

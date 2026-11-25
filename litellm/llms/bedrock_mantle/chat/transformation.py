@@ -10,17 +10,26 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import with_sanitized_schema_at
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    drop_schema_keywords_gemma_4_rejects,
+    live_model_cost,
+    mantle_supports_all_json_schema_keywords,
+    mantle_url_region,
+    resolve_mantle_region,
+    with_values_gemma_4_accepts,
 )
 from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
@@ -38,6 +47,51 @@ if TYPE_CHECKING:
     from litellm.llms.openai.chat.gpt_transformation import (
         OpenAIChatCompletionStreamingHandler,
     )
+
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+_CHAT_SCHEMA_PATHS: Final = MappingProxyType(
+    {
+        "tools": ("function", "parameters"),
+        "functions": ("parameters",),
+        "response_format": ("json_schema", "schema"),
+    }
+)
+
+
+def _chat_entry_gemma_4_accepts(entry: object, path: tuple[str, ...]) -> object:
+    if not isinstance(entry, dict):
+        return entry
+    return with_sanitized_schema_at(_JSON_OBJECT.validate_python(entry), path, drop_schema_keywords_gemma_4_rejects)
+
+
+def _chat_value_gemma_4_accepts(key: str, value: object) -> object:
+    path: Final = _CHAT_SCHEMA_PATHS.get(key)
+    if path is None:
+        return value
+    if isinstance(value, list):
+        return [_chat_entry_gemma_4_accepts(entry, path) for entry in _JSON_ARRAY.validate_python(value)]
+    return _chat_entry_gemma_4_accepts(value, path)
+
+
+def _chat_request_region(litellm_params: Mapping[str, object]) -> str:
+    api_base: Final = litellm_params.get("api_base")
+    if isinstance(api_base, str) and api_base:
+        return mantle_url_region(api_base, litellm_params)
+    return resolve_mantle_region(litellm_params)
+
+
+def _with_schemas_model_accepts(
+    params: Mapping[str, object], model: str, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if mantle_supports_all_json_schema_keywords(
+        model, _chat_request_region(litellm_params), litellm_params, live_model_cost()
+    ):
+        return params
+    return with_values_gemma_4_accepts(params, model, _chat_value_gemma_4_accepts)
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -172,7 +226,21 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             if BaseAWSLLM.get_bedrock_invoke_provider(model) == "mistral"
             else messages
         )
-        return super().transform_request(model, sent_messages, optional_params, litellm_params, headers)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts
+        request: Final = _REQUEST_BODY.validate_python(
+            super().transform_request(model, sent_messages, optional_params, litellm_params, headers)  # pyright: ignore[reportUnknownMemberType]  # OpenAIGPTConfig.transform_request types its params and result as bare dicts
+        )
+        return dict(_with_schemas_model_accepts(request, model, litellm_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return _with_schemas_model_accepts(
+            super().transform_extra_body(extra_body, request, model, litellm_params), model, litellm_params
+        )
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

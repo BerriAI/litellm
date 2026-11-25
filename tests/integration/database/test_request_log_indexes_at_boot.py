@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -325,7 +326,8 @@ def test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_
         job: Final = migration_job(database_url, resolver)
         assert job.returncode == 0, job.stdout + job.stderr
         assert INDEXES_IN_PLACE in job.stderr + job.stdout, job.stdout + job.stderr
-        assert "Building index" not in job.stderr + job.stdout, job.stdout + job.stderr
+        built: Final = re.findall(r"Building index (\S+) on ", job.stderr + job.stdout)
+        assert built == ["LiteLLM_EndUserTable_restricted_idx"], job.stdout + job.stderr
         assert ledger(database_url) == {name: True for name in SHIPPED_MIGRATIONS}
         assert index_oids(database_url) == before
         assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(gateway, tmp_path, database_url, resolver)
