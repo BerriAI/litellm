@@ -1,14 +1,17 @@
 import asyncio
+from datetime import datetime
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException, Request
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
@@ -18,12 +21,15 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    _build_passthrough_failure_request_payload,
+    _log_passthrough_upstream_failure,
 )
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
 )
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import CallTypes
 
 
 @pytest.mark.asyncio
@@ -787,6 +793,7 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"
 
 
+_VERTEX_GROUP: Final = "gemini-3.8-flash"
 _VERTEX_BODY: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
 
 
@@ -859,44 +866,92 @@ def _vertex_deployment(group: str, model: str, deployment_id: str) -> Deployment
     }
 
 
+def _least_busy_of(router: Router) -> LeastBusyLoggingHandler:
+    return next(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, LeastBusyLoggingHandler) and callback.router_cache is router.health().store
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("group", "model", "url_model", "body"),
+    ("group", "model", "first_url_model", "second_url_model", "body"),
     [
-        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "gemini-3.8-flash", _VERTEX_BODY),
-        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "alias", _VERTEX_BODY),
+        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.8-flash", _VERTEX_BODY),
+        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "alias", "alias", _VERTEX_BODY),
+        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "alias", "gemini-3.8-flash", _VERTEX_BODY),
         (
             "gemini-3.8-flash",
             "vertex_ai/gemini-3.8-flash",
             "alias",
+            "alias",
             {**_VERTEX_BODY, "metadata": {"deployment_model_name": "caller-named-group"}},
         ),
-        ("vertex_ai/*", "vertex_ai/*", "gemini-3.8-flash", _VERTEX_BODY),
+        ("vertex_ai/*", "vertex_ai/*", "gemini-3.8-flash", "gemini-3.8-flash", _VERTEX_BODY),
     ],
-    ids=["group", "alias", "alias-with-a-caller-named-group", "wildcard"],
+    ids=["group", "alias", "alias-then-group", "alias-with-a-caller-named-group", "wildcard"],
 )
 async def test_a_vertex_passthrough_call_in_flight_keeps_its_deployment_busy_whatever_name_the_url_uses(
-    group: str, model: str, url_model: str, body: Mapping[str, object]
+    group: str, model: str, first_url_model: str, second_url_model: str, body: Mapping[str, object]
 ) -> None:
     router: Final = Router(
         model_list=[_vertex_deployment(group, model, "dep-a"), _vertex_deployment(group, model, "dep-b")],
         model_group_alias={"alias": group},
         routing_strategy="least-busy",
     )
-    least_busy: Final = next(
-        callback
-        for callback in litellm.callbacks
-        if isinstance(callback, LeastBusyLoggingHandler) and callback.router_cache is router.cache
-    )
 
-    first: Final = await _vertex_pass_through_logging_kwargs(router, url_model, "first-call", body)
-    least_busy.log_pre_api_call(model=url_model, messages=[], kwargs=first)
-    second: Final = await _vertex_pass_through_logging_kwargs(router, url_model, "second-call", body)
+    first: Final = await _vertex_pass_through_logging_kwargs(router, first_url_model, "first-call", body)
+    _least_busy_of(router).log_pre_api_call(model=first_url_model, messages=[], kwargs=first)
+    second: Final = await _vertex_pass_through_logging_kwargs(router, second_url_model, "second-call", body)
 
     assert (
         second["litellm_params"]["metadata"]["model_info"]["id"]
         != first["litellm_params"]["metadata"]["model_info"]["id"]
     )
+
+
+@pytest.mark.asyncio
+async def test_a_vertex_passthrough_call_the_upstream_rejected_leaves_its_deployment_idle() -> None:
+    router: Final = Router(
+        model_list=[
+            _vertex_deployment(_VERTEX_GROUP, "vertex_ai/gemini-3.8-flash", "dep-a"),
+            _vertex_deployment(_VERTEX_GROUP, "vertex_ai/gemini-3.8-flash", "dep-b"),
+        ],
+        routing_strategy="least-busy",
+    )
+    kwargs: Final = await _vertex_pass_through_logging_kwargs(router, _VERTEX_GROUP, "rejected-call")
+    _least_busy_of(router).log_pre_api_call(model=_VERTEX_GROUP, messages=[], kwargs=kwargs)
+    logging_obj: Final = Logging(
+        model=_VERTEX_GROUP,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime.now(),
+        litellm_call_id="rejected-call",
+        function_id="rejected-call",
+    )
+    upstream_url: Final = (
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google/models/"
+        f"{_VERTEX_GROUP}:generateContent"
+    )
+
+    await _log_passthrough_upstream_failure(
+        response=httpx.Response(
+            400, json={"error": {"code": 400}}, request=httpx.Request("POST", upstream_url)
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        request_payload=_build_passthrough_failure_request_payload(
+            parsed_body=dict(_VERTEX_BODY),
+            kwargs=kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider="vertex_ai",
+        ),
+        logging_obj=logging_obj,
+    )
+
+    served: Final = kwargs["litellm_params"]["metadata"]["model_info"]["id"]
+    assert router.health().store.get_cache(f"{_VERTEX_GROUP}_request_count:{served}") == 0
 
 
 _VERTEX_MODEL: Final = "gemini-3.8-flash"

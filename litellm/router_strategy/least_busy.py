@@ -21,6 +21,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.attempt_settlement import current_attempt_id, release_in_background, released
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import CallTypes
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
@@ -476,6 +477,17 @@ class LeastBusyLoggingHandler(CustomLogger):
         await self._async_settle(kwargs)
         if self.test_flag:
             self.logged_failure += 1
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    async def async_post_call_failure_hook(
+        self,
+        request_data: Mapping[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        if request_data.get("call_type") == CallTypes.pass_through.value:
+            await self._async_settle(request_data)
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(

@@ -23,6 +23,7 @@ from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.attempt_settlement import routed_attempt
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
     SELECTION_RESERVATION_TTL_SECONDS,
@@ -892,6 +893,22 @@ def test_a_proxy_error_logged_on_a_request_whose_failure_was_already_logged_leav
     )
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_failure_seen_by_both_failure_paths_frees_only_its_own_call() -> None:
+    worker: Final = _worker(None)
+    failed: Final = {**_call_kwargs("dep-a", "failed-call"), "call_type": CallTypes.pass_through.value}
+    still_running: Final = {**_call_kwargs("dep-a", "still-running"), "call_type": CallTypes.pass_through.value}
+    worker.log_pre_api_call(model="m", messages=[], kwargs=failed)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=still_running)
+
+    await worker.async_log_failure_event(failed, None, None, None)
+    await worker.async_post_call_failure_hook(
+        request_data=dict(failed), original_exception=Exception("upstream 400"), user_api_key_dict=UserAPIKeyAuth()
+    )
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
 def test_a_call_logged_under_its_callers_group_name_frees_the_pick_made_for_another_group() -> None:
