@@ -113,6 +113,11 @@ def _resolve_oidc_reference(credential: str | None) -> str | None:
             return resolved
 
 
+def _locally_resolved(credential: str) -> str | None:
+    resolved: Final = resolve_local_oidc_reference(credential)
+    return resolved if isinstance(resolved, str) else None
+
+
 class PassthroughEndpointRouter:
     """
     Use this class to Get credentials for pass-through endpoints
@@ -264,7 +269,7 @@ class PassthroughEndpointRouter:
         if llm_router is None:
             return None
         provider: Final = litellm.LlmProviders.OPENAI.value
-        pass_through_api_key: Final = self._get_configured_api_key(provider)
+        pass_through_api_key: Final = self._get_sent_api_key(provider)
         if pass_through_api_key is None:
             return None
         default_api_key: Final = get_secret_str(self._get_default_env_variable_name_passthrough_endpoint(provider))
@@ -277,7 +282,7 @@ class PassthroughEndpointRouter:
             if not _is_team_deployment(deployment)
             and self._get_deployment_provider_model(deployment["litellm_params"]) == (provider, model)
             and (credentials := self._get_deployment_api_key_and_base(deployment["litellm_params"]))
-            and (credentials[0] or default_api_key) == pass_through_api_key
+            and _locally_resolved(credentials[0] or default_api_key or "") == pass_through_api_key
             and _is_under_api_base(called_url, credentials[1] or default_api_base)
         )
         prices: Final = frozenset(_declared_pricing(deployment) for deployment in candidates)
@@ -285,15 +290,11 @@ class PassthroughEndpointRouter:
             return None
         return _deployment_id(candidates[0])
 
-    def _get_configured_api_key(self, custom_llm_provider: str) -> str | None:
-        deployment_credentials: Final = self._get_deployment_credentials(
-            custom_llm_provider=custom_llm_provider,
-            region_name=None,
-            include_team_deployments=True,
-        )
-        if deployment_credentials is not None:
-            return deployment_credentials.api_key
-        return get_secret_str(self._get_default_env_variable_name_passthrough_endpoint(custom_llm_provider))
+    def _get_sent_api_key(self, custom_llm_provider: str) -> str | None:
+        try:
+            return self.get_credentials(custom_llm_provider=custom_llm_provider, region_name=None)
+        except HTTPException:
+            return None
 
     @staticmethod
     def _get_deployment_api_key_and_base(litellm_params: LiteLLMParamsTypedDict) -> tuple[str | None, str | None]:

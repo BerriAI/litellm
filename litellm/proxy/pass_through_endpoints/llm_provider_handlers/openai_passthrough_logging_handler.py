@@ -237,8 +237,12 @@ def _without_remote_high_detail_images(message: Mapping[str, object]) -> Mapping
     return {**message, "content": kept_parts}
 
 
-def pricing_deployment_id(model: str | None, custom_llm_provider: object, url_route: str) -> str | None:
-    if custom_llm_provider != LlmProviders.OPENAI.value or model is None:
+def pricing_deployment_id(model: str | None, declared_provider: object, url_route: str) -> str | None:
+    """
+    Only the built-in OpenAI route declares its provider and sends the configured key upstream. A configured
+    pass-through route forwards its own credential, so its account is unknown and it stays on the cost map
+    """
+    if declared_provider != LlmProviders.OPENAI.value or model is None:
         return None
     return PassthroughEndpointRouter().get_openai_pricing_deployment_id(model=model, called_url=url_route)
 
@@ -665,14 +669,13 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             ) = None
             handler_instance: Final = OpenAIPassthroughLoggingHandler()
 
-            logged_custom_llm_provider: Final = _DECODED_JSON.validate_python(
-                logging_obj.model_call_details.get("custom_llm_provider", "openai")
+            logged_provider: Final = _DECODED_JSON.validate_python(
+                logging_obj.model_call_details.get("custom_llm_provider")
             )
-            custom_llm_provider: Final = TypeAdapter(str).validate_python(
-                kwargs.get("custom_llm_provider", logged_custom_llm_provider)
-            )
+            declared_provider: Final = _DECODED_JSON.validate_python(kwargs.get("custom_llm_provider", logged_provider))
+            custom_llm_provider: Final = TypeAdapter(str).validate_python(declared_provider or "openai")
             router_model_id: Final = pricing_deployment_id(
-                model if isinstance(model, str) else None, custom_llm_provider, url_route
+                model if isinstance(model, str) else None, declared_provider, url_route
             )
 
             if is_chat_completions:
@@ -974,8 +977,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     "kwargs": {},
                 }
 
-            custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
-            router_model_id: Final = pricing_deployment_id(model, custom_llm_provider, url_route)
+            declared_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider")
+            custom_llm_provider: Final = declared_provider or "openai"
+            router_model_id: Final = pricing_deployment_id(model, declared_provider, url_route)
             # Calculate cost using LiteLLM's cost calculator
             response_cost: Final = (
                 0.0
