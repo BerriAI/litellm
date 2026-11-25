@@ -1,4 +1,23 @@
 {
+  "lensControls": {
+    "title": "Lens",
+    "tracing": "追踪",
+    "new": "新增",
+    "description": "追踪 · 告警 · 评估",
+    "on": "开启",
+    "off": "关闭",
+    "open": "打开 Lens",
+    "teamDefault": "团队密钥的默认设置",
+    "keyInherited": "使用团队设置",
+    "keyCustom": "自定义设置",
+    "useTeam": "使用团队设置",
+    "saveFailed": "无法保存 Lens 日志设置",
+    "loading": "加载中…",
+    "unknown": "未知",
+    "teamUnavailable": "无法获取团队 Lens 设置",
+    "statusUnavailable": "无法获取 Lens 连接状态",
+    "notConfigured": "请配置网关的 Lens 连接以记录追踪"
+  },
   "apps": {
     "title": "应用",
     "list": {
@@ -2322,7 +2341,6 @@
       },
       "header": {
         "defaultKeyName": "虚拟密钥",
-        "never": "永不",
         "enterpriseOnly": "这是 LiteLLM Enterprise 功能，需要有效的密钥才能使用。"
       },
       "deleteModal": {
@@ -2362,28 +2380,8 @@
         "settings": "设置"
       },
       "overview": {
-        "spend": "费用",
-        "teamMemberSpend": "团队成员费用：${{spend}} / ${{maxBudget}}（团队成员预算）",
-        "ofBudget": "预算 {{budget}}",
-        "resets": "重置于 ",
-        "lifetimeSpend": "历史累计费用：$",
         "lifetimeSpendHintLabel": "为什么历史累计费用低于当前费用",
-        "lifetimeSpendHint": "历史累计费用从 2026-09-19 的 LiteLLM v1.103.0 开始记录，未回填旧数据，因此仅包含该次升级后的用量。",
-        "rateLimits": "速率限制",
-        "tpm": "TPM：",
-        "rpm": "RPM：",
-        "tpd": "TPD（批处理）：",
-        "unlimited": "无限制",
-        "throttleOnBudgetExceeded": "超出预算后降速：是",
-        "models": "模型",
-        "noModels": "未指定模型",
-        "guardrails": "护栏",
-        "noGuardrails": "尚未配置护栏",
-        "globalGuardrailsDisabled": "全局护栏已停用",
-        "policies": "策略",
-        "loadingGuardrails": "正在加载护栏…",
-        "resolvedGuardrails": "最终生效的护栏：",
-        "noPolicies": "尚未配置策略"
+        "lifetimeSpendHint": "历史累计费用从 2026-09-19 的 LiteLLM v1.103.0 开始记录，未回填旧数据，因此仅包含该次升级后的用量。"
       },
       "settings": {
         "title": "密钥设置",
@@ -2450,7 +2448,6 @@
       "regenerateKey": "重新生成密钥",
       "createNewKey": "创建密钥",
       "copyKeyAlias": "复制密钥别名",
-      "blocked": "已封禁",
       "keyIdLabel": "密钥 ID：",
       "copyKeyId": "复制密钥 ID",
       "moreActions": "更多密钥操作",
@@ -2461,11 +2458,6 @@
         "delete": "删除密钥"
       },
       "fields": {
-        "expires": "到期时间",
-        "createdAt": "创建时间",
-        "createdBy": "创建人",
-        "lastUpdated": "最近更新时间",
-        "lastActive": "最近活跃时间",
         "team": "团队",
         "organization": "组织"
       }
@@ -2669,7 +2661,6 @@
         "revoked": "已撤销（封禁）",
         "deleted": "已删除"
       },
-      "loadingKey": "正在加载密钥…",
       "title": "虚拟密钥",
       "description": "管理所有用于网关请求认证的密钥。",
       "loading": "正在加载密钥…",
@@ -9281,12 +9272,8 @@
     },
     "appliedBudgets": {
       "title": "适用的预算",
-      "explainer": "每个限额单独检查，任意一个达到上限时请求即被阻止。",
       "empty": "此密钥没有预算限制。费用会被记录，但不会被阻止。",
       "thisKey": "此密钥",
-      "closestToLimit": "最接近上限",
-      "spendOfLimit": "${{spend}} / ${{limit}}",
-      "limitOnly": "上限 ${{limit}}",
       "percentUsed": "已使用 {{percent}}%",
       "resetsEvery": "每 {{duration}} 重置",
       "noReset": "不重置"
@@ -16355,7 +16342,42 @@
       "format": {
         "label": "格式",
         "csv": "CSV（Excel、Google 表格）",
-        "json": "JSON（包含元数据）"
+        "json": "JSON（包含元数据）",
+        "pdf": "PDF（可打印报告）"
+      },
+      "report": {
+        "frameTitle": "用量报告",
+        "summary": {
+          "title": "汇总",
+          "spend": "总花费",
+          "requests": "请求数",
+          "successful": "成功请求",
+          "failed": "失败请求",
+          "tokens": "总令牌数",
+          "promptTokens": "提示令牌",
+          "completionTokens": "补全令牌"
+        },
+        "breakdown": "明细",
+        "columns": {
+          "date": "日期",
+          "key": "密钥",
+          "model": "模型",
+          "user": "用户",
+          "spend": "花费",
+          "requests": "请求数",
+          "successful": "成功",
+          "failed": "失败",
+          "promptTokens": "提示令牌",
+          "completionTokens": "补全令牌"
+        },
+        "meta": {
+          "dateRange": "日期范围",
+          "exportType": "导出类型",
+          "filters": "筛选条件",
+          "generated": "生成时间"
+        },
+        "truncated": "仅显示前 {{shown}} 行，共 {{total}} 行。汇总涵盖所有行。如需完整明细，请导出 CSV。",
+        "empty": "此日期范围内没有用量"
       },
       "summary": {
         "filterCount_one": "{{count}} 个筛选条件",
@@ -21431,6 +21453,53 @@
       "teams": "客户团队",
       "member": "客户成员",
       "members": "客户成员"
+    }
+  },
+  "lensWorkspace": {
+    "opening": "正在打开 Lens…",
+    "frameTitle": "Lens",
+    "unsupported": {
+      "title": "更新 Lens 以在此使用",
+      "body": "Lens 已连接，但此版本不支持在网关内打开。请更新 Lens 部署，以在此使用工作区。",
+      "open": "打开 Lens",
+      "noBrowserUrl": "如需单独打开 Lens，请让管理员配置浏览器可访问的 Lens 地址。"
+    },
+    "unavailable": {
+      "title": "无法连接到 Lens",
+      "body": "无法验证 Lens 连接。如果已配置 Lens，请检查服务是否正在运行以及网关是否具有连接凭据，然后重试。"
+    },
+    "retry": "检查连接",
+    "docs": "Lens 文档",
+    "introduction": {
+      "title": "帮助智能体持续改进的网关",
+      "description": "将记录的智能体运行转化为关联具体步骤的发现，了解发生了什么以及如何改进。",
+      "setup": "设置 Lens",
+      "tracing": "追踪",
+      "sampleTrace": "示例追踪 · 14.2s",
+      "timeline": "示例追踪时间线",
+      "failed": "失败",
+      "benchmarkError": "错误：基准测试运行器不可用 (503)",
+      "sampleAnswer": "“对于您的工作负载，列存储比行存储快 40%。”",
+      "findings": "Lens 发现",
+      "sampleRuns": "已审查 500 次示例运行",
+      "claimTitle": "声称未经测量的数值",
+      "claimBody": "基准测试失败后仍报告性能提升。",
+      "claimQuote": "“…对于您的工作负载，比行存储快 40%。”",
+      "claimAction": "报告基准测试失败，而不是估算结果。",
+      "claimPriority": "38 次关联运行 · 高优先级",
+      "followupTitle": "承诺跟进后却停止运行",
+      "followupBody": "订单查询超时后，智能体承诺继续检查，却结束了运行。",
+      "followupPriority": "12 次关联运行 · 中优先级",
+      "nextStep": "下一步",
+      "highlight": "{{name}}，{{duration}} 秒。突出显示相关发现",
+      "output": "{{name}} · 输出",
+      "duration": "{{duration}}s",
+      "gateway": "LiteLLM 网关",
+      "agents": "智能体集群",
+      "agentSteps": "每次运行，每个记录的步骤",
+      "infrastructure": "集中管理，运行于您的基础设施",
+      "findProblems": "找到需要修复的问题",
+      "nextRun": "为下次运行提供洞察"
     }
   }
 }

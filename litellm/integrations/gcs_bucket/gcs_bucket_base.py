@@ -182,7 +182,7 @@ class GCSBucketBase(CustomBatchLogger):
         """
         return credentials or IAM_AUTH_KEY
 
-    async def download_gcs_object(self, object_name: str, **kwargs):
+    async def download_gcs_object(self, object_name: str, **kwargs: object):
         """
         Download an object from GCS.
 
@@ -219,7 +219,7 @@ class GCSBucketBase(CustomBatchLogger):
             verbose_logger.error("GCS object download error: %s", str(e))
             return None
 
-    async def delete_gcs_object(self, object_name: str, **kwargs):
+    async def delete_gcs_object(self, object_name: str, **kwargs: object):
         """
         Delete an object from GCS.
         """

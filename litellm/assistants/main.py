@@ -55,7 +55,7 @@ def _popped_azure_ad_token(extra_body: object) -> str | None:
 async def aget_assistants(
     custom_llm_provider: Literal["openai", "azure"],
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AsyncCursorPage[Assistant]:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -393,7 +393,7 @@ def create_assistants(
 async def adelete_assistant(
     custom_llm_provider: Literal["openai", "azure"],
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AssistantDeleted:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -543,7 +543,7 @@ def delete_assistant(
 ### THREADS ###
 
 
-async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs) -> Thread:
+async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs: object) -> Thread:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["acreate_thread"] = True
@@ -715,7 +715,7 @@ async def aget_thread(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Thread:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -866,9 +866,9 @@ async def a_add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
-    client=None,
-    **kwargs,
+    metadata: dict[str, object] | None = None,
+    client: object | None = None,
+    **kwargs: object,
 ) -> OpenAIMessage:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -917,7 +917,7 @@ def add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     client=None,
     **kwargs,
 ) -> OpenAIMessage | Coroutine[None, None, OpenAIMessage]:
@@ -1038,7 +1038,7 @@ async def aget_messages(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AsyncCursorPage[OpenAIMessage]:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -1201,12 +1201,12 @@ async def arun_thread(
     assistant_id: str,
     additional_instructions: str | None = None,
     instructions: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, str] | None = None,
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
     client: object | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -1266,7 +1266,7 @@ def run_thread(
     assistant_id: str,
     additional_instructions: str | None = None,
     instructions: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, str] | None = None,
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,

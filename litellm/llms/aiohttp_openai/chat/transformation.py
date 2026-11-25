@@ -48,8 +48,8 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         """
@@ -60,14 +60,14 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: object,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
 
     async def transform_response(
@@ -76,10 +76,10 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         raw_response: ClientResponse,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: object,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

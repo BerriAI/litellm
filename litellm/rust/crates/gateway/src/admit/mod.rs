@@ -13,14 +13,19 @@ use std::sync::Arc;
 use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_env::Lookup;
-use litellm_gateway_auth::{Auth, BearerOrXApiKey};
-use litellm_gateway_inference::JsonObject;
+use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
+use litellm_gateway_auth_core::authz::Layer;
+use litellm_gateway_inference::{JsonObject, routing};
 use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
-use crate::AppState;
+use crate::{
+    AppState, Gateway,
+    callbacks::parallel_request_limiter,
+    host::{self, NativeHost, NativeRows},
+};
+use checks::Fields;
 pub use checks::Reason;
 
 /// Why the gateway does not serve a request the way the Python proxy would.
@@ -62,9 +67,6 @@ pub struct Admit {
     config: Config,
     /// The variables only the environment holds, as `main` read them.
     environment: Environment,
-    /// What gives the proxy a database, which it writes a spend log and key spend to after every
-    /// call, the master key's included.
-    database: Option<Box<str>>,
     /// The variable that has the proxy serve models and settings from its database on top of the
     /// config. `general_settings.store_model_in_db` is a setting of the config itself.
     stored_models: Option<Box<str>>,
@@ -77,36 +79,33 @@ pub struct Admit {
     /// The router the native app serves through, which says where a request for a name can be
     /// served and what a call served there asks of its host.
     router: Router,
-    auth: Auth,
+    /// The native host, which says which of a model group's host steps it answers.
+    host: NativeHost,
+    auth: Auth<NativeRows>,
+    /// The native app's inference, which tells whether a caller may call the model it asks for.
+    /// `None` leaves every caller with a model list to Python.
+    inference: Option<Arc<Gateway>>,
 }
-
-/// The variables the proxy builds a database from when `database_url` names none.
-const DATABASE_VARIABLES: [&str; 4] = [
-    "DATABASE_URL",
-    "DATABASE_HOST",
-    "IAM_TOKEN_DB_AUTH",
-    "AZURE_POSTGRESQL_AUTH",
-];
 
 const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
-
-fn database(config: &Config, environment: &dyn Lookup) -> Option<Box<str>> {
-    config
-        .general_settings
-        .database_url
-        .as_ref()
-        .map(|_| "general_settings.database_url".into())
-        .or_else(|| {
-            DATABASE_VARIABLES
-                .into_iter()
-                .find(|variable| environment.get(variable).is_some())
-                .map(Box::from)
-        })
-}
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
     (Box::new(Request::from_parts(request, body)), reason)
+}
+
+/// A key that counts tokens reserves what the body asks for before the call, and only Python's
+/// estimator reads a body that carries media, so that call goes to Python.
+fn token_estimate(
+    caller: &Authenticated<NativeRows>,
+    path: &str,
+    fields: &mut Fields,
+) -> Option<Reason> {
+    let counts_tokens = parallel_request_limiter::Caller::of(caller)
+        .limits
+        .counts_tokens();
+    (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
+        .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
 
 impl Admit {
@@ -144,13 +143,14 @@ impl Admit {
             .collect();
         Self {
             environment: environment.clone(),
-            database: database(config, &*state.environment),
             stored_models: state
                 .environment
                 .get(STORE_MODEL_IN_DB)
                 .map(|_| STORE_MODEL_IN_DB.into()),
             auth: state.auth(config),
             aliased,
+            host: state.inference.host().clone(),
+            inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
         }
     }
@@ -163,14 +163,27 @@ impl Admit {
     fn built(config: &Config, router: Router, deployed: Vec<Deployed>) -> Self {
         Self {
             router,
-            auth: Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey)),
+            auth: host::auth::auth(config, None),
             config: config.clone(),
             environment: Environment::default(),
-            database: None,
             stored_models: None,
             deployed,
             aliased: Vec::new(),
+            host: NativeHost::default(),
+            inference: None,
         }
+    }
+
+    /// A caller whose model lists do not reach the model it asks for goes to Python, which
+    /// answers the refusal itself. The native route asks the same question of the same router,
+    /// and the auth core answers both.
+    fn model_access(&self, caller: &Authenticated<NativeRows>, fields: &Fields) -> Option<Reason> {
+        let model = fields.get("model")?.as_str()?;
+        let allowed = match &self.inference {
+            Some(inference) => routing::allows(inference, caller, model),
+            None => host::layers(caller).all(|Layer::Key(models)| models.is_empty()),
+        };
+        (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -192,7 +205,7 @@ impl Admit {
             return Err(refused(parts, body, reason));
         }
         let (body, whole) = body::read(&parts, body).await;
-        let Some(fields) =
+        let Some(mut fields) =
             whole.and_then(|sent| serde_json::from_slice::<Map<String, Value>>(&sent).ok())
         else {
             return Err(refused(
@@ -204,7 +217,17 @@ impl Admit {
         if let Some(reason) = checks::BODY.iter().find_map(|check| check(&self, &fields)) {
             return Err(refused(parts, body, reason));
         }
+        let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
+            self.model_access(caller, &fields)
+                .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
+        });
+        if let Some(reason) = over_its_caller {
+            return Err(refused(parts, body, reason));
+        }
         parts.extensions.insert(JsonObject(fields));
+        if let Ok(caller) = authenticated {
+            parts.extensions.insert(Preauthenticated(caller));
+        }
         Ok(Request::from_parts(parts, body))
     }
 }
@@ -213,8 +236,10 @@ impl Admit {
 mod tests {
     use axum::http::Method;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
+    use crate::host::auth::{AuthStore, keys};
 
     const CONFIG: &str = "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n  - model_name: gpt\n    litellm_params:\n      model: openai/gpt-5.5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n";
     const MASTER_KEY: (&str, &str) = ("authorization", "Bearer gateway-key");
@@ -226,6 +251,76 @@ mod tests {
             ("gpt".to_owned(), Ok(LlmProviders::Openai)),
         ];
         Arc::new(Admit::over(&config, deployed))
+    }
+
+    const VIRTUAL_KEY: (&str, &str) = ("authorization", "Bearer sk-virtual");
+
+    /// What the database holds for [`VIRTUAL_KEY`], the only key it holds.
+    #[derive(Clone, Copy)]
+    enum Stored {
+        Active,
+        Revoked,
+        Owned,
+        Unreachable,
+    }
+
+    /// The admit over a database storing the key as `stored` says, with that database.
+    async fn holding(stored: Stored) -> (Arc<Admit>, Option<keys::Held>) {
+        let columns = match stored {
+            Stored::Active => Some(json!({})),
+            Stored::Revoked => Some(json!({"blocked": true})),
+            Stored::Owned => Some(json!({"user_id": "owner"})),
+            Stored::Unreachable => None,
+        };
+        let held = match columns {
+            Some(columns) => Some(keys::Held::holding("sk-virtual", columns).await),
+            None => None,
+        };
+        let database = held
+            .as_ref()
+            .map_or_else(keys::unreachable, keys::Held::database);
+        let config = Config::from_yaml(CONFIG).unwrap();
+        let admit = Arc::new(Admit {
+            auth: host::auth::auth(
+                &config,
+                Some(Arc::new(AuthStore::new(keys::memory_cache(), database))),
+            ),
+            ..Admit::over(
+                &config,
+                vec![("claude".to_owned(), Ok(LlmProviders::Anthropic))],
+            )
+        });
+        (admit, held)
+    }
+
+    #[rstest]
+    #[case::active(Stored::Active, VIRTUAL_KEY, None)]
+    #[case::revoked(Stored::Revoked, VIRTUAL_KEY, Some("invalid_token"))]
+    #[case::holding_what_the_native_app_does_not_serve(
+        Stored::Owned,
+        VIRTUAL_KEY,
+        Some("not_native")
+    )]
+    #[case::unreadable(Stored::Unreachable, VIRTUAL_KEY, Some("unavailable"))]
+    #[case::unknown(
+        Stored::Active,
+        ("authorization", "Bearer sk-someone-else"),
+        Some("invalid_token")
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_virtual_key_is_admitted_only_when_the_native_app_authenticates_it(
+        #[case] stored: Stored,
+        #[case] credential: (&str, &str),
+        #[case] over: Option<&str>,
+    ) {
+        let (admit, _held) = holding(stored).await;
+
+        let refused = admit
+            .admit(messages(&[credential], "claude"))
+            .await
+            .err()
+            .map(|(_, reason)| (reason.why, reason.over));
+        assert_eq!(refused, over.map(|over| (Refused::Credential, over.into())));
     }
 
     fn messages(headers: &[(&str, &str)], model: &str) -> Request {

@@ -11,9 +11,9 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use crate::{
-    Call, RouterStateSnapshot,
+    Call, FailureReport, RouterStateSnapshot,
     config::Op,
-    error::{AttemptError, Error, FailureKind},
+    error::{AttemptError, Error, FailureKind, RaisedBy},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
@@ -27,7 +27,7 @@ use crate::{
     prerouting::{PreRoute, PreRouted},
     registry::{ResolveKind, ResolveScope},
     retry::{RetryContext, RetryState, RetryStep, resolve_retry_policy, retry_step},
-    select::{Candidates, SelectInputs},
+    select::{Candidates, SelectInputs, skips_batch_only},
 };
 
 mod stream;
@@ -715,14 +715,19 @@ impl<H: RouterHost> Call<'_, H> {
             excluded.push(failed_id.to_owned());
         }
         let listing_team = request.listing_team_id.as_deref();
-        let ids: Vec<String> = group_members(snapshot, &target.group, listing_team)
-            .iter()
+        let members: Vec<_> = group_members(snapshot, &target.group, listing_team)
+            .into_iter()
             .filter(|d| d.listed_for_team(listing_team))
+            .collect();
+        let skip_batch_only = skips_batch_only(request, &members);
+        let ids: Vec<String> = members
+            .iter()
+            .filter(|d| !skip_batch_only || !d.serves_only_batches())
             .map(|d| d.id.clone())
             .collect();
         let cooling = self
             .health()
-            .active_cooldowns(&ids)
+            .cooling(&ids, !skip_batch_only)
             .await
             .unwrap_or_default();
         let remaining = ids
@@ -817,9 +822,11 @@ impl<H: RouterHost> Call<'_, H> {
                 .collect();
             let batch_levels_only =
                 request.batch_create && members.iter().any(|d| d.is_batch_capable());
+            let skips_batch_only = skips_batch_only(request, &members);
             let mut orders: Vec<i64> = members
                 .iter()
                 .filter(|d| !batch_levels_only || !d.cannot_run_batches())
+                .filter(|d| !skips_batch_only || !d.serves_only_batches())
                 .filter_map(|d| d.order())
                 .collect();
             orders.sort_unstable();
@@ -876,8 +883,14 @@ impl<H: RouterHost> Call<'_, H> {
             .snapshot
             .registry
             .group(&level.target.group)
-            .filter(|group| group.len() == 1)
-            .and_then(|group| group[0].raw_params.get("num_retries")?.as_u64())
+            .and_then(|group| {
+                let skips_batch_only = skips_batch_only(level.request, &group);
+                let mut usable = group
+                    .into_iter()
+                    .filter(|d| !skips_batch_only || !d.serves_only_batches());
+                usable.next().filter(|_| usable.next().is_none())
+            })
+            .and_then(|deployment| deployment.raw_params.get("num_retries")?.as_u64())
             .and_then(|retries| u32::try_from(retries).ok());
         Err(self.mock_failed(MockFailure::RateLimit, level, lone).into())
     }
@@ -936,7 +949,7 @@ impl<H: RouterHost> Call<'_, H> {
         let all = self
             .candidates(snapshot, op, request, &target.group, &counting)
             .await
-            .map(|c| counted(&c, c.all.len()))
+            .map(|c| counted(&c, c.routable()))
             .unwrap_or(0);
 
         for retry in 0..=num_retries {
@@ -1194,8 +1207,30 @@ impl<H: RouterHost> Call<'_, H> {
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
-        match self.host.attempt(&attempt).await {
+        let checks = &self.core.config.pre_call_checks;
+        let admitted = checks
+            .admit(self.host.cache(), &deployment, self.core.clock.now())
+            .await;
+        let ran = match admitted {
+            Err(refusal) => Err(refusal),
+            Ok(()) => self
+                .host
+                .attempt(&attempt)
+                .await
+                .map_err(|failure| self.failed(failure, Some(&deployment.id))),
+        };
+        match ran {
             Ok(output) => {
+                if !output.deferred {
+                    checks
+                        .succeeded(
+                            self.host.cache(),
+                            &deployment,
+                            output.total_tokens,
+                            self.core.clock.now(),
+                        )
+                        .await;
+                }
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
                 let routed = routed_name(target, &candidates);
@@ -1273,19 +1308,35 @@ impl<H: RouterHost> Call<'_, H> {
                     ),
                 })
             }
-            Err(failure) => {
-                let error = self.failed(failure, Some(&deployment.id));
-                let failed_deployment = match &error {
-                    Error::Attempt { failure, .. } => {
-                        if !failure.recorded && !failure.queue_rejected() {
-                            self.record_failure(
-                                snapshot,
-                                request,
-                                &candidates,
-                                &deployment,
-                                failure,
-                            )
-                            .await;
+            Err(mut error) => {
+                let failed_deployment = match &mut error {
+                    Error::Attempt { failure, raised_by } => {
+                        match raised_by {
+                            // A refused deployment that cooled down is retried as Python's loop
+                            // retries it, on a healthy sibling at once. One that stayed healthy (a
+                            // lone deployment) would be retried after its `retry-after`, a minute,
+                            // so its refusal is answered now.
+                            RaisedBy::PreCallCheck(_) => {
+                                let cooled = self
+                                    .cool_down_refused(snapshot, request, &deployment, failure)
+                                    .await;
+                                if !cooled {
+                                    failure.num_retries = Some(0);
+                                }
+                            }
+                            RaisedBy::Host(_) | RaisedBy::Core
+                                if !failure.recorded && !failure.queue_rejected() =>
+                            {
+                                self.record_failure(
+                                    snapshot,
+                                    request,
+                                    &candidates,
+                                    &deployment,
+                                    failure,
+                                )
+                                .await;
+                            }
+                            RaisedBy::Host(_) | RaisedBy::Core => {}
                         }
                         Some(deployment.id.clone())
                     }
@@ -1360,6 +1411,7 @@ impl<H: RouterHost> Call<'_, H> {
                     kind: ResolveKind::Group,
                     all: vec![deployment.clone()],
                     healthy: vec![deployment.clone()],
+                    skips_batch_only: skips_batch_only(request, std::slice::from_ref(&deployment)),
                     wildcard_request: None,
                     served_as: None,
                 };
@@ -1452,6 +1504,47 @@ impl<H: RouterHost> Call<'_, H> {
         }
     }
 
+    /// `async_routing_strategy_pre_call_checks`' cooldown for a deployment a pre-call check
+    /// refused: `set_cooldown_deployments` alone, as the Python host reports its own refusal.
+    /// Returns whether the deployment was cooled down.
+    async fn cool_down_refused(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        request: &RouterRequest,
+        deployment: &crate::registry::Deployment,
+        failure: &AttemptError,
+    ) -> bool {
+        let report = FailureReport {
+            uncounted: true,
+            batch_api: request.batch_api,
+            ..FailureReport::default()
+        };
+        let cooled = self
+            .core
+            .reported_failure(
+                snapshot,
+                self.host.cache(),
+                &deployment.id,
+                failure,
+                &report,
+            )
+            .await;
+        match cooled {
+            Ok(Some(cooldown)) => {
+                self.host.observe(&RouterEvent::CooldownSet {
+                    deployment_id: deployment.id.clone(),
+                    cooldown,
+                });
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                warn!(deployment_id = %deployment.id, error = %error, "cooldown was not recorded");
+                false
+            }
+        }
+    }
+
     async fn record_failure(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -1501,24 +1594,28 @@ impl<H: RouterHost> Call<'_, H> {
         } else {
             deployment
         };
-        let shape = GroupShape {
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[candidates.model_group.as_str()])
+            .is_some();
+        let batch_call = !candidates.skips_batch_only;
+        let shape = GroupShape::of_failure(batch_call, has_fallback_group, |batch_call| {
             // The deployment's own group decides, also when the call named the deployment by id.
-            single_deployment: snapshot
+            snapshot
                 .registry
                 .group(&deployment.model_name)
-                .map_or(candidates.all.len() == 1, |group| group.len() == 1)
+                .map_or(deployment.peers_in(&candidates.all, batch_call) == 1, |group| {
+                    deployment.peers_in(&group, batch_call) == 1
+                })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
-                && !(candidates.kind == ResolveKind::RoutingGroup && candidates.all.len() > 1)
+                && !(candidates.kind == ResolveKind::RoutingGroup
+                    && deployment.peers_in(&candidates.all, batch_call) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
-                && !team_model_has_alternatives(&snapshot.registry, deployment),
-            has_fallback_group: snapshot
-                .settings
-                .dynamic
-                .fallback_targets(&[candidates.model_group.as_str()])
-                .is_some(),
-        };
+                && !team_model_has_alternatives(&snapshot.registry, deployment, batch_call)
+        });
         self.count_failed_request(deployment, failure).await;
         match self
             .health()

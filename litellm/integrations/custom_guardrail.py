@@ -55,6 +55,7 @@ dc: Final = DualCache()
 
 
 from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -330,8 +331,27 @@ _RESPONSE_METADATA_KEYS: Final = frozenset(
 )
 
 
+_TOKEN_DATA_KEYS: Final = frozenset({"token_ids", "logprobs"})
+_TOKEN_DATA_HOLDERS: Final = frozenset({"choices", "output"})
+_RESPONSE_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _without_token_data(value: object, depth: int = 0) -> object:
+    match value:
+        case list() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return [_without_token_data(item, depth + 1) for item in _RESPONSE_ITEMS.validate_python(value)]
+        case dict() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return {
+                key: _without_token_data(item, depth + 1)
+                for key, item in _REQUEST_FIELDS.validate_python(value).items()
+                if key not in _TOKEN_DATA_KEYS
+            }
+        case _:
+            return value
+
+
 def _response_fingerprint(response: object) -> str | None:
-    """Digest of everything but metadata set between layers, so an unknown field counts as content."""
+    """Digest of everything but layer metadata and token data a rewrite drops, so an unknown field counts as content."""
     try:
         fields: Final[Mapping[str, object]] = (
             response.model_dump(mode="json")
@@ -341,8 +361,11 @@ def _response_fingerprint(response: object) -> str | None:
         content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
         if not content:
             return None
+        hashed: Final = {
+            key: _without_token_data(value) if key in _TOKEN_DATA_HOLDERS else value for key, value in content.items()
+        }
         return hashlib.sha256(
-            json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            json.dumps(hashed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
     except (TypeError, ValueError):
         return None
@@ -898,7 +921,7 @@ class CustomGuardrail(CustomLogger):
         if isinstance(event_hook, list):
             _validate_event_hook_list_is_in_supported_event_hooks(event_hook, supported_event_hooks)
         elif isinstance(event_hook, Mode):
-            tag_values_flat: Final[list] = []
+            tag_values_flat: Final[list[str]] = []
             for v in event_hook.tags.values():
                 if isinstance(v, list):
                     tag_values_flat.extend(v)
@@ -913,7 +936,7 @@ class CustomGuardrail(CustomLogger):
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
 
     @staticmethod
-    def _get_admin_metadata(data: dict) -> dict:
+    def _get_admin_metadata(data: Mapping[str, object]) -> dict:
         """Return merged admin-configured key and team metadata from the request data.
 
         The proxy may inject admin metadata (user_api_key_metadata,
@@ -934,7 +957,7 @@ class CustomGuardrail(CustomLogger):
             key_meta = meta.get("user_api_key_metadata") or key_meta
         return {**team_meta, **key_meta}
 
-    def get_disable_global_guardrail(self, data: dict) -> bool | None:
+    def get_disable_global_guardrail(self, data: Mapping[str, object]) -> bool | None:
         """
         Returns True if the global guardrail should be disabled.
 
@@ -943,7 +966,7 @@ class CustomGuardrail(CustomLogger):
         """
         return self._get_admin_metadata(data).get("disable_global_guardrails", False)
 
-    def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> list[str]:
+    def get_opted_out_global_guardrails_from_metadata(self, data: Mapping[str, object]) -> list[str]:
         """
         Returns the list of global guardrail names the team/key has opted out of.
 
@@ -1110,7 +1133,7 @@ class CustomGuardrail(CustomLogger):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -1529,7 +1552,7 @@ class CustomGuardrail(CustomLogger):
             return False
         return self.event_hook == event_type.value
 
-    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict[str, object]) -> dict:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
@@ -1661,7 +1684,7 @@ class CustomGuardrail(CustomLogger):
             **(tracing_detail or {}),
         )
 
-        def _append_guardrail_info(container: dict) -> None:
+        def _append_guardrail_info(container: dict[str, object]) -> None:
             key: Final = "standard_logging_guardrail_information"
             existing: Final = container.get(key)
             if existing is None:
@@ -1691,7 +1714,7 @@ class CustomGuardrail(CustomLogger):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1720,13 +1743,13 @@ class CustomGuardrail(CustomLogger):
 
     def _process_response(
         self,
-        response: dict | None,
-        request_data: dict,
+        response: dict[str, object] | None,
+        request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,
+        original_inputs: dict[str, object] | None = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
@@ -1788,7 +1811,7 @@ class CustomGuardrail(CustomLogger):
     def _process_error(
         self,
         e: Exception,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
@@ -1895,7 +1918,7 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
-def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
+def _append_slg_to_litellm_params(lp: object, entries: Sequence[object]) -> None:
     """Merge guardrail entries into a single litellm_params dict."""
     if not isinstance(lp, dict):
         return
@@ -1924,7 +1947,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     slg_info: Final = meta_src.get("standard_logging_guardrail_information")
     if not slg_info:
         return
-    entries: Final[list] = slg_info if isinstance(slg_info, list) else [slg_info]
+    entries: Final[list[object]] = slg_info if isinstance(slg_info, list) else [slg_info]
     mcd: Final = getattr(logging_obj, "model_call_details", None) or {}
     _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
@@ -1941,7 +1964,7 @@ def _original_inputs_for(
     kwargs: Mapping[str, object],
     request_data: Mapping[str, object],
     event_type: GuardrailEventHooks | None,
-) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
+) -> dict[str, object] | None:  # mutable-ok: matches _process_response(original_inputs=) signature
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
     Hooks may edit their argument in place and return it, so the baseline is always a deep
@@ -2095,7 +2118,7 @@ def log_guardrail_information(func):
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object):
         if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)

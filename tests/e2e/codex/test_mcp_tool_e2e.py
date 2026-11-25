@@ -15,7 +15,7 @@ MCP_SERVER: Final = Path(__file__).with_name("mcp_server.py")
 
 
 @pytest.mark.parametrize("deployment", SETUPS)
-class TestCodexMcpTool:
+class TestCodexMCPTool:
     def test_calls_a_local_mcp_tool_again_on_a_resumed_turn(self, codex: CodexHarness, setup: ModelSetup) -> None:
         secret: Final = codex.home / "secret.txt"
         vault: Final = McpServer(command=sys.executable, args=(str(MCP_SERVER),), env={"SECRET_FILE": str(secret)})

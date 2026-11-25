@@ -109,7 +109,7 @@ async def _get_cloudzero_settings():
 
     cloudzero_config: Final = await _config_table(prisma_client).find_first(where={"param_name": "cloudzero_settings"})
     if cloudzero_config is None or cloudzero_config.param_value is None:
-        return {}
+        return dict[str, str]()
 
     # Handle both dict and JSON string cases
     if isinstance(cloudzero_config.param_value, dict):

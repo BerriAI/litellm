@@ -33,8 +33,8 @@ export async function openRequestSettings(page: PlaywrightPage): Promise<void> {
 export async function enterVirtualKey(page: PlaywrightPage, key: string): Promise<void> {
   await openRequestSettings(page);
   await keySourceSelect(page).click();
-  await onlyVisible(page.getByRole("option", { name: "Virtual key", exact: true })).click({ timeout: 15_000 });
-  const keyInput = onlyVisible(page.getByLabel("Virtual key", { exact: true }));
+  await onlyVisible(page.getByRole("option", { name: "Virtual Key", exact: true })).click({ timeout: 15_000 });
+  const keyInput = onlyVisible(page.getByLabel("Virtual Key", { exact: true }));
   await expect(keyInput).toBeVisible({ timeout: 10_000 });
   await keyInput.fill(key);
   await page.keyboard.press("Escape");

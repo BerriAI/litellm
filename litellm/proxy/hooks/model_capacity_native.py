@@ -36,7 +36,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
@@ -47,10 +47,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
     RateLimitedModel,
     RateLimitUnverifiableError,
+    RememberedTokenEstimate,
     RequestRateLimiterStash,
     callback_kwargs_mapping,
     cap_output_for_limit,
     claim_request_stash_for_data,
+    dispatched_token_estimate,
     get_or_create_request_stash,
     get_request_stash,
     limiter_post_call_success,
@@ -58,7 +60,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     native_rate_limit_store,
     rate_limit_window_size,
     request_stash_for_callback,
-    request_token_estimate,
     resolve_rate_limited_model,
     token_rate_limit_type,
     tpm_token_reservation_enabled,
@@ -77,7 +78,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitStore
 from litellm.types.integrations.custom_logger_v2 import KeyIdentity
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
-from litellm.types.utils import PriorityReservationSettings
+from litellm.types.utils import PriorityReservationSettings, Usage
 
 if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
@@ -103,6 +104,7 @@ class LiveRequest:
     hook: Hook | None = None
     data: Mapping[str, object] | None = None
     auth: UserAPIKeyAuth | None = None
+    stash: RequestRateLimiterStash | None = None
     response: object = None
     kwargs: Mapping[str, object] | None = None
     state: "NativeModelCapacityState | None" = None
@@ -432,22 +434,33 @@ class CapacityHost:
         data: Final = live.data
         if not data:
             return {"kind": "no_body"}
-        model: Final = str(args["model"])
+        model: Final = args["model"]
         tpm_share: Final = int(str(args["tpm_share"]))
         call_type: Final = args["call_type"] if isinstance(args["call_type"], str) else None
-        as_dispatched: Final = dict(data, model=model)
+        stash: Final = live.stash
+        team_id: Final = (
+            live.auth.team_id if live.auth is not None else None if stash is None else stash.request_team_id
+        )
+        as_dispatched: Final = dict(data) if not isinstance(model, str) else dict(data, model=model)
+        media_model_resolver: Final = (
+            {} if self.media_model_resolver is None else {"media_model_resolver": self.media_model_resolver}
+        )
         rate_limit_type: Final = token_rate_limit_type()
-        if rate_limit_type != "input":
+        if live.hook is not Hook.attempt_ended and rate_limit_type != "input":
             cap_output_for_limit(as_dispatched, tpm_share, call_type)
+        dispatched_model: Final = as_dispatched.get("model")
+        remembered: Final = None if stash is None else stash.token_estimate
         try:
-            estimate: Final = await offload_token_count(request_token_estimate)(
-                data=as_dispatched,
-                model=model,
-                min_configured_tpm_limit=tpm_share,
-                call_type=call_type,
-                team_id=None if live.auth is None else live.auth.team_id,
-                rate_limit_type=rate_limit_type,
-                **({} if self.media_model_resolver is None else {"media_model_resolver": self.media_model_resolver}),
+            estimate: Final = (
+                remembered.estimate
+                if live.hook is Hook.attempt_ended and remembered is not None and remembered.model == dispatched_model
+                else await offload_token_count(dispatched_token_estimate)(
+                    data=as_dispatched,
+                    min_configured_tpm_limit=tpm_share,
+                    call_type=call_type,
+                    team_id=team_id,
+                    **media_model_resolver,
+                )
             )
         except Exception as error:  # noqa: BLE001  # an unreadable prompt still holds the minimum so admission runs
             from litellm._logging import verbose_proxy_logger
@@ -456,7 +469,13 @@ class CapacityHost:
                 "Dynamic rate limiter: token estimate failed for %s, holding one token: %s", model, error
             )
             return {"kind": "failed"}
-        return {"kind": "tokens", "tokens": estimate}
+        if stash is not None and live.hook is not Hook.attempt_ended:
+            stash.token_estimate = RememberedTokenEstimate(
+                dispatched_model if isinstance(dispatched_model, str) else None, estimate
+            )
+        if live.hook is Hook.attempt_ended and estimate.unpriced_media:
+            return {"kind": "unpriced"}
+        return {"kind": "tokens", "tokens": estimate.charged(rate_limit_type)}
 
     def cap_output(self, data: object, tpm_share: int, call_type: str | None) -> None:
         cap_output_for_limit(data, tpm_share, call_type)
@@ -668,7 +687,7 @@ def _request_stash(hook: Hook, data: Mapping[str, object] | None) -> RequestRate
 
 def _targeted(hook: Hook, view: object) -> bool:
     if hook is Hook.attempt_ended:
-        return getattr(view, Field.outcome.value, None) == AttemptOutcome.success
+        return attribute_or_none(view, Field.outcome.value) == AttemptOutcome.success
     return hook in _TARGETED_HOOKS
 
 
@@ -746,13 +765,19 @@ class NativeDynamicRateLimiter(RustLogger):
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
     ) -> Patch | Abort | None:
         data: Final = as_str_mapping(getattr(view, Field.deprecated_kwargs.value, None))
+        stash: Final = _request_stash(hook, data)
+        auth: Final = (REQUEST_AUTH.get() or auth_from_request(data)) if hook is not Hook.attempt_ended else None
+        if hook is Hook.pre_call and stash is not None:
+            stash.request_body = data
+            stash.request_team_id = None if auth is None else auth.team_id
         live: Final = LiveRequest(
             hook=hook,
-            data=data if hook is not Hook.attempt_ended else None,
-            auth=(REQUEST_AUTH.get() or auth_from_request(data)) if hook is not Hook.attempt_ended else None,
+            data=data if hook is not Hook.attempt_ended else None if stash is None else stash.request_body,
+            auth=auth,
+            stash=stash,
             response=getattr(view, Field.deprecated_response_obj.value, None),
             kwargs=data if hook is Hook.attempt_ended else None,
-            state=self._state_for(_request_stash(hook, data)),
+            state=self._state_for(stash),
         )
         token: Final = _LIVE.set(live)
         try:
@@ -858,6 +883,28 @@ class NativeDynamicRateLimiter(RustLogger):
         refused: Final = as_str_mapping(_native_answer(answer, live).get("refused"))
         if refused is not None:
             raise _proxy_rate_limit_error(refused)
+
+    async def charge_realtime_capacity_turn(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        if requested_model is None:
+            return
+        state: Final = self._state_for(get_request_stash())
+        live: Final = LiveRequest(auth=user_api_key_dict, state=state)
+        token: Final = _LIVE.set(live)
+        prompt_details: Final = usage.prompt_tokens_details
+        cached_tokens: Final = 0 if prompt_details is None else prompt_details.cached_tokens or 0
+        try:
+            answer: Final = await self.capacity.charge_turn(
+                state,
+                key_inputs(user_api_key_dict),
+                requested_model,
+                (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, cached_tokens),
+                self.delegate.facts(requested_model),
+            )
+        finally:
+            _LIVE.reset(token)
+        _ = _native_answer(answer, live)
 
 
 def build_native_dynamic_rate_limiter(
