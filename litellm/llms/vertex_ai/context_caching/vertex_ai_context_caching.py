@@ -125,17 +125,35 @@ def _conversation_turns_start(
     return len(leading_system_run)
 
 
-def _cached_turns_link_web_media(
+def _links_web_media_gemini_fetches(
     cached_messages: Sequence[AllMessageValues],
     model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> bool:
     should_inline: Final = should_inline_remote_media(custom_llm_provider)
     turns_start: Final = _conversation_turns_start(cached_messages, model, custom_llm_provider)
-    if not has_remote_media(
+    return has_remote_media(
         cached_messages[turns_start:],
         lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIXES),
-    ):
+    )
+
+
+def _cached_contents_accepts(
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> bool:
+    return cached_messages_end_on_supported_turn(cached_messages) and not _links_web_media_gemini_fetches(
+        cached_messages, model, custom_llm_provider
+    )
+
+
+def _cached_turns_link_web_media(
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> bool:
+    if not _links_web_media_gemini_fetches(cached_messages, model, custom_llm_provider):
         return False
     verbose_logger.debug(
         "Vertex AI context caching: a cached turn links web media that Gemini fetches itself, which the "
@@ -455,6 +473,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages,
             system_run_holds_a_cache=clears_the_cache_floor,
+            cache_accepts=partial(_cached_contents_accepts, model=model, custom_llm_provider=custom_llm_provider),
             supports_system_message=supports_system_message,
         )
 
@@ -629,6 +648,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages,
             system_run_holds_a_cache=clears_the_cache_floor,
+            cache_accepts=partial(_cached_contents_accepts, model=model, custom_llm_provider=custom_llm_provider),
             supports_system_message=supports_system_message,
         )
 

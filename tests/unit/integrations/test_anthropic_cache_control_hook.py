@@ -928,7 +928,7 @@ def test_gemini_cache_control_injection_points_detected():
     assert is_cached_message(messages[1]) is False
 
     # Verify separate_cached_messages correctly separates them
-    cached, non_cached = separate_cached_messages(messages, lambda _: True)
+    cached, non_cached = separate_cached_messages(messages, lambda _: True, lambda _: True)
     assert len(cached) == 1
     assert cached[0]["role"] == "system"
     assert len(non_cached) == 1
@@ -975,7 +975,7 @@ def test_gemini_cache_control_injection_list_content_detected():
     assert is_cached_message(messages[1]) is False
 
     # Verify separate_cached_messages correctly separates them
-    cached, non_cached = separate_cached_messages(messages, lambda _: True)
+    cached, non_cached = separate_cached_messages(messages, lambda _: True, lambda _: True)
     assert len(cached) == 1
     assert len(non_cached) == 1
 
