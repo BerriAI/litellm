@@ -22,6 +22,8 @@ use crate::{
     request::pending,
 };
 
+const MEMORY_ENTRIES: usize = 10_000;
+
 /// The v3 rate limiter's keyspace: its memory tier, its Lua scripts and the plain counter writes
 /// `DualCache` made for it on `main`. The admission logic stays with the caller. A script needs
 /// Redis, so without one it declares nothing and answers `None`.
@@ -41,7 +43,7 @@ impl RateLimits {
             cache: DualCache::new(
                 Arc::new(RemoteSlot::new(remote)),
                 MemorySettings {
-                    entries: None,
+                    entries: Some(MEMORY_ENTRIES),
                     ttl: backfill_ttl,
                 },
                 now,

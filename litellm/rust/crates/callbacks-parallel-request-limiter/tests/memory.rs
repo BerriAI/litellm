@@ -359,6 +359,43 @@ async fn a_failure_settled_after_its_window_expired_counts_toward_the_next_reser
     assert_eq!(refused.headers["rate_limit_type"], "tokens");
 }
 
+#[tokio::test]
+async fn a_charge_stays_counted_while_a_hundred_other_keys_are_charged_in_its_window() {
+    let (limiter, _, clock) = limiter_whose_memory_shares_its_clock(true);
+    let charge = |key: String| SuccessFacts {
+        total_tokens: 1092,
+        targets: TargetFacts {
+            user_api_key_hash: Some(key),
+            ..TargetFacts::default()
+        },
+        ..SuccessFacts::default()
+    };
+    limiter
+        .settle_turn(&LimiterState::default(), charge("k".into()), None)
+        .await;
+    clock
+        .0
+        .store((1_700_000_001.5_f64).to_bits(), Ordering::SeqCst);
+    for other in 0..100 {
+        limiter
+            .settle_turn(
+                &LimiterState::default(),
+                charge(format!("other-{other}")),
+                None,
+            )
+            .await;
+    }
+
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_window_opened_over_a_leftover_counter_holds_the_charge_for_the_whole_window() {
