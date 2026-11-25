@@ -536,6 +536,11 @@ mod tests {
         "{model: openai/a, litellm_credential_name: shared}",
         true
     )]
+    #[case::credential_base_used_when_the_model_base_is_null(
+        "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+        "{model: openai/a, litellm_credential_name: shared, api_base: null}",
+        true
+    )]
     #[case::different_origin_is_withheld(
         "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
         "{model: openai/a, litellm_credential_name: shared, api_base: https://elsewhere.example}",
