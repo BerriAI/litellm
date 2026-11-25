@@ -352,3 +352,47 @@ async def test_a_streamed_anthropic_passthrough_call_logs_the_rate_limit_the_pro
     logged_headers: Final = logged_result._hidden_params["additional_headers"]
     assert logged_headers["x-ratelimit-remaining-tokens"] == "11999000"
     assert logged_headers["x-ratelimit-remaining-requests"] == "12999"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_type", [EndpointType.VERTEX_AI, EndpointType.GENERIC])
+async def test_a_streamed_non_anthropic_passthrough_call_keeps_provider_headers_out_of_logging(
+    endpoint_type: EndpointType,
+):
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="passthrough-non-anthropic-headers",
+        function_id="passthrough-non-anthropic-headers",
+    )
+    upstream: Final = httpx.Response(
+        200,
+        headers={
+            "content-type": "text/event-stream",
+            "set-cookie": "session=secret",
+            "x-ratelimit-remaining-tokens": "11999000",
+        },
+        content=b'data: {"candidates": []}\n\n',
+    )
+    logged_details: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async def record_logged_details(*, litellm_logging_obj: LiteLLMLoggingObj, **_: object) -> None:
+        logged_details.put_nowait(dict(litellm_logging_obj.model_call_details))
+
+    async for _ in PassThroughStreamingHandler.chunk_processor(
+        response=upstream,
+        request_body={"model": "gemini-2.5-flash", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=endpoint_type,
+        start_time=datetime(2025, 1, 1),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/vertex_ai/v1/models/gemini-2.5-flash:streamGenerateContent",
+        route_streaming_logging=record_logged_details,
+    ):
+        pass
+    details: Final = await asyncio.wait_for(logged_details.get(), timeout=5)
+
+    assert "response_headers" not in details

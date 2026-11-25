@@ -353,8 +353,9 @@ def test_unparseable_provider_ratelimit_header_skips_only_its_own_gauge(
             float("inf"),
             12.5,
         ),
+        ({"x_ratelimit_remaining_requests": 0, "x_ratelimit_remaining_tokens": "0"}, 0.0, 0.0),
     ],
-    ids=["decimal", "decimal-with-a-non-string-key", "infinity-and-arabic-indic-digits"],
+    ids=["decimal", "decimal-with-a-non-string-key", "infinity-and-arabic-indic-digits", "provider-reported-zero"],
 )
 def test_provider_ratelimit_headers_set_both_gauges_to_the_value_float_reads(
     prometheus_logger: PrometheusLogger,
