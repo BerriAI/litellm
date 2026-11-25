@@ -4438,11 +4438,7 @@ SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     - DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS
 )
 
-SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"supports_box_questions", "supports_mid_conversation_system"}
-)
-
-OPT_OUT_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_mid_conversation_system"})
+SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_box_questions"})
 
 
 def _belongs_on_shared_backend_key(field: str, value: object) -> bool:

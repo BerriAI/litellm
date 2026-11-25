@@ -15,7 +15,9 @@ from litellm.llms.base_llm.base_utils import hoisted_instruction_indices, leadin
 from litellm.types.llms.openai import ResponseInputParam
 
 UnfoldedDeveloperRole: TypeAlias = Literal["system", "user"]
-SystemItemPlacement: TypeAlias = Literal["leading_block_into_instructions", "every_item_in_place"]
+SystemItemPlacement: TypeAlias = Literal[
+    "leading_block_into_instructions", "leading_block_into_system_item", "every_item_in_place"
+]
 _ConversationItemKind: TypeAlias = Literal["system", "tool_output", "other"]
 
 _INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
@@ -180,12 +182,28 @@ def _instruction_items_as_user_turns(input: str | ResponseInputParam) -> str | R
     return [*_conversation_with_system_items_as_user(tuple(_developer_item_as(item, "system") for item in input))]
 
 
+def _leading_block_into_system_item(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    folded: Final = instruction_items_folded(input, MappingProxyType({}), "user")
+    if folded is None:
+        return later_system_items_as_user(input)
+    folded_items, folded_params = folded
+    match folded_params.get("instructions"):
+        case str(text):
+            return later_system_items_as_user(
+                [EasyInputMessageParam(role="system", content=text, type="message"), *folded_items]
+            )
+        case _:
+            return later_system_items_as_user(folded_items)
+
+
 def system_first_input_and_params(
     input: str | ResponseInputParam, params: Mapping[str, object], placement: SystemItemPlacement
 ) -> tuple[str | ResponseInputParam, Mapping[str, object]]:
     match placement:
         case "every_item_in_place":
             return _instruction_items_as_user_turns(input), params
+        case "leading_block_into_system_item":
+            return _leading_block_into_system_item(input), params
         case "leading_block_into_instructions":
             folded_input, folded_params = instruction_items_folded(input, params, "user") or (input, params)
             return later_system_items_as_user(folded_input), folded_params

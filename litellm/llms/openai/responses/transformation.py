@@ -651,9 +651,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params
         )
-        placement: Final = self._system_item_placement(
-            model, input, request_params.get("previous_response_id") is not None, litellm_params
-        )
+        placement: Final = self._system_item_placement(model, input, request_params, litellm_params)
         placed: Final = (
             None
             if placement is None
@@ -688,9 +686,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        continues_conversation: bool,
+        request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
     ) -> SystemItemPlacement | None:
+        continues_conversation: Final = request_params.get("previous_response_id") is not None
         places_system_items_first: Final = (
             self.custom_llm_provider is LlmProviders.OPENAI
             and not self._targets_openai_api(litellm_params)
@@ -699,7 +698,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if not places_system_items_first:
             return None
-        return "every_item_in_place" if continues_conversation else "leading_block_into_instructions"
+        if continues_conversation:
+            return "every_item_in_place"
+        if request_params.get("instructions"):
+            return "leading_block_into_instructions"
+        return "leading_block_into_system_item"
 
     def transform_extra_body(
         self,

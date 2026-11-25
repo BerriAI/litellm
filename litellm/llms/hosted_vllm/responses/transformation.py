@@ -6,6 +6,7 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -76,7 +77,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        continues_conversation: bool,
+        request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
     ) -> SystemItemPlacement | None:
         declared_system_first: Final = declares_system_first(

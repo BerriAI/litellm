@@ -5154,6 +5154,7 @@ def _responses_request_sent(
     model_info: Mapping[str, object] | None,
     input: Sequence[Mapping[str, str]],
     previous_response_id: str | None = None,
+    instructions: str | None = None,
 ) -> Mapping[str, JsonValue]:
     with respx.mock() as router:
         route: Final = router.post(f"{api_base}/responses").mock(
@@ -5177,6 +5178,7 @@ def _responses_request_sent(
             input=[dict(item) for item in input],
             model_info=model_info,
             previous_response_id=previous_response_id,
+            instructions=instructions,
         )
     return TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)
 
@@ -5249,3 +5251,75 @@ def test_a_system_first_openai_compatible_deployment_keeps_a_first_turns_leading
     request: Final = _responses_request_sent(_FIREWORKS_API_BASE, _SYSTEM_FIRST_DEPLOYMENT, _CONTINUED_TURN_INPUT)
 
     assert ("instructions" in request, request["input"]) == (False, list(_CONTINUED_TURN_INPUT))
+
+
+_LATER_SYSTEM_ITEM_AS_USER: Final = {
+    "type": "message",
+    "role": "user",
+    "content": [
+        {"type": "input_text", "text": CONVERTED_SYSTEM_NOTE},
+        {"type": "input_text", "text": "Reply in French."},
+    ],
+}
+
+
+def test_a_system_first_openai_compatible_deployment_stores_a_first_turns_leading_system_prompt_beside_a_later_one() -> (
+    None
+):
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE,
+        _SYSTEM_FIRST_DEPLOYMENT,
+        ({"role": "system", "content": "You are a geography tutor."}, *_LATER_SYSTEM_INPUT),
+    )
+
+    assert ("instructions" in request, request["input"]) == (
+        False,
+        [
+            {"type": "message", "role": "system", "content": "You are a geography tutor."},
+            *_LATER_SYSTEM_INPUT[:2],
+            _LATER_SYSTEM_ITEM_AS_USER,
+            _LATER_SYSTEM_INPUT[3],
+        ],
+    )
+
+
+def test_a_system_first_openai_compatible_deployment_folds_a_first_turns_leading_system_prompt_into_caller_instructions() -> (
+    None
+):
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE,
+        _SYSTEM_FIRST_DEPLOYMENT,
+        ({"role": "system", "content": "You are a geography tutor."}, *_LATER_SYSTEM_INPUT),
+        instructions="Answer in one word.",
+    )
+
+    assert (request["instructions"], request["input"]) == (
+        "Answer in one word.\n\nYou are a geography tutor.",
+        [*_LATER_SYSTEM_INPUT[:2], _LATER_SYSTEM_ITEM_AS_USER, _LATER_SYSTEM_INPUT[3]],
+    )
+
+
+def test_a_system_first_openai_compatible_deployment_sends_a_first_turns_leading_block_as_one_system_item() -> None:
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE,
+        _SYSTEM_FIRST_DEPLOYMENT,
+        (
+            {"role": "system", "content": "You are a geography tutor."},
+            {"role": "developer", "content": "Keep answers short."},
+            *_LATER_SYSTEM_INPUT,
+        ),
+    )
+
+    assert ("instructions" in request, request["input"]) == (
+        False,
+        [
+            {
+                "type": "message",
+                "role": "system",
+                "content": "You are a geography tutor.\n\nKeep answers short.",
+            },
+            *_LATER_SYSTEM_INPUT[:2],
+            _LATER_SYSTEM_ITEM_AS_USER,
+            _LATER_SYSTEM_INPUT[3],
+        ],
+    )
