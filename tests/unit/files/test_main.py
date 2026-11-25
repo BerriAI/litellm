@@ -243,3 +243,22 @@ async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, mo
     assert delete_route.call_count == 1
     assert deleted.id == "file-abc123"
     assert deleted.deleted is True
+
+
+@pytest.mark.parametrize(
+    "operation, kwargs",
+    [
+        (litellm.create_file, {"file": ("test.jsonl", b"{}", "application/jsonl"), "purpose": "batch"}),
+        (litellm.file_list, {}),
+        (litellm.file_retrieve, {"file_id": "file-123"}),
+        (litellm.file_delete, {"file_id": "file-123"}),
+        (litellm.file_content, {"file_id": "file-123"}),
+    ],
+    ids=["create_file", "file_list", "file_retrieve", "file_delete", "file_content"],
+)
+def test_file_endpoints_invalid_custom_llm_provider_raises_bad_request_not_value_error(operation, kwargs):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        operation(custom_llm_provider="invalid_custom_provider_typo", **kwargs)
+
+    assert exc_info.value.status_code == 400
+    assert "invalid_custom_provider_typo" in str(exc_info.value)
