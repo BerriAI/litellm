@@ -52,10 +52,13 @@ WORKFLOW: Final = {
 }
 
 
-def _tree(root: Path, *paths: str) -> Path:
-    for path in paths:
+COST_MAP_READER: Final = 'BACKUP = "litellm/model_prices_and_context_window_backup.json"\n'
+
+
+def _tree(root: Path, *paths: str, cost_map_readers: tuple[str, ...] = ()) -> Path:
+    for path in (*paths, *cost_map_readers):
         (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text("")
+        (root / path).write_text(COST_MAP_READER if path in cost_map_readers else "")
     return root
 
 
@@ -191,29 +194,39 @@ def test_a_change_outside_proxy_extras_selects_no_proxy_extras_test(tmp_path):
 @pytest.mark.parametrize(
     "changed", ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json")
 )
-def test_a_cost_map_change_selects_the_cost_map_tests_only(tmp_path, changed):
+def test_a_cost_map_change_selects_every_test_that_names_the_cost_map(tmp_path, changed):
     root: Final = _tree(
         tmp_path,
-        "tests/unit/test_model_prices_and_context_window.py",
         "tests/unit/test_utils.py",
-        "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py",
+        "tests/unit/llms/openai_like/test_other_provider.py",
+        cost_map_readers=(
+            "tests/unit/test_model_prices_and_context_window.py",
+            "tests/unit/llms/openai_like/test_huawei_maas_provider.py",
+            "tests/unit/proxy/auth/test_core_auth.py",
+        ),
     )
-    assert _select(root, changed) == ("tests/unit/test_model_prices_and_context_window.py",)
+    assert _select(root, changed) == (
+        "tests/unit/llms/openai_like/test_huawei_maas_provider.py",
+        "tests/unit/test_model_prices_and_context_window.py",
+    )
 
 
 def test_a_file_named_like_the_cost_map_elsewhere_selects_no_cost_map_test(tmp_path):
-    root: Final = _tree(tmp_path, "tests/unit/test_model_prices_and_context_window.py")
+    root: Final = _tree(tmp_path, cost_map_readers=("tests/unit/test_model_prices_and_context_window.py",))
     assert _select(root, "litellm/model_prices_and_context_window.json", "docs/model_prices_and_context_window.json") == ()
 
 
 @pytest.mark.parametrize(
     "changed", ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json")
 )
-def test_the_real_unit_workflow_lets_a_cost_map_change_run_the_cost_map_tests(changed):
+def test_the_real_unit_workflow_lets_a_cost_map_change_run_the_tests_that_read_its_rows(changed):
     workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text(encoding="utf-8"))
-    assert selector.select((changed,), selector.exclusions(workflow, "3.12"), _REPO_ROOT) == (
+    selected: Final = selector.select((changed,), selector.exclusions(workflow, "3.12"), _REPO_ROOT)
+    assert {
         "tests/unit/test_model_prices_and_context_window.py",
-    )
+        "tests/unit/test_deepseek_model_metadata.py",
+        "tests/unit/llms/openai_like/test_huawei_maas_provider.py",
+    } <= set(selected)
 
 
 def test_the_real_unit_workflow_lets_a_migration_change_run_the_migration_ddl_tests():
