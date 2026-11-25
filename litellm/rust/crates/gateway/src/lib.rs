@@ -153,8 +153,18 @@ pub(crate) async fn inference_over(
 
 pub fn install_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = process_crypto_provider().install_default();
     }
+}
+
+#[cfg(feature = "fips")]
+fn process_crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::default_fips_provider()
+}
+
+#[cfg(not(feature = "fips"))]
+fn process_crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::aws_lc_rs::default_provider()
 }
 
 pub fn router(state: AppState, config: &Config) -> Router {

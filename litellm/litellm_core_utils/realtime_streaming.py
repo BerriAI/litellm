@@ -1558,7 +1558,7 @@ class RealTimeStreaming:
             return self._event_normalizer.normalize(event)
         return event
 
-    def _event_to_client_json(self, event: dict) -> str:
+    def _event_to_client_json(self, event: dict[str, object]) -> str:
         return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
 
     def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
@@ -2411,7 +2411,7 @@ class RealTimeStreaming:
         }
 
     @staticmethod
-    def _translate_event_to_beta(event: dict) -> dict | None:
+    def _translate_event_to_beta(event: dict) -> dict[str, object] | None:
         """Translate a single GA event dict to its beta equivalent.
 
         Returns None when the event must be dropped (the GA-only

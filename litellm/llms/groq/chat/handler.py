@@ -30,7 +30,7 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding: object,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,

@@ -1268,7 +1268,7 @@ class CustomGuardrail(CustomLogger):
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+    ) -> tuple[dict[str, object], object]:  # mutable-ok: CustomLogger.async_logging_hook contract
         """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
         from litellm.llms import get_guardrail_translation_mapping
 
@@ -1743,7 +1743,7 @@ class CustomGuardrail(CustomLogger):
 
     def _process_response(
         self,
-        response: dict | None,
+        response: dict[str, object] | None,
         request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,

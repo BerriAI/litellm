@@ -50,8 +50,8 @@ pub(crate) const REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
 const MEMORY_TTL: Duration = Duration::from_secs(1);
 /// The api key and the user Python names a master key caller by, `LITELLM_PROXY_MASTER_KEY_ALIAS`
 /// and `LITELLM_PROXY_ADMIN_NAME`.
-const MASTER_KEY_ALIAS: &str = "litellm_proxy_master_key";
-const PROXY_ADMIN_NAME: &str = "default_user_id";
+pub(super) const MASTER_KEY_ALIAS: &str = "litellm_proxy_master_key";
+pub(super) const PROXY_ADMIN_NAME: &str = "default_user_id";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
