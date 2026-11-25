@@ -18,7 +18,7 @@ from litellm.llms.azure_ai.image_generation.flux_transformation import (
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.llms.openai import FileTypes, OpenAIImageGenerationOptionalParams
+from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -35,8 +35,8 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     with the image passed as base64 in JSON body.
     """
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
+        return [*AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)]
 
     def map_openai_params(
         self,

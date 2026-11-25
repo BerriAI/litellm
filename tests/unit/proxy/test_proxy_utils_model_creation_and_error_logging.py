@@ -4935,6 +4935,16 @@ def test_is_client_error_exception_budget_exceeded_5xx_is_not_client_error() -> 
     assert _is_client_error_exception(exc) is False
 
 
+def test_is_client_error_exception_an_unresolvable_previous_response_is_client_error() -> None:
+    from litellm.exceptions import UnresolvablePreviousResponseError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = UnresolvablePreviousResponseError(
+        message="Previous response with id 'resp_unknown' not found.", model="gpt-5.4-mini", llm_provider="openai"
+    )
+    assert _is_client_error_exception(exc) is True
+
+
 def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     from litellm.proxy._types import ProxyException
     from litellm.proxy.utils import _is_client_error_exception

@@ -1,6 +1,7 @@
 mod admit;
 mod boot;
 mod callbacks;
+mod config_sync;
 mod db;
 mod error;
 mod gateway_requests;
@@ -11,6 +12,7 @@ mod live;
 pub mod middleware;
 mod periodic;
 mod redis;
+mod reload;
 mod resources;
 mod state;
 mod stored;
@@ -21,12 +23,14 @@ pub use callbacks::{
     Callbacks, Registered, Unregistrable,
     model_capacity::{self, ModelCapacity},
     parallel_request_limiter::{self, KeyLimiter},
+    spend_log::{SpendLog, SpendLogs},
 };
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
 pub use live::{Live, Served};
 pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
+pub use reload::{Poller, Source, reload_every};
 pub use resources::Resources;
 pub use state::AppState;
 pub use stored::{Loaded, StoredConfig};
@@ -46,7 +50,7 @@ use litellm_http::{
     media::PublicDnsResolver,
 };
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
-use litellm_redis_store::{Remote, active_teams::ActiveTeams};
+use litellm_redis_store::{Remote, active_teams::ActiveTeams, rate_limits::RateLimits};
 use litellm_router_core::registry::DeploymentFilter;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
@@ -57,9 +61,10 @@ pub async fn load_config(path: impl AsRef<Path>) -> Result<Loaded, Error> {
     let lookup = |name: &str| std::env::var(name).ok();
     let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&lookup)]);
     let client = pool.client(&Resolution::from(&settings).config, ClientVariant::Provider)?;
-    Box::pin(stored::load(path.as_ref(), || {
-        environment_secrets(Arc::new(ProcessEnvironment), client.clone())
-    }))
+    Box::pin(stored::load(
+        path.as_ref(),
+        Arc::new(move || environment_secrets(Arc::new(ProcessEnvironment), client.clone())),
+    ))
     .await
 }
 
@@ -89,20 +94,40 @@ const LICENSE: &str = "LITELLM_LICENSE";
 /// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise. `variables` holds the config's `environment_variables` in front of the
-/// process's, as the limiter reads its window from them on every call.
+/// process's, as the limiter reads its window from them on every call. With a `spend_log`, the
+/// proxy's spend log callback runs last and writes each served call's row to the database.
 pub async fn build_inference(
     config: &Config,
     variables: &Environment,
     resources: &Resources,
     routing: RoutingCache,
     redis: &RedisClients,
+    spend_log: Option<&SpendLog>,
+) -> Result<Inference, Error> {
+    let counters = parallel_request_limiter::counters(redis.coordination.clone());
+    inference_over(
+        config, variables, resources, routing, redis, counters, spend_log,
+    )
+    .await
+}
+
+/// [`build_inference`] over the routing state and the limiters' counters a previous config's
+/// inference counted in, and its spend log callback, so a new config keeps its cooldowns, rate
+/// limit windows and queued spend logs.
+pub(crate) async fn inference_over(
+    config: &Config,
+    variables: &Environment,
+    resources: &Resources,
+    routing: impl Into<Arc<RoutingCache>>,
+    redis: &RedisClients,
+    counters: Arc<RateLimits>,
+    spend_log: Option<&SpendLog>,
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, variables);
-    let counters = parallel_request_limiter::counters(redis.coordination.clone());
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
     let model_capacity = model_capacity::Settings::read(config, limits, licensed).map(|read| {
@@ -117,6 +142,7 @@ pub async fn build_inference(
             .iter()
             .map(|capacity| capacity.registered())
             .chain([key_limiter.registered()])
+            .chain(spend_log.map(SpendLog::registered))
             .collect(),
     )?;
     let gateway = Gateway::new(

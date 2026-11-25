@@ -45,6 +45,7 @@ async fn inference_for(config: &Config) -> Inference {
             litellm_gateway_inference::RouterTiers::default(),
         ),
         &RedisClients::default(),
+        None,
     )
     .await
     .unwrap()
@@ -72,8 +73,10 @@ fn without_stores(inference: Inference) -> AppState {
         redis: RedisClients::default(),
         database: None,
         keys: None,
+        spend_logs: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
+        counters: litellm_gateway::parallel_request_limiter::counters(None),
         variables: Environment::default(),
         gateway_requests: None,
         gateway_requests_flush: None,
@@ -712,21 +715,23 @@ async fn reached(upstream: &MockServer) -> bool {
     !upstream.received_requests().await.unwrap().is_empty()
 }
 
-/// A `claude` group of a deployment with a 100 token window and one with a 1000 token window,
-/// with the pre-call checks on.
-fn two_windows(small: &MockServer, large: &MockServer) -> String {
-    let sized = |id: &str, upstream: &MockServer, window: u32| {
+/// A `claude` group of a deployment with a 100 token window and one of `large_model` with a 1000
+/// token window, with the pre-call checks on.
+fn two_windows(small: &MockServer, large: &MockServer, large_model: &str) -> String {
+    let sized = |id: &str, model: &str, upstream: &MockServer, window: u32| {
         format!(
-            "  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n    model_info:\n      id: {id}\n      max_input_tokens: {window}\n",
+            "  - model_name: claude\n    litellm_params:\n      model: anthropic/{model}\n      api_base: {}\n      api_key: test-key\n    model_info:\n      id: {id}\n      max_input_tokens: {window}\n",
             upstream.uri()
         )
     };
     format!(
         "model_list:\n{}{}router_settings:\n  enable_pre_call_checks: true\ngeneral_settings:\n  master_key: gateway-key\n",
-        sized("small", small, 100),
-        sized("large", large, 1000),
+        sized("small", UNLISTED, small, 100),
+        sized("large", large_model, large, 1000),
     )
 }
+
+const UNLISTED: &str = "in-house-9";
 
 /// One user message of `words` words, a few tokens over `words` as the gateway estimates it.
 fn prompt(words: usize) -> Value {
@@ -738,11 +743,12 @@ fn prompt(words: usize) -> Value {
 
 #[rstest]
 #[case::every_deployment_it_fits(10, (true, true))]
-#[case::no_deployment_it_is_over(200, (false, true))]
+#[case::only_the_deployments_it_fits(150, (false, true))]
+#[case::a_deployment_its_estimate_overflows_by_less_than_twice_when_none_fits(1500, (false, true))]
 #[tokio::test]
 async fn a_prompt_reaches(#[case] words: usize, #[case] expected: (bool, bool)) {
     let (small, large) = (answering().await, answering().await);
-    let app = app(&two_windows(&small, &large)).await;
+    let app = app(&two_windows(&small, &large, UNLISTED)).await;
 
     for _ in 0..30 {
         let response = app.clone().oneshot(asking(&prompt(words))).await.unwrap();
@@ -752,12 +758,18 @@ async fn a_prompt_reaches(#[case] words: usize, #[case] expected: (bool, bool)) 
     assert_eq!((reached(&small).await, reached(&large).await), expected);
 }
 
+#[rstest]
+#[case::past_twice_every_window(3000, UNLISTED)]
+#[case::over_a_window_its_own_model_info_caps_below_the_cost_maps(1500, "claude-haiku-5-5")]
 #[tokio::test]
-async fn a_prompt_no_deployment_fits_is_refused_before_any_provider_call() {
+async fn a_prompt_no_deployment_fits_is_refused_before_any_provider_call(
+    #[case] words: usize,
+    #[case] large_model: &str,
+) {
     let (small, large) = (answering().await, answering().await);
-    let app = app(&two_windows(&small, &large)).await;
+    let app = app(&two_windows(&small, &large, large_model)).await;
 
-    let response = app.oneshot(asking(&prompt(2000))).await.unwrap();
+    let response = app.oneshot(asking(&prompt(words))).await.unwrap();
 
     let status = response.status().as_u16();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -1336,6 +1348,49 @@ async fn a_deployment_additional_drop_param_never_reaches_the_provider(
     let forwarded = forwarded_body(deployment_params, json!({"temperature": 0.5})).await;
 
     assert_eq!(forwarded.get("temperature").cloned(), expected);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_requests_messages_settings_lay_over_the_deployments_and_never_reach_the_provider() {
+    let forwarded = forwarded_body(
+        "      additional_drop_params: [top_k]\n",
+        json!({
+            "temperature": 0.5,
+            "top_k": 5,
+            "drop_params": true,
+            "additional_drop_params": ["temperature"],
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        [
+            "temperature",
+            "top_k",
+            "drop_params",
+            "additional_drop_params"
+        ]
+        .map(|key| forwarded.get(key).cloned()),
+        [None, Some(json!(5)), None, None]
+    );
+}
+
+#[rstest]
+#[case::text_python_reads_as_on("  reasoning_auto_summary: \"false\"\n", Some(json!("summarized")))]
+#[case::off("  reasoning_auto_summary: false\n", None)]
+#[tokio::test]
+async fn litellm_settings_reasoning_auto_summary_asks_for_summarized_thinking(
+    #[case] settings: &str,
+    #[case] expected: Option<Value>,
+) {
+    let forwarded = forwarded_body(
+        &format!("    model_info:\n      supports_reasoning: true\nlitellm_settings:\n{settings}"),
+        json!({"max_tokens": 2048, "thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    )
+    .await;
+
+    assert_eq!(forwarded["thinking"].get("display").cloned(), expected);
 }
 
 #[rstest]

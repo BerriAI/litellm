@@ -16,7 +16,8 @@ use axum::{
 use litellm_config::{Config, Environment};
 use litellm_env::Lookup;
 use litellm_gateway::{
-    Admit, AppState, Live, Loaded, Refused, Resources, Served, StoredConfig, middleware::InFlight,
+    Admit, AppState, Live, Loaded, Poller, Refused, Resources, Served, Source, StoredConfig,
+    middleware::InFlight,
 };
 use litellm_tracing::{KeyLength, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use serde_json::json;
@@ -100,17 +101,23 @@ async fn standalone(
     log_level: Level,
     key_length: &KeyLength,
 ) -> Result<(), Box<dyn Error>> {
-    let Loaded { config, stored } = litellm_gateway::load_config(settings.litellm_config).await?;
+    let Loaded {
+        config,
+        stored,
+        source,
+    } = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
     let admit = Arc::new(Admit::new(&config, &state, stored));
+    let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
         Some(admit),
         &config,
         environment,
-        &InFlight::new(),
+        &in_flight,
     )));
+    let poller = polled(source, &config, &live, environment, &in_flight);
     let app = alone(live.clone());
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
@@ -119,7 +126,7 @@ async fn standalone(
     let served = axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
         .with_graceful_shutdown(shutdown_signal())
         .await;
-    live.current().state.close().await;
+    closed(poller, &live).await;
     Ok(served?)
 }
 
@@ -186,10 +193,22 @@ async fn pythons_config(path: Option<&Path>) -> Option<Loaded> {
 async fn native_state(
     loaded: Option<Loaded>,
     environment: &Environment,
-) -> Result<(Config, AppState, Option<Arc<Admit>>), litellm_gateway::Error> {
-    if let Some(Loaded { config, stored }) = loaded {
+) -> Result<NativeState, litellm_gateway::Error> {
+    if let Some(Loaded {
+        config,
+        stored,
+        source,
+    }) = loaded
+    {
         match admitted_state(&config, environment, stored).await {
-            Ok((state, admit)) => return Ok((config, state, Some(Arc::new(admit)))),
+            Ok((state, admit)) => {
+                return Ok(NativeState {
+                    config,
+                    state,
+                    admit: Some(Arc::new(admit)),
+                    source,
+                });
+            }
             Err(error) => tracing::error!(
                 error = %litellm_error::Report::new(&error),
                 "could not build the native app from the config python runs with, so python answers every request"
@@ -198,7 +217,21 @@ async fn native_state(
     }
     let config = Config::default();
     let state = AppState::build(&config, environment).await?;
-    Ok((config, state, None))
+    Ok(NativeState {
+        config,
+        state,
+        admit: None,
+        source: None,
+    })
+}
+
+/// What the native app in front of Python is built from, and where the config stored in the
+/// database is read again, which is only when the native app answers anything.
+struct NativeState {
+    config: Config,
+    state: AppState,
+    admit: Option<Arc<Admit>>,
+    source: Option<Source>,
 }
 
 async fn admitted_state(
@@ -221,15 +254,22 @@ async fn in_front_of_python(
 ) -> Result<(), Box<dyn Error>> {
     let stdin_closed = litellm_gateway_forward::input_closed(std::io::stdin());
     let loaded = pythons_config(forward.config.as_deref()).await;
-    let (config, state, admit) = native_state(loaded, environment).await?;
+    let NativeState {
+        config,
+        state,
+        admit,
+        source,
+    } = native_state(loaded, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
+    let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
         admit,
         &config,
         environment,
-        &InFlight::new(),
+        &in_flight,
     )));
+    let poller = polled(source, &config, &live, environment, &in_flight);
     let admitting = live.clone();
     let ran = litellm_gateway_forward::run(
         forward,
@@ -240,8 +280,49 @@ async fn in_front_of_python(
         },
     )
     .await;
-    live.current().state.close().await;
+    closed(poller, &live).await;
     Ok(ran?)
+}
+
+/// Reads the config stored in the database again on the interval `config` sets, and on every
+/// change the proxy announces on Redis, when boot read it from a database, and swaps `live` to each
+/// config that changed. Both modes start it here, so they reload alike.
+fn polled(
+    source: Option<Source>,
+    config: &Config,
+    live: &Arc<Live>,
+    environment: &Environment,
+    in_flight: &InFlight,
+) -> Option<Poller> {
+    let environment = environment.clone();
+    let in_flight = in_flight.clone();
+    Some(source?.reload_on(
+        litellm_gateway::reload_every(config),
+        live.clone(),
+        move |config, stored, current| {
+            let environment = environment.clone();
+            let in_flight = in_flight.clone();
+            async move {
+                let state = current.state.next(&config).await?;
+                let admit = Arc::new(Admit::new(&config, &state, stored));
+                Ok(served(
+                    state,
+                    Some(admit),
+                    &config,
+                    &environment,
+                    &in_flight,
+                ))
+            }
+        },
+    ))
+}
+
+/// Stops the poller before the database pools close, so no read is left on a closed pool.
+async fn closed(poller: Option<Poller>, live: &Live) {
+    if let Some(poller) = poller {
+        poller.stop().await;
+    }
+    live.current().state.close().await;
 }
 
 /// What both modes serve from `config`: the native app built from `state`, with `admit` deciding
@@ -422,10 +503,14 @@ mod tests {
     async fn from_the_file(yaml_text: &str) -> Served {
         let file = yaml(yaml_text);
         let environment = Environment::default();
-        let (config, state, admit) =
-            native_state(pythons_config(Some(file.path())).await, &environment)
-                .await
-                .unwrap();
+        let NativeState {
+            config,
+            state,
+            admit,
+            ..
+        } = native_state(pythons_config(Some(file.path())).await, &environment)
+            .await
+            .unwrap();
         served(state, admit, &config, &environment, &InFlight::new())
     }
 
@@ -493,10 +578,16 @@ mod tests {
         ))
         .unwrap();
 
-        let (_, state, admit) =
-            native_state(Some(Loaded { config, stored }), &Environment::default())
-                .await
-                .unwrap();
+        let NativeState { state, admit, .. } = native_state(
+            Some(Loaded {
+                config,
+                stored,
+                source: None,
+            }),
+            &Environment::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(refused(&state, admit).await, Some(why));
         state.close().await;
@@ -506,7 +597,7 @@ mod tests {
     #[case::an_admitted_request("/v1/messages", StoredConfig::Unused, (StatusCode::OK, None))]
     #[case::a_stored_config_layered_in(
         "/v1/messages",
-        StoredConfig::Loaded,
+        StoredConfig::Loaded(litellm_repositories::StoredObjects::default()),
         (StatusCode::OK, None)
     )]
     #[case::a_refused_request(
@@ -530,10 +621,16 @@ mod tests {
             "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n  supported_db_objects: [models]\n",
         )
         .unwrap();
-        let (_, state, admit) =
-            native_state(Some(Loaded { config, stored }), &Environment::default())
-                .await
-                .unwrap();
+        let NativeState { state, admit, .. } = native_state(
+            Some(Loaded {
+                config,
+                stored,
+                source: None,
+            }),
+            &Environment::default(),
+        )
+        .await
+        .unwrap();
         let native = tower::service_fn(|_: Request| async {
             Ok::<_, Infallible>(Response::new(axum::body::Body::empty()))
         });
@@ -565,7 +662,8 @@ mod tests {
     async fn without_a_config_python_answers_every_request() {
         litellm_gateway::install_crypto_provider();
 
-        let (_, state, admit) = native_state(None, &Environment::default()).await.unwrap();
+        let NativeState { state, admit, .. } =
+            native_state(None, &Environment::default()).await.unwrap();
 
         assert_eq!(refused(&state, admit).await, Some("configuration"));
         state.close().await;

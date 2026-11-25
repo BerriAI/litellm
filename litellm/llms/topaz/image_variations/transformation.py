@@ -48,7 +48,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "response_format":
                 optional_params["output_format"] = v

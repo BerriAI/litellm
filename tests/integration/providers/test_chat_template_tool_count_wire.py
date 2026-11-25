@@ -224,10 +224,14 @@ def test_messages_count_tokens_counts_qwen3_5_tools_the_way_its_chat_template_re
     assert with_tool - without_tools == _qwen3_5_tool_tokens(_FUNCTION, with_system=with_system)
 
 
-def test_messages_count_tokens_skips_web_search_and_counts_unmapped_tool_keys_for_deepseek_v4(
+def test_messages_count_tokens_skips_web_search_and_defer_loading_and_counts_unmapped_tool_keys_for_deepseek_v4(
     gateway: Gateway,
 ) -> None:
-    deferred_function: Final[dict[str, JsonValue]] = {"name": "lookup", "parameters": {**_SCHEMA, "defer_loading": True}}
+    examples: Final[list[JsonValue]] = [{"query": "weather in Paris"}]
+    function_with_examples: Final[dict[str, JsonValue]] = {
+        "name": "lookup",
+        "parameters": {**_SCHEMA, "input_examples": examples},
+    }
     with wire_server(_completion) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "count", _DEEPSEEK_V4, wire.url)
         plain: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, (_ANTHROPIC_TOOL,)))
@@ -237,13 +241,17 @@ def test_messages_count_tokens_skips_web_search_and_counts_unmapped_tool_keys_fo
         deferred: Final = _count(
             gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ({**_ANTHROPIC_TOOL, "defer_loading": True},))
         )
+        with_examples: Final = _count(
+            gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ({**_ANTHROPIC_TOOL, "input_examples": examples},))
+        )
         upstream: Final = wire.drain()
     assert upstream == ()
     assert with_web_search == plain
+    assert deferred == plain
     assert_counted_with_deepseek(
-        deferred - plain,
+        with_examples - plain,
         lambda tokens: (
-            _deepseek_v4_tool_tokens(deferred_function, tokens) - _deepseek_v4_tool_tokens(_FUNCTION, tokens)
+            _deepseek_v4_tool_tokens(function_with_examples, tokens) - _deepseek_v4_tool_tokens(_FUNCTION, tokens)
         ),
     )
 

@@ -132,6 +132,7 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
     "reject_clientside_metadata_tags",
     "reject_unregistered_guardrails",
     "request_tag_mappings",
+    "require_key_mcp_access_defined",
     "responses_websocket_session_limit_seconds",
     "return_wildcard_routes",
     "scheduled_job_stagger",

@@ -41,6 +41,7 @@ from typing import Any, Dict, Final, Optional
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
@@ -53,7 +54,8 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.batches.main import acreate_batch
+from litellm.proxy.utils import ProxyLogging, handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -85,6 +87,12 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_key": "sk-vllm",
         "api_base": "http://vllm.test/v1",
         "model": "hosted_vllm/qwen",
+    },
+    "mistral-model": {
+        "custom_llm_provider": "mistral",
+        "api_key": "sk-mistral",
+        "api_base": "https://mistral.test/v1",
+        "model": "mistral/mistral-small-latest",
     },
     "bedrock-batch": {
         "custom_llm_provider": "bedrock",
@@ -165,6 +173,7 @@ class Harness:
     router: MagicMock
     logging: MagicMock
     creds_resolver: MagicMock
+    upstream: respx.MockRouter
     upstream_files_route: respx.Route
 
     @property
@@ -279,6 +288,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
             router=router,
             logging=logging,
             creds_resolver=creds_resolver,
+            upstream=upstream,
             upstream_files_route=upstream_files_route,
         )
         yield h
@@ -1476,6 +1486,139 @@ async def test_create__exception_carries_the_litellm_call_id(harness, openai_env
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+_UPSTREAM_BATCH_CREATE: Final = httpx.Request("POST", "https://api.openai.com/v1/batches")
+_INPUT_FILE_DOWNLOAD: Final = httpx.Request("GET", "https://storage.test/batch-input/input.jsonl")
+
+
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+_BATCH_MAY_EXIST_NOTICE: Final = (
+    "\n\nThe provider may already have created this batch, so check your newest batches before you send it again"
+)
+
+
+@pytest.mark.parametrize(
+    "create_error, should_retry",
+    [
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), httpx.ReadTimeout("no answer in time")
+            ),
+            "false",
+            id="read-timeout",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_BATCH_CREATE),
+                httpx.RemoteProtocolError("the server closed the connection before it answered"),
+            ),
+            "false",
+            id="connection-dropped",
+        ),
+        pytest.param(
+            lambda: openai.InternalServerError(
+                "the gateway gave up waiting", response=httpx.Response(504, request=_UPSTREAM_BATCH_CREATE), body=None
+            ),
+            "false",
+            id="504",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), httpx.ConnectTimeout("no connection in time")
+            ),
+            None,
+            id="connect-timeout",
+        ),
+        pytest.param(
+            lambda: openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), "false", id="timeout-of-unknown-phase"
+        ),
+        pytest.param(
+            lambda: openai.APIConnectionError(request=_UPSTREAM_BATCH_CREATE),
+            None,
+            id="connection-error-of-unknown-cause",
+        ),
+        pytest.param(
+            lambda: openai.RateLimitError(
+                "slow down", response=httpx.Response(429, request=_UPSTREAM_BATCH_CREATE), body=None
+            ),
+            None,
+            id="rate-limited",
+        ),
+        pytest.param(
+            lambda: openai.AuthenticationError(
+                "invalid x-api-key",
+                response=httpx.Response(401, headers={"x-should-retry": "false"}, request=_UPSTREAM_BATCH_CREATE),
+                body=None,
+            ),
+            None,
+            id="rejected-with-should-retry-false",
+        ),
+        pytest.param(
+            lambda: httpx.ReadTimeout("the input file did not download in time", request=_INPUT_FILE_DOWNLOAD),
+            None,
+            id="input-download-timed-out",
+        ),
+        pytest.param(
+            lambda: httpx.HTTPStatusError(
+                "the storage gateway gave up waiting",
+                request=_INPUT_FILE_DOWNLOAD,
+                response=httpx.Response(504, request=_INPUT_FILE_DOWNLOAD),
+            ),
+            None,
+            id="input-download-504",
+        ),
+    ],
+)
+async def test_create__tells_the_caller_not_to_resend_only_a_create_the_provider_may_have_made(
+    harness, openai_env_creds, create_error, should_retry
+):
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    error: Final = create_error()
+    harness.litellm_acreate.side_effect = error
+    answer_without_the_notice: Final = handle_exception_on_proxy(error)
+    notice: Final = _BATCH_MAY_EXIST_NOTICE if should_retry == "false" else ""
+
+    with pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers.get("x-should-retry") == should_retry
+    assert (raised.value.code, raised.value.message, raised.value.type) == (
+        answer_without_the_notice.code,
+        answer_without_the_notice.message + notice,
+        answer_without_the_notice.type,
+    )
+
+
+async def test_create__tells_the_caller_not_to_resend_a_mistral_batch_whose_post_timed_out_after_it_was_sent(
+    harness,
+):
+    set_body(
+        harness,
+        {
+            "model": "mistral-model",
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.litellm_acreate.side_effect = acreate_batch
+    create_route: Final = harness.upstream.post(url__startswith=CREDS["mistral-model"]["api_base"]).mock(
+        side_effect=httpx.ReadTimeout("no answer in time")
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert create_route.call_count == 1
+    assert raised.value.headers.get("x-should-retry") == "false"
+    assert raised.value.message.endswith(_BATCH_MAY_EXIST_NOTICE)
 
 
 # =========================================================================== #

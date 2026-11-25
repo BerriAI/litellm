@@ -1,14 +1,15 @@
 //! The gateway's router: `model_list` built through router-core's deployment build, and
 //! `router_settings` read by the core. The config load resolved every `os.environ/` reference.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use crate::host::NativeBootHost;
-use litellm_config::{Config, Spelled};
+use litellm_config::{Config, LiteLlmSettings, Spelled};
+use litellm_gateway_inference::messages::drop_paths;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
 use litellm_model_catalog::Catalog;
-use litellm_python_compat::flags::lax_bool;
+use litellm_python_compat::{flags::lax_bool, number::float};
 use litellm_router_core::{
     BuildPath, Deployment, Router, RouterConfig, build::Install, registry::DeploymentFilter,
 };
@@ -55,39 +56,50 @@ fn is_on(flag: Option<&Spelled<bool>>) -> bool {
     }
 }
 
-fn additional_drop_params(deployment: &Deployment) -> Vec<String> {
-    deployment
-        .params
-        .extra
-        .get("additional_drop_params")
-        .and_then(Value::as_array)
-        .map(|names| {
-            names
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+/// `litellm_settings.request_timeout` as Python's `float()` reads it, when the native call keeps
+/// it as a timeout: zero and a value no `Duration` holds are none.
+pub(crate) fn request_timeout(settings: &LiteLlmSettings) -> Option<f64> {
+    let seconds = match settings.request_timeout.as_ref()? {
+        Spelled::Value(seconds) => *seconds,
+        Spelled::Text(text) => float(text)?,
+    };
+    Duration::try_from_secs_f64(seconds)
+        .is_ok_and(|timeout| !timeout.is_zero())
+        .then_some(seconds)
 }
 
-/// How the messages route shapes a call to `deployment`: its `drop_params`, and the
-/// capabilities the catalog and its `model_info` declare.
+/// What `litellm_settings` sets for a messages call to any deployment.
+fn configured(settings: &LiteLlmSettings) -> MessagesSettings {
+    MessagesSettings {
+        global_drop_params: settings.drop_params == Some(true),
+        reasoning_auto_summary: settings.reasoning_auto_summary,
+        request_timeout: request_timeout(settings),
+        ..MessagesSettings::default()
+    }
+}
+
+/// How the messages route shapes a call to `deployment`: the `configured` settings under its own
+/// `drop_params` and `additional_drop_params`, and the capabilities the catalog and its
+/// `model_info` declare.
 fn shaping(
     deployment: &Deployment,
     catalog: &Catalog,
-    drops_params_globally: bool,
+    configured: &MessagesSettings,
 ) -> MessagesShaping {
     let params = &deployment.params;
-    let drop_params = drops_params_globally || is_on(params.drop_params.as_ref());
+    let drop_params = configured.global_drop_params || is_on(params.drop_params.as_ref());
     let base_model = params.extra.get("base_model").and_then(Value::as_str);
     MessagesShaping {
         settings: MessagesSettings {
             drop_params,
             drops_unsupported_params: drop_params,
-            additional_drop_params: additional_drop_params(deployment),
+            additional_drop_params: params
+                .extra
+                .get("additional_drop_params")
+                .map(drop_paths)
+                .unwrap_or_default(),
             base_model: base_model.map(str::to_owned),
-            ..MessagesSettings::default()
+            ..configured.clone()
         },
         capabilities: messages_route_capabilities(
             catalog,
@@ -123,7 +135,7 @@ pub(crate) async fn router(
             Install::Replace,
         )
         .await?;
-    let drops_params_globally = config.litellm_settings.drop_params == Some(true);
+    let configured = configured(&config.litellm_settings);
     let shaping = router
         .registry()
         .deployments(&DeploymentFilter::default())
@@ -131,7 +143,7 @@ pub(crate) async fn router(
         .map(|deployment| {
             (
                 deployment.id.clone(),
-                shaping(deployment, catalog, drops_params_globally),
+                shaping(deployment, catalog, &configured),
             )
         })
         .collect();
@@ -207,6 +219,69 @@ mod tests {
         assert_eq!(
             (settings.drop_params, settings.drops_unsupported_params),
             (expected, expected)
+        );
+    }
+
+    #[rstest]
+    #[case::unset("model_list: []\n", None)]
+    #[case::seconds("litellm_settings:\n  request_timeout: 30\n", Some(30.0))]
+    #[case::text_float_reads("litellm_settings:\n  request_timeout: \" 2.5 \"\n", Some(2.5))]
+    #[case::text_float_refuses("litellm_settings:\n  request_timeout: soon\n", None)]
+    #[case::zero("litellm_settings:\n  request_timeout: 0\n", None)]
+    #[case::negative("litellm_settings:\n  request_timeout: -1\n", None)]
+    fn a_request_timeout_is_read_as_float_reads_it(
+        #[case] yaml: &str,
+        #[case] expected: Option<f64>,
+    ) {
+        let config = Config::from_yaml(yaml).unwrap();
+
+        assert_eq!(super::request_timeout(&config.litellm_settings), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn litellm_settings_reach_every_deployment() {
+        let (_, shaping) = built(
+            "litellm_settings:\n  drop_params: true\n  reasoning_auto_summary: true\n  request_timeout: 30\nmodel_list:\n  - model_name: a\n    litellm_params:\n      model: provider/a\n  - model_name: b\n    litellm_params:\n      model: provider/b\n      drop_params: false\n",
+        )
+        .await;
+        let read: Vec<_> = shaping
+            .values()
+            .map(|shaping| {
+                let settings = &shaping.settings;
+                (
+                    settings.global_drop_params,
+                    settings.reasoning_auto_summary,
+                    settings.request_timeout,
+                )
+            })
+            .collect();
+
+        assert_eq!(read, [(true, true, Some(30.0)); 2]);
+    }
+
+    #[rstest]
+    #[case::a_list("[metadata.user_id, 1, thinking]", &["metadata.user_id", "thinking"])]
+    #[case::text("metadata.user_id", &[])]
+    #[case::a_map("{metadata: user_id}", &[])]
+    #[tokio::test]
+    async fn a_deployments_additional_drop_params_are_the_text_entries_of_its_list(
+        #[case] written: &str,
+        #[case] expected: &[&str],
+    ) {
+        let (_, shaping) = built(&format!(
+            "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      additional_drop_params: {written}"
+        ))
+        .await;
+
+        assert_eq!(
+            shaping
+                .values()
+                .next()
+                .unwrap()
+                .settings
+                .additional_drop_params,
+            expected
         );
     }
 

@@ -47,6 +47,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     keep_original_fields,
     scannable_tool_result_request,
 )
+from litellm.llms.anthropic.messages.deferred_tools import client_tool_search_name
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
 from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
@@ -69,6 +70,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
+    tool_calls_in_guardrail_scope,
     unappliable_request_rewrite,
 )
 from litellm.types.llms.anthropic import (
@@ -488,17 +490,22 @@ def _is_deferred_tool(tool: object) -> bool:
     return fields is not None and fields.get("defer_loading") is True
 
 
-def _loaded_up_front(tools: Sequence[object]) -> Sequence[object]:
+def _without_deferral(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return tool
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _loaded_up_front(tools: Sequence[object], removed_tool_search: bool) -> Sequence[object]:
     """
-    Anthropic rejects a request whose tools are all deferred, so when a guardrail removed the
-    tools that were not, the ones it kept are sent without `defer_loading`.
+    Deferred tools load only through the tool search tool, and Anthropic rejects a request whose tools
+    are all deferred, so when a guardrail removed the search tool or every tool that was not deferred,
+    the ones it kept are sent without `defer_loading`.
     """
-    if not tools or not all(map(_is_deferred_tool, tools)):
+    if not tools or not (removed_tool_search or all(map(_is_deferred_tool, tools))):
         return tools
-    return tuple(
-        {key: value for key, value in fields.items() if key != "defer_loading"}
-        for fields in filter(None, map(as_str_mapping, tools))
-    )
+    return tuple(map(_without_deferral, tools))
 
 
 def _as_sent_by_fingerprint(
@@ -551,7 +558,11 @@ def _tools_after_guardrail(
         if tool is not None
     )
     all_as_sent: Final = _NOT_AS_SENT not in matched
-    return [*never_shown, *(_loaded_up_front(kept) if all_as_sent and len(returned) < len(shown) else kept)]
+    removed_tool_search: Final = client_tool_search_name(shown) is not None and client_tool_search_name(kept) is None
+    return [
+        *never_shown,
+        *(_loaded_up_front(kept, removed_tool_search) if all_as_sent and len(returned) < len(shown) else kept),
+    ]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -1132,6 +1143,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                include_tool_calls=tool_calls_in_guardrail_scope(guardrail_to_apply),
             )
             for msg_idx, message in enumerate(messages)
         )
@@ -1491,6 +1503,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        include_tool_calls: bool = True,
     ) -> ExtractedInput:
         """Extract text content and images from a message.
 
@@ -1526,7 +1539,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         tool_use_blocks: Final = (
             ()
-            if scan_only_tool_results
+            if not include_tool_calls
             else tuple(
                 (content_idx, content_item)
                 for content_idx, content_item in enumerate(content)
