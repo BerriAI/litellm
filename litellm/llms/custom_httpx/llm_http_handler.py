@@ -6936,7 +6936,7 @@ class BaseLLMHTTPHandler:
             raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise with_provider_reply(provider_error, error_response)
+        raise with_provider_reply(provider_error, error_response) from error
 
     def handle_error(
         self,

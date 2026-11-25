@@ -1241,6 +1241,11 @@ def failover_fields(plan: Plan) -> Mapping[str, object]:
 _PYTHON_HANDLER_NAMES: Final[Mapping[str, str]] = MappingProxyType({"acreate_file": "_acreate_file"})
 
 
+def python_handler_name(plan: Plan) -> str:
+    function_name: Final = plan.function_name or plan.host_op
+    return _PYTHON_HANDLER_NAMES.get(function_name, function_name)
+
+
 def scoped_fallback_fields(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
     """A request that creates or names a resource only one provider holds (a file upload, a batch
     on an uploaded file, a fine-tuning job) falls back within its own model group only
@@ -1250,9 +1255,8 @@ def scoped_fallback_fields(plan: Plan, request: Mapping[str, object]) -> Mapping
         references_provider_scoped_resource,
     )
 
-    function_name: Final = plan.function_name or plan.host_op
     handlers: Final = {
-        "original_function": _Handler(_PYTHON_HANDLER_NAMES.get(function_name, function_name)),
+        "original_function": _Handler(python_handler_name(plan)),
         "original_generic_function": _Handler(plan.host_op),
     }
     kwargs: Final = {**request, **handlers}
@@ -2494,6 +2498,7 @@ class RustEndpoints:
         from litellm.litellm_core_utils.routing_common_utils import (
             add_model_file_id_mappings,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
         )
+        from litellm.llms.openai.common_utils import CreatedOnSomeDeployments, create_may_already_exist
         from litellm.types.utils import LlmProviders
 
         target_model_names: Final = _TARGET_MODEL_NAMES.validate_python(kwargs.get(_TARGET_MODEL_NAMES_KEY, ()))
@@ -2573,7 +2578,14 @@ class RustEndpoints:
             self.counters.success_calls[model_name] += 1
             return response
 
-        responses: Final = await asyncio.gather(*(create_for(as_dict(d)) for d in deployments))
+        outcomes: Final = await asyncio.gather(*(create_for(as_dict(d)) for d in deployments), return_exceptions=True)
+        failures: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
+        if failures:
+            failure: Final = next((each for each in failures if create_may_already_exist(each)), failures[0])
+            if len(failures) < len(outcomes):
+                raise failure from CreatedOnSomeDeployments(failure)
+            raise failure
+        responses: Final = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
         if len(responses) == 0:
             raise Exception("No healthy deployments found.")  # noqa: TRY002  # as the Python router
         mapping: Final = add_model_file_id_mappings(healthy_deployments=deployments, responses=responses)  # pyright: ignore[reportArgumentType, reportUnknownVariableType]  # deployment records

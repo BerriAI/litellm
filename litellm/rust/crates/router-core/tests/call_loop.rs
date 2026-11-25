@@ -493,6 +493,12 @@ fn agentic_followup() -> AttemptError {
     failed
 }
 
+fn create_may_exist() -> AttemptError {
+    let mut failed = failure(FailureKind::Timeout, 408);
+    failed.create_may_exist = true;
+    failed
+}
+
 fn over_every_tpm_limit() -> AttemptError {
     let mut failed = failure(FailureKind::RateLimit, 429);
     failed.classes = vec![
@@ -1965,6 +1971,88 @@ async fn a_retry_that_fails_beyond_any_retry_ends_the_retries(
         matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.ends_retries())
     );
     assert_eq!((host.retries(), host.selected().len()), (1, 2));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_create_that_may_exist_is_neither_retried_nor_sent_to_a_fallback(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![create_may_exist()]));
+    let router = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acreate_batch"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.create_may_exist)
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_retry_whose_create_may_exist_ends_the_retries_and_the_fallbacks(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![server_error(), create_may_exist()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acreate_batch"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.create_may_exist)
+    );
+    assert_eq!((host.retries(), host.selected().len()), (1, 2));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_whose_create_may_exist_is_the_last_fallback_tried() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![create_may_exist()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acreate_batch"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.create_may_exist)
+    );
+    assert_eq!(host.selected(), ["p1", "b1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_weighted_failover_whose_create_may_exist_skips_the_regular_fallbacks() {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![server_error(), create_may_exist()],
+    ));
+    let config = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "a2"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/b1"}, "model_info": {"id": "b1"}},
+        ],
+        "enable_weighted_failover": true,
+    }))
+    .unwrap();
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acreate_batch"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.create_may_exist)
+    );
+    assert_eq!(host.selected().len(), 2);
 }
 
 /// Where a stream of `primary` came from, the rest as `named` says. An origin is only ever built

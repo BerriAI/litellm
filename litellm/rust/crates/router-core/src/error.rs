@@ -455,6 +455,9 @@ pub struct AttemptError {
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
     /// failure keeps its own class, which decides its fallbacks and cooldown as for any failure.
     pub agentic_followup: bool,
+    /// A file or batch create the provider may already hold (`is_create_that_may_already_exist`):
+    /// neither retried nor sent to a fallback, since either sends the create again.
+    pub create_may_exist: bool,
     /// One of `deployment_callback_on_failure`'s early exits holds: the failure says nothing about
     /// the deployment, so it is neither counted nor cooled down (a failed request still counts
     /// against the minute's requests, which `async_deployment_callback_on_failure` does apart).
@@ -483,6 +486,7 @@ impl AttemptError {
             recorded: false,
             names_provider: false,
             agentic_followup: false,
+            create_may_exist: false,
             outside_deployment: false,
             caller_scoped: false,
             status_absent: false,
