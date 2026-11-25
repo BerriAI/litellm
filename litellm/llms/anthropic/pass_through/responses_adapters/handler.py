@@ -373,13 +373,16 @@ def _build_responses_kwargs(
         else tools or ()
     )
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
+    top_level_cache_control: Final = (
+        None if "cache_control" in explicitly_dropped else forwarded_kwargs.get("cache_control")
+    )
     request_messages: Final[AnthropicRequestMessages] = (
         [
             {
                 **message,
                 "content": list(_rewritten_blocks(message.get("content"), block_rewrite)) or message.get("content"),
             }
-            for message in _with_automatic_cache_mark(messages, forwarded_kwargs.get("cache_control"))
+            for message in _with_automatic_cache_mark(messages, top_level_cache_control)
         ]
         if block_rewrite
         else messages
