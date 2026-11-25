@@ -147,6 +147,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.customer_budget_headers import customer_budget_headers
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
@@ -3037,6 +3038,7 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
             "x-litellm-key-spend": str(updated_spend),
+            **customer_budget_headers(getattr(user_api_key_dict, "customer_hierarchy", None)),
             "x-litellm-response-duration-ms": str(timing_values.get("_response_ms")),
             "x-litellm-overhead-duration-ms": str(timing_values.get("litellm_overhead_time_ms")),
             "x-litellm-callback-duration-ms": str(hidden_params.get("callback_duration_ms", None)),

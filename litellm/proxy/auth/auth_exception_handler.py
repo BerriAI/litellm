@@ -31,6 +31,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+from litellm.proxy.common_utils.customer_budget_headers import customer_budget_headers
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
@@ -57,6 +58,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+            headers=dict(customer_budget_headers(getattr(e, "customer_hierarchy", None))),
         )
     if isinstance(e, ModelAccessDeniedHTTPException):
         return ModelAccessDeniedProxyException(

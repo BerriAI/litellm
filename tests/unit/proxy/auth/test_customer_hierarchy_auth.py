@@ -17,7 +17,9 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_ORG_ALIAS_HEADER,
     CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
+    CustomerBudgetExceededError,
     CustomerIdentityHeaderNames,
+    check_customer_hierarchy_access,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
@@ -1040,6 +1042,44 @@ async def test_either_customer_cap_blocks_while_the_other_has_capacity(exhausted
     assert error.value.entity_id == member.entity_id
     assert error.value.current_cost == exhausted.max_budget
     assert exhausted_duration in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_window_is_rejected_with_the_reading_of_every_window(monkeypatch) -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    store = FakeSpendCounters().store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member = hierarchy.scopes[-1]
+    monthly, yearly = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    await store.set(monthly.counter_key, 10.0)
+    await store.set(yearly.counter_key, 25.0)
+
+    with pytest.raises(CustomerBudgetExceededError) as rejected:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+
+    assert [
+        (window.budget_duration, window.spend, window.max_budget, window.reset_at)
+        for window in rejected.value.customer_hierarchy.scopes[-1].budget_window_usage
+    ] == [("1mo", 10.0, 10.0, monthly.reset_at), ("12mo", 25.0, 100.0, yearly.reset_at)]
+    assert monthly.reset_at is not None and yearly.reset_at is not None
+
+    await store.set(monthly.counter_key, 3.0)
+    admitted = await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert [(window.budget_duration, window.spend) for window in admitted.scopes[-1].budget_window_usage] == [
+        ("1mo", 3.0),
+        ("12mo", 25.0),
+    ]
 
 
 @pytest.mark.asyncio
