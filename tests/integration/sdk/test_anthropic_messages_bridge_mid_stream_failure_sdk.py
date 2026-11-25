@@ -3,13 +3,16 @@ import json
 import threading
 import uuid
 from collections.abc import AsyncIterable, Callable
-from typing import Final
+from typing import Final, Literal
 
+import pytest
 from integration._support.anthropic_sse import (
+    Attempts,
     SseEvent,
     delta_text,
     dropping_reply,
     event_types,
+    message_id,
     message_stream,
     parse_sse,
     stream_reply,
@@ -59,6 +62,20 @@ class _CallbackProbe(CustomLogger):
     def successes(self) -> tuple[object, ...]:
         with self._lock:
             return tuple(self._successes)
+
+
+class _AgenticHookProbe(_CallbackProbe):
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return False, {}
 
 
 def _upstream(marker: str) -> Callable[[Request], Reply]:
@@ -156,3 +173,53 @@ async def test_sdk_native_messages_stream_delivers_one_success_callback_with_usa
         assert (logging["prompt_tokens"], logging["completion_tokens"], logging["total_tokens"]) == (5, 3, 8)
         assert probe.failures() == ()
         assert posted_targets(wire) == ("/v1/messages",)
+
+
+@pytest.mark.parametrize("stream_wrapper", ["none", "cache-miss", "agentic-hook"])
+async def test_sdk_router_stream_retried_before_content_logs_the_message_id_the_client_saw(
+    stream_wrapper: Literal["none", "cache-miss", "agentic-hook"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cache", litellm.Cache() if stream_wrapper == "cache-miss" else litellm.cache)
+    probe: Final = _AgenticHookProbe() if stream_wrapper == "agentic-hook" else _CallbackProbe()
+    litellm.callbacks.append(probe)
+    prompt: Final = uuid.uuid4().hex
+    model: Final = "claude-sonnet-5-5"
+    attempts: Final = Attempts()
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/v1/messages")
+        attempt: Final = attempts.record(user_prompt(object_value(json.loads(request.body))))
+        frames: Final = message_stream(f"msg_attempt_{attempt}", model, _TEXT)
+        return dropping_reply(frames, abort_after=1) if attempt == 1 else stream_reply(frames)
+
+    with wire_server(respond) as wire:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": f"anthropic/{model}", "api_base": wire.url, "api_key": _PROVIDER_KEY},
+                }
+            ],
+            num_retries=1,
+        )
+        response: Final = await router.aanthropic_messages(
+            model="claude",
+            max_tokens=16,
+            stream=True,
+            messages=[{"role": "user", "content": prompt}],
+            caching=stream_wrapper == "cache-miss",
+        )
+        assert isinstance(response, AsyncIterable), response
+        frames: Final = [frame async for frame in response]
+        events: Final = parse_sse(b"".join(frame for frame in frames if isinstance(frame, bytes)).decode())
+        assert delta_text(events) == _TEXT, events
+        assert event_types(events).count("message_start") == 1, events
+        assert attempts.count(prompt) == 2
+        await _settled(probe.successes)
+        await GLOBAL_LOGGING_WORKER.flush()
+    successes: Final = probe.successes()
+    assert len(successes) == 1, successes
+    logged: Final = TypeAdapter(dict[str, object]).validate_python(
+        TypeAdapter(tuple[object, object]).validate_python(successes[0])[1]
+    )
+    assert logged["id"] == message_id(events) == "msg_attempt_1"
