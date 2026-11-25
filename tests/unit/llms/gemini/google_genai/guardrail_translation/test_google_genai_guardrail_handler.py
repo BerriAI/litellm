@@ -358,6 +358,29 @@ async def test_list_items_keep_their_type_when_a_guardrail_drops_a_tool_result_l
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(5)
+async def test_a_guardrail_dropping_one_item_from_a_long_tool_result_list_keeps_the_rest_without_stalling() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_response_with_rows([1] * 8000 + ["zebrafruit"]),
+        guardrail_to_apply=_RestructuringGuardrail(rewrite=_without_zebrafruit_rows),
+    )
+
+    assert _sent_request(guardrailed) == _function_response_with_rows([1] * 8000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(5)
+async def test_a_guardrail_dropping_both_ends_of_a_long_tool_result_list_sends_the_rest_without_stalling() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_response_with_rows(["zebrafruit", *[1] * 8000, "zebrafruit"]),
+        guardrail_to_apply=_RestructuringGuardrail(rewrite=_without_zebrafruit_rows),
+    )
+
+    sent_rows: Final = guardrailed["contents"][0]["parts"][0]["functionResponse"]["response"]["rows"]
+    assert [str(row) for row in sent_rows] == ["1"] * 8000
+
+
+@pytest.mark.asyncio
 async def test_a_non_ascii_blocked_word_in_a_function_response_is_blocked() -> None:
     accented_filter: Final = ContentFilterGuardrail(
         guardrail_name="accented-filter",
@@ -641,26 +664,22 @@ async def test_a_masked_word_in_a_function_call_the_model_returns_reaches_the_cl
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_replacing_a_reply_with_one_text_replaces_its_first_text_as_on_chat() -> None:
-    reply: Final = {
-        "candidates": [
-            {
-                "content": {
-                    "role": "model",
-                    "parts": [{"text": "zebrafruit"}, {"executableCode": {"language": "PYTHON", "code": "print(1)"}}],
-                }
-            }
-        ]
-    }
+@pytest.mark.parametrize(
+    "ordered",
+    [lambda text, code: [text, code], lambda text, code: [code, text]],
+    ids=["text_first", "code_first"],
+)
+async def test_a_guardrail_replacing_a_reply_with_one_text_replaces_its_first_text_as_on_chat(
+    ordered: Callable[[dict[str, object], dict[str, object]], list[dict[str, object]]],
+) -> None:
+    code_part: Final = {"executableCode": {"language": "PYTHON", "code": "print(1)"}}
+    reply: Final = {"candidates": [{"content": {"role": "model", "parts": ordered({"text": "zebrafruit"}, code_part)}}]}
 
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
         response=reply, guardrail_to_apply=_mock_guardrail(["Blocked by policy"])
     )
 
-    assert guardrailed["candidates"][0]["content"]["parts"] == [
-        {"text": "Blocked by policy"},
-        {"executableCode": {"language": "PYTHON", "code": "print(1)"}},
-    ]
+    assert guardrailed["candidates"][0]["content"]["parts"] == ordered({"text": "Blocked by policy"}, code_part)
 
 
 @pytest.mark.asyncio
@@ -749,6 +768,30 @@ async def test_a_blocked_word_split_between_a_streamed_text_part_and_a_code_part
     )
 
     assert result is chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "as_stream_item",
+    [lambda reply: reply, lambda reply: f"data: {json.dumps(reply)}\r\n\r\n"],
+    ids=["response_chunk", "raw_sse"],
+)
+async def test_a_blocked_word_whose_streamed_text_parts_sit_around_a_code_part_blocks_the_stream(
+    as_stream_item: Callable[[dict[str, object]], object],
+) -> None:
+    streamed: Final = [
+        as_stream_item(_model_reply({"text": "zebra"})),
+        as_stream_item(_model_reply({"executableCode": {"language": "PYTHON", "code": "pass"}})),
+        as_stream_item(_model_reply({"text": "fruit"})),
+    ]
+
+    with pytest.raises(HTTPException) as blocked:
+        await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+            responses_so_far=streamed,
+            guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.BLOCK),
+        )
+
+    assert blocked.value.status_code == 400
 
 
 @pytest.mark.asyncio

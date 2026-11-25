@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from itertools import chain, groupby, pairwise
+from itertools import chain, filterfalse, groupby, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
@@ -49,6 +49,7 @@ _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
 _SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
+_MAX_ALIGNED_ITEM_PAIRS: Final = 250_000
 _JSON_SCALAR: Final = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
 _JSON_STRING_ESCAPE: Final = re.compile(r'\\(["\\]|[bfnrt]|u[0-9a-fA-F]{4})')
 _CONTROL_CHARACTER_ESCAPES: Final = MappingProxyType({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"})
@@ -198,13 +199,38 @@ def _json_shape(value: object) -> frozenset[str] | str:
     return "array" if _as_list_or_tuple(value) is not None else "scalar"
 
 
+def _common_prefix_length(left: Sequence[Hashable], right: Sequence[Hashable]) -> int:
+    return next((index for index, (a, b) in enumerate(zip(left, right)) if a != b), min(len(left), len(right)))
+
+
+def _bounded_opcodes(
+    original_keys: Sequence[Hashable], guardrailed_keys: Sequence[Hashable]
+) -> Iterable[tuple[str, int, int, int, int]]:
+    if len(original_keys) * len(guardrailed_keys) > _MAX_ALIGNED_ITEM_PAIRS:
+        return (("replace", 0, len(original_keys), 0, len(guardrailed_keys)),)
+    return SequenceMatcher(None, original_keys, guardrailed_keys, autojunk=False).get_opcodes()
+
+
 def _aligned_blocks(
     original_items: Sequence[object], guardrailed_items: Sequence[object], key: Callable[[object], Hashable]
 ) -> Iterable[tuple[str, Sequence[object], Sequence[object]]]:
-    matcher: Final = SequenceMatcher(
-        None, tuple(map(key, original_items)), tuple(map(key, guardrailed_items)), autojunk=False
+    original_keys: Final = tuple(map(key, original_items))
+    guardrailed_keys: Final = tuple(map(key, guardrailed_items))
+    head: Final = _common_prefix_length(original_keys, guardrailed_keys)
+    tail: Final = _common_prefix_length(original_keys[head:][::-1], guardrailed_keys[head:][::-1])
+    original_end: Final = len(original_items) - tail
+    guardrailed_end: Final = len(guardrailed_items) - tail
+    middle: Final = (
+        (tag, original_items[head + i1 : head + i2], guardrailed_items[head + j1 : head + j2])
+        for tag, i1, i2, j1, j2 in _bounded_opcodes(
+            original_keys[head:original_end], guardrailed_keys[head:guardrailed_end]
+        )
     )
-    return ((tag, original_items[i1:i2], guardrailed_items[j1:j2]) for tag, i1, i2, j1, j2 in matcher.get_opcodes())
+    return chain(
+        (("equal", original_items[:head], guardrailed_items[:head]),),
+        middle,
+        (("equal", original_items[original_end:], guardrailed_items[guardrailed_end:]),),
+    )
 
 
 def _with_paired_numbers(originals: Sequence[object], guardrailed: Sequence[object], depth: int) -> Iterable[object]:
@@ -311,10 +337,15 @@ def _candidate_contents(response: object) -> tuple[object, ...]:
     return tuple(_field(candidate, "content") for candidate in candidates)
 
 
+def _is_text_part_slot(slot: _TextSlot) -> bool:
+    return slot.key == "text" or isinstance(slot.key, int)
+
+
 def _response_part_slots(response: object) -> tuple[_TextSlot, ...]:
-    return tuple(
+    slots: Final = tuple(
         chain.from_iterable(_content_part_slots(content, _FULL_PART_SCOPE) for content in _candidate_contents(response))
     )
+    return (*filter(_is_text_part_slot, slots), *filterfalse(_is_text_part_slot, slots))
 
 
 def _slot_texts(text_slots: Sequence[_TextSlot]) -> tuple[str, ...]:
@@ -569,20 +600,10 @@ def _chunk_sse_text(chunk: object) -> str | None:
     return None
 
 
-def _is_text_part_slot(slot: _TextSlot) -> bool:
-    return slot.key == "text" or isinstance(slot.key, int)
-
-
-def _stream_separator(previous: _TextSlot, current: _TextSlot) -> str:
-    return "" if _is_text_part_slot(previous) and _is_text_part_slot(current) else "\n"
-
-
 def _joined_stream_text(text_slots: Sequence[_TextSlot]) -> str:
-    if not text_slots:
-        return ""
-    return text_slots[0].text + "".join(
-        _stream_separator(previous, current) + current.text for previous, current in pairwise(text_slots)
-    )
+    text_parts: Final = "".join(slot.text for slot in filter(_is_text_part_slot, text_slots))
+    other_fields: Final = tuple(slot.text for slot in filterfalse(_is_text_part_slot, text_slots))
+    return "\n".join(text for text in (text_parts, *other_fields) if text)
 
 
 def _accumulated_stream_text(responses_so_far: Sequence[object]) -> str:
