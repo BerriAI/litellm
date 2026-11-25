@@ -33,6 +33,7 @@ from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY, RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.tool_fields import (
     BRIDGED_TOOL_NAMES_KWARG,
     BridgedToolNames,
@@ -48,7 +49,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
-from litellm.types.caching import LiteLLMCacheType
+from litellm.types.caching import CachingSupportedCallTypes, LiteLLMCacheType
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
@@ -1452,9 +1453,18 @@ def test_sync_bridged_responses_past_max_messages_neither_read_nor_write_the_cac
     assert anthropic_messages_route.call_count == 3, "a request past max_messages used the cache"
 
 
-async def _drain_cache_writes() -> None:
-    while _PENDING_CACHE_WRITES:
-        await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+_SETTLE_TIMEOUT_SECONDS: Final = 10
+_COMPLETION_ONLY_CALL_TYPES: Final[tuple[CachingSupportedCallTypes, ...]] = ("completion", "acompletion")
+
+
+async def _await_cache_writes() -> None:
+    await asyncio.wait_for(asyncio.gather(*tuple(_PENDING_CACHE_WRITES)), timeout=_SETTLE_TIMEOUT_SECONDS)
+
+
+async def _settle_post_response_work() -> None:
+    await _await_cache_writes()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=_SETTLE_TIMEOUT_SECONDS)
+    await _await_cache_writes()
 
 
 @pytest.mark.asyncio
@@ -1465,12 +1475,75 @@ async def test_async_bridged_responses_past_max_messages_neither_read_nor_write_
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     monkeypatch.setattr(litellm, "cache", cache)
 
-    await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
-    await _drain_cache_writes()
-    repeat: Final = await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
-    await _drain_cache_writes()
-    cache.max_messages = None
-    await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+    try:
+        await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+        await _settle_post_response_work()
+        repeat: Final = await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+        await _settle_post_response_work()
+        cache.max_messages = None
+        await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
 
-    assert repeat._hidden_params.get("cache_hit") is not True
-    assert anthropic_messages_route.call_count == 3, "a request past max_messages used the cache"
+        assert repeat._hidden_params.get("cache_hit") is not True
+        assert anthropic_messages_route.call_count == 3, "a request past max_messages used the cache"
+    finally:
+        await _settle_post_response_work()
+
+
+_STRING_INPUT_CASES: Final = (
+    pytest.param(0, None, 2, id="a-zero-limit-skips-the-one-chat-message"),
+    pytest.param(0, "Answer in one word", 2, id="a-zero-limit-skips-the-chat-messages-with-instructions"),
+    pytest.param(1, None, 1, id="a-limit-of-one-caches-the-one-chat-message"),
+)
+
+
+@pytest.mark.parametrize(("max_messages", "instructions", "provider_calls"), _STRING_INPUT_CASES)
+def test_sync_bridged_string_input_keeps_the_chat_message_count_on_the_inner_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_messages_route: respx.Route,
+    max_messages: int,
+    instructions: str | None,
+    provider_calls: int,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(
+            type=LiteLLMCacheType.LOCAL,
+            max_messages=max_messages,
+            supported_call_types=list(_COMPLETION_ONLY_CALL_TYPES),
+        ),
+    )
+
+    for _ in range(2):
+        litellm.responses(model="anthropic/claude-sonnet-5-5", input="hi", instructions=instructions)
+
+    assert anthropic_messages_route.call_count == provider_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("max_messages", "instructions", "provider_calls"), _STRING_INPUT_CASES)
+async def test_async_bridged_string_input_keeps_the_chat_message_count_on_the_inner_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_messages_route: respx.Route,
+    max_messages: int,
+    instructions: str | None,
+    provider_calls: int,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(
+            type=LiteLLMCacheType.LOCAL,
+            max_messages=max_messages,
+            supported_call_types=list(_COMPLETION_ONLY_CALL_TYPES),
+        ),
+    )
+
+    try:
+        for _ in range(2):
+            await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input="hi", instructions=instructions)
+            await _settle_post_response_work()
+
+        assert anthropic_messages_route.call_count == provider_calls
+    finally:
+        await _settle_post_response_work()
