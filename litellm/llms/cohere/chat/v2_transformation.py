@@ -129,12 +129,12 @@ def _cohere_assistant_fields(fields: Mapping[str, object]) -> Mapping[str, objec
     return {**kept, "tool_calls": [_cohere_tool_call(tool_call) for tool_call in tool_calls]}
 
 
-def _cohere_history_message(message: object) -> object:
+def _cohere_history_message(message: object, resends_thinking: bool) -> object:
     fields: Final = as_str_mapping(message)
     if fields is None or fields.get("role") != "assistant":
         return message
     turn: Final = _cohere_assistant_fields(fields)
-    reasoning: Final = _replayed_reasoning(fields)
+    reasoning: Final = _replayed_reasoning(fields) if resends_thinking else ""
     content_parts: Final = _assistant_content_parts(turn.get("content"))
     if not reasoning or not (content_parts or turn.get("tool_calls")) or _has_thinking_part(content_parts):
         return turn
@@ -162,6 +162,11 @@ def _any_model_supports(capability: Callable[..., bool], model_ids: tuple[str, .
         capability(model=model_id, custom_llm_provider=provider)
         for model_id, provider in itertools.product(model_ids, _COHERE_PROVIDERS)
     )
+
+
+def _listed_without_reasoning(model_ids: tuple[str, ...]) -> bool:
+    listed: Final = any(litellm.utils.get_model_cost_key(model_id) is not None for model_id in model_ids)
+    return listed and not _any_model_supports(litellm.supports_reasoning, model_ids)
 
 
 def _function_name(tool: object) -> object:
@@ -527,7 +532,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             headers,
         )
         history: Final = _HISTORY.validate_python(data["messages"])
-        return {**data, "messages": [_cohere_history_message(message) for message in history]}
+        resends_thinking: Final = not _listed_without_reasoning(
+            _cohere_model_ids(model, litellm_params.get("base_model"))
+        )
+        return {**data, "messages": [_cohere_history_message(message, resends_thinking) for message in history]}
 
     def transform_response(
         self,

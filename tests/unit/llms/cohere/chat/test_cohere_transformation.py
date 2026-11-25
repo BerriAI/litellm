@@ -1686,6 +1686,7 @@ async def test_cohere_v2_stream_returns_thinking_and_cohere_usage(respx_mock: re
     assert rebuilt.choices[0].finish_reason == "stop"
     assert (rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens) == (66, 38)
     assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 35
+    assert len({chunk.id for chunk in chunks}) == 1
 
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
@@ -1808,6 +1809,39 @@ def test_cohere_v2_resent_assistant_thinking_becomes_cohere_thinking_content(
 
     litellm.completion(
         model=f"cohere_chat/v2/{REASONING_MODEL}",
+        messages=[ARITHMETIC_QUESTION, assistant_turn, follow_up],
+        api_key="cohere-test-key",
+    )
+
+    assert _sent_body(route)["messages"] == [ARITHMETIC_QUESTION, cohere_turn, follow_up]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("model", "cohere_turn"),
+    [
+        (NON_REASONING_MODEL, {"role": "assistant", "content": "391"}),
+        (
+            "command-z-reasoning-unlisted",
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}],
+            },
+        ),
+    ],
+)
+def test_cohere_v2_resent_thinking_goes_only_to_models_that_reason(
+    respx_mock: respx.MockRouter, model: str, cohere_turn: Mapping[str, object]
+) -> None:
+    follow_up: Final = {"role": "user", "content": "Now divide that by 17."}
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "23"}]}))
+    )
+    assistant_turn: Final = {"role": "assistant", "content": "391", "reasoning_content": "17 * 23 is 391."}
+
+    litellm.completion(
+        model=f"cohere_chat/v2/{model}",
         messages=[ARITHMETIC_QUESTION, assistant_turn, follow_up],
         api_key="cohere-test-key",
     )

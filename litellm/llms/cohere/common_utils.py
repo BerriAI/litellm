@@ -17,6 +17,7 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
     StreamingChoices,
     Usage,
+    generate_id,
 )
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -235,6 +236,7 @@ class CohereV2ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.tool_call_indexes_with_arguments: frozenset[int] = frozenset()
+        self.response_id: Final = generate_id()
 
     def _parse_content_delta(self, chunk: dict) -> tuple[str, str]:
         """Parse content-delta chunks into their answer text and their thinking text."""
@@ -360,6 +362,7 @@ class CohereV2ModelResponseIterator:
                     )
                 ],
                 usage=usage,
+                id=self.response_id,
             )
 
         except Exception as e:
