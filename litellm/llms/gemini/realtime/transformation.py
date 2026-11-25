@@ -592,7 +592,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     @staticmethod
     def _is_text_only_live_model(model: str) -> bool:
-        return GeminiRealtimeConfig._model_cost_entry(model).get("mode") == "audio_transcription"
+        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
+        if entry.get("mode") == "audio_transcription":
+            return True
+        endpoints: Final = entry.get("supported_endpoints")
+        output_modalities: Final = entry.get("supported_output_modalities")
+        return (
+            isinstance(endpoints, list)
+            and "/v1/realtime" in endpoints
+            and isinstance(output_modalities, list)
+            and "audio" not in output_modalities
+        )
 
     @staticmethod
     def _default_response_modality(model: str) -> GeminiResponseModalities:

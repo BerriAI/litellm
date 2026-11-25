@@ -76564,7 +76564,17 @@
         "litellm_provider": "vertex_ai",
         "mode": "audio_transcription",
         "output_cost_per_token": 2.1e-05,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
     },
     "vertex_ai/gemini-omni-1.1-flash": {
         "input_cost_per_token": 1.5e-06,

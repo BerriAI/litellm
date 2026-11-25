@@ -9,6 +9,7 @@ Validates:
   WebSocket pair (no real network calls)
 """
 
+import base64
 import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -789,7 +790,15 @@ def test_vertex_text_only_live_model_default_setup_requests_text(
     assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
 
 
-@pytest.mark.parametrize("entry", [{"mode": "realtime"}, {"mode": "realtime", "gemini_native_audio": True}])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"mode": "realtime"},
+        {"mode": "realtime", "gemini_native_audio": True},
+        {"mode": "realtime", "supported_endpoints": ["/v1/realtime"], "supported_output_modalities": ["text", "audio"]},
+        {"mode": "chat", "supported_output_modalities": ["text"]},
+    ],
+)
 def test_vertex_audio_live_model_default_setup_keeps_audio_defaults(
     monkeypatch: pytest.MonkeyPatch, entry: dict[str, object]
 ) -> None:
@@ -804,6 +813,40 @@ def test_vertex_audio_live_model_default_setup_keeps_audio_defaults(
             "outputAudioTranscription": {},
         }
     }
+
+
+def test_vertex_text_only_live_model_default_setup_requests_text_when_deployment_declares_realtime_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            f"vertex_ai/{_SYNTHETIC_TRANSCRIBE_MODEL}": {
+                "litellm_provider": "vertex_ai",
+                "mode": "audio_transcription",
+                "supported_endpoints": ["/v1/realtime"],
+                "supported_output_modalities": ["text"],
+            }
+        },
+    )
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "transcribe-live",
+                "litellm_params": {
+                    "model": f"vertex_ai/{_SYNTHETIC_TRANSCRIBE_MODEL}",
+                    "vertex_project": "my-proj",
+                    "vertex_location": "global",
+                },
+                "model_info": {"mode": "realtime"},
+            }
+        ]
+    )
+
+    setup: Final = json.loads(_vertex_config().session_configuration_request(_SYNTHETIC_TRANSCRIBE_MODEL))["setup"]
+
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
 
 
 def test_vertex_text_only_live_model_session_created_reports_text(vertex_only_transcribe_cost_map: None) -> None:
@@ -829,8 +872,6 @@ def test_vertex_only_text_only_live_model_session_update_defaults_to_text(
 def test_vertex_only_text_only_live_model_estimates_usage_for_streamed_audio(
     vertex_only_transcribe_cost_map: None,
 ) -> None:
-    import base64
-
     cfg: Final = _vertex_config()
     cfg.transform_realtime_request(
         json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00" * 96000).decode()}),
