@@ -7741,6 +7741,93 @@ def test_bridged_chat_sends_background_to_a_provider_that_answers_it_inline(
     assert json.loads(upstream.calls.last.request.content)["background"] is True
 
 
+@pytest.mark.parametrize("model", ["edenai/google/gemma-4-31b-it", "edenai/google-model-without-a-prefix"])
+def test_bridged_chat_sends_background_to_an_eden_ai_upstream_that_answers_it_inline(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(model_cost, model, {"litellm_provider": "edenai", "mode": "responses"})
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://eden.invalid/").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model.split("/", 1)[1]))
+        )
+        response: Final = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            api_base="https://eden.invalid/v3",
+            api_key="test-key",
+            background=True,
+            model_info={"mode": "responses"},
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "edenai/openai/gpt-5.3-codex",
+        "edenai/azure/gpt-5.3-codex",
+        "edenai/microsoft/mai-model",
+        "edenai/meta/muse-model",
+        "edenai/gpt-5.3-codex",
+    ],
+)
+def test_bridged_chat_rejects_background_on_an_eden_ai_upstream_that_starts_a_run(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(model_cost, model, {"litellm_provider": "edenai", "mode": "responses"})
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://eden.invalid/").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model.split("/", 1)[1]))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                api_base="https://eden.invalid/v3",
+                api_key="test-key",
+                background=True,
+                model_info={"mode": "responses"},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+def test_bridged_chat_keeps_serving_allowed_background_on_a_provider_that_starts_no_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, "volcengine/seed-2-0-mini-260428", {"litellm_provider": "volcengine", "mode": "responses"}
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-provider.invalid/").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("seed-2-0-mini-260428"))
+        )
+        response: Final = litellm.completion(
+            model="volcengine/seed-2-0-mini-260428",
+            messages=[{"role": "user", "content": "ping"}],
+            api_base="https://inline-provider.invalid/v1",
+            api_key="test-key",
+            background=True,
+            allowed_openai_params=["background"],
+            model_info={"mode": "responses"},
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
 def test_bridged_chat_keeps_serving_background_on_a_deployment_that_falls_back_to_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

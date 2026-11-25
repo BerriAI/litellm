@@ -63,7 +63,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
-    def starts_background_runs(self) -> bool:
+    def starts_background_runs(self, model: str) -> bool:
         return "background" in _CHATGPT_REQUEST_KEYS
 
     def validate_environment(

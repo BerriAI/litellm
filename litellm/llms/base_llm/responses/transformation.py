@@ -67,7 +67,7 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
-    def starts_background_runs(self) -> bool:
+    def starts_background_runs(self, model: str) -> bool:
         return True
 
     def sign_request(
