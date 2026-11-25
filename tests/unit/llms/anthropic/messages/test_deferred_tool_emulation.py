@@ -6,6 +6,8 @@ import pytest
 
 from litellm.llms.anthropic.messages.deferred_tool_emulation import DeferredToolEmulation, deferred_tool_emulation
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
+from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+from litellm.types.llms.openai import ResponseIncompleteEvent, ResponsesAPIStreamEvents
 
 _GREP_TOOL: Final = {"name": "Grep", "input_schema": {"type": "object"}, "defer_loading": True}
 _DELETE_TOOL: Final = {"name": "Delete", "input_schema": {"type": "object"}, "defer_loading": True}
@@ -185,6 +187,34 @@ class _ClosableSyncStream:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _ResponsesBridgeStream:
+    def __init__(self, frames: tuple[bytes, ...], partial: ResponseIncompleteEvent) -> None:
+        self._frames: Final = iter(frames)
+        self._partial: Final = partial
+
+    def __aiter__(self) -> "_ResponsesBridgeStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return next(self._frames)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent:
+        return self._partial
+
+
+@pytest.mark.asyncio
+async def test_a_restored_stream_the_client_drops_still_bills_what_the_provider_streamed() -> None:
+    partial: Final = ResponseIncompleteEvent.model_construct(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE)
+    upstream: Final = _ResponsesBridgeStream(_dispatcher_stream_frames(json.dumps({"name": "Grep", "input": {}})), partial)
+    restored: Final = _EMULATION.restored(upstream)
+    await restored.__anext__()
+
+    assert partial_responses_incomplete_event_on_disconnect(restored) is partial
 
 
 @pytest.mark.parametrize("frames_read", [0, 1], ids=["before_reading", "mid_stream"])

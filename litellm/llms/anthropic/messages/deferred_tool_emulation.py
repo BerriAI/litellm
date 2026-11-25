@@ -25,6 +25,8 @@ from litellm.llms.anthropic.messages.deferred_tools import (
 from litellm.llms.anthropic.messages.native.streaming_iterator import sse_frame_event, sse_frames
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported, close_if_supported
+from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+from litellm.types.llms.openai import ResponseIncompleteEvent
 
 DISPATCHER_NAME: Final = "CallLoadedTool"
 _Result = TypeVar("_Result")
@@ -212,6 +214,9 @@ class DispatcherRestoringStream:
     async def aclose(self) -> None:
         await self._frames.aclose()
         await aclose_if_supported(self._stream)
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        return partial_responses_incomplete_event_on_disconnect(self._stream)
 
 
 def _loaded_tool_text(name: str, tool: Mapping[str, object] | None, dispatcher: str) -> str:
