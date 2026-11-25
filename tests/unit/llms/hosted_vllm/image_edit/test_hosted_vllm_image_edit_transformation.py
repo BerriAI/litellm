@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs
+
 import httpx
 import pytest
 
@@ -110,6 +112,32 @@ def test_image_edit_posts_multipart_to_vllm_omni():
     assert f'name="model"\r\n\r\n{MODEL}'.encode() in request.content
     assert b'name="prompt"\r\n\r\nadd a hat' in request.content
     assert b'name="seed"\r\n\r\n42' in request.content
+
+
+def test_image_edit_with_image_references_posts_a_form_vllm_omni_can_read():
+    """regression: vLLM-Omni reads edits only as form fields, so image references must not switch it to a JSON body."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+
+    litellm.image_edit(
+        model=f"hosted_vllm/{MODEL}",
+        image=None,
+        images=[{"image_url": "https://images.example/tree.png"}],
+        prompt="add a hat",
+        api_base="http://localhost:8091",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+    )
+
+    assert len(captured) == 1
+    assert captured[0].headers["content-type"].startswith("application/x-www-form-urlencoded")
+    assert parse_qs(captured[0].content.decode()) == {
+        "model": [MODEL],
+        "images[][image_url]": ["https://images.example/tree.png"],
+        "prompt": ["add a hat"],
+    }
 
 
 @pytest.mark.parametrize("param", ["mask", "quality", "input_fidelity"])

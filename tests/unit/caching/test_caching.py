@@ -2626,3 +2626,180 @@ def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact()
     assert supported == ["embedding", "aembedding", "completion"]
     assert excluded == ["embedding", "aembedding"]
     assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+
+class _FloatConversionFails:
+    def __init__(self, error: type[Exception]) -> None:
+        self.error = error
+
+    def __float__(self) -> float:
+        raise self.error("ttl conversion failed")
+
+
+class _ManualClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _refresh_local_entry(
+    async_write: bool, default_ttl: int | None, refresh_controls: dict[str, object], **write_kwargs: object
+) -> tuple[Cache, _ManualClock, float]:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local", ttl=default_ttl)
+    cache.cache = InMemoryCache(clock=clock)
+    first_written_at: Final = clock.now
+    cache.add_cache({"id": "first"}, cache_key="entry", cache={"ttl": 60})
+    clock.now += 5
+    refresh_kwargs: Final = {
+        "cache_key": "entry",
+        "cache": {**refresh_controls, "no-cache": True},
+        **write_kwargs,
+    }
+    if async_write:
+        await cache.async_add_cache({"id": "refreshed"}, **refresh_kwargs)
+    else:
+        cache.add_cache({"id": "refreshed"}, **refresh_kwargs)
+    return cache, clock, first_written_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize(("request_ttl", "lifetime"), [(10, 10.0), (600, 600.0), ("5", 5.0), (2.5, 2.5)])
+async def test_local_response_cache_refresh_restarts_entry_lifetime_from_request_ttl(
+    async_write: bool, request_ttl: object, lifetime: float
+) -> None:
+    cache, clock, first_written_at = await _refresh_local_entry(async_write, None, {"ttl": request_ttl})
+    refreshed_at: Final = first_written_at + 5
+
+    clock.now = refreshed_at + lifetime - 1
+    assert cache.get_cache(cache_key="entry") == {"id": "refreshed"}
+    clock.now = refreshed_at + lifetime + 1
+    assert cache.get_cache(cache_key="entry") is None
+    assert await cache.async_get_cache(cache_key="entry") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize(
+    ("default_ttl", "refresh_controls", "write_kwargs"),
+    [
+        *(
+            (None, {"ttl": ttl}, {})
+            for ttl in (
+                "abc",
+                [1],
+                None,
+                0,
+                -1,
+                "nan",
+                "inf",
+                float("inf"),
+                10**400,
+                True,
+                False,
+                _FloatConversionFails(TypeError),
+                _FloatConversionFails(RuntimeError),
+            )
+        ),
+        (None, {}, {}),
+        (10, {}, {}),
+        (None, {"ttl": 10}, {"replace_ttl": False}),
+    ],
+)
+async def test_local_response_cache_refresh_without_usable_request_ttl_keeps_live_entry_expiry(
+    caplog: pytest.LogCaptureFixture,
+    async_write: bool,
+    default_ttl: int | None,
+    refresh_controls: dict[str, object],
+    write_kwargs: dict[str, object],
+) -> None:
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        cache, clock, first_written_at = await _refresh_local_entry(
+            async_write, default_ttl, refresh_controls, **write_kwargs
+        )
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    clock.now = first_written_at + 59
+    assert cache.get_cache(cache_key="entry") == {"id": "refreshed"}
+    clock.now = first_written_at + 61
+    assert cache.get_cache(cache_key="entry") is None
+
+
+@pytest.mark.asyncio
+async def test_local_embedding_cache_refresh_restarts_entry_lifetime_from_request_ttl() -> None:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=clock)
+    request: Final = {"model": "text-embedding-3-small", "input": ["hello"]}
+    await cache.async_add_cache_pipeline(_embedding_response(prompt_tokens=1, num_items=1), **request)
+    clock.now += 5
+    await cache.async_add_cache_pipeline(
+        _embedding_response(prompt_tokens=2, num_items=1), **request, cache={"no-cache": True, "ttl": 10}
+    )
+    entry_key: Final = cache.get_cache_key(model="text-embedding-3-small", input="hello")
+
+    clock.now += 9
+    assert cache.cache.get_cache(entry_key) is not None
+    clock.now += 2
+    assert cache.cache.get_cache(entry_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [TypeError, RuntimeError])
+async def test_local_embedding_cache_refresh_with_unconvertible_request_ttl_keeps_live_entry_expiry(
+    caplog: pytest.LogCaptureFixture, error: type[Exception]
+) -> None:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=clock)
+    request: Final = {"model": "text-embedding-3-small", "input": ["hello"]}
+    await cache.async_add_cache_pipeline(
+        _embedding_response(prompt_tokens=1, num_items=1), **request, cache={"ttl": 60}
+    )
+    clock.now += 5
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await cache.async_add_cache_pipeline(
+            _embedding_response(prompt_tokens=2, num_items=1),
+            **request,
+            cache={"no-cache": True, "ttl": _FloatConversionFails(error)},
+        )
+    entry_key: Final = cache.get_cache_key(model="text-embedding-3-small", input="hello")
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    clock.now += 54
+    refreshed_entry: Final = cache.cache.get_cache(entry_key)
+    assert isinstance(refreshed_entry, dict)
+    assert refreshed_entry["response"]["prompt_tokens"] == 2
+    clock.now += 2
+    assert cache.cache.get_cache(entry_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("refresh_controls", "expires_after_first_write"), [({"ttl": 10}, 15.0), ({}, 600.0)])
+async def test_redis_response_cache_refresh_sets_worker_copy_lifetime_only_from_request_ttl(
+    redis_response_cache_clients: tuple[MagicMock, MagicMock],
+    refresh_controls: dict[str, object],
+    expires_after_first_write: float,
+) -> None:
+    _, async_client = redis_response_cache_clients
+    async_client.set = AsyncMock(return_value=True)
+    async_client.get = AsyncMock(return_value=None)
+    clock: Final = _ManualClock(1_000_000.0)
+    first_written_at: Final = clock.now
+    cache: Final = Cache(type="redis", host="127.0.0.1", port="6379")
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=InMemoryCache(clock=clock))
+    await cache.async_add_cache({"id": "first"}, dynamic_cache_object=dual, cache_key="entry")
+    clock.now += 5
+    refreshed: Final = {"id": "refreshed"}
+    await cache.async_add_cache(
+        refreshed, dynamic_cache_object=dual, cache_key="entry", cache={**refresh_controls, "no-cache": True}
+    )
+
+    clock.now = first_written_at + expires_after_first_write - 1
+    assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="entry") == refreshed
+    clock.now = first_written_at + expires_after_first_write + 1
+    assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="entry") is None
+    assert async_client.set.await_count == 2

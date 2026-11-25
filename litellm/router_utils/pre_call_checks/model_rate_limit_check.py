@@ -291,7 +291,7 @@ class ModelRateLimitingCheck(CustomLogger):
         )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def pre_call_check(self, deployment: dict) -> dict | None:
+    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
         """
         Synchronous pre-call check for model rate limits.
 
