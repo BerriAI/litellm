@@ -37,6 +37,7 @@ load_dotenv()
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.types import Message
 
 import litellm
 from litellm import Router
@@ -3498,7 +3499,6 @@ async def _count_through_the_anthropic_endpoint(
     deployment_params: Mapping[str, object],
     router_defaults: Mapping[str, object] = MappingProxyType({}),
 ) -> tuple[object, respx.Route]:
-    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     router: Final = Router(
@@ -3512,17 +3512,27 @@ async def _count_through_the_anthropic_endpoint(
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(
-        anthropic_endpoints, "read_request_body", AsyncMock(return_value={"model": "user-text-count", **body})
+    payload: Final = json.dumps({"model": "user-text-count", **body}).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages/count_tokens",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
     )
-    mock_request: Final = MagicMock(spec=Request)
-    mock_request.headers = {}
 
     with respx.mock(assert_all_called=False) as upstream_mock:
         upstream: Final = upstream_mock.route().mock(
             return_value=httpx.Response(200, json={"input_tokens": 7, "totalTokens": 7})
         )
-        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+        response: Final = await anthropic_count_tokens(request, MagicMock())
     return response, upstream
 
 
