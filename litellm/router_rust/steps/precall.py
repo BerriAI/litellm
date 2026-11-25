@@ -12,8 +12,9 @@ router core's ``_pre_call_checks`` helpers; it never reaches a Python router cor
 deployment records rather than a step, and those need not be in the Rust registry.
 """
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from functools import partial
 from itertools import accumulate, chain, groupby
 from types import MappingProxyType
@@ -27,18 +28,19 @@ from litellm.litellm_core_utils.get_llm_provider_logic import declared_authentic
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
 from litellm.litellm_core_utils.token_counter import (
-    PdfDocumentPricing,
+    MessageCountFraming,
+    deployment_openai_model,
     inline_pdf_token_deltas,
+    message_count_framing,
     offload_token_count,
-    pdf_page_pricing,
-    served_openai_models,
-    single_encoding_openai_model,
+    openai_tokenizer_encoding_name,
     split_embedding_input_tokens,
     token_counter,
 )
 from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
+from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.decisions import (
     DecisionsIRMessages,
     DecisionsIRState,
@@ -46,6 +48,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInputMessage,
 )
 from litellm.types.router import LiteLLM_Params
+from litellm.types.utils import SelectTokenizerResponse
 
 if TYPE_CHECKING:
     from litellm.router_python_host import PythonHost
@@ -54,9 +57,51 @@ if TYPE_CHECKING:
 # The chat params a deployment must take when the request sends them (`_PRE_CALL_CHECK_FILTERED_PARAMS`).
 _FILTERED_PARAMS: Final = frozenset({"response_format"})
 _CHARS_PER_OFFLOADED_COUNT: Final = 1 << 16
-_NO_PDF_COUNTS: Final[Mapping[str, int]] = MappingProxyType({})
-_NO_PDF_PRICINGS: Final[Mapping[str, PdfDocumentPricing]] = MappingProxyType({})
-_NO_PDF_DELTAS: Final[Mapping[PdfDocumentPricing, int | None]] = MappingProxyType({})
+_STAND_IN_ENCODING: Final = "o200k_base"
+STAND_IN_OVERCOUNT_MARGIN: Final = 2
+
+
+@dataclass(frozen=True, slots=True)
+class _Tokenizer:
+    model: str
+    custom: SelectTokenizerResponse | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenCountKey:
+    encoding: str
+    framing: MessageCountFraming
+
+
+@dataclass(frozen=True, slots=True)
+class _DeploymentCount:
+    tokens: int
+    estimated: bool
+
+
+def stand_in_tokenizer() -> SelectTokenizerResponse:
+    return {"type": "openai_tokenizer", "tokenizer": get_encoding(_STAND_IN_ENCODING)}
+
+
+def _tokenizer(openai_model: str | None) -> _Tokenizer:
+    if openai_model is not None:
+        return _Tokenizer(openai_model, None)
+    return _Tokenizer("", stand_in_tokenizer())
+
+
+def _token_count_key(openai_model: str | None) -> _TokenCountKey:
+    return _TokenCountKey(
+        _STAND_IN_ENCODING if openai_model is None else openai_tokenizer_encoding_name(openai_model),
+        message_count_framing(openai_model or ""),
+    )
+
+
+def _counter(host: "PythonHost", tokenizer: _Tokenizer) -> Callable[..., int]:
+    return partial(
+        host.invoke("token_counter"),  # pyright: ignore[reportUnknownMemberType]  # the host's overloads name litellm's untyped returns
+        model=tokenizer.model,
+        custom_tokenizer=tokenizer.custom,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,39 +138,53 @@ def count_tokens(
     """``_count_pre_call_check_tokens``: messages, or Responses input normalized to messages, plus
     the tools and Anthropic ``system`` block the message list never carries. Embedding media an
     item of ``deployments`` reads as media is left out of the input: it never counts as text."""
+    return _count_tokens(
+        host,
+        _counter(host, _Tokenizer(tokenizer_model, None)),
+        messages,
+        input,
+        request_kwargs,
+        deployments,
+        fits_within,
+    )
+
+
+def _count_tokens(
+    host: "PythonHost",
+    counter: Callable[..., int],
+    messages: object,
+    input: object,  # the request field's name
+    request_kwargs: Mapping[str, object] | None,
+    deployments: Sequence[Mapping[str, object]],
+    fits_within: int,
+) -> int:
     from litellm.llms.anthropic.messages.native.utils import anthropic_system_to_openai_message
 
     if messages is None and input is not None:
-        return _input_tokens(host, _text_input(input, deployments), request_kwargs, tokenizer_model, fits_within)
+        return _input_tokens(host, counter, _text_input(input, deployments), request_kwargs, fits_within)
     if messages is None:
         raise ValueError("Either messages or input must be provided to count tokens")
     extras: Final = _extras(request_kwargs)
     system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
-    counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # the host's overloads name litellm's untyped returns
     counted_messages: Final = (system_message, *_items(messages)) if system_message is not None else messages
-    return counter(model=tokenizer_model, messages=counted_messages, tools=_tools(extras))
+    return counter(messages=counted_messages, tools=_tools(extras))
 
 
 def _input_tokens(
     host: "PythonHost",
+    counter: Callable[..., int],
     text_input: object,
     request_kwargs: Mapping[str, object] | None,
-    tokenizer_model: str,
     fits_within: int,
 ) -> int:
-    counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
     match _embedding_batch(text_input):
         case _TextBatch(texts):
-            return _longest_text_tokens(counter, tokenizer_model, texts, fits_within)
+            return _longest_text_tokens(counter, texts, fits_within)
         case _TokenIdBatch(longest):
             return _token_id_count(host, longest)
         case None:
             pass
-    return counter(
-        model=tokenizer_model,
-        messages=_responses_messages(text_input, request_kwargs),
-        tools=_tools(_extras(request_kwargs)),
-    )
+    return counter(messages=_responses_messages(text_input, request_kwargs), tools=_tools(_extras(request_kwargs)))
 
 
 def _responses_messages(text_input: object, request_kwargs: Mapping[str, object] | None) -> object:
@@ -171,10 +230,8 @@ def _embedding_batch(text_input: object) -> _TextBatch | _TokenIdBatch | None:
     return None
 
 
-def _longest_text_tokens(
-    counter: Callable[..., int], tokenizer_model: str, texts: Sequence[str], fits_within: int
-) -> int:
-    return max(_text_tokens(counter, tokenizer_model, text, fits_within) for text in texts)
+def _longest_text_tokens(counter: Callable[..., int], texts: Sequence[str], fits_within: int) -> int:
+    return max(_text_tokens(counter, text, fits_within) for text in texts)
 
 
 def _offload_slices(texts: Sequence[str]) -> tuple[tuple[str, ...], ...]:
@@ -185,9 +242,9 @@ def _offload_slices(texts: Sequence[str]) -> tuple[tuple[str, ...], ...]:
     return tuple(tuple(text for _, text in texts_in_slice) for _, texts_in_slice in slices)
 
 
-def _text_tokens(counter: Callable[..., int], tokenizer_model: str, text: str, fits_within: int) -> int:
+def _text_tokens(counter: Callable[..., int], text: str, fits_within: int) -> int:
     size: Final = len(text.encode(errors="surrogatepass"))
-    return size if size <= fits_within else counter(model=tokenizer_model, text=text)
+    return size if size <= fits_within else counter(text=text)
 
 
 def _is_token_id(value: object) -> bool:
@@ -202,18 +259,44 @@ def _token_id_count(host: "PythonHost", count: int) -> int:
     return 0 if host.dynamic().disable_token_counter else count
 
 
-def _max_input_tokens(registry: PreCallRegistry, model: str, deployment: Mapping[str, object]) -> int | None:
-    """``_deployment_max_input_tokens``: the declared context window, or None when there is none or
+def _router_model_info(registry: PreCallRegistry, model: str, deployment: Mapping[str, object]) -> Mapping[str, object]:
+    """``_deployment_max_input_tokens``'s lookup: the deployment's router model info, or none when
     the deployment cannot be resolved."""
     try:
-        model_info: Final = registry._core_get_router_model_info(  # pyright: ignore[reportPrivateUsage]  # the host registry's lookup
+        return registry._core_get_router_model_info(  # pyright: ignore[reportPrivateUsage]  # the host registry's lookup
             deployment=deployment, received_model_name=model
         )
     except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
         verbose_router_logger.debug("litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e)
-        return None
+        return MappingProxyType({})
+
+
+def _max_input_tokens(model_info: Mapping[str, object]) -> int | None:
     max_input_tokens: Final = model_info.get("max_input_tokens")
     return max_input_tokens if isinstance(max_input_tokens, int) else None
+
+
+def _caps_below_catalog(
+    registry: PreCallRegistry, model: str, deployment: Mapping[str, object], window: int | None
+) -> bool:
+    model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+    if window is None or "max_input_tokens" not in model_info:
+        return False
+    uncapped: Final = {
+        **deployment,
+        "model_info": {key: value for key, value in model_info.items() if key != "max_input_tokens"},
+    }
+    catalog_window: Final = _max_input_tokens(_router_model_info(registry, model, uncapped))
+    return catalog_window is not None and window < catalog_window
+
+
+_SILENTLY_TRUNCATING_PROVIDERS: Final = frozenset({"ollama", "ollama_chat"})
+
+
+def _truncates_silently(deployment: Mapping[str, object]) -> bool:
+    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+    provider: Final = params.get("custom_llm_provider") or str(params.get("model") or "").partition("/")[0]
+    return provider in _SILENTLY_TRUNCATING_PROVIDERS
 
 
 def _items(value: object) -> tuple[object, ...]:
@@ -322,7 +405,6 @@ class PreCallFacts:
         input: object,  # the request field's name
     ) -> None:
         self._host: Final = host
-        self._registry: Final = registry
         self._model: Final = str(step.get("model_group"))
         self._name: Final = str(step.get("model"))
         self._candidates: Final = [str(id) for id in _items(step.get("candidates"))]
@@ -332,7 +414,11 @@ class PreCallFacts:
         self._messages: Final = messages
         self._input: Final = input
         self._has_input: Final = messages is not None or input is not None
-        self._windows: Final = {id: _max_input_tokens(registry, self._model, records(id)) for id in self._candidates}
+        self._registry: Final = registry
+        self._model_infos: Final = {
+            id: _router_model_info(registry, self._model, records(id)) for id in self._candidates
+        }
+        self._windows: Final = {id: _max_input_tokens(info) for id, info in self._model_infos.items()}
 
     def _record(self, id: str) -> Mapping[str, object]:  # a deployment id
         return self._records(id)
@@ -340,19 +426,25 @@ class PreCallFacts:
     def _needs_count(self) -> bool:
         return self._has_input and any(limit is not None for limit in self._windows.values())
 
-    def _tokenizer_model(self) -> str:
+    def _openai_models(self) -> Mapping[str, str | None]:
         # A wildcard deployment serves the requested model (`PatternMatchRouter.route`).
-        named: Final = tuple(
-            for_requested_model(record, self._name)
-            for record in self._registry._core_deployments_named(self._model) or ()  # pyright: ignore[reportPrivateUsage]  # the host registry's index
-        )
+        return {
+            id: deployment_openai_model(for_requested_model(self._record(id), self._name))
+            for id, limit in self._windows.items()
+            if limit is not None
+        }
+
+    def _window_is_exact(self, id: str) -> bool:  # a deployment id
+        record: Final = self._record(id)
         return (
-            single_encoding_openai_model(
-                served_openai_models(named)
-                or served_openai_models(for_requested_model(self._record(id), self._name) for id in self._candidates)
-            )
-            or ""
+            self._model_infos[id].get("mode") == "embedding"
+            or _truncates_silently(record)
+            or _caps_below_catalog(self._registry, self._model, record, self._windows[id])
         )
+
+    def _estimated(self, models: Mapping[str, str | None]) -> frozenset[str]:
+        stand_ins: Final = (id for id, model in models.items() if model is None)
+        return frozenset(id for id in stand_ins if not self._window_is_exact(id))
 
     def _candidate_records(self) -> Sequence[Mapping[str, object]]:
         return tuple(self._record(id) for id in self._candidates)
@@ -363,41 +455,41 @@ class PreCallFacts:
     def _input_is_a_list(self) -> bool:
         return self._messages is None and _is_list(self._input)
 
-    def _count(self) -> int | None:
+    def _count(self, openai_model: str | None) -> int | None:
         try:
-            tokenizer_model: Final = self._tokenizer_model()
+            counter: Final = _counter(self._host, _tokenizer(openai_model))
             if not self._input_is_a_list():
-                return count_tokens(
+                return _count_tokens(
                     self._host,
+                    counter,
                     self._messages,
                     self._input,
                     self._request,
-                    tokenizer_model,
                     self._candidate_records(),
                     self._fits_within(),
                 )
             text_input: Final = _text_input(self._input, self._candidate_records())
             match _embedding_batch(text_input):
-                case _TextBatch() if not tokenizer_model:
+                case _TextBatch() if openai_model is None:
                     return 0
                 case _:
-                    return _input_tokens(self._host, text_input, self._request, tokenizer_model, self._fits_within())
+                    return _input_tokens(self._host, counter, text_input, self._request, self._fits_within())
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
                 "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
             )
             return None
 
-    async def _count_async(self) -> int | None:
+    async def _count_async(self, openai_model: str | None) -> int | None:
         try:
-            tokenizer_model: Final = self._tokenizer_model()
+            counter: Final = _counter(self._host, _tokenizer(openai_model))
             if not self._input_is_a_list():
-                return await offload_token_count(count_tokens)(
+                return await offload_token_count(_count_tokens)(
                     self._host,
+                    counter,
                     self._messages,
                     self._input,
                     self._request,
-                    tokenizer_model,
                     self._candidate_records(),
                     self._fits_within(),
                 )
@@ -407,21 +499,20 @@ class PreCallFacts:
                 else await offload_token_count(_text_input)(self._input, self._candidate_records())
             )
             match _embedding_batch(text_input):
-                case _TextBatch() if not tokenizer_model:
+                case _TextBatch() if openai_model is None:
                     return 0
                 case _TextBatch(texts):
-                    counter: Final = self._host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
                     fits_within: Final = self._fits_within()
                     count_slice: Final = offload_token_count(_longest_text_tokens)
                     return max(
                         [
-                            await count_slice(counter, tokenizer_model, texts_in_slice, fits_within)
+                            await count_slice(counter, texts_in_slice, fits_within)
                             for texts_in_slice in _offload_slices(texts)
                         ]
                     )
                 case _:
                     return await offload_token_count(_input_tokens)(
-                        self._host, text_input, self._request, tokenizer_model, self._fits_within()
+                        self._host, counter, text_input, self._request, self._fits_within()
                     )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -429,20 +520,21 @@ class PreCallFacts:
             )
             return None
 
-    def _own_pdf_pricings(self, input_tokens: int | None) -> Mapping[str, PdfDocumentPricing]:
-        """The candidates the shared count overflows that bill an inline PDF below its price there. Only litellm's
-        own counter prices a PDF the way the repricing assumes, so a custom one keeps the shared count."""
-        if input_tokens is None or compaction_pending(self._request) or not _counts_with_litellm(self._host):
-            return _NO_PDF_PRICINGS
+    def _pdf_repriced(self, models: Mapping[str, str | None], counts: Mapping[str, _DeploymentCount]) -> frozenset[str]:
+        """The stand-in counts over their window for a deployment that bills an inline PDF like one image. Only
+        litellm's own counter prices a PDF the way the repricing assumes, so a custom one keeps its count."""
+        if not counts or compaction_pending(self._request) or not _counts_with_litellm(self._host):
+            return frozenset()
         if not _may_carry_an_inline_pdf(self._messages, self._input):
-            return _NO_PDF_PRICINGS
-        shared: Final = pdf_page_pricing(self._tokenizer_model())
-        overflowing: Final = (id for id in self._candidates if _overflows(self._windows.get(id), input_tokens))
-        priced: Final[Iterator[tuple[str, PdfDocumentPricing | None]]] = (
-            (id, _own_pdf_pricing(for_requested_model(self._record(id), self._name), self._model, shared))
-            for id in overflowing
+            return frozenset()
+        overflowing: Final = (
+            id for id, count in counts.items() if models[id] is None and _overflows(self._windows[id], count.tokens)
         )
-        return MappingProxyType[str, PdfDocumentPricing]({id: pricing for id, pricing in priced if pricing is not None})
+        return frozenset(
+            id
+            for id in overflowing
+            if _bills_pdfs_like_gemini(for_requested_model(self._record(id), self._name), self._model)
+        )
 
     def _counted_messages(self) -> object:
         """The messages ``_count`` priced: the request's own, or its Responses input normalized the same way."""
@@ -453,29 +545,34 @@ class PreCallFacts:
         text_input: Final = _text_input(self._input, self._candidate_records())
         return () if _embedding_batch(text_input) is not None else _responses_messages(text_input, self._request)
 
-    def _pdf_deltas(self, pricings: Mapping[str, PdfDocumentPricing]) -> Mapping[PdfDocumentPricing, int | None]:
-        if not pricings:
-            return _NO_PDF_DELTAS
+    def _stand_in_single_image_pdf_delta(self) -> int | None:
         try:
-            messages: Final = self._counted_messages()
-            tokenizer_model: Final = self._tokenizer_model()
-            return MappingProxyType[PdfDocumentPricing, int | None](
-                inline_pdf_token_deltas(tokenizer_model, messages, pricings.values())
+            deltas: Final = inline_pdf_token_deltas(
+                "", self._counted_messages(), ("single_image",), custom_tokenizer=stand_in_tokenizer()
             )
-        except Exception as e:  # noqa: BLE001  # best-effort: an unpriceable PDF keeps the shared count
+            return deltas["single_image"]
+        except Exception as e:  # noqa: BLE001  # best-effort: an unpriceable PDF keeps the stand-in count
             verbose_router_logger.debug("litellm.router.py::_pre_call_checks: PDF repricing failed. Got - %s", e)
-            return _NO_PDF_DELTAS
+            return None
 
-    def _pdf_counts(self, input_tokens: int | None) -> Mapping[str, int]:
-        pricings: Final = self._own_pdf_pricings(input_tokens)
-        return _own_pdf_counts(pricings, input_tokens, self._pdf_deltas(pricings))
+    def _counts(self) -> Mapping[str, _DeploymentCount]:
+        models: Final = self._openai_models()
+        keys: Final = {id: _token_count_key(model) for id, model in models.items()}
+        counted: Final = {key: self._count(model) for key, model in _model_by_key(models, keys).items()}
+        counts: Final = _deployment_counts(keys, counted, self._estimated(models))
+        repriced: Final = self._pdf_repriced(models, counts)
+        return _repriced(counts, repriced, self._stand_in_single_image_pdf_delta() if repriced else None)
 
-    async def _pdf_counts_async(self, input_tokens: int | None) -> Mapping[str, int]:
-        pricings: Final = self._own_pdf_pricings(input_tokens)
-        deltas: Final = await offload_token_count(self._pdf_deltas)(pricings) if pricings else _NO_PDF_DELTAS
-        return _own_pdf_counts(pricings, input_tokens, deltas)
+    async def _counts_async(self) -> Mapping[str, _DeploymentCount]:
+        models: Final = self._openai_models()
+        keys: Final = {id: _token_count_key(model) for id, model in models.items()}
+        counted: Final = {key: await self._count_async(model) for key, model in _model_by_key(models, keys).items()}
+        counts: Final = _deployment_counts(keys, counted, self._estimated(models))
+        repriced: Final = self._pdf_repriced(models, counts)
+        delta: Final = await offload_token_count(self._stand_in_single_image_pdf_delta)() if repriced else None
+        return _repriced(counts, repriced, delta)
 
-    def _answer(self, input_tokens: int | None, pdf_counts: Mapping[str, int] = _NO_PDF_COUNTS) -> Mapping[str, object]:
+    def _answer(self, counts: Mapping[str, _DeploymentCount]) -> Mapping[str, object]:
         if not self._has_input:
             return {"has_input": False}
         request: Final[Mapping[str, object]] = self._request if self._request is not None else {}
@@ -484,34 +581,54 @@ class PreCallFacts:
             if self._request is not None and self._host.dynamic().drop_params is False
             else frozenset[str]()
         )
-        deployments: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: built here, then returned
-        for id in dict.fromkeys([*self._candidates, *self._pool]):
-            record = self._record(id)
-            deployments[id] = {
-                "max_input_tokens": self._windows.get(id),
-                "lacks_params": bool(params) and id in self._candidates and _lacks_params(record, self._model, params),
-                "rejects_params": bool(params) and _rejects_params(record, self._model, params, request),
-                **({"input_tokens": pdf_counts[id]} if id in pdf_counts else {}),
-            }
+        deployments: Final = {
+            id: self._deployment_facts(id, counts.get(id), params, request)
+            for id in dict.fromkeys([*self._candidates, *self._pool])
+        }
         allowed_region: Final = request.get("allowed_model_region")
         return {
             "has_input": True,
             "countable": not compaction_pending(self._request),
-            "input_tokens": input_tokens,
             "allowed_model_region": allowed_region,
             "requested_params": sorted(params),
             "deployments": deployments,
         }
 
+    def _deployment_facts(
+        self, id: str, count: _DeploymentCount | None, params: frozenset[str], request: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        record: Final = self._record(id)
+        return {
+            "max_input_tokens": self._windows.get(id),
+            "input_tokens": count.tokens if count is not None else None,
+            "estimated": count is not None and count.estimated,
+            "lacks_params": bool(params) and id in self._candidates and _lacks_params(record, self._model, params),
+            "rejects_params": bool(params) and _rejects_params(record, self._model, params, request),
+        }
+
     def answer(self) -> Mapping[str, object]:
         """The facts on the sync path: the prompt is counted inline."""
-        counted: Final = self._count() if self._needs_count() else None
-        return self._answer(counted, self._pdf_counts(counted))
+        return self._answer(self._counts() if self._needs_count() else {})
 
     async def answer_async(self) -> Mapping[str, object]:
         """The facts on the async path: the prompt is counted off the event loop."""
-        counted: Final = await self._count_async() if self._needs_count() else None
-        return self._answer(counted, await self._pdf_counts_async(counted))
+        return self._answer(await self._counts_async() if self._needs_count() else {})
+
+
+def _model_by_key(
+    models: Mapping[str, str | None], keys: Mapping[str, _TokenCountKey]
+) -> Mapping[_TokenCountKey, str | None]:
+    return {keys[id]: model for id, model in models.items()}
+
+
+def _deployment_counts(
+    keys: Mapping[str, _TokenCountKey], counted: Mapping[_TokenCountKey, int | None], estimated: frozenset[str]
+) -> Mapping[str, _DeploymentCount]:
+    return {
+        id: _DeploymentCount(tokens, estimated=id in estimated)
+        for id, key in keys.items()
+        if (tokens := counted[key]) is not None
+    }
 
 
 def pre_call_checks(
@@ -539,30 +656,31 @@ def pre_call_checks(
     records: Final = {**candidates, **group}
     step: Final = {"model_group": model, "model": model, "candidates": list(candidates), "pool": list(group)}
     facts: Final = PreCallFacts(host, registry, step, records.__getitem__, request_kwargs, messages, input)
-    counts_inline: Final = input_token_count is None and not skip_inline_token_count and facts._needs_count()  # pyright: ignore[reportPrivateUsage]  # this module's own class
-    counted: Final = facts._count() if counts_inline else input_token_count  # pyright: ignore[reportPrivateUsage]  # see above
-    pdf_counts: Final = facts._pdf_counts(counted) if counts_inline else _NO_PDF_COUNTS  # pyright: ignore[reportPrivateUsage]  # see above
-    answer: Final = facts._answer(counted, pdf_counts)  # pyright: ignore[reportPrivateUsage]  # see above
+    counts: Final[Mapping[str, _DeploymentCount]] = (
+        {id: _DeploymentCount(input_token_count, estimated=False) for id in candidates}
+        if input_token_count is not None
+        else {}
+        if skip_inline_token_count or not facts._needs_count()  # pyright: ignore[reportPrivateUsage]  # this module's own class
+        else facts._counts()  # pyright: ignore[reportPrivateUsage]  # see above
+    )
+    answer: Final = facts._answer(counts)  # pyright: ignore[reportPrivateUsage]  # see above
     rows: Final = as_str_mapping(answer.get("deployments")) or {}
     allowed_region: Final = answer.get("allowed_model_region")
 
     def row(id: str) -> Mapping[str, object]:  # a candidate or pool key
         return as_str_mapping(rows.get(id)) or {}
 
-    def tokens(id: str) -> int | None:
-        own: Final = row(id).get("input_tokens")
-        return own if isinstance(own, int) else counted
-
-    def over_window(id: str) -> bool:
-        limit: Final = row(id).get("max_input_tokens")
-        count: Final = tokens(id)
-        return isinstance(limit, int) and answer.get("countable") is True and count is not None and count > limit
+    def fit(id: str) -> _Fit:
+        if answer.get("countable") is not True:
+            return _Fit.FITS
+        return _fit(row(id).get("max_input_tokens"), counts.get(id))
 
     def out_of_region(id: str) -> bool:
         params: Final = as_str_mapping(records[id].get("litellm_params")) or {}
         return allowed_region is not None and params.get("region_name") != allowed_region
 
-    too_small: Final = tuple(id for id in candidates if over_window(id))
+    fits: Final = {id: fit(id) for id in candidates}
+    too_small: Final = tuple(id for id in candidates if fits[id] is _Fit.EXCEEDS)
     invalid: Final = frozenset(too_small) | frozenset(id for id in candidates if out_of_region(id))
     param_candidates: Final = tuple(id for id in candidates if id not in invalid)
     lacking: Final = tuple(row(id).get("lacks_params") is True for id in param_candidates)
@@ -583,7 +701,7 @@ def pre_call_checks(
         if too_small:
             detail: Final = "".join(
                 f"Model={_error_model(records[id])}, Max Input Tokens={row(id).get('max_input_tokens')}, "
-                f"Got={tokens(id)}"
+                f"Got={counts[id].tokens}"
                 for id in too_small
             )
             raise litellm_exceptions.ContextWindowExceededError(
@@ -592,7 +710,23 @@ def pre_call_checks(
                 model=model,
                 llm_provider="",
             )
-    return tuple(record for id, record in candidates.items() if id not in excluded)
+    kept: Final = tuple(id for id in candidates if id not in excluded)
+    fitting: Final = tuple(id for id in kept if fits[id] is not _Fit.UNCERTAIN)
+    return tuple(candidates[id] for id in fitting or kept)
+
+
+class _Fit(Enum):
+    FITS = "fits"
+    UNCERTAIN = "uncertain"
+    EXCEEDS = "exceeds"
+
+
+def _fit(limit: object, count: _DeploymentCount | None) -> _Fit:
+    if not isinstance(limit, int) or count is None or count.tokens <= limit:
+        return _Fit.FITS
+    if count.estimated and count.tokens <= limit * STAND_IN_OVERCOUNT_MARGIN:
+        return _Fit.UNCERTAIN
+    return _Fit.EXCEEDS
 
 
 def _overflows(limit: int | None, input_tokens: int) -> bool:
@@ -657,27 +791,15 @@ def _may_carry_an_inline_pdf(*values: object) -> bool:
     return False
 
 
-def _own_pdf_pricing(
-    deployment: Mapping[str, object], group: str, shared: PdfDocumentPricing
-) -> PdfDocumentPricing | None:
-    openai_model: Final = single_encoding_openai_model(served_openai_models((deployment,)))
-    own: Final = (
-        pdf_page_pricing(openai_model)
-        if openai_model is not None
-        else ("single_image" if _bills_pdfs_like_gemini(deployment, group) else None)
-    )
-    return None if own is None or own == shared else own
-
-
-def _own_pdf_counts(
-    pricings: Mapping[str, PdfDocumentPricing],
-    input_tokens: int | None,
-    deltas: Mapping[PdfDocumentPricing, int | None],
-) -> Mapping[str, int]:
-    if input_tokens is None:
-        return _NO_PDF_COUNTS
-    lowered: Final = ((id, deltas.get(pricing)) for id, pricing in pricings.items())
-    return MappingProxyType({id: input_tokens + delta for id, delta in lowered if delta is not None and delta < 0})
+def _repriced(
+    counts: Mapping[str, _DeploymentCount], repriced: frozenset[str], delta: int | None
+) -> Mapping[str, _DeploymentCount]:
+    if delta is None or delta >= 0:
+        return counts
+    return {
+        id: _DeploymentCount(count.tokens + delta, count.estimated) if id in repriced else count
+        for id, count in counts.items()
+    }
 
 
 def _bills_pdfs_like_gemini(deployment: Mapping[str, object], group: str) -> bool:
@@ -688,7 +810,7 @@ def _bills_pdfs_like_gemini(deployment: Mapping[str, object], group: str) -> boo
         return False
     try:
         model, provider = _capability_model_and_provider(params, group)
-    except Exception as e:  # noqa: BLE001  # best-effort: an unresolvable deployment keeps the shared count
+    except Exception as e:  # noqa: BLE001  # best-effort: an unresolvable deployment keeps its count
         verbose_router_logger.debug("litellm.router.py::_pre_call_checks: no provider for deployment. Got - %s", e)
         return False
     match provider:
@@ -740,12 +862,14 @@ def declares_no_vision(deployment: Mapping[str, object], group: str) -> bool:
 
 
 __all__ = [
+    "STAND_IN_OVERCOUNT_MARGIN",
     "PreCallFacts",
     "PreCallRegistry",
     "count_tokens",
     "declares_no_vision",
     "pre_call_checks",
     "request_carries_image",
+    "stand_in_tokenizer",
 ]
 
 
