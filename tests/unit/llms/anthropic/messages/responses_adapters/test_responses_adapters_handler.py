@@ -3032,3 +3032,111 @@ async def test_a_summary_refused_while_replayed_reasoning_is_resent_is_not_logge
     assert "summary" not in answered.get("reasoning", {})
     assert _replayed_reasoning_counts(upstream)[-1] == 0
     assert failure_log.rejections == ()
+
+
+WEB_SEARCH_FILTERS_REFUSAL: Final = {
+    "error": {
+        "message": "Parameter 'filters' not supported with model 'gpt-4o-mini'",
+        "type": "invalid_request_error",
+        "param": "tools",
+        "code": None,
+    }
+}
+FILTERED_WEB_SEARCH: Final = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "allowed_domains": ["docs.litellm.ai"],
+    "user_location": {"type": "approximate", "city": "San Francisco", "country": "US"},
+}
+
+
+def _sends_filters(tools: list[dict[str, object]]) -> bool:
+    return any("filters" in tool for tool in tools)
+
+
+def _refuse_web_search_filters(request: httpx.Request) -> httpx.Response:
+    if _sends_filters(json.loads(request.content)["tools"]):
+        return httpx.Response(400, json=WEB_SEARCH_FILTERS_REFUSAL)
+    return httpx.Response(200, json=TEXT_RESPONSE)
+
+
+async def _filtered_search_turn(*, sync: bool, drop_params: bool) -> None:
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=64,
+            messages=MESSAGES,
+            model="openai/gpt-4o-mini",
+            tools=[dict(FILTERED_WEB_SEARCH)],
+            drop_params=drop_params,
+            num_retries=2,
+        )
+        return
+    await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=MESSAGES,
+        model="openai/gpt-4o-mini",
+        tools=[dict(FILTERED_WEB_SEARCH)],
+        drop_params=drop_params,
+        num_retries=2,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_web_search_filters_the_model_refuses_are_sent_again_once_without_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch, answer=_refuse_web_search_filters)
+
+    await _filtered_search_turn(sync=sync, drop_params=True)
+
+    first, second = (json.loads(call.request.content) for call in upstream.calls)
+    (search,) = first["tools"]
+    assert search["filters"] == {"allowed_domains": ["docs.litellm.ai"]}
+    assert second == {**first, "tools": [{key: value for key, value in search.items() if key != "filters"}]}
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_without_drop_params_web_search_filters_the_model_refuses_are_never_dropped(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch, answer=_refuse_web_search_filters)
+
+    with pytest.raises(litellm.BadRequestError, match="Parameter 'filters' not supported"):
+        await _filtered_search_turn(sync=sync, drop_params=False)
+
+    assert all(_sends_filters(json.loads(call.request.content)["tools"]) for call in upstream.calls)
+
+
+@pytest.mark.asyncio
+async def test_under_drop_params_a_turn_refused_for_its_summary_then_its_web_search_filters_is_sent_without_both(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(400, json=SUMMARY_REFUSAL), httpx.Response(400, json=WEB_SEARCH_FILTERS_REFUSAL)),
+        False,
+    )
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high"},
+        tools=[dict(FILTERED_WEB_SEARCH)],
+        drop_params=True,
+    )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert [("summary" in body["reasoning"], _sends_filters(body["tools"])) for body in bodies] == [
+        (True, True),
+        (False, True),
+        (False, False),
+    ]
