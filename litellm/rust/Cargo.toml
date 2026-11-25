@@ -90,6 +90,7 @@ litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" 
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
+litellm-standard-logging = { path = "crates/standard-logging" }
 litellm-circuit-breaker = { path = "crates/circuit-breaker" }
 litellm-redis-client = { path = "crates/redis-client" }
 litellm-redis-connect = { path = "crates/redis-connect" }

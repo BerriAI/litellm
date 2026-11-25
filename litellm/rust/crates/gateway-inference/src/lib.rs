@@ -67,11 +67,20 @@ pub struct Gateway<H> {
     pub http: HttpClientConfig,
     /// What the request body check reads besides the request.
     body_check: BodyCheck,
+    /// `general_settings.use_x_forwarded_for`, which decides the requester address a call logs.
+    use_x_forwarded_for: bool,
 }
 
 impl<H: Host> Gateway<H> {
     pub fn with_body_check(self, body_check: BodyCheck) -> Self {
         Self { body_check, ..self }
+    }
+
+    pub fn with_use_x_forwarded_for(self, use_x_forwarded_for: bool) -> Self {
+        Self {
+            use_x_forwarded_for,
+            ..self
+        }
     }
 
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
@@ -137,6 +146,7 @@ impl<H: Host> Gateway<H> {
             resources,
             http,
             body_check: BodyCheck::new(&litellm_config::GeneralSettings::default()),
+            use_x_forwarded_for: false,
         })
     }
 }
@@ -154,6 +164,9 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             group_usage::told::<H>,
         ))
         .layer(axum::middleware::from_fn(headers::render_response_headers))
-        .layer(axum::middleware::from_fn(record::scoped))
+        .layer(axum::middleware::from_fn_with_state(
+            gateway.use_x_forwarded_for,
+            record::scoped,
+        ))
         .with_state(gateway)
 }
