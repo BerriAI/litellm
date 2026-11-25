@@ -140,11 +140,12 @@ def _holder_of_server_error_middleware(stack: object, server_error_type: type) -
 
     ``None`` when the stack is Starlette's own, or when a wrapper does not expose ``app``.
     """
-    if not isinstance(stack, _WrapsAnApp) or isinstance(stack, server_error_type):
-        return None
-    if isinstance(stack.app, server_error_type):
-        return stack
-    return _holder_of_server_error_middleware(stack.app, server_error_type)
+    wrapper: object = stack  # rebind-ok: steps down the wrappers in the loop
+    while isinstance(wrapper, _WrapsAnApp) and not isinstance(wrapper, server_error_type):
+        if isinstance(wrapper.app, server_error_type):
+            return wrapper
+        wrapper = wrapper.app
+    return None
 
 
 def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | None" = None) -> None:
