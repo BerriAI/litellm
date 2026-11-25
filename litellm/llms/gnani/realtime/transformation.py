@@ -20,6 +20,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     json_object,
     new_event_id,
     parse_transcription_session_update,
+    speech_event,
     transcription_session,
     transcription_session_created_event,
 )
@@ -44,6 +45,7 @@ _MANAGED_HEADERS: Final = frozenset(
     ("x-api-key-id", "authorization", "model", "x-model", "x-sample-rate", "language_code", "lang_code")
 )
 _DEFAULT_LANGUAGE: Final = "indic-auto"
+_SERVER_VAD: Final = (None, "server_vad")
 
 
 class _ActiveSettings(BaseModel):
@@ -117,6 +119,7 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
         self._language: str = _DEFAULT_LANGUAGE
         self._session_id: str = new_event_id()
         self._previous_item: str | None = None
+        self._started_items: frozenset[str] = frozenset()
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
         base: Final = urlsplit(api_base or get_secret_str("GNANI_API_BASE") or "https://api.vachana.ai")
@@ -124,6 +127,9 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
             raise ValueError("Gnani realtime requires an HTTP or WebSocket URL")
         path: Final = ensure_api_route(base.path, "stt/v3/stream")
         return urlunsplit(("wss" if base.scheme in ("https", "wss") else "ws", base.netloc, path, base.query, ""))
+
+    def requires_session_configuration(self) -> bool:
+        return True
 
     def validate_environment(
         self, headers: Mapping[str, str], model: str, api_key: str | None = None
@@ -166,9 +172,8 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
         update: Final = parse_transcription_session_update(message)
         if update.session_type not in (None, "transcription"):
             raise RealtimeTranscriptionProtocolError("Gnani realtime supports transcription sessions only")
-        if update.turn_detection_disabled:
-            raise RealtimeTranscriptionProtocolError("Gnani realtime requires server_vad")
-        if update.turn_detection_type not in (None, "server_vad") and not self._drop_params:
+        keeps_server_vad: Final = not update.turn_detection_disabled and update.turn_detection_type in _SERVER_VAD
+        if not keeps_server_vad and not self._drop_params:
             raise RealtimeTranscriptionProtocolError(
                 "Gnani realtime supports server_vad only. Set drop_params to use server_vad instead"
             )
@@ -232,6 +237,9 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
             return (self._session(event, model, "session.created"),)
         if event.type == "settings_updated":
             return (self._session(event, model, "session.updated"),)
+        if event.type == "speech_start" and event.utterance_id is not None:
+            self._started_items = self._started_items | {event.utterance_id}
+            return (speech_event("input_audio_buffer.speech_started", event.utterance_id),)
         if event.type == "error":
             error: Final[_ErrorEvent] = {
                 **error_event(event.message or "Gnani transcription failed"),
@@ -242,7 +250,11 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
             return ()
         if event.text is None:
             raise ValueError("Gnani returned a transcript without text")
-        item: Final = event.segment_id or event.utterance_id or new_event_id()
+        item: Final = event.utterance_id or event.segment_id or new_event_id()
+        stopped: Final = (
+            (speech_event("input_audio_buffer.speech_stopped", item),) if item in self._started_items else ()
+        )
+        self._started_items = self._started_items - {item}
         committed: Final[OpenAIRealtimeInputAudioBufferCommitted] = {
             "type": "input_audio_buffer.committed",
             "event_id": new_event_id(),
@@ -253,9 +265,9 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
         spoken: Final = None if event.audio_duration_ms is None else event.audio_duration_ms / 1000
         transcript: Final = completed_event(item, event.text, self._take_usage(spoken))
         if event.detected_language_code is None:
-            return committed, transcript
+            return *stopped, committed, transcript
         detected: Final[_Transcript] = {**transcript, "detected_language_code": event.detected_language_code}
-        return committed, detected
+        return *stopped, committed, detected
 
     def transform_realtime_response(
         self,

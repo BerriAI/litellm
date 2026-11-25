@@ -2,6 +2,8 @@ import asyncio
 import audioop
 import math
 import sys
+import time
+from collections.abc import Awaitable, Callable
 from functools import reduce
 from types import MappingProxyType
 from typing import Final
@@ -42,7 +44,13 @@ _ANTI_ALIAS_TAPS: Final = MappingProxyType({rate: _anti_alias_taps(rate) for rat
 
 
 class GnaniAudioStream:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._monotonic: Final = monotonic
+        self._sleep: Final = sleep
         self.rate: int = 24_000
         self._taps: tuple[float, ...] = _ANTI_ALIAS_TAPS[self.rate]
         self._history: bytes = self._silent_history()
@@ -54,7 +62,9 @@ class GnaniAudioStream:
     def set_rate(self, rate: int) -> None:
         if rate not in _INPUT_RATES:
             raise RealtimeTranscriptionProtocolError("Unsupported Gnani PCM sample rate")
-        if self._sent_audio and rate != self.rate:
+        if rate == self.rate:
+            return
+        if self._sent_audio:
             raise RealtimeTranscriptionProtocolError("Open a new session to change the audio rate after sending audio")
         self.rate = rate
         self._taps = _ANTI_ALIAS_TAPS[rate]
@@ -101,6 +111,7 @@ class GnaniAudioStream:
         return (*filter_tail, *padded, '{"type":"commit"}')
 
     async def pace(self) -> None:
-        loop: Final = asyncio.get_running_loop()
-        await asyncio.sleep(max(0.0, self._next_frame - loop.time()))
-        self._next_frame = loop.time() + _FRAME_SECONDS
+        now: Final = self._monotonic()
+        due: Final = max(now, self._next_frame)
+        await self._sleep(due - now)
+        self._next_frame = due + _FRAME_SECONDS

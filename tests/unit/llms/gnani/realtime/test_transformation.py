@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import math
@@ -9,7 +10,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
+from litellm.llms.gnani.realtime.audio import GnaniAudioStream
 from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.utils import LlmProviders
@@ -108,10 +111,11 @@ def _append(pcm: bytes) -> str:
             "prompt, turn_detection.prefix_padding_ms, turn_detection.silence_duration_ms, turn_detection.threshold",
         ),
         ({"type": "semantic_vad", "eagerness": "auto"}, "server_vad only"),
+        (None, "server_vad only"),
     ],
 )
-def test_tuned_turn_detection_and_prompt_are_rejected_unless_drop_params_drops_them(
-    turn_detection: Mapping[str, object], strict_error: str
+def test_turn_detection_other_than_server_vad_and_a_prompt_are_rejected_unless_drop_params_drops_them(
+    turn_detection: Mapping[str, object] | None, strict_error: str
 ) -> None:
     update: Final = _session_update(
         24_000, {"model": "gnani-prisma-v3", "language": "en", "prompt": "Asha"}, turn_detection=turn_detection
@@ -331,3 +335,108 @@ async def test_each_transcript_bills_its_spoken_duration_and_the_silence_left_bi
 
 def _usage(event: Mapping[str, object]) -> object:
     return event.get("usage")
+
+
+@pytest.mark.parametrize("rate", [24_000, 48_000])
+def test_repeating_the_session_rate_mid_stream_leaves_the_forwarded_audio_unchanged(rate: int) -> None:
+    samples: Final = rate // 5
+    tone: Final = struct.pack(
+        f"<{samples}h", *(round(10_000 * math.sin(2 * math.pi * 1_000 * i / rate)) for i in range(samples))
+    )
+    half: Final = len(tone) // 2
+
+    def forwarded(*between: str) -> bytes:
+        config: Final = GnaniRealtimeConfig()
+        config.transform_realtime_request(_session_update(rate, {}), "prisma-v3.0")
+        messages: Final = (_append(tone[:half]), *between, _append(tone[half:]), '{"type":"input_audio_buffer.commit"}')
+        return _pcm(
+            chain.from_iterable(config.transform_realtime_request(message, "prisma-v3.0") for message in messages)
+        )
+
+    assert forwarded(_session_update(rate, {"language": "en"})) == forwarded()
+
+
+class _OvershootingClock:
+    def __init__(self, overshoot: float) -> None:
+        self.now: float = 100.0
+        self._overshoot: Final = overshoot
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.now += max(seconds, 0.0) + self._overshoot
+
+    def stall(self, seconds: float) -> None:
+        self.now += seconds
+
+
+async def _paced_send_times(stream: GnaniAudioStream, clock: _OvershootingClock, frames: int) -> tuple[float, ...]:
+    return tuple([await _paced_send(stream, clock) for _ in range(frames)])
+
+
+async def _paced_send(stream: GnaniAudioStream, clock: _OvershootingClock) -> float:
+    await stream.pace()
+    return clock.now
+
+
+@pytest.mark.asyncio
+async def test_pacing_holds_real_time_cadence_when_sleeps_overshoot_and_does_not_burst_after_a_stall() -> None:
+    clock: Final = _OvershootingClock(overshoot=0.004)
+    stream: Final = GnaniAudioStream(monotonic=clock.monotonic, sleep=clock.sleep)
+    streamed: Final = await _paced_send_times(stream, clock, 1_000)
+    assert streamed[-1] - streamed[0] == pytest.approx(999 * 0.032, abs=0.005)
+    clock.stall(5.0)
+    resumed: Final = await _paced_send_times(stream, clock, 3)
+    assert resumed[1] - resumed[0] == pytest.approx(0.032, abs=0.001)
+    assert resumed[2] - resumed[1] == pytest.approx(0.032, abs=0.001)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_client_event_reports_an_error_and_the_session_keeps_forwarding() -> None:
+    rejected: Final = _session_update(24_000, {}, format={"type": "audio/pcmu"})
+    accepted: Final = _session_update(24_000, {"language": "hi"})
+    client_ws: Final = Mock(
+        headers={}, receive_text=AsyncMock(side_effect=[rejected, accepted, RuntimeError]), send_text=AsyncMock()
+    )
+    backend_ws: Final = Mock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, Mock(), provider_config=GnaniRealtimeConfig(), model="prisma-v3.0"
+    )
+
+    await asyncio.wait_for(streaming.client_ack_messages(), timeout=2)
+
+    sent_to_client: Final = tuple(json.loads(call.args[0]) for call in client_ws.send_text.await_args_list)
+    assert tuple(event["error"]["message"] for event in sent_to_client if event["type"] == "error") == (
+        "Gnani realtime requires mono PCM16 audio",
+    )
+    assert tuple(json.loads(call.args[0]) for call in backend_ws.send.await_args_list) == (
+        {"type": "update_settings", "language_code": "hi-IN"},
+    )
+
+
+def test_speech_events_share_the_item_id_of_their_utterance_transcript() -> None:
+    config: Final = GnaniRealtimeConfig()
+    first_started: Final = _events(config, {"type": "speech_start", "utterance_id": "u1"})
+    second_started: Final = _events(config, {"type": "speech_start", "utterance_id": "u2"})
+    first: Final = _events(config, {"type": "transcript", "text": "one", "utterance_id": "u1", "segment_id": "s-1"})
+    second: Final = _events(config, {"type": "transcript", "text": "two", "utterance_id": "u2", "segment_id": "s-2"})
+    unannounced: Final = _events(config, {"type": "transcript", "text": "three", "segment_id": "s-3"})
+    assert tuple(map(_type_and_item, first_started + second_started)) == (
+        ("input_audio_buffer.speech_started", "u1"),
+        ("input_audio_buffer.speech_started", "u2"),
+    )
+    assert tuple(map(_type_and_item, first + second + unannounced)) == (
+        ("input_audio_buffer.speech_stopped", "u1"),
+        ("input_audio_buffer.committed", "u1"),
+        ("conversation.item.input_audio_transcription.completed", "u1"),
+        ("input_audio_buffer.speech_stopped", "u2"),
+        ("input_audio_buffer.committed", "u2"),
+        ("conversation.item.input_audio_transcription.completed", "u2"),
+        ("input_audio_buffer.committed", "s-3"),
+        ("conversation.item.input_audio_transcription.completed", "s-3"),
+    )
+
+
+def _type_and_item(event: Mapping[str, object]) -> tuple[object, object]:
+    return event.get("type"), event.get("item_id")
