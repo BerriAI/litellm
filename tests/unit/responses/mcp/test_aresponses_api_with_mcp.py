@@ -4792,6 +4792,41 @@ async def test_a_model_that_keeps_calling_a_direct_mcp_tool_past_the_round_cap_g
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_a_streamed_model_that_keeps_calling_a_direct_mcp_tool_past_the_round_cap_gets_the_call_back_unrun(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(
+        respx.mock,
+        monkeypatch,
+        tuple(_streamed_tool_call_round() for _ in range(3)),
+        _DEEPSEEK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        stream: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(_DEEPWIKI_TOOL)],
+            max_agentic_loops=1,
+            stream=True,
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+        events: Final = tuple([event async for event in stream])
+
+    assert [call.name for call in server.calls] == ["ask_question"]
+    assert provider.call_count == 2
+    assert _event_type(events[-1]) == "response.completed"
+    assert _output_summary(events[-1].response.output) == (
+        ("mcp_list_tools", "deepwiki", None),
+        ("mcp_call", "deepwiki", "ask_question"),
+        ("function_call", None, "deepwiki-ask_question"),
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_a_streamed_gateway_reference_that_needs_approval_beside_a_claimed_url_hands_its_call_back_unrun(
     monkeypatch: pytest.MonkeyPatch,
 ):

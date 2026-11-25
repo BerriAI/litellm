@@ -931,7 +931,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 else ()
             )
             run_calls: Final = self._calls_to_run(tool_calls)
-            if not run_calls:
+            if not run_calls or self.tool_call_round >= self.max_tool_call_rounds:
                 return
             hands_calls_back: Final = len(run_calls) < len(tool_calls)
             self.tool_call_round += 1
