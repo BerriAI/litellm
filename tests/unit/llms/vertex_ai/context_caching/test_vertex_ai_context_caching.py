@@ -3249,6 +3249,22 @@ def test_the_leading_system_message_goes_into_the_cache_and_a_later_reminder_com
     ]
 
 
+def test_a_mark_inside_the_leading_system_run_caches_the_whole_run():
+    from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
+
+    run: Final = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "system", "content": [{"type": "text", "text": "policy", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "system", "content": "Answer in English."},
+    ]
+    question: Final = {"role": "user", "content": "question 1"}
+
+    cached, remaining = separate_cached_messages([*run, question])
+
+    assert cached == run
+    assert remaining == [question]
+
+
 def _cached_question_then_a_reminder_marked(
     reminder_mark: Mapping[str, str], user_turns: int
 ) -> list[AllMessageValues]:

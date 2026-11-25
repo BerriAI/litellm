@@ -186,7 +186,7 @@ def separate_cached_messages(
 
     block_start: Final = _cached_block_start(messages, marked.leading_run_end, marked.block.start, marked.block.stop)
     block_end: Final = _cached_block_end(messages, marked.leading_run_end, block_start, marked.block.stop)
-    cached_end: Final = block_end if block_start < block_end else 0
+    cached_end: Final = max(marked.leading_run_end, block_end) if block_start < block_end else 0
     later_messages: Final = messages[max(cached_end, marked.leading_run_end) :]
     return (
         messages[:cached_end],
