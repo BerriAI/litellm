@@ -1662,22 +1662,18 @@ def _anthropic_image_block_tokens(data: str, use_default_image_token_count: bool
     estimate the block used before.
     https://platform.claude.com/docs/en/build-with-claude/vision
 
-    Only inline `data:` images are measured. Any other source (an `http(s)` URL, an empty file id) is
-    left to `calculate_img_tokens`, which returns the flat base without fetching, so a token count
-    never adds an outbound request the previous code did not make.
+    Only inline base64 `data:image/` sources within `MAX_IMAGE_URL_DOWNLOAD_SIZE_MB` are measured. Any
+    other source (an `http(s)` URL, an empty file id, an oversized payload) keeps the flat estimate
+    from `calculate_img_tokens`, so a count never fetches or decodes more than it did before.
     """
-    if use_default_image_token_count or not data.startswith("data:"):
+    dimensions: Final = None if use_default_image_token_count else _auto_image_dimensions(data)
+    if dimensions is None:
         return calculate_img_tokens(
             data=data,
             mode="auto",
             use_default_image_token_count=use_default_image_token_count,
         )
-    try:
-        width, height = get_image_dimensions(data)
-    except Exception as e:  # noqa: BLE001  # any decode failure keeps the flat estimate, never fails a count
-        verbose_logger.debug("Could not read the image's dimensions (%s), keeping the flat estimate", e)
-        return calculate_img_tokens(data=data, mode="auto")
-    return math.ceil(_anthropic_image_pixels(width, height) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+    return math.ceil(_anthropic_image_pixels(*dimensions) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
 def _pdf_dictionary(node: object) -> Mapping[str, object] | None:

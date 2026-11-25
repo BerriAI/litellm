@@ -2512,6 +2512,21 @@ def test_anthropic_image_block_keeps_a_small_images_own_area():
     assert page_sized < math.ceil(1568 * 1568 / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
+def test_anthropic_image_block_keeps_the_flat_estimate_without_decoding_past_the_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import ANTHROPIC_IMAGE_PIXELS_PER_TOKEN
+
+    counter: Final = importlib.import_module("litellm.litellm_core_utils.token_counter")
+    monkeypatch.setattr(counter, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 24 / (1024 * 1024))
+
+    with patch("base64.b64decode", side_effect=AssertionError("oversized input must not be decoded")) as decode:
+        tokens: Final = _count_image_tokens_for_anthropic(_png_data_url(1024, 1024))
+
+    decode.assert_not_called()
+    assert tokens < math.ceil(1024 * 1024 / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
 def test_anthropic_image_block_url_source_matches_openai_image_url():
     """A URL image block keeps the pre-existing parity with OpenAI's `image_url` and fetches nothing.
 
