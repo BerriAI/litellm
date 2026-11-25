@@ -204,8 +204,9 @@ def _channel_count(audio_content: bytes) -> int:
         return 1
 
     try:
-        channels: Final = soundfile.info(io.BytesIO(audio_content)).channels  # pyright: ignore[reportUnknownMemberType]  # soundfile ships no type hints
-        return _CHANNELS.validate_python(channels)
+        return _CHANNELS.validate_python(
+            soundfile.info(io.BytesIO(audio_content)).channels  # pyright: ignore[reportUnknownMemberType]  # soundfile ships no type hints
+        )
     except (RuntimeError, TypeError, ValidationError):
         return 1
 
