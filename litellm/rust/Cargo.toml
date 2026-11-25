@@ -128,7 +128,7 @@ uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
 wiremock = "0.6.5"
 rstest_reuse = "0.7.0"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-native-certs = "0.8"
 rustify = "=0.7.0"
 rustify_derive = "=0.5.5"
@@ -140,7 +140,9 @@ sha2 = "0.10"
 sha1 = "0.10"
 zeroize = "1.9.0"
 syn = { version = "2", default-features = false }
-sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-aws-lc-rs"] }
+# sqlx-core directly so its rustls-native-certs feature puts the OS trust store under sqlx's aws-lc TLS; the feature is an undocumented optional dep, hence the exact pin
+sqlx-core = { version = "=0.9.0", default-features = false, features = ["rustls-native-certs"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proc-macro2 = "1"
 quote = "1"

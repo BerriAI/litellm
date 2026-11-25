@@ -143,7 +143,9 @@ class InMemoryCache(BaseCache):
                 break
 
         if len(self.expiration_heap) > 2 * self.max_size_in_memory:
-            self.expiration_heap = [entry for entry in self.expiration_heap if self.ttl_dict.get(entry[1]) == entry[0]]
+            self.expiration_heap = [
+                entry for entry in frozenset(self.expiration_heap) if self.ttl_dict.get(entry[1]) == entry[0]
+            ]
             heapq.heapify(self.expiration_heap)
 
         # Step 2: Evict if cache is still full

@@ -384,7 +384,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         is_mcp: Final = self._is_mcp_call_type(call_type)
 
         if not self._surface_matches(is_mcp):

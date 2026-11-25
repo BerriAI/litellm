@@ -28,6 +28,7 @@ use crate::{
     error::{Ended, NoDeployments},
     headers::Routing,
     hooks::CallHooks,
+    record,
     stream_event::{Counts, Read},
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
@@ -348,7 +349,10 @@ where
         }
         let unsent = std::mem::replace(chunks, stream::empty().boxed());
         let failed = match stream_hold::hold(unsent, read, stream_hold::HELD).await {
-            Held::Committed(sent) => {
+            Held::Committed(sent, first_event) => {
+                if let Some(at) = first_event {
+                    record::write(|entries| entries.see_first_event(at));
+                }
                 *chunks = sent;
                 return Ok(routed);
             }
@@ -688,7 +692,8 @@ mod tests {
             .call(&host, op.clone(), request.clone())
             .await
             .unwrap();
-        taken_over_while_held::<Failing, _>(router, &host, &op, &request, first).await
+        let held = taken_over_while_held::<Failing, _>(router, &host, &op, &request, first);
+        record::scope(record::CallRecord::new(), held).await
     }
 
     /// Python closes the attempt a take-over supersedes before the take-over runs, so a retry

@@ -242,7 +242,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: list[AllMessageValues],
         non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
@@ -266,7 +266,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: list[AllMessageValues],
         non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -326,10 +326,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Used in managed_files.py
         """
 
-    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict[str, object] | None:
+    async def async_pre_call_check(
+        self, deployment: dict[str, object], parent_otel_span: Span | None
+    ) -> dict[str, object] | None:
         pass
 
-    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
+    def pre_call_check(self, deployment: dict[str, object]) -> dict[str, object] | None:
         pass
 
     async def async_post_call_success_deployment_hook(
@@ -695,8 +697,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict[str, object],
@@ -751,12 +753,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_run_agentic_loop(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         kwargs: dict[str, object],
@@ -820,12 +822,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         kwargs: dict[str, object],
@@ -881,8 +883,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict[str, object],
@@ -894,9 +896,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_run_chat_completion_agentic_loop(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         optional_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
@@ -909,9 +911,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         optional_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
