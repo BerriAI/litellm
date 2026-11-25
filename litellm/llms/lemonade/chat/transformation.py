@@ -60,7 +60,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         self,
         repeat_penalty: float | None = None,
         functions: Sequence[object] | None = None,
-        logit_bias: dict | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_completion_tokens: int | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
@@ -69,7 +69,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         temperature: int | None = None,
         top_p: int | None = None,
         top_k: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
         tools: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
@@ -140,7 +140,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return None
 
     @staticmethod
-    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict:
+    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict[str, object]:
         provider_specific_entry = model_info.get("provider_specific_entry")
         if not isinstance(provider_specific_entry, dict):
             provider_specific_entry = {}

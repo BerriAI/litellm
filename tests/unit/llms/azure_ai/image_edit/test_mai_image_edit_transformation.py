@@ -1,9 +1,9 @@
 import io
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
-
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
@@ -14,6 +14,7 @@ from litellm.llms.azure_ai.image_edit import (
 from litellm.llms.azure_ai.image_generation.mai_transformation import (
     AzureFoundryMAIImageGenerationConfig,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 class TestAzureMAIImageEdit:
@@ -22,33 +23,21 @@ class TestAzureMAIImageEdit:
             api_base="https://my-resource.services.ai.azure.com",
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
 
     def test_get_mai_image_edit_url_rewrites_generation_url(self):
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
-            api_base=(
-                "https://my-resource.services.ai.azure.com/mai/v1/images/generations"
-                "?api-version=preview"
-            ),
+            api_base=("https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"),
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
 
     def test_get_mai_image_edit_url_appends_edits_to_mai_root(self):
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
             api_base="https://my-resource.services.ai.azure.com/mai/v1",
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
 
     def test_get_azure_ai_image_edit_config_returns_mai(self):
         config = get_azure_ai_image_edit_config("MAI-Image-2.5")
@@ -113,6 +102,32 @@ class TestAzureMAIImageEdit:
                 api_base="https://my-resource.services.ai.azure.com",
             )
         assert exc_info.value.status_code == 400
+
+    def test_image_edit_with_image_references_posts_a_form_not_json(self):
+        """regression: the MAI edit route reads form fields, so image references must not switch it to a JSON body."""
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+
+        litellm.image_edit(
+            model="azure_ai/MAI-Image-2.5",
+            image=None,
+            images=[{"image_url": "https://images.example/tree.png"}],
+            prompt="Turn this into a studio product shot",
+            api_key="test-key",
+            api_base="https://my-resource.services.ai.azure.com",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        assert len(captured) == 1
+        assert captured[0].headers["content-type"].startswith("application/x-www-form-urlencoded")
+        assert parse_qs(captured[0].content.decode()) == {
+            "model": ["MAI-Image-2.5"],
+            "images[][image_url]": ["https://images.example/tree.png"],
+            "prompt": ["Turn this into a studio product shot"],
+        }
 
     def test_transform_image_edit_request_uses_image_field(self):
         config = AzureFoundryMAIImageEditConfig()

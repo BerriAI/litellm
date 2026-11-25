@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.routing_common_utils import without_router_only_
 from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
+from litellm.router_rust.invoke.cache_controls import report_ignored_cache_controls, with_model_cache_controls
 from litellm.router_rust.invoke.shaping import (
     ROUTER_CLIENTS_TARGET,
     STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
@@ -783,6 +784,7 @@ class AttemptCall:
     group: str
     # `_embedding`'s batch-size refusal, raised by the driver in place of the host call.
     refused: Exception | None = None
+    ignored_cache_controls: tuple[str, ...] = ()
 
 
 def reports_own_success(call: AttemptCall) -> bool:
@@ -896,6 +898,34 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
 
 
 def attempt_call(
+    core: EndpointCore,
+    plan: Plan,
+    request: Mapping[str, object],
+    deployment: Mapping[str, object],
+    *,
+    group: str,
+    requested: str,
+    fallback_model_group: str | None = None,
+    authenticated: Mapping[str, object] | None = None,
+) -> AttemptCall:
+    """``authenticated`` is the request before a fallback's own params went over it, the only place the
+    virtual key's cache controls are read from."""
+    params, merged_request, ignored = with_model_cache_controls(
+        as_dict(deployment.get("litellm_params")), request, authenticated
+    )
+    call: Final = _attempt_call(
+        core,
+        plan,
+        merged_request,
+        {**deployment, "litellm_params": params},
+        group=group,
+        requested=requested,
+        fallback_model_group=fallback_model_group,
+    )
+    return dataclasses.replace(call, ignored_cache_controls=ignored) if ignored else call
+
+
+def _attempt_call(
     core: EndpointCore,
     plan: Plan,
     request: Mapping[str, object],
@@ -2247,18 +2277,23 @@ class RustEndpoints:
                 specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the request's value, as given
                 request_kwargs=kwargs,
             )
-        data: Final = as_dict(deployment.get("litellm_params"))
+        data, merged, ignored = with_model_cache_controls(as_dict(deployment.get("litellm_params")), kwargs)
+        call_kwargs: Final = dict(merged)
         for key, value in self._core.resolved.default_litellm_params.items():
-            if key not in kwargs:
-                kwargs[key] = value
+            if key not in call_kwargs:
+                call_kwargs[key] = value
             elif key == "metadata":
-                metadata_bucket(kwargs, key).update(
-                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                metadata_bucket(call_kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(call_kwargs[key]))
                 )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
-            kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+            call_kwargs["model_id"] = pinned
+        response: Final = self._invoke("text_completion")(
+            **{**data, "prompt": prompt, "caching": self._cache_responses, **call_kwargs}
+        )
+        report_ignored_cache_controls(response, ignored)
+        return response
 
     async def aadapter_completion(
         self,

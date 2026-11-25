@@ -2,9 +2,9 @@ import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from itertools import chain, dropwhile, groupby
+from itertools import chain, dropwhile, groupby, starmap
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, NoReturn, TypeAlias, TypeVar
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
@@ -13,7 +13,6 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block_without_text
 from litellm.litellm_core_utils.prompt_templates.factory import sanitize_anthropic_tool_use_id
-from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
 from litellm.types.utils import TokenCountMessagesFormat
 
 _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
@@ -93,6 +92,8 @@ def _message_labels(message: Mapping[str, JsonValue]) -> Iterator[str]:
 
 
 def unconvertible_anthropic_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+
     normalized: Final = _json_messages(normalize_native_messages(messages))
     return tuple(sorted(set(chain.from_iterable(_message_labels(message) for message in normalized))))
 
@@ -197,19 +198,57 @@ def _tool_result_text_errors(block: object) -> Iterator[str]:
             return iter(())
 
 
-def malformed_tool_result_text_error(messages: Iterable[object]) -> str | None:
-    blocks: Final = chain.from_iterable(map(_user_content_blocks, messages))
-    return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
+_BlockTextErrors: TypeAlias = Callable[[int, int, object], Iterator[str]]
 
 
-def malformed_tool_result_count_error(
+def _user_text_errors(message_index: int, block_index: int, block: object) -> Iterator[str]:
+    if _non_str_text(block) is None:
+        return iter(())
+    return iter((f"messages.{message_index}.content.{block_index}.text: Input should be a valid string",))
+
+
+def _user_block_text_errors(message_index: int, block_index: int, block: object) -> Iterator[str]:
+    return chain(_user_text_errors(message_index, block_index, block), _tool_result_text_errors(block))
+
+
+def _message_text_errors(block_errors: _BlockTextErrors, message_index: int, message: object) -> Iterator[str]:
+    return chain.from_iterable(
+        block_errors(message_index, block_index, block)
+        for block_index, block in enumerate(_user_content_blocks(message))
+    )
+
+
+def _first_text_error(block_errors: _BlockTextErrors, messages: Iterable[object]) -> str | None:
+    return next(chain.from_iterable(starmap(partial(_message_text_errors, block_errors), enumerate(messages))), None)
+
+
+def malformed_text_error(messages: Iterable[object]) -> str | None:
+    return _first_text_error(_user_block_text_errors, messages)
+
+
+def non_string_user_text_error(messages: Iterable[object]) -> str | None:
+    return _first_text_error(_user_text_errors, messages)
+
+
+def non_string_system_text_error(system: object) -> str | None:
+    return next(
+        (
+            f"system.{index}.text: Input should be a valid string"
+            for index, block in enumerate(_list_items(system))
+            if _non_str_text(block) is not None
+        ),
+        None,
+    )
+
+
+def malformed_text_count_error(
     messages: Iterable[Mapping[str, object]] | None,
     messages_format: TokenCountMessagesFormat,
     deployment: Mapping[str, object] | None,
 ) -> str | None:
     if messages_format != "anthropic" or deployment_drops_params(deployment):
         return None
-    return malformed_tool_result_text_error(messages or ())
+    return malformed_text_error(messages or ())
 
 
 def _scannable_part(part: object) -> object:
@@ -278,6 +317,7 @@ def _with_kept_parts(tool_result: Mapping[str, object], parts: _KeptParts) -> ob
 
 
 _V = TypeVar("_V")  # rebind-ok: a TypeVar cannot be Final
+_Block = TypeVar("_Block")
 _ToolResultValues: TypeAlias = tuple[tuple[str, _V], ...]
 
 
@@ -506,21 +546,48 @@ def _without_non_string_text(block: object) -> object:
 
 def _without_non_string_texts(
     message: dict[str, object],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
-) -> dict[str, object]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+) -> dict[str, object] | None:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     match message:
         case {"role": "user", "content": list()}:
-            return {**message, "content": [_without_non_string_text(block) for block in _user_content_blocks(message)]}
+            blocks: Final = _user_content_blocks(message)
+            kept: Final = [_without_non_string_text(block) for block in blocks if _non_str_text(block) is None]
+            return {**message, "content": kept} if kept or not blocks else None
         case _:
             return message
 
 
-def drop_non_string_tool_result_texts(
+def drop_non_string_texts(
     messages: Sequence[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     drop_params: object,
 ) -> Sequence[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
-    if not drops_unsupported_params(drop_params) or malformed_tool_result_text_error(messages) is None:
+    if not drops_unsupported_params(drop_params) or malformed_text_error(messages) is None:
         return messages
-    return [_without_non_string_texts(message) for message in messages]
+    return [kept for message in messages if (kept := _without_non_string_texts(message)) is not None]
+
+
+def without_non_string_system_texts(
+    system: Sequence[_Block],
+) -> list[_Block] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    return [block for block in system if _non_str_text(block) is None] or None
+
+
+def drop_non_string_system_texts(
+    system: str | list[dict[str, JsonValue]] | None,  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    drop_params: object,
+) -> str | list[dict[str, JsonValue]] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    if (
+        not isinstance(system, list)
+        or not drops_unsupported_params(drop_params)
+        or non_string_system_text_error(system) is None
+    ):
+        return system
+    return without_non_string_system_texts(system)
+
+
+def emptied_messages_error(sent: Sequence[object], kept: Sequence[object]) -> str | None:
+    if kept or malformed_text_error(sent) is None:
+        return None
+    return "messages: no message has content left after dropping empty or non-string text blocks"
 
 
 def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
@@ -531,15 +598,59 @@ def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
             return drops_unsupported_params(None)
 
 
-def reject_malformed_tool_result_text(
+def reject_malformed_text(
     messages: Iterable[Mapping[str, object]], model: str, forwarded_kwargs: Mapping[str, object]
 ) -> None:
-    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
-        return
-    error: Final = malformed_tool_result_text_error(messages)
+    _reject_text_error(
+        malformed_text_error,
+        messages,
+        forwarded_kwargs.get("drop_params"),
+        model,
+        forwarded_kwargs.get("custom_llm_provider"),
+    )
+
+
+def reject_non_string_user_text(messages: Iterable[object], drop_params: object, model: str, provider: object) -> None:
+    _reject_text_error(non_string_user_text_error, messages, drop_params, model, provider)
+
+
+def reject_non_string_system_text(system: object, drop_params: object, model: str, provider: object) -> None:
+    error: Final = None if drops_unsupported_params(drop_params) else non_string_system_text_error(system)
     if error is None:
         return
-    provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    raise litellm.BadRequestError(
-        message=error, model=model, llm_provider=provider if isinstance(provider, str) else ""
-    )
+    _raise_bad_request(error, model, provider)
+
+
+def _reject_text_error(
+    first_error: Callable[[Iterable[object]], str | None],
+    messages: Iterable[object],
+    drop_params: object,
+    model: str,
+    provider: object,
+) -> None:
+    if drops_unsupported_params(drop_params):
+        return
+    error: Final = first_error(messages)
+    if error is None:
+        return
+    _raise_bad_request(error, model, provider)
+
+
+def reject_emptied_messages(sent: Sequence[object], kept: Sequence[object], model: str, provider: str | None) -> None:
+    error: Final = emptied_messages_error(sent, kept)
+    if error is None:
+        return
+    _raise_bad_request(error, model, provider)
+
+
+def _raise_bad_request(error: str, model: str, provider: object) -> NoReturn:
+    raise litellm.BadRequestError(message=error, model=model, llm_provider=_provider_name(model, provider))
+
+
+def _provider_name(model: str, provider: object) -> str:
+    if isinstance(provider, str) and provider:
+        return provider
+    try:
+        return litellm.get_llm_provider(model=model)[1]
+    except litellm.BadRequestError:
+        return ""

@@ -4501,7 +4501,7 @@ def azure_text_pt(messages: Sequence[Mapping[str, object]]):
 
 
 ###### AZURE AI #######
-def stringify_json_tool_call_content(messages: list) -> list:
+def stringify_json_tool_call_content(messages: list[AllMessageValues]) -> list:
     """
 
     - Check 'content' in tool role -> convert to dict (if not) -> stringify
