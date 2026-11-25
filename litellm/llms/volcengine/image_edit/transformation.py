@@ -30,7 +30,7 @@ _IMAGES: Final = TypeAdapter(tuple[object, ...])
 
 class VolcEngineImageEditConfig(BaseImageEditConfig):
     @override
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
         return list(_ARK_IMAGE_EDIT_PARAMS)
 
     @override
@@ -39,7 +39,7 @@ class VolcEngineImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
         return dict(ark_image_params(image_edit_optional_params, model, drop_params))
 
     @override
@@ -54,8 +54,8 @@ class VolcEngineImageEditConfig(BaseImageEditConfig):
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
-        return ark_image_headers(headers, api_key, model)
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        return dict(ark_image_headers(headers, api_key, model))
 
     @override
     def get_complete_url(
@@ -79,7 +79,7 @@ class VolcEngineImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, object],
-    ) -> tuple[dict[str, object], RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:  # mutable-ok: inherited contract
         images: Final = _IMAGES.validate_python(image) if isinstance(image, list) else (image,)
         return {
             **ark_image_request(model, prompt, image_edit_optional_request_params),
