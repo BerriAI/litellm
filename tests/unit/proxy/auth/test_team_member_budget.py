@@ -486,4 +486,6 @@ def test_resolve_effective_team_member_budget_preserves_member_and_default_prece
     ) == 0
     assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=50), now) == 50
     assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=0), now) is None
+    assert resolve_effective_team_member_budget(expired_inherited_increase, LiteLLM_BudgetTable(max_budget=0), now) == 0
+    assert resolve_effective_team_member_budget(active_inherited_increase, LiteLLM_BudgetTable(max_budget=0), now) == 10
     assert resolve_effective_team_member_budget(None, None, now) is None
