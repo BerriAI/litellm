@@ -239,8 +239,6 @@ fn messages_length(messages: &[Value]) -> Out<i128> {
     Ok(total)
 }
 
-/// The characters of the instruction text a request carries outside its messages or input, which is
-/// `system` on Anthropic Messages and `instructions` on Responses.
 fn instruction_length(request: &Map<String, Value>, call_type: &str) -> Out<i128> {
     let instructions = if ANTHROPIC_MESSAGES.contains(&call_type) {
         get(request, "system")

@@ -1098,8 +1098,6 @@ def _embedding_input_type(request: Mapping[str, object] | None) -> str | None:
 
 
 def _instruction_text(request: Mapping[str, object], call_type: str | None) -> str:
-    """The instruction text a request carries outside its messages or input, which is ``system`` on Anthropic
-    Messages and ``instructions`` on Responses."""
     instructions: Final = (
         request.get("system")
         if call_type in ANTHROPIC_MESSAGES_CALL_TYPES
