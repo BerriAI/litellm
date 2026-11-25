@@ -2826,15 +2826,17 @@ def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
 
 
 @pytest.mark.parametrize(
-    "output_effort, reasoning_effort",
+    "output_effort, drop_params, reasoning_effort",
     [
-        pytest.param("low", "low", id="lower-effort-wins"),
-        pytest.param("high", "medium", id="budget-caps-a-stronger-effort"),
-        pytest.param("turbo", "turbo", id="unknown-effort-goes-to-the-target"),
+        pytest.param("low", False, "low", id="lower-effort-wins"),
+        pytest.param("high", False, "medium", id="budget-caps-a-stronger-effort"),
+        pytest.param("turbo", False, "turbo", id="unknown-effort-goes-to-the-target"),
+        pytest.param("turbo", True, "medium", id="drop-params-drops-an-unknown-effort-for-the-budget"),
+        pytest.param("none", True, "none", id="drop-params-keeps-a-known-effort"),
     ],
 )
 def test_explicit_output_effort_beside_an_enabled_budget_reaches_a_non_claude_model_up_to_the_budget(
-    output_effort: str, reasoning_effort: str
+    output_effort: str, drop_params: bool, reasoning_effort: str
 ) -> None:
     new_kwargs: Final = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
     LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
@@ -2846,6 +2848,7 @@ def test_explicit_output_effort_beside_an_enabled_budget_reaches_a_non_claude_mo
             },
         ),
         cast(Any, new_kwargs),
+        drop_params=drop_params,
     )
 
     assert new_kwargs["reasoning_effort"] == reasoning_effort

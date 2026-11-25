@@ -20,6 +20,7 @@ from litellm.llms.anthropic.common_utils import system_without_claude_code_billi
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.messages.utils import (
+    KNOWN_REASONING_EFFORTS,
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
     ClientEffort,
@@ -164,6 +165,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
     reasoning_effort_from_thinking_silently,
     reasoning_effort_within_thinking_budget,
+    warn_dropped_reasoning,
 )
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
@@ -1255,6 +1257,17 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
     @staticmethod
+    def _effort_within_thinking_budget(
+        output_effort: object, budget_effort: str | None, model: str, *, drop_params: bool
+    ) -> str | None:
+        if not drop_params or not isinstance(output_effort, str) or output_effort in KNOWN_REASONING_EFFORTS:
+            return reasoning_effort_within_thinking_budget(output_effort, budget_effort)
+        warn_dropped_reasoning(
+            "output_config.effort", output_effort, model, "no reasoning API defines it", drop_params_gated=True
+        )
+        return budget_effort
+
+    @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
         if not is_between_tool_calls(anthropic_message_request):
             return REASONING_EFFORT_OFF
@@ -1325,7 +1338,7 @@ class LiteLLMAnthropicMessagesAdapter:
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
-            else reasoning_effort_within_thinking_budget(
+            else self._effort_within_thinking_budget(
                 output_effort,
                 self.translate_anthropic_thinking_to_reasoning_effort(
                     cast(AnthropicThinkingParam, thinking),
@@ -1333,6 +1346,8 @@ class LiteLLMAnthropicMessagesAdapter:
                     drop_params=drop_params,
                     report_reasoning_drops=report_reasoning_drops,
                 ),
+                model,
+                drop_params=drop_params,
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
