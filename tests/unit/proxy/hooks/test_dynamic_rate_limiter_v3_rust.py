@@ -2422,8 +2422,8 @@ async def test_a_reservation_at_saturation_is_refunded_when_the_proxy_refuses_th
 @pytest.mark.asyncio
 async def test_a_failed_tool_call_inside_the_request_leaves_the_requests_reservation_held(
     monkeypatch: pytest.MonkeyPatch,
-):
-    handler = _borrowing_handler(monkeypatch, borrows=True)
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
     key: Final = _team_key()
     await _check(handler, key, saturation=0.5, data=_prompt(words=30))
     held: Final = await _team_tokens_remaining(handler)

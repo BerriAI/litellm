@@ -830,7 +830,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
             .unwrap_or(false);
         let disabled = failure.settings.disable_spend_updates;
         let resets = failure.window_resets.clone();
-        if !completed_cost || disabled {
+        if (!completed_cost || disabled) && !failure.nested_tool_call {
             self.release(host, reservation, &resets).await;
             if let Some(settled) = reservation.as_ref() {
                 for row in &mut failure.rows {

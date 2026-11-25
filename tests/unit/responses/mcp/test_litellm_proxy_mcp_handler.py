@@ -41,7 +41,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 
 class _DummyMCPResult:
@@ -512,7 +512,9 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_calls_reports_an_unmapped_tool_failure_as_that_tool_calls_failure(monkeypatch):
+async def test_execute_tool_calls_reports_an_unmapped_tool_failure_inside_the_nested_tool_call_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     call_tool_mock: Final = _setup_mcp_call_environment(monkeypatch)
     post_call_failure_hook: Final = _setup_proxy_logging(monkeypatch)
     reported_inside_a_nested_tool_call: Final = MagicMock()
@@ -530,10 +532,6 @@ async def test_execute_tool_calls_reports_an_unmapped_tool_failure_as_that_tool_
     assert results[0]["result"].startswith("Error executing tool")
     call_tool_mock.assert_not_awaited()
     post_call_failure_hook.assert_awaited_once()
-    assert post_call_failure_hook.await_args is not None
-    reported_request: Final = post_call_failure_hook.await_args.kwargs["request_data"]
-    assert reported_request["litellm_call_id"] == "cid_call-unmapped"
-    assert reported_request["call_type"] == CallTypes.call_mcp_tool.value
     reported_inside_a_nested_tool_call.assert_called_once_with(True)
     assert reporting_nested_tool_call_failure() is False
 

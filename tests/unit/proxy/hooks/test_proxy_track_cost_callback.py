@@ -1093,8 +1093,8 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
 
 
 @pytest.mark.asyncio
-async def test_a_failed_tool_call_inside_the_request_leaves_the_requests_budget_reservation_open():
-    user_api_key_dict = UserAPIKeyAuth(
+async def test_a_failed_tool_call_inside_the_request_leaves_the_requests_budget_reservation_open() -> None:
+    user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="test_api_key",
         request_route="/custom/route",
         budget_reservation={"reserved_cost": 0.5, "entries": []},
