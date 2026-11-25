@@ -3299,24 +3299,29 @@ async def mcp_read_resource(
     candidates: Final = tuple(server for server in allowed_mcp_servers if not is_mcp_stdio_blocked(server.transport))
 
     async def owner(candidate: MCPServer) -> MCPServer | ResourceListingFailed | None:
-        candidate_auth, candidate_headers = _prepare_mcp_server_headers(
-            server=candidate,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            mcp_auth_header=mcp_auth_header,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            user_api_key_auth=user_api_key_auth,
-            scope_servers=candidates,
-        )
-        listing: Final = await global_mcp_server_manager.list_resources_from_server(
-            server=candidate,
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=candidate_auth,
-            extra_headers=_withhold_fanned_out_caller_authorization(candidate, candidate_headers, candidates),
-            add_prefix=False,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-        )
+        try:
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
+                candidate_auth, candidate_headers = _prepare_mcp_server_headers(
+                    server=candidate,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                    scope_servers=candidates,
+                )
+                listing: Final = await global_mcp_server_manager.list_resources_from_server(
+                    server=candidate,
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=candidate_auth,
+                    extra_headers=_withhold_fanned_out_caller_authorization(candidate, candidate_headers, candidates),
+                    add_prefix=False,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                    for_owner_lookup=True,
+                )
+        except TimeoutError as error:
+            return ResourceListingFailed(server_name=candidate.name, error=error)
         if isinstance(listing, ResourceListingFailed):
             return listing
         return candidate if any(str(resource.uri) == str(url) for resource in listing) else None

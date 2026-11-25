@@ -16907,8 +16907,8 @@ class _DiscoveryUpstream:
             {"name": "example", "description": "original", "inputSchema": {"type": "object"}},
         )
         self.outcome = "supported"
-        self.ttl_ms = 60000
-        self.last_page_ttl_ms = 60000
+        self.ttl_ms: int | None = 60000
+        self.last_page_ttl_ms: int | None = 60000
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
@@ -16975,6 +16975,7 @@ class _DiscoveryUpstream:
             if self.outcome in ("paged", "paged_failure") and not (payload.params or {}).get("cursor")
             else {}
         )
+        ttl: Final = self.last_page_ttl_ms if (payload.params or {}).get("cursor") else self.ttl_ms
         return httpx2.Response(
             200,
             json={
@@ -16983,7 +16984,7 @@ class _DiscoveryUpstream:
                 "result": {
                     **result,
                     **continuation,
-                    "ttlMs": self.last_page_ttl_ms if (payload.params or {}).get("cursor") else self.ttl_ms,
+                    **({} if ttl is None else {"ttlMs": ttl}),
                     "cacheScope": "private",
                     "resultType": "complete",
                 },
@@ -22703,6 +22704,37 @@ async def test_discovery_does_not_retain_unknown_freshness(kind: str) -> None:
         assert len(await operation(_discovery_server(), None)) == 1
         assert len(await operation(_discovery_server(), None)) == 1
     assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_ttl", "last_ttl", "expected_warm_lists"), [(None, None, 2), (None, 0, 4), (0, None, 4)]
+)
+async def test_resource_owner_discovery_distinguishes_omitted_ttl_from_opt_out(
+    monkeypatch: pytest.MonkeyPatch, first_ttl: int | None, last_ttl: int | None, expected_warm_lists: int
+) -> None:
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "60")
+    clock: Final = _DiscoveryClock()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = "paged"
+    upstream.ttl_ms = first_ttl
+    upstream.last_page_ttl_ms = last_ttl
+    manager: Final = MCPServerManager(discovery_clock=clock, upstream_transport=httpx2.MockTransport(upstream.respond))
+    server: Final = _discovery_server().model_copy(update={"protocol_version": "2025-03-26"})
+
+    def list_count() -> int:
+        return sum(method == "resources/list" for method, _ in upstream.requests)
+
+    initial: Final = await manager.list_resources_from_server(server, None, for_owner_lookup=True)
+    assert isinstance(initial, tuple) and len(initial) == 2
+    clock.now = 59
+    assert await manager.list_resources_from_server(server, None, for_owner_lookup=True) == initial
+    assert list_count() == expected_warm_lists
+    assert len(await manager.get_resources_from_server(server, None)) == 2
+    assert list_count() == expected_warm_lists + 2
+    clock.now = 60
+    assert await manager.list_resources_from_server(server, None, for_owner_lookup=True) == initial
+    assert list_count() == expected_warm_lists + 4
 
 
 def test_discovery_keys_bind_static_auth_to_caller_and_configuration() -> None:

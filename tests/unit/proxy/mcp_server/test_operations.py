@@ -45,6 +45,7 @@ from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.clock_loops import AutojumpClockLoop
 
 
 class _CatalogHookCapture(CustomLogger):
@@ -244,6 +245,63 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     assert "private upstream diagnostic" not in rejected.value.error.message
     if case == "slow_failure":
         await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
+
+
+@pytest.mark.parametrize("slow_method", ("initialize", "resources/list"))
+def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_failure(
+    monkeypatch: pytest.MonkeyPatch, slow_method: str
+) -> None:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ReadResourceRequest, ReadResourceRequestParams
+
+    uri: Final = "test://resource"
+    message: Final = TypeAdapter(JSONRPCMessage)
+    entered: Final[asyncio.Queue[str]] = asyncio.Queue()
+    monkeypatch.setattr(operations, "MCP_TOOL_LISTING_TIMEOUT", 1.0)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = message.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        owner: Final = request.url.host == "owner.example"
+        if not owner and payload.method == slow_method and entered.empty():
+            entered.put_nowait(slow_method)
+            await asyncio.sleep(2)
+        result: Final = {
+            "initialize": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "upstream", "version": "1"},
+                "capabilities": {"resources": {}},
+            },
+            "resources/list": {"resources": [{"uri": uri, "name": "resource"}] if owner else []},
+            "resources/read": {"contents": [{"uri": uri, "text": request.url.host}]},
+        }[payload.method]
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    for name in ("owner", "other"):
+        monkeypatch.setitem(
+            manager.config_mcp_servers,
+            name,
+            MCPServer(
+                server_id=name,
+                name=name,
+                url=f"https://{name}.example/mcp",
+                transport=MCPTransport.http,
+                allow_all_keys=True,
+            ),
+        )
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    context: Final = prepare_context(UserAPIKeyAuth(api_key=hash_token("sk-resource-read")))
+    request: Final = ReadResourceRequest(params=ReadResourceRequestParams(uri=uri))
+
+    with asyncio.Runner(loop_factory=AutojumpClockLoop) as runner:
+        with pytest.raises(MCPError, match="resource owner is unknown"):
+            runner.run(GatewayOperations().execute(request, context))
+        assert runner.get_loop().time() == pytest.approx(1)
+        result: Final = runner.run(GatewayOperations().execute(request, context))
+        assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
 
 
 def _listing_client() -> SimpleNamespace:

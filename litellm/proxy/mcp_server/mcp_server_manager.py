@@ -5246,6 +5246,8 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        *,
+        for_owner_lookup: bool = False,
     ) -> tuple[Resource, ...] | ResourceListingFailed:
         if self._skip_blocked_stdio_listing(server, "resource"):
             return ()
@@ -5285,9 +5287,12 @@ class MCPServerManager:
             )
 
             async def fetch() -> ListResourcesResult:
-                return await client.list_resources_result(raise_on_error=True)
+                return await client.list_resources_result(raise_on_error=True, for_owner_lookup=for_owner_lookup)
 
-            items: Final = await self._resource_discovery_cache.get(key, fetch)
+            cache_key: Final = (key[0], f"{key[1]}:owner") if for_owner_lookup else key
+            items: Final = await self._resource_discovery_cache.get(
+                cache_key, fetch, default_on_omission=for_owner_lookup
+            )
             return tuple(self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix))
         except Exception as error:
             return ResourceListingFailed(server_name=server.name, error=error)

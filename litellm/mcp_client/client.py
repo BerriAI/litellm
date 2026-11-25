@@ -11,6 +11,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
+from contextvars import ContextVar
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
@@ -27,6 +28,8 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._stream_protocols import ReadStream, WriteStream
+from mcp.shared.dispatcher import CallOptions
+from mcp.shared.jsonrpc_dispatcher import JSONRPCDispatcher
 from mcp.shared.message import SessionMessage
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -82,6 +85,7 @@ from mcp.types import (
     LoggingMessageNotificationParams,
     PaginatedRequestParams,
     Prompt,
+    RequestId,
     ResourceTemplate,
     SamplingCapability,
     ServerNotification,
@@ -244,6 +248,7 @@ def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
 TSessionResult = TypeVar("TSessionResult")
 _ListPage = TypeVar("_ListPage", ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult)
 _ListItem = TypeVar("_ListItem")
+_owner_listing_ttl_present: Final[ContextVar[bool | None]] = ContextVar("owner_listing_ttl_present", default=None)
 
 
 async def _run_bounded_cleanup(operation: Callable[[], Awaitable[TSessionResult]], deadline: float) -> TSessionResult:
@@ -477,6 +482,21 @@ def _notify_stream_error(
 def _notify_cleanup(callback: Callable[[], None] | None) -> None:
     if callback is not None:
         callback()
+
+
+class _OwnerDiscoveryDispatcher(JSONRPCDispatcher):
+    async def send_raw_request(
+        self,
+        method: str,
+        params: Mapping[str, object] | None,
+        opts: CallOptions | None = None,
+        *,
+        _related_request_id: RequestId | None = None,
+    ) -> dict[str, object]:  # mutable-ok: the SDK dispatcher contract requires a dictionary result
+        raw: Final = await super().send_raw_request(method, params, opts, _related_request_id=_related_request_id)
+        if method == "resources/list":
+            _owner_listing_ttl_present.set("ttlMs" in raw)
+        return raw
 
 
 class _UnvalidatedClientSession(ClientSession):
@@ -791,9 +811,15 @@ class MCPClient:
                     session_type: Final = (
                         _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
                     )
+                    discovery_dispatcher: Final = (
+                        _OwnerDiscoveryDispatcher(read_stream, write_stream)
+                        if _owner_listing_ttl_present.get() is not None
+                        else None
+                    )
                     session_ctx: Final = session_type(
-                        read_stream,
-                        write_stream,
+                        read_stream if discovery_dispatcher is None else None,
+                        write_stream if discovery_dispatcher is None else None,
+                        dispatcher=discovery_dispatcher,
                         read_timeout_seconds=self.timeout,
                         message_handler=partial(
                             _receive_session_message, stream_error=stream_error, on_notification=on_notification
@@ -1283,18 +1309,24 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
-    async def _run_optional_discovery(self, operation: Callable[[ClientSession], Awaitable[_ListPage]]) -> _ListPage:
+    async def _run_optional_discovery(
+        self, operation: Callable[[ClientSession], Awaitable[_ListPage]], *, preserve_ttl_omission: bool = False
+    ) -> _ListPage:
         async def timed_operation(session: ClientSession) -> tuple[_ListPage, float]:
             result: Final = await operation(session)
             return result, time.monotonic()
 
         result, received = await self.run_with_session(timed_operation)
+        if preserve_ttl_omission and "ttl_ms" not in result.model_fields_set:
+            return result
         return age_freshness(result, time.monotonic() - received)
 
     async def _list_optional_pages(
         self,
         fetch_page: Callable[[PaginatedRequestParams | None], Awaitable[_ListPage]],
         items_of: Callable[[_ListPage], Sequence[_ListItem]],
+        *,
+        preserve_ttl_omission: bool = False,
     ) -> tuple[list[_ListItem], CacheableResult]:
         items: Final[list[_ListItem]] = []  # mutable-ok: bounded iterative page accumulation
         pages: Final[list[tuple[CacheableResult, float]]] = []  # mutable-ok: bounded pagination evidence
@@ -1312,9 +1344,12 @@ class MCPClient:
                 items.extend(items_of(page))
                 if not page.next_cursor:
                     now: Final = time.monotonic()
-                    return items, aggregate_freshness(
+                    freshness = aggregate_freshness(
                         tuple(age_freshness(value, now - received) for value, received in pages)
                     )
+                    if preserve_ttl_omission and all("ttl_ms" not in value.model_fields_set for value, _ in pages):
+                        return items, CacheableResult(cache_scope=freshness.cache_scope)
+                    return items, freshness
                 if page.next_cursor in cursors:
                     raise RuntimeError("MCP list pagination repeated a cursor")
                 cursors.add(page.next_cursor)
@@ -1437,18 +1472,33 @@ class MCPClient:
     async def list_resources(self, *, raise_on_error: bool = False) -> list[Resource]:
         return (await self.list_resources_result(raise_on_error=raise_on_error)).resources
 
-    async def list_resources_result(self, *, raise_on_error: bool = False) -> ListResourcesResult:
+    async def list_resources_result(
+        self, *, raise_on_error: bool = False, for_owner_lookup: bool = False
+    ) -> ListResourcesResult:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
         async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
             capabilities: Final = session.server_capabilities
+            empty: Final = (
+                ListResourcesResult(resources=[], ttl_ms=0) if for_owner_lookup else ListResourcesResult(resources=[])
+            )
             if capabilities is not None and capabilities.resources is None:
-                return ListResourcesResult(resources=[])
+                return empty
+
+            async def fetch_page(params: PaginatedRequestParams | None) -> ListResourcesResult:
+                page: Final = await session.list_resources(params=params)
+                # Legacy sessions strip ttlMs before parsing. A stripped hint must not become a default TTL.
+                if for_owner_lookup and _owner_listing_ttl_present.get() and "ttl_ms" not in page.model_fields_set:
+                    return page.model_copy(update={"ttl_ms": 0})
+                return page
+
             try:
                 items, freshness = await self._list_optional_pages(
-                    lambda params: session.list_resources(params=params), lambda page: page.resources
+                    fetch_page, lambda page: page.resources, preserve_ttl_omission=for_owner_lookup
                 )
+                if "ttl_ms" not in freshness.model_fields_set:
+                    return ListResourcesResult(resources=items, cache_scope=freshness.cache_scope)
                 return ListResourcesResult(resources=items, ttl_ms=freshness.ttl_ms, cache_scope=freshness.cache_scope)
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
@@ -1456,10 +1506,17 @@ class MCPClient:
                 verbose_logger.debug(
                     "MCP client list_resources is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourcesResult(resources=[])
+                return empty
 
         try:
-            result: Final = await self._run_optional_discovery(_list_resources_operation)
+            token: Final = _owner_listing_ttl_present.set(False) if for_owner_lookup else None
+            try:
+                result: Final = await self._run_optional_discovery(
+                    _list_resources_operation, preserve_ttl_omission=for_owner_lookup
+                )
+            finally:
+                if token is not None:
+                    _owner_listing_ttl_present.reset(token)
             resource_count: Final = len(result.resources)
             resource_names: Final = [resource.name for resource in result.resources]
             verbose_logger.info(
