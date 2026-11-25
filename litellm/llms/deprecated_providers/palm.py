@@ -1,5 +1,5 @@
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 
@@ -25,7 +25,7 @@ class PalmConfig:
     """
 
     context: str | None = None
-    examples: list | None = None
+    examples: list[object] | None = None
     temperature: float | None = None
     candidate_count: int | None = None
     top_k: int | None = None
@@ -35,7 +35,7 @@ class PalmConfig:
     def __init__(
         self,
         context: str | None = None,
-        examples: list | None = None,
+        examples: Sequence[object] | None = None,
         temperature: float | None = None,
         candidate_count: int | None = None,
         top_k: int | None = None,

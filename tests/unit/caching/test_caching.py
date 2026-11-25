@@ -1,12 +1,16 @@
 import asyncio
+import copy
 import hashlib
 import json
 import logging
 import re
+import time
 import traceback
 import tracemalloc
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, UserDict
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from enum import Enum
 from functools import reduce
@@ -17,19 +21,27 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import httpx
 import pytest
 import respx
+from opentelemetry.trace import NonRecordingSpan, SpanContext
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm import acompletion, aembedding, completion, embedding
+from litellm import CustomLLM, acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
-from litellm.caching.caching import Cache, CacheMode, response_cache_phase
+from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, SEMANTIC_CACHE_POLICY_KEY
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import (
+    DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
+    EMBEDDING_CACHE_FORMAT_VERSION,
+    LiteLLMCacheType,
+    SemanticCacheScope,
+)
+from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -47,6 +59,15 @@ def redis_client_without_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("redis.Redis.info", lambda *args, **kwargs: {"redis_version": "7.2.0"})
     monkeypatch.setattr("redis.Redis.ping", lambda *args, **kwargs: True)
     monkeypatch.setattr("redis.asyncio.Redis.ping", AsyncMock(return_value=True))
+
+
+@pytest.fixture
+def redis_response_cache_clients(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock]:
+    sync_client: Final = MagicMock(info=MagicMock(return_value={"redis_version": "7.2.0"}))
+    async_client: Final = MagicMock(ping=AsyncMock(return_value=True))
+    monkeypatch.setattr("litellm._redis.get_redis_client", lambda **_: sync_client)
+    monkeypatch.setattr("litellm._redis.get_redis_async_client", lambda **_: async_client)
+    return sync_client, async_client
 
 
 def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
@@ -135,6 +156,40 @@ def test_get_per_item_prompt_tokens_distributes_with_remainder():
     per_item = [cache._get_per_item_prompt_tokens(result, i) for i in range(3)]
     assert sum(per_item) == 10  # 4 + 3 + 3
     assert per_item == [4, 3, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("item_usage", [[{"prompt_tokens": 1}, {"prompt_tokens": 2}], None])
+async def test_an_upstream_item_usage_key_still_caches_each_embedding_input(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, item_usage: object
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post("http://upstream.test/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": index, "embedding": [0.1, 0.2]} for index in range(2)],
+                "model": "m",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                "item_usage": item_usage,
+            },
+        )
+    )
+
+    async def embed(input: Sequence[str]) -> EmbeddingResponse:
+        return await aembedding(
+            model="openai_like/m", input=input, api_base="http://upstream.test/v1", api_key="upstream-test-key"
+        )
+
+    await embed(["alpha", "beta"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    hit: Final = await embed(["alpha"])
+
+    assert route.call_count == 1
+    assert hit.usage.prompt_tokens == 2
 
 
 def _semantic_cache(**cache_kwargs):
@@ -485,6 +540,30 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 
+def _request_span(trace_id: int) -> NonRecordingSpan:
+    return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=trace_id, is_remote=False))
+
+
+@pytest.mark.parametrize("provider_specific_params_keyed", [True, False])
+def test_cache_key_ignores_the_per_request_otel_span(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "openai/mock-model", "messages": [{"role": "user", "content": "hi"}]}
+    first_span: Final = _request_span(1)
+    second_span: Final = _request_span(2)
+    assert repr(first_span) != repr(second_span)
+
+    first_key: Final = cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=first_span)
+
+    assert cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=second_span) == first_key
+    assert cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=None) == first_key
+    assert (cache.get_cache_key(**request, my_provider_param="b", parent_otel_span=first_span) != first_key) is (
+        provider_specific_params_keyed
+    )
+
+
 def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     request: Final = {
@@ -525,6 +604,309 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_bod
     assert cache.get_cache_key(**request, extra_body={"top_k": 5, "return_token_ids": True}) != other_extra_body_key
     assert cache.get_cache_key(**request, extra_body={"return_token_ids": False}) == plain_key
     assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
+
+
+@pytest.mark.parametrize(
+    "audio_format_ask",
+    [
+        {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}},
+        {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}},
+        {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}},
+        {"extra_body": {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}}},
+        {"extra_body": {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}}},
+    ],
+    ids=["responseFormat", "generationConfig", "generation_config", "extra_body-camelCase", "extra_body-snake_case"],
+)
+def test_cache_key_tells_apart_requests_that_name_a_gemini_audio_format(audio_format_ask: dict[str, object]) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash-tts",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "modalities": ["audio"],
+        "audio": {"voice": "Kore"},
+    }
+
+    assert cache.get_cache_key(**request, **audio_format_ask) != cache.get_cache_key(**request)
+
+
+_EXTRA_BODY_REQUEST: Final = MappingProxyType(
+    {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "extra-body"}]}
+)
+_LARGE_EXTRA_BODY_TEXT: Final = "x" * 70_000
+
+
+def _as_pair_list(body: Mapping[str, object]) -> Sequence[tuple[str, object]]:
+    return list(body.items())
+
+
+def _as_pair_tuple(body: Mapping[str, object]) -> Sequence[tuple[str, object]]:
+    return tuple(body.items())
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ({"chat_template_kwargs": {"enable_thinking": True}}, {"chat_template_kwargs": {"enable_thinking": False}}),
+        ({"top_k": 0}, None),
+        ({"top_k": None}, {}),
+        ({"top_k": False}, {"top_k": 0}),
+        ({"chat_template_kwargs": {}}, {}),
+        ({"stop_token_ids": [1, 2]}, {"stop_token_ids": [2, 1]}),
+        ({"stop_token_ids": (1,)}, {"stop_token_ids": [1]}),
+        ({"guided_regex": b"a"}, {"guided_regex": b"b"}),
+        ({"prompt": _LARGE_EXTRA_BODY_TEXT + "a"}, {"prompt": _LARGE_EXTRA_BODY_TEXT + "b"}),
+        ({"top_k": 5, "return_token_ids": True}, {"return_token_ids": True}),
+        ({"top_k": 5, "return_token_ids": False}, None),
+    ],
+    ids=[
+        "nested_bool",
+        "zero",
+        "null",
+        "false_vs_zero",
+        "empty_nested_dict",
+        "list_order",
+        "tuple_vs_list",
+        "bytes",
+        "large_string_tail",
+        "beside_token_ids",
+        "beside_falsy_token_ids",
+    ],
+)
+def test_default_cache_key_tells_apart_requests_whose_extra_body_differs(
+    monkeypatch: pytest.MonkeyPatch, first: object, second: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    first_key: Final = cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=first)
+
+    assert first_key != cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=second)
+    assert first_key == cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=copy.deepcopy(first))
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        None,
+        {},
+        "top_k=5",
+        [],
+        (),
+        [("return_token_ids", False), ("continuation_token", "")],
+        [("top_k",)],
+        [("top_k", 5, 6)],
+        [(5, "top_k")],
+        ["a"],
+        ["abc"],
+        [("top_k", 5), ("min_p",)],
+        {"return_token_ids": False},
+        {"continuation_token": ""},
+        {"return_token_ids": None, "continuation_token": ""},
+    ],
+    ids=[
+        "none",
+        "empty",
+        "string",
+        "empty_pair_list",
+        "empty_pair_tuple",
+        "falsy_token_id_pairs",
+        "short_pair",
+        "long_pair",
+        "non_string_pair_key",
+        "short_string_item",
+        "long_string_item",
+        "one_malformed_pair",
+        "falsy_token_ids",
+        "empty_continuation",
+        "falsy_legacy_fields",
+    ],
+)
+def test_default_cache_key_ignores_extra_body_that_adds_nothing_to_the_request(
+    monkeypatch: pytest.MonkeyPatch, extra_body: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    assert cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body) == cache.get_cache_key(
+        **_EXTRA_BODY_REQUEST
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_specific_params_keyed", "extra_body", "extra_body_preimage"),
+    [
+        (False, {"return_token_ids": True}, "extra_body.return_token_ids: True"),
+        (False, {"continuation_token": "dG9r", "return_token_ids": False}, "extra_body.continuation_token: dG9r"),
+        (False, {"return_token_ids": True, "top_k": 5}, "extra_body: {'top_k': 5}extra_body.return_token_ids: True"),
+        (True, {}, "extra_body: {}"),
+        (True, {"return_token_ids": False}, "extra_body: {'return_token_ids': False}"),
+        (
+            True,
+            {"return_token_ids": True, "top_k": 5},
+            "extra_body: {'return_token_ids': True, 'top_k': 5}extra_body.return_token_ids: True",
+        ),
+        (True, "top_k=5", "extra_body: top_k=5"),
+        (
+            True,
+            MappingProxyType({"return_token_ids": True, "top_k": 5}),
+            "extra_body: {'return_token_ids': True, 'top_k': 5}",
+        ),
+        (True, UserDict({"return_token_ids": True, "top_k": 5}), "extra_body: {'return_token_ids': True, 'top_k': 5}"),
+        (
+            False,
+            MappingProxyType({"return_token_ids": True, "top_k": 5}),
+            "extra_body: {'return_token_ids': True, 'top_k': 5}",
+        ),
+        (False, [("return_token_ids", True), ("top_k", 5)], "extra_body: {'return_token_ids': True, 'top_k': 5}"),
+        (True, [("return_token_ids", True), ("top_k", 5)], "extra_body: [('return_token_ids', True), ('top_k', 5)]"),
+    ],
+    ids=[
+        "default_token_ids",
+        "default_continuation",
+        "default_beside_token_ids",
+        "flag_empty",
+        "flag_falsy_token_ids",
+        "flag_beside_token_ids",
+        "flag_string",
+        "flag_mapping_proxy",
+        "flag_user_dict",
+        "default_mapping_proxy_beside_token_ids",
+        "default_pairs_beside_token_ids",
+        "flag_pairs",
+    ],
+)
+def test_extra_body_cache_key_keeps_its_preimage(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, extra_body: object, extra_body_preimage: str
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    expected: Final = hashlib.sha256(f"model: mmessages: hi{extra_body_preimage}".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+
+
+@pytest.mark.parametrize("mapping_type", [MappingProxyType, UserDict])
+def test_default_cache_key_reads_extra_body_from_any_mapping(
+    monkeypatch: pytest.MonkeyPatch, mapping_type: Callable[[Mapping[str, object]], Mapping[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    thinking: Final = {"chat_template_kwargs": {"enable_thinking": True}}
+    no_thinking: Final = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    def key_of(extra_body: Mapping[str, object] | None) -> str:
+        return cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert key_of(mapping_type(thinking)) == key_of(thinking)
+    assert key_of(mapping_type(no_thinking)) == key_of(no_thinking)
+    assert key_of(mapping_type(thinking)) != key_of(mapping_type(no_thinking))
+    assert key_of(mapping_type({})) == key_of(None)
+    assert key_of(mapping_type({"return_token_ids": False, "continuation_token": ""})) == key_of(None)
+    assert key_of(mapping_type({"return_token_ids": True})) != key_of(None)
+    assert key_of(mapping_type({"continuation_token": "a"})) != key_of(mapping_type({"continuation_token": "b"}))
+
+
+@pytest.mark.parametrize("pair_sequence", [list, tuple])
+def test_default_cache_key_reads_extra_body_given_as_key_value_pairs(
+    monkeypatch: pytest.MonkeyPatch, pair_sequence: Callable[[Iterable[Sequence[object]]], Sequence[Sequence[object]]]
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    thinking_pairs: Final = pair_sequence([("chat_template_kwargs", {"enable_thinking": True})])
+    sent_pairs: Final = copy.deepcopy(thinking_pairs)
+
+    def key_of(extra_body: object) -> str:
+        return cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert key_of(thinking_pairs) == key_of({"chat_template_kwargs": {"enable_thinking": True}})
+    assert key_of(thinking_pairs) != key_of(pair_sequence([("chat_template_kwargs", {"enable_thinking": False})]))
+    assert thinking_pairs == sent_pairs
+    assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) == key_of({"top_k": 5})
+    assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) != key_of({"top_k": 1})
+    assert key_of(pair_sequence([("return_token_ids", True)])) != key_of(None)
+    assert key_of(pair_sequence([["top_k", 5]])) == key_of({"top_k": 5})
+    assert key_of(pair_sequence(["ab"])) == key_of({"a": "b"})
+    assert key_of(pair_sequence(["ab"])) != key_of(pair_sequence(["ac"]))
+
+
+def test_default_cache_key_leaves_one_shot_extra_body_iterators_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    pairs: Final = iter([("top_k", 5)])
+
+    assert cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=pairs) == cache.get_cache_key(**_EXTRA_BODY_REQUEST)
+    assert next(pairs) == ("top_k", 5)
+
+
+def test_extra_body_keeps_preset_keys_and_namespaces_in_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    extra_body: Final = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    unscoped_key: Final = cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert (
+        cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body, litellm_params={"preset_cache_key": "preset"})
+        == "preset"
+    )
+    assert (
+        cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body, cache={"namespace": "team-a"})
+        == f"team-a:{unscoped_key}"
+    )
+
+
+def test_semantic_cache_scope_separates_extra_body_but_still_ignores_the_prompt() -> None:
+    cache: Final = _semantic_cache()
+    sky, colour = _SEMANTICALLY_IDENTICAL_PROMPTS
+
+    def scope_key(messages: object, api_key: str, enable_thinking: bool) -> str:
+        return cache.get_cache_key(
+            model="gpt-4o-mini",
+            messages=messages,
+            metadata={"user_api_key": api_key},
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
+        )
+
+    assert scope_key(sky, "hash-A", True) == scope_key(colour, "hash-A", True)
+    assert scope_key(sky, "hash-A", True) != scope_key(colour, "hash-A", False)
+    assert scope_key(sky, "hash-A", True) != scope_key(colour, "hash-B", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+@pytest.mark.parametrize("extra_body_type", [dict, MappingProxyType, UserDict, _as_pair_list, _as_pair_tuple])
+async def test_response_cache_answers_each_extra_body_with_its_own_reply(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_specific_params_keyed: bool,
+    extra_body_type: Callable[[Mapping[str, object]], object],
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    async def ask(enable_thinking: bool, mock_response: str) -> tuple[str, object]:
+        response: Final = await acompletion(
+            model="hosted_vllm/qwen",
+            api_base="http://localhost:8000",
+            messages=[{"role": "user", "content": "extra-body"}],
+            extra_body=extra_body_type({"chat_template_kwargs": {"enable_thinking": enable_thinking}}),
+            mock_response=mock_response,
+        )
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        assert isinstance(response, litellm.ModelResponse), response
+        return _completion_text(response), response._hidden_params.get("cache_hit")
+
+    replies: Final = (
+        await ask(True, "WITH-THINKING"),
+        await ask(False, "NO-THINKING"),
+        await ask(True, "not served, cached reply expected"),
+        await ask(False, "not served, cached reply expected"),
+    )
+
+    assert replies == (
+        ("WITH-THINKING", None),
+        ("NO-THINKING", None),
+        ("WITH-THINKING", True),
+        ("NO-THINKING", True),
+    )
 
 
 def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
@@ -1072,6 +1454,17 @@ _FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4
         pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
         pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
         pytest.param({"input": [_FILE_BLOCK_ITEM] * 5}, True, id="embedding-file-blocks-are-not-messages"),
+        pytest.param(
+            {"input": [{"type": "text", "text": "chunk"}] * 5}, True, id="embedding-text-blocks-are-not-messages"
+        ),
+        pytest.param(
+            {"input": [{"type": ["message"], "content": "hi"}] * 5}, False, id="unhashable-item-types-still-count"
+        ),
+        pytest.param(
+            {"input": [{"type": "message", "role": "user", "content": "hi"}] * 5},
+            False,
+            id="five-typed-responses-messages-skip-the-cache",
+        ),
     ],
 )
 def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:
@@ -1535,6 +1928,257 @@ async def test_caching_with_cache_controls(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_scoped_ttl_rejects_old_exact_cache_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    result: Final = {"id": "stored-response"}
+    cache.cache.set_cache("existing-entry", {"timestamp": 100.0, "response": result})
+    scoped: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+
+    assert cache.get_cache(cache_key="existing-entry", cache=scoped) is None
+    assert await cache.async_get_cache(cache_key="existing-entry", cache=scoped) is None
+    assert cache.get_cache(cache_key="existing-entry") == result
+    assert cache.get_cache(cache_key="existing-entry", cache={"s-maxage": 0}) == result
+    large_age: Final = {"s-maxage": 10**400}
+    assert cache.get_cache(cache_key="existing-entry", cache=large_age) == result
+    assert await cache.async_get_cache(cache_key="existing-entry", cache=large_age) == result
+    assert cache.get_cache(cache_key="existing-entry", cache={**scoped, **large_age}) is None
+    relaxed: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=20))}
+    assert cache.get_cache(cache_key="existing-entry", cache=relaxed) == result
+    assert cache.get_cache(cache_key="existing-entry", cache={**relaxed, "s-maxage": 0}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("max_age", "accept_fresh"), [("nan", True), ("inf", True), ("-inf", False)])
+async def test_nonfinite_request_max_age_cannot_extend_scoped_ttl(
+    monkeypatch: pytest.MonkeyPatch, max_age: str, accept_fresh: bool
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    fresh: Final = {"id": "fresh-response"}
+    cache.cache.set_cache("fresh", {"timestamp": 109.0, "response": fresh})
+    cache.cache.set_cache("stale", {"timestamp": 100.0, "response": {"id": "stale-response"}})
+    scoped: Final = {
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5)),
+        "s-max-age": max_age,
+    }
+
+    expected: Final = fresh if accept_fresh else None
+    assert cache.get_cache(cache_key="fresh", cache=scoped) == expected
+    assert await cache.async_get_cache(cache_key="fresh", cache=scoped) == expected
+    assert cache.get_cache(cache_key="stale", cache=scoped) is None
+    assert await cache.async_get_cache(cache_key="stale", cache=scoped) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize("original_ttl", [2, 120])
+async def test_scoped_ttl_expires_replaced_local_entries_for_unscoped_readers(
+    monkeypatch: pytest.MonkeyPatch, async_write: bool, original_ttl: int
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 100.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, ttl=120)
+    cache.add_cache({"id": "old-response"}, cache_key="existing-entry", cache={"ttl": original_ttl})
+    scoped: Final = {
+        "ttl": 120,
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5)),
+    }
+    replacement: Final = {"id": "new-response"}
+    if async_write:
+        await cache.async_add_cache(replacement, cache_key="existing-entry", cache=scoped)
+    else:
+        cache.add_cache(replacement, cache_key="existing-entry", cache=scoped)
+
+    monkeypatch.setattr(time, "time", lambda: 104.0)
+    assert cache.get_cache(cache_key="existing-entry") == replacement
+    monkeypatch.setattr(time, "time", lambda: 105.0)
+    assert cache.get_cache(cache_key="existing-entry") is None
+    assert await cache.async_get_cache(cache_key="existing-entry") is None
+
+
+@pytest.mark.asyncio
+async def test_disabled_scope_does_not_overwrite_existing_exact_cache_entry() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    result: Final = {"id": "stored-response"}
+    cache.add_cache(result, cache_key="existing-entry")
+    scoped: Final = {
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(enabled=False))
+    }
+
+    cache.add_cache({"id": "sync-write"}, cache_key="existing-entry", cache=scoped)
+    await cache.async_add_cache({"id": "async-write"}, cache_key="existing-entry", cache=scoped)
+
+    assert cache.get_cache(cache_key="existing-entry") == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "ttl", "expected_id"),
+    [(None, None, "stored-response"), (False, None, None), (True, 5, "fresh-response"), (True, 15, "stored-response")],
+)
+async def test_batched_redis_reader_applies_scoped_policy(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool | None, ttl: int | None, expected_id: str | None
+) -> None:
+    from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
+
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+    monkeypatch.setattr(litellm, "cache", cache)
+    reader: Final = PROXY_BatchRedisRequests()
+    worker_store: Final = InMemoryCache()
+    reader.in_memory_cache = worker_store
+    worker_store.set_cache("existing-entry", {"timestamp": 100.0, "response": {"id": "stored-response"}})
+    cache.cache.set_cache("existing-entry", {"timestamp": 109.0, "response": {"id": "fresh-response"}})
+    controls: Final = (
+        {}
+        if enabled is None
+        else {
+            SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(
+                scope="team", params=SemanticCacheParams(enabled=enabled, ttl=ttl)
+            )
+        }
+    )
+
+    assert await cache.async_get_cache(cache_key="existing-entry", cache=controls) == (
+        {"id": expected_id} if expected_id is not None else None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("stored_ttl", [None, 5])
+async def test_redis_response_cache_reads_refreshed_entry_after_worker_copy_expires(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_response_cache_clients: tuple[MagicMock, MagicMock],
+    sync: bool,
+    stored_ttl: int | None,
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert isinstance(cache.cache, RedisCache)
+    worker: Final = InMemoryCache()
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=worker)
+    stale: Final = {"timestamp": 100.0, "response": {"id": "worker-response"}}
+    worker.set_cache("shared-entry", {**stale, "response_cache_ttl": stored_ttl})
+    fresh: Final = {"id": "redis-response"}
+    stored: Final = json.dumps({"timestamp": 109.0, "response": fresh})
+    redis_get: Final = MagicMock(return_value=stored) if sync else AsyncMock(return_value=stored)
+    sync_client, async_client = redis_response_cache_clients
+    client: Final = sync_client if sync else async_client
+    client.get = redis_get
+    controls: Final = (
+        {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+        if stored_ttl is None
+        else {}
+    )
+
+    if sync:
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+    else:
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+    assert redis_get.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+async def test_redis_response_cache_keeps_worker_copy_when_shared_entry_is_stale(
+    monkeypatch: pytest.MonkeyPatch, redis_response_cache_clients: tuple[MagicMock, MagicMock], sync: bool
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert isinstance(cache.cache, RedisCache)
+    worker: Final = InMemoryCache()
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=worker)
+    worker_response: Final = {"id": "worker-response"}
+    worker.set_cache("shared-entry", {"timestamp": 104.0, "response": worker_response})
+    stored: Final = json.dumps({"timestamp": 100.0, "response": {"id": "redis-response"}})
+    redis_get: Final = MagicMock(return_value=stored) if sync else AsyncMock(return_value=stored)
+    sync_client, async_client = redis_response_cache_clients
+    client: Final = sync_client if sync else async_client
+    client.get = redis_get
+    controls: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+
+    if sync:
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) is None
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry") == worker_response
+    else:
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) is None
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry") == worker_response
+    assert redis_get.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_path", ["sync", "async", "batched"])
+async def test_redis_response_cache_keeps_worker_write_during_shared_read(
+    monkeypatch: pytest.MonkeyPatch, redis_response_cache_clients: tuple[MagicMock, MagicMock], read_path: str
+) -> None:
+    from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
+
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert isinstance(cache.cache, RedisCache)
+    worker: Final = InMemoryCache()
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=worker)
+    worker.set_cache("shared-entry", {"timestamp": 104.0, "response": {"id": "old-worker-response"}})
+    worker_response: Final = {"id": "new-worker-response"}
+    redis_response: Final = {"id": "redis-response"}
+    controls: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+
+    def read_redis(_: str) -> str:
+        worker.set_cache("shared-entry", {"timestamp": 109.0, "response": worker_response})
+        return json.dumps({"timestamp": 107.0, "response": redis_response})
+
+    sync_client, async_client = redis_response_cache_clients
+    if read_path == "sync":
+        sync_client.get = MagicMock(side_effect=read_redis)
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == redis_response
+    else:
+        async_client.get = AsyncMock(side_effect=read_redis)
+        if read_path == "batched":
+            monkeypatch.setattr(litellm, "cache", cache)
+            reader: Final = PROXY_BatchRedisRequests()
+            reader.in_memory_cache = worker
+            assert await reader.async_get_cache(cache_key="shared-entry", cache=controls) == redis_response
+        else:
+            assert await cache.async_get_cache(
+                dynamic_cache_object=dual, cache_key="shared-entry", cache=controls
+            ) == redis_response
+    assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry") == worker_response
+
+
+@pytest.mark.asyncio
+async def test_scoped_ttl_reaches_redis_when_batching_is_configured(
+    monkeypatch: pytest.MonkeyPatch, redis_response_cache_clients: tuple[MagicMock, MagicMock]
+) -> None:
+    monkeypatch.setattr(litellm, "default_redis_ttl", 60)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", redis_flush_size=100)
+    pipeline: Final = MagicMock()
+    pipeline.__aenter__.return_value = pipeline
+    pipeline.execute = AsyncMock()
+    _, async_client = redis_response_cache_clients
+    async_client.pipeline.return_value = pipeline
+    scoped: Final = {
+        "ttl": 120,
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=30)),
+    }
+
+    await cache.async_add_cache({"id": "buffered-response"}, cache_key="existing-entry")
+    pipeline.set.assert_not_called()
+    await cache.async_add_cache({"id": "scoped-response"}, cache_key="existing-entry", cache=scoped)
+
+    pipeline.execute.assert_awaited_once()
+    assert [
+        (command.kwargs["name"], json.loads(command.kwargs["value"])["response"], command.kwargs["ex"])
+        for command in pipeline.set.call_args_list
+    ] == [
+        ("existing-entry", {"id": "buffered-response"}, timedelta(seconds=60)),
+        ("existing-entry", {"id": "scoped-response"}, timedelta(seconds=30)),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_embedding_caching_redis_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     mock_pipeline: Final = AsyncMock()
     mock_set: Final = AsyncMock()
@@ -1734,6 +2378,18 @@ def test_cache_key_stays_the_sha256_of_the_formatted_request(case: object) -> No
     assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages=case, stream=True) == expected
 
 
+@pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+@pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
+def test_extra_body_cache_key_formats_any_accepted_value_like_the_request(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, case: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    extra_body: Final = {"payload": case}
+    expected: Final = hashlib.sha256(f"model: mmessages: hiextra_body: {extra_body}".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+
+
 def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:
     with pytest.raises(UnicodeEncodeError):
         Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="\ud800", stream=True)
@@ -1770,3 +2426,380 @@ def test_cache_key_for_large_image_payloads_does_not_copy_the_whole_request() ->
     assert added_peak < payload_bytes / 4, (
         f"peak {added_peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
     )
+
+
+class _CountingEmbedder(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: int = 0
+
+    def _respond(self, model: str, input: list[str]) -> EmbeddingResponse:
+        self.calls += 1
+        return EmbeddingResponse(
+            model=model,
+            data=[
+                Embedding(embedding=[float(self.calls)], index=idx, object="embedding") for idx, _ in enumerate(input)
+            ],
+        )
+
+    def embedding(self, model: str, input: list[str], *args: object, **kwargs: object) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+    async def aembedding(self, model: str, input: list[str], *args: object, **kwargs: object) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+
+@pytest.fixture
+def counting_embedder(monkeypatch: pytest.MonkeyPatch) -> _CountingEmbedder:
+    embedder: Final = _CountingEmbedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "count-embed", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "count-embed"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "count-embed"])
+    return embedder
+
+
+_EMBED_REQUEST: Final = MappingProxyType({"model": "count-embed/m", "input": ["alpha", "beta"]})
+_COMPLETION_REQUEST: Final = MappingProxyType(
+    {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "excluded call types"}]}
+)
+_EMBEDDING_CALL_TYPES: Final = ("embedding", "aembedding")
+_CALL_TYPE_EXCLUSION_CASES: Final = (
+    pytest.param({}, True, True, id="default"),
+    pytest.param({"excluded_call_types": []}, True, True, id="empty_exclusion"),
+    pytest.param({"excluded_call_types": list(_EMBEDDING_CALL_TYPES)}, False, True, id="embeddings_excluded"),
+    pytest.param({"excluded_call_types": ["completion", "acompletion"]}, True, False, id="completions_excluded"),
+    pytest.param(
+        {
+            "supported_call_types": [*_EMBEDDING_CALL_TYPES, "completion", "acompletion"],
+            "excluded_call_types": list(_EMBEDDING_CALL_TYPES),
+        },
+        False,
+        True,
+        id="custom_supported_list",
+    ),
+    pytest.param(
+        {"supported_call_types": None, "excluded_call_types": list(_EMBEDDING_CALL_TYPES)},
+        False,
+        False,
+        id="none_supported",
+    ),
+    pytest.param(
+        {"supported_call_types": [], "excluded_call_types": list(_EMBEDDING_CALL_TYPES)},
+        False,
+        False,
+        id="empty_supported",
+    ),
+)
+
+
+@asynccontextmanager
+async def _owned_cache_writes() -> AsyncIterator[Callable[[], Awaitable[None]]]:
+    before: Final = frozenset(_PENDING_CACHE_WRITES)
+
+    async def drain() -> None:
+        owned: Final = frozenset(_PENDING_CACHE_WRITES) - before
+        if not owned:
+            return
+        _, unfinished = await asyncio.wait(owned, timeout=CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+        for task in unfinished:
+            task.cancel()
+        await asyncio.gather(*unfinished, return_exceptions=True)
+
+    try:
+        yield drain
+    finally:
+        await drain()
+
+
+def _completion_text(response: object) -> str:
+    assert isinstance(response, litellm.ModelResponse), response
+    choice: Final = response.choices[0]
+    assert isinstance(choice, litellm.Choices), choice
+    return str(choice.message.content)
+
+
+@pytest.mark.parametrize(("cache_kwargs", "embeddings_cached", "completions_cached"), _CALL_TYPE_EXCLUSION_CASES)
+def test_excluded_call_types_decide_sync_cache_reads_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    cache_kwargs: dict[str, object],
+    embeddings_cached: bool,
+    completions_cached: bool,
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, **cache_kwargs))
+
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == (1 if embeddings_cached else 2)
+    assert (embedding_entries > 0) is embeddings_cached
+    assert _completion_text(second) == ("first" if completions_cached else "second")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cache_kwargs", "embeddings_cached", "completions_cached"), _CALL_TYPE_EXCLUSION_CASES)
+async def test_excluded_call_types_decide_async_cache_reads_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    cache_kwargs: dict[str, object],
+    embeddings_cached: bool,
+    completions_cached: bool,
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, **cache_kwargs))
+
+    async with _owned_cache_writes() as drain_owned_writes:
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        embedding_entries: Final = len(backend.cache_dict)
+        await acompletion(**_COMPLETION_REQUEST, mock_response="first")
+        await drain_owned_writes()
+        second: Final = await acompletion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == (1 if embeddings_cached else 2)
+    assert (embedding_entries > 0) is embeddings_cached
+    assert _completion_text(second) == ("first" if completions_cached else "second")
+
+
+@pytest.mark.asyncio
+async def test_excluded_call_types_bypass_embeddings_cached_before_the_exclusion(
+    monkeypatch: pytest.MonkeyPatch, counting_embedder: _CountingEmbedder
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend))
+
+    async with _owned_cache_writes() as drain_owned_writes:
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        primed: Final = dict(backend.cache_dict)
+        monkeypatch.setattr(
+            litellm,
+            "cache",
+            Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, excluded_call_types=list(_EMBEDDING_CALL_TYPES)),
+        )
+        response: Final = await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+
+    assert len(primed) == len(_EMBED_REQUEST["input"])
+    assert counting_embedder.calls == 2
+    assert [item["embedding"] for item in response.data] == [[2.0], [2.0]]
+    assert backend.cache_dict == primed
+
+
+@pytest.mark.parametrize("configure_cache", [enable_cache, update_cache], ids=["enable_cache", "update_cache"])
+def test_cache_setup_helpers_pass_excluded_call_types_to_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    configure_cache: Callable[..., None],
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "input_callback", list(litellm.input_callback))
+    monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+    backend: Final = InMemoryCache()
+
+    configure_cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=list(_EMBEDDING_CALL_TYPES), _backend=backend)
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == 2
+    assert embedding_entries == 0
+    assert _completion_text(second) == "first"
+
+
+def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact() -> None:
+    supported: Final = [*_EMBEDDING_CALL_TYPES, "completion"]
+    excluded: Final = list(_EMBEDDING_CALL_TYPES)
+
+    Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported, excluded_call_types=excluded)
+    Cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=excluded)
+
+    assert supported == ["embedding", "aembedding", "completion"]
+    assert excluded == ["embedding", "aembedding"]
+    assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+
+class _FloatConversionFails:
+    def __init__(self, error: type[Exception]) -> None:
+        self.error = error
+
+    def __float__(self) -> float:
+        raise self.error("ttl conversion failed")
+
+
+class _ManualClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _refresh_local_entry(
+    async_write: bool, default_ttl: int | None, refresh_controls: dict[str, object], **write_kwargs: object
+) -> tuple[Cache, _ManualClock, float]:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local", ttl=default_ttl)
+    cache.cache = InMemoryCache(clock=clock)
+    first_written_at: Final = clock.now
+    cache.add_cache({"id": "first"}, cache_key="entry", cache={"ttl": 60})
+    clock.now += 5
+    refresh_kwargs: Final = {
+        "cache_key": "entry",
+        "cache": {**refresh_controls, "no-cache": True},
+        **write_kwargs,
+    }
+    if async_write:
+        await cache.async_add_cache({"id": "refreshed"}, **refresh_kwargs)
+    else:
+        cache.add_cache({"id": "refreshed"}, **refresh_kwargs)
+    return cache, clock, first_written_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize(("request_ttl", "lifetime"), [(10, 10.0), (600, 600.0), ("5", 5.0), (2.5, 2.5)])
+async def test_local_response_cache_refresh_restarts_entry_lifetime_from_request_ttl(
+    async_write: bool, request_ttl: object, lifetime: float
+) -> None:
+    cache, clock, first_written_at = await _refresh_local_entry(async_write, None, {"ttl": request_ttl})
+    refreshed_at: Final = first_written_at + 5
+
+    clock.now = refreshed_at + lifetime - 1
+    assert cache.get_cache(cache_key="entry") == {"id": "refreshed"}
+    clock.now = refreshed_at + lifetime + 1
+    assert cache.get_cache(cache_key="entry") is None
+    assert await cache.async_get_cache(cache_key="entry") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize(
+    ("default_ttl", "refresh_controls", "write_kwargs"),
+    [
+        *(
+            (None, {"ttl": ttl}, {})
+            for ttl in (
+                "abc",
+                [1],
+                None,
+                0,
+                -1,
+                "nan",
+                "inf",
+                float("inf"),
+                10**400,
+                True,
+                False,
+                _FloatConversionFails(TypeError),
+                _FloatConversionFails(RuntimeError),
+            )
+        ),
+        (None, {}, {}),
+        (10, {}, {}),
+        (None, {"ttl": 10}, {"replace_ttl": False}),
+    ],
+)
+async def test_local_response_cache_refresh_without_usable_request_ttl_keeps_live_entry_expiry(
+    caplog: pytest.LogCaptureFixture,
+    async_write: bool,
+    default_ttl: int | None,
+    refresh_controls: dict[str, object],
+    write_kwargs: dict[str, object],
+) -> None:
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        cache, clock, first_written_at = await _refresh_local_entry(
+            async_write, default_ttl, refresh_controls, **write_kwargs
+        )
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    clock.now = first_written_at + 59
+    assert cache.get_cache(cache_key="entry") == {"id": "refreshed"}
+    clock.now = first_written_at + 61
+    assert cache.get_cache(cache_key="entry") is None
+
+
+@pytest.mark.asyncio
+async def test_local_embedding_cache_refresh_restarts_entry_lifetime_from_request_ttl() -> None:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=clock)
+    request: Final = {"model": "text-embedding-3-small", "input": ["hello"]}
+    await cache.async_add_cache_pipeline(_embedding_response(prompt_tokens=1, num_items=1), **request)
+    clock.now += 5
+    await cache.async_add_cache_pipeline(
+        _embedding_response(prompt_tokens=2, num_items=1), **request, cache={"no-cache": True, "ttl": 10}
+    )
+    entry_key: Final = cache.get_cache_key(model="text-embedding-3-small", input="hello")
+
+    clock.now += 9
+    assert cache.cache.get_cache(entry_key) is not None
+    clock.now += 2
+    assert cache.cache.get_cache(entry_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [TypeError, RuntimeError])
+async def test_local_embedding_cache_refresh_with_unconvertible_request_ttl_keeps_live_entry_expiry(
+    caplog: pytest.LogCaptureFixture, error: type[Exception]
+) -> None:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=clock)
+    request: Final = {"model": "text-embedding-3-small", "input": ["hello"]}
+    await cache.async_add_cache_pipeline(
+        _embedding_response(prompt_tokens=1, num_items=1), **request, cache={"ttl": 60}
+    )
+    clock.now += 5
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await cache.async_add_cache_pipeline(
+            _embedding_response(prompt_tokens=2, num_items=1),
+            **request,
+            cache={"no-cache": True, "ttl": _FloatConversionFails(error)},
+        )
+    entry_key: Final = cache.get_cache_key(model="text-embedding-3-small", input="hello")
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    clock.now += 54
+    refreshed_entry: Final = cache.cache.get_cache(entry_key)
+    assert isinstance(refreshed_entry, dict)
+    assert refreshed_entry["response"]["prompt_tokens"] == 2
+    clock.now += 2
+    assert cache.cache.get_cache(entry_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("refresh_controls", "expires_after_first_write"), [({"ttl": 10}, 15.0), ({}, 600.0)])
+async def test_redis_response_cache_refresh_sets_worker_copy_lifetime_only_from_request_ttl(
+    redis_response_cache_clients: tuple[MagicMock, MagicMock],
+    refresh_controls: dict[str, object],
+    expires_after_first_write: float,
+) -> None:
+    _, async_client = redis_response_cache_clients
+    async_client.set = AsyncMock(return_value=True)
+    async_client.get = AsyncMock(return_value=None)
+    clock: Final = _ManualClock(1_000_000.0)
+    first_written_at: Final = clock.now
+    cache: Final = Cache(type="redis", host="127.0.0.1", port="6379")
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=InMemoryCache(clock=clock))
+    await cache.async_add_cache({"id": "first"}, dynamic_cache_object=dual, cache_key="entry")
+    clock.now += 5
+    refreshed: Final = {"id": "refreshed"}
+    await cache.async_add_cache(
+        refreshed, dynamic_cache_object=dual, cache_key="entry", cache={**refresh_controls, "no-cache": True}
+    )
+
+    clock.now = first_written_at + expires_after_first_write - 1
+    assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="entry") == refreshed
+    clock.now = first_written_at + expires_after_first_write + 1
+    assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="entry") is None
+    assert async_client.set.await_count == 2

@@ -8,6 +8,8 @@ from datetime import datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
+
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.verification_token import (
@@ -21,7 +23,6 @@ from litellm.repositories.base_repository import (
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.rust_bridge._native import RustKeyRepository
-from litellm.types.proxy.auth.user_api_key_auth import LiteLLM_VerificationTokenView
 
 if TYPE_CHECKING:
     from prisma.models import (
@@ -62,6 +63,8 @@ class _PrismaClientView(Protocol):
     def db(self) -> _PrismaVerificationTokenDb: ...
 
 
+_CACHED_KEY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
 _JSON_ENCODED_TOKEN_FIELDS: Final = (
     "aliases",
     "config",
@@ -94,17 +97,15 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     def model_class(self) -> type[LiteLLM_VerificationToken]:
         return LiteLLM_VerificationToken
 
-    async def find_for_auth(
-        self, hashed_token: str, *, use_writer: bool = False
-    ) -> LiteLLM_VerificationTokenView | None:
-        """The key's ``combined_view`` row as auth reads it, read by the Rust repository.
+    async def find_for_auth(self, hashed_token: str, *, use_writer: bool = False) -> Mapping[str, object] | None:
+        """The key as auth reads it and as the auth cache holds it, read by the Rust repository: the
+        ``combined_view`` row shaped into ``UserAPIKeyAuth``'s fields, with no object permission nested.
 
-        A hash rotated away from a key within its grace period answers with the active key's row, so the deprecated
+        A hash rotated away from a key within its grace period answers with the active key, so the deprecated
         token fallback needs no second call. ``use_writer`` reads the writer instead of a replica."""
-        payload: Final = await rust_database.required_repository(RustKeyRepository).find(
-            hashed_token, use_writer=use_writer
+        return _CACHED_KEY.validate_python(
+            await rust_database.required_repository(RustKeyRepository).find(hashed_token, use_writer=use_writer)
         )
-        return rust_database.decode(LiteLLM_VerificationTokenView, payload)
 
     def _to_model(self, record: DbRecord | None) -> LiteLLM_VerificationToken | None:
         """Convert a database record to a VerificationToken model."""

@@ -30,6 +30,7 @@ from litellm.llms.azure.common_utils import (
     get_azure_ad_token_from_entra_id,
     get_azure_ad_token_from_oidc,
     get_azure_ad_token_from_username_password,
+    uses_azure_entra_id_auth,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -1748,6 +1749,74 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
     assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
 
 
+def test_azure_v1_base_without_an_azure_credential_never_sends_the_openai_api_key(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key-meant-for-api-openai-com")
+    route: Final = respx_mock.post(
+        host="no-credential-resource.openai.azure.com", path="/openai/v1/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            },
+        )
+    )
+
+    litellm.completion(
+        model="azure/gpt-4.1-mini",
+        api_base="https://no-credential-resource.openai.azure.com/openai/v1",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert "authorization" not in route.calls.last.request.headers
+
+
+def _embed_on(api_base: str) -> object:
+    return litellm.embedding(model="azure/text-embedding-3-small", api_base=api_base, api_key="k", input=["hi"])
+
+
+def _draw_on(api_base: str) -> object:
+    return litellm.image_generation(model="azure/gpt-image-1", api_base=api_base, api_key="k", prompt="a dot")
+
+
+@pytest.mark.parametrize(
+    ("call", "route_path", "upstream_body"),
+    [
+        pytest.param(
+            _embed_on,
+            "/openai/v1/embeddings",
+            {
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            id="embedding",
+        ),
+        pytest.param(
+            _draw_on, "/openai/v1/images/generations", {"created": 1, "data": [{"b64_json": "aGk="}]}, id="image"
+        ),
+    ],
+)
+def test_azure_openai_v1_base_with_no_api_version_uses_the_v1_api_beyond_chat(
+    respx_mock, monkeypatch, call: Callable[[str], object], route_path: str, upstream_body: dict[str, object]
+):
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+    route: Final = respx_mock.post(host="v1-default-resource.openai.azure.com", path=route_path).mock(
+        return_value=httpx.Response(200, json=upstream_body)
+    )
+
+    call("https://v1-default-resource.openai.azure.com/openai/v1")
+
+    assert route.calls.last.request.url.params.get("api-version") != litellm.AZURE_DEFAULT_API_VERSION
+
+
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
 def test_azure_v1_api_with_azure_ad_token_provider(api_version):
     """
@@ -2489,6 +2558,45 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "environ", "token_refresh_enabled", "expected"),
+    [
+        ({"azure_ad_token": "deployment-token"}, {}, False, True),
+        ({"azure_ad_token_provider": lambda: "token"}, {}, False, True),
+        ({"tenant_id": "t", "client_id": "c", "client_secret": "s"}, {}, False, True),
+        ({}, {"AZURE_TENANT_ID": "t", "AZURE_CLIENT_ID": "c", "AZURE_CLIENT_SECRET": "s"}, False, True),
+        ({"tenant_id": "t", "client_id": "c"}, {"AZURE_CLIENT_SECRET": "s"}, False, True),
+        ({"client_id": "c", "azure_username": "u"}, {"AZURE_PASSWORD": "p"}, False, True),
+        ({}, {}, True, True),
+        ({"tenant_id": "t", "client_id": "c"}, {}, False, False),
+        ({"client_secret": "s"}, {}, False, False),
+        ({"azure_username": "u", "azure_password": "p"}, {}, False, False),
+        ({"tenant_id": None, "client_id": "c", "client_secret": "s"}, {"AZURE_TENANT_ID": "t"}, False, True),
+        ({"tenant_id": "", "client_id": "c", "client_secret": "s"}, {"AZURE_TENANT_ID": "t"}, False, False),
+        ({}, {}, False, False),
+    ],
+    ids=[
+        "ad-token",
+        "ad-token-provider",
+        "service-principal-in-params",
+        "service-principal-in-env",
+        "ids-in-params-secret-in-env",
+        "username-password-split",
+        "token-refresh",
+        "service-principal-missing-secret",
+        "secret-alone",
+        "username-password-missing-client-id",
+        "none-param-falls-back-to-env",
+        "empty-param-does-not-fall-back-to-env",
+        "nothing-set",
+    ],
+)
+def test_uses_azure_entra_id_auth_matches_the_sources_the_azure_client_builds_entra_auth_from(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], token_refresh_enabled: bool, expected: bool
+):
+    assert uses_azure_entra_id_auth(litellm_params, environ, token_refresh_enabled) is expected
 
 
 _ENTRA_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"

@@ -11,9 +11,9 @@ import os
 import ssl
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -35,13 +35,16 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
+from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
+from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connections_on_graceful_goaway
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
     get_ssl_configuration,
     http2_enabled,
 )
+from litellm.types.llms.openai import CreateBatchRequest, CreateFileRequest
 
 
 def _is_plain_dict(value: object) -> bool:
@@ -96,6 +99,181 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
 
+_CreatedT = TypeVar("_CreatedT")
+_CreateRequestT = TypeVar("_CreateRequestT", CreateFileRequest, CreateBatchRequest)
+_RETRY_COUNT_HEADER: Final = "x-stainless-retry-count"
+_CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING: Final = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+    httpx.WriteTimeout,
+    httpx.WriteError,
+    httpx.LocalProtocolError,
+    httpx.UnsupportedProtocol,
+)
+_METHODS_THAT_CREATE_NOTHING: Final = frozenset({"GET", "HEAD", "OPTIONS"})
+_STATUSES_THE_SDK_RETRIES: Final = frozenset({408, 409, 429})
+_REQUEST_TIMEOUT: Final = 408
+_GATEWAY_TIMEOUT: Final = 504
+_LONGEST_CAUSE_CHAIN: Final = 10
+_WIRE_FAILURES: Final = (httpx.TransportError, httpx.HTTPStatusError, openai.APIStatusError)
+
+
+def _cannot_have_created(error: openai.APIError) -> bool:
+    return isinstance(error, openai.APIConnectionError) and isinstance(
+        error.__cause__, _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING
+    )
+
+
+def _retry_the_provider_asked_for(response: httpx.Response) -> bool | None:
+    match response.headers.get("x-should-retry"):
+        case "true":
+            return True
+        case "false":
+            return False
+        case _:
+            return None
+
+
+def _provider_asks_for_a_retry(response: httpx.Response) -> bool:
+    asked: Final = _retry_the_provider_asked_for(response)
+    if asked is not None:
+        return asked
+    return response.status_code in _STATUSES_THE_SDK_RETRIES or (
+        response.status_code >= 500 and response.status_code != _GATEWAY_TIMEOUT
+    )
+
+
+def _provider_rejected_the_request(response: httpx.Response) -> bool:
+    return 400 <= response.status_code < 500 and response.status_code != _REQUEST_TIMEOUT
+
+
+def _answer_says_it_may_exist(response: httpx.Response) -> bool:
+    if _provider_rejected_the_request(response):
+        return False
+    asked: Final = _retry_the_provider_asked_for(response)
+    if asked is not None:
+        return not asked
+    return response.status_code == _GATEWAY_TIMEOUT
+
+
+def _error_it_wraps(error: BaseException) -> BaseException | None:
+    if error.__cause__ is not None:
+        return error.__cause__
+    if isinstance(error, litellm.Timeout) and isinstance(error.__context__, httpx.TimeoutException):
+        return error.__context__
+    return None
+
+
+def _cause_chain(error: BaseException | None, links_left: int = _LONGEST_CAUSE_CHAIN) -> tuple[BaseException, ...]:
+    if error is None or links_left == 0:
+        return ()
+    return (error, *_cause_chain(_error_it_wraps(error), links_left - 1))
+
+
+class CreatedOnSomeDeployments(Exception):
+    def __init__(self, failure: BaseException) -> None:
+        super().__init__("Another deployment in this model group already created it")
+        self.__cause__ = _error_it_wraps(failure)
+
+
+def _request_it_sent(
+    failure: httpx.TransportError | httpx.HTTPStatusError | openai.APIStatusError,
+) -> httpx.Request | None:
+    if not isinstance(failure, httpx.TransportError) and failure.response.history:
+        return failure.response.history[0].request
+    try:
+        return failure.request
+    except RuntimeError:
+        return None
+
+
+def _failed_on_a_read(failure: BaseException) -> bool:
+    if not isinstance(failure, _WIRE_FAILURES):
+        return False
+    request: Final = _request_it_sent(failure)
+    return request is not None and request.method in _METHODS_THAT_CREATE_NOTHING
+
+
+def create_may_already_exist(error: BaseException) -> bool:
+    chain: Final = _cause_chain(error)
+    if any(isinstance(link, CreatedOnSomeDeployments) for link in chain):
+        return True
+    wire_failures: Final = tuple(link for link in chain if isinstance(link, _WIRE_FAILURES))
+    if wire_failures and _failed_on_a_read(wire_failures[-1]):
+        return False
+    match wire_failures[-1] if wire_failures else None:
+        case openai.APIStatusError(response=response) | httpx.HTTPStatusError(response=response):
+            return _answer_says_it_may_exist(response)
+        case httpx.TransportError() as transport_error:
+            return not isinstance(transport_error, _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING)
+        case _:
+            return any(isinstance(link, openai.APITimeoutError) for link in chain)
+
+
+def _resend_cannot_duplicate(error: openai.APIError) -> bool:
+    if isinstance(error, openai.APIStatusError):
+        return _provider_asks_for_a_retry(error.response)
+    return _cannot_have_created(error)
+
+
+def _seconds_before_resend(error: openai.APIError, max_retries: int, retries_left: int) -> float:
+    return litellm.calculate_retry_after(
+        remaining_retries=retries_left,
+        max_retries=max_retries,
+        response_headers=error.response.headers if isinstance(error, openai.APIStatusError) else None,
+    )
+
+
+def _headers_to_number(request: CreateFileRequest | CreateBatchRequest) -> Mapping[str, str] | None:
+    match request.get("extra_headers"):
+        case None:
+            return {}
+        case dict() as sent_headers if not any(name.lower() == _RETRY_COUNT_HEADER for name in sent_headers):
+            return sent_headers
+        case _:
+            return None
+
+
+def _numbered(request: _CreateRequestT, retries_taken: int) -> _CreateRequestT:
+    sent_headers: Final = _headers_to_number(request)
+    if sent_headers is None:
+        return request
+    numbered: Final = request.copy()
+    numbered["extra_headers"] = {_RETRY_COUNT_HEADER: str(retries_taken), **sent_headers}
+    return numbered
+
+
+def send_create_without_duplicates(
+    client: OpenAI, request: _CreateRequestT, create: Callable[[OpenAI, _CreateRequestT], _CreatedT]
+) -> _CreatedT:
+    single_try_client: Final = client.with_options(max_retries=0)
+    for retries_taken in range(client.max_retries):
+        try:
+            return create(single_try_client, _numbered(request, retries_taken))
+        except openai.APIError as error:
+            if not _resend_cannot_duplicate(error):
+                raise
+            time.sleep(_seconds_before_resend(error, client.max_retries, client.max_retries - retries_taken))
+    return create(single_try_client, _numbered(request, client.max_retries))
+
+
+async def asend_create_without_duplicates(
+    client: AsyncOpenAI,
+    request: _CreateRequestT,
+    create: Callable[[AsyncOpenAI, _CreateRequestT], Awaitable[_CreatedT]],
+) -> _CreatedT:
+    single_try_client: Final = client.with_options(max_retries=0)
+    for retries_taken in range(client.max_retries):
+        try:
+            return await create(single_try_client, _numbered(request, retries_taken))
+        except openai.APIError as error:
+            if not _resend_cannot_duplicate(error):
+                raise
+            await asyncio.sleep(_seconds_before_resend(error, client.max_retries, client.max_retries - retries_taken))
+    return await create(single_try_client, _numbered(request, client.max_retries))
+
 
 class _ModelDumpable(Protocol):
     def model_dump(self) -> dict[str, object]: ...  # mutable-ok: pydantic model_dump returns a dict
@@ -121,6 +299,7 @@ class OpenAIHTTPClient(httpx.Client):
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     def __del__(self) -> None:
@@ -135,6 +314,7 @@ class OpenAIAsyncHTTPClient(httpx.AsyncClient):
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     def __del__(self) -> None:
@@ -169,7 +349,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: dict | None = None,
+        body: object = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -188,8 +368,12 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=body,
+            body=None if (body_object := as_str_mapping(body)) is None else dict(body_object),
         )
+
+
+class RelayOnlyBodyOpenAIError(OpenAIError, RelayOnlyBodyLLMException):
+    pass
 
 
 def upstream_error_response(error: Exception) -> httpx.Response | None:
@@ -198,6 +382,10 @@ def upstream_error_response(error: Exception) -> httpx.Response | None:
     return error_response_without_credentials(
         error.response.status_code, error.response, "https://docs.litellm.ai/docs"
     )
+
+
+def upstream_error_body(error: Exception) -> Mapping[str, object] | None:
+    return as_str_mapping(error.body) if isinstance(error, openai.APIError) else None
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -339,7 +527,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def get_cached_openai_client(
-        client_initialization_params: dict, client_type: Literal["openai", "azure"]
+        client_initialization_params: dict[str, object], client_type: Literal["openai", "azure"]
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         """Retrieves the OpenAI client from the in-memory cache based on the client initialization parameters"""
         _cache_key: Final = BaseOpenAILLM.get_openai_client_cache_key(
@@ -372,7 +560,7 @@ class BaseOpenAILLM:
     def set_cached_openai_client(
         openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI,
         client_type: Literal["openai", "azure"],
-        client_initialization_params: dict,
+        client_initialization_params: dict[str, object],
         litellm_owned_client: bool = False,
     ):
         """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS
@@ -461,6 +649,7 @@ class BaseOpenAILLM:
             mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
             http2=http2_enabled(),
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     @classmethod
@@ -482,11 +671,15 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        use_http2: Final = http2_enabled()
+        if use_http2:
+            drain_http2_connections_on_graceful_goaway()
 
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
-            http2=http2_enabled(),
+            http2=use_http2,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     @classmethod

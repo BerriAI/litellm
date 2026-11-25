@@ -87,16 +87,24 @@
     "api_key_env": "GMI_API_KEY"
   },
   "sarvam": {
-    "base_url": "https://api.sarvam.ai/v1",
+    "base_url": "https://api.sarvam.ai/v2",
+    "model_base_urls": {
+      "sarvam-105b": "https://api.sarvam.ai/v1",
+      "sarvam-105b-conversations": "https://api.sarvam.ai/v1"
+    },
+    "model_special_handling": {
+      "sarvam-105b": {"convert_text_content_list_to_string": true},
+      "sarvam-105b-conversations": {"convert_text_content_list_to_string": true}
+    },
+    "special_handling": {
+      "round_reasoning_effort_to_declared_levels": true
+    },
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
-    "user_agent": "litellm/{version} Python/{python}",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "headers": {
-      "api-subscription-key": "{api_key}"
-    }
+    "user_agent": "litellm/{version} Python/{python}"
   },
   "assemblyai": {
     "base_url": "https://llm-gateway.assemblyai.com/v1",
@@ -168,6 +176,15 @@
     "base_url": "https://api.libertai.io/v1",
     "api_key_env": "LIBERTAI_API_KEY",
     "api_base_env": "LIBERTAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "resetdata": {
+    "base_url": "https://api.resetdata.ai/api/v1",
+    "api_key_env": "RESETDATA_API_KEY",
+    "api_base_env": "RESETDATA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"],
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
@@ -266,6 +283,54 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "perplexity_orchestrator": {
+    "base_url": "https://api.perplexity.ai/orchestrator/v1",
+    "api_key_env": ["PERPLEXITYAI_API_KEY", "PERPLEXITY_API_KEY"],
+    "constraints": {
+      "cache_control_ttl": true
+    },
+    "unsupported_params": [
+      "seed",
+      "logit_bias",
+      "top_logprobs",
+      "functions",
+      "function_call",
+      "modalities",
+      "audio",
+      "prediction",
+      "web_search_options",
+      "verbosity",
+      "prompt_cache_retention"
+    ],
+    "extra_supported_params": ["user"],
+    "responses_unsupported_params": ["previous_response_id"],
+    "model_special_handling": {
+      "perplexity/auto": {
+        "reads_prompt_cache_breakpoint": true
+      },
+      "anthropic/*": {
+        "reads_prompt_cache_breakpoint": true,
+        "rejects_json_object_response_format": true
+      }
+    },
+    "accepted_values": {
+      "n": [1],
+      "frequency_penalty": [0],
+      "presence_penalty": [0],
+      "logprobs": [false],
+      "store": [false],
+      "background": [false],
+      "service_tier": ["auto", "default"]
+    },
+    "model_unrestricted_params": {
+      "openai/*": ["service_tier"]
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "inferenceapis": {
     "base_url": "https://api.inferenceapis.com/v1",
     "api_key_env": "INFERENCEAPIS_API_KEY",
@@ -306,6 +371,11 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "huawei_maas": {
+    "base_url": "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
+    "api_key_env": "HUAWEI_MAAS_API_KEY",
+    "api_base_env": "HUAWEI_MAAS_API_BASE"
   },
   "wally": {
     "base_url": "https://inference.runanywhere.ai/v1",

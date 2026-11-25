@@ -17,6 +17,7 @@ _PER_REQUEST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "mar
 _TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
 _COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
 _STR_KEYED: Final = TypeAdapter(Mapping[str, object])
+_JSONABLE_USAGE: Final = TypeAdapter(object)
 
 _Round = TypeVar("_Round", ResponsesAPIResponse, ModelResponse)
 
@@ -47,7 +48,9 @@ def _summed_mapping(first: Mapping[str, object], final: Mapping[str, object]) ->
 
 
 def _summed_usage(first: BaseModel, final: BaseModel) -> object:
-    return to_jsonable_python(_summed_mapping(first.model_dump(), final.model_dump()), fallback=dict)
+    return _JSONABLE_USAGE.validate_python(
+        to_jsonable_python(_summed_mapping(first.model_dump(), final.model_dump()), fallback=dict)
+    )
 
 
 def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
@@ -76,6 +79,16 @@ def _response_cost(round_response: ResponsesAPIResponse | ModelResponse) -> obje
     return None if hidden_params is None else hidden_params.get("response_cost")
 
 
+def has_billed_cost(round_response: ResponsesAPIResponse | ModelResponse) -> bool:
+    return isinstance(_response_cost(round_response), (int, float))
+
+
+def billed_nothing(round_response: _Round) -> _Round:
+    billed: Final = round_response.model_copy()
+    set_hidden_params(billed, {**(get_hidden_params(round_response) or {}), "response_cost": 0.0})
+    return billed
+
+
 def _usage_of_both_rounds(
     first: ResponsesAPIResponse | ModelResponse, final: ResponsesAPIResponse | ModelResponse
 ) -> ResponseAPIUsage | Usage | None:
@@ -88,7 +101,7 @@ def _usage_of_both_rounds(
     return merged_chat_usage(first_usage, final_usage)
 
 
-def _repeated_fixed_margin(
+def _first_round_fixed_margin(
     first: ResponsesAPIResponse | ModelResponse,
     first_breakdown: CostBreakdown | None,
     final: ResponsesAPIResponse | ModelResponse,
@@ -98,7 +111,7 @@ def _repeated_fixed_margin(
         return 0.0
     if served_from_cache(first) or served_from_cache(final):
         return 0.0
-    return min(first_breakdown.get("margin_fixed_amount", 0.0), final_breakdown.get("margin_fixed_amount", 0.0))
+    return first_breakdown.get("margin_fixed_amount", 0.0)
 
 
 def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -> Mapping[str, object]:
@@ -135,7 +148,7 @@ def summed_cost_breakdown(
     return _COST_BREAKDOWN.validate_python(
         _less_repeated_fixed_margin(
             _summed_mapping(first_breakdown, final_breakdown),
-            _repeated_fixed_margin(first, first_breakdown, final, final_breakdown),
+            _first_round_fixed_margin(first, first_breakdown, final, final_breakdown),
         )
     )
 
@@ -150,12 +163,13 @@ def billed_for_every_round(
 
     Costs are summed per round rather than repriced from the summed usage, because a round's price can depend on its
     own size (tiered rates) or on charges the usage does not show (built-in tools, provider-reported costs). The fixed
-    margin both rounds added is charged once, since it is a per-request fee.
+    margin is charged once, at the final round's fee, since it is a per-request fee and the breakdown shows the final
+    round's.
     """
     first_cost: Final = _response_cost(first)
     final_cost: Final = _response_cost(final)
     total_cost: Final = (
-        first_cost + final_cost - _repeated_fixed_margin(first, first_breakdown, final, final_breakdown)
+        first_cost + final_cost - _first_round_fixed_margin(first, first_breakdown, final, final_breakdown)
         if isinstance(first_cost, (int, float)) and isinstance(final_cost, (int, float))
         else None
     )

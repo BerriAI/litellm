@@ -15,7 +15,7 @@ class FreshbooksAccessTokenDetector(RegexBasedDetector):
         return "Freshbooks Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Freshbooks Access Token
             re.compile(

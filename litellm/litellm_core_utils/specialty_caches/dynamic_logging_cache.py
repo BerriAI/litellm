@@ -8,6 +8,7 @@ This ensures we do
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any, Final
 
 import litellm
@@ -27,7 +28,7 @@ class LangfuseInMemoryCache(InMemoryCache):
     (https://github.com/BerriAI/litellm/issues/11169).
     """
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
         evicted: Final = self.cache_dict.pop(key, None)
@@ -59,16 +60,16 @@ class DynamicLoggingCache:
     def __init__(self) -> None:
         self.cache = LangfuseInMemoryCache(default_ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS)
 
-    def get_cache_key(self, args: dict) -> str:
+    def get_cache_key(self, args: Mapping[str, object]) -> str:
         args_str: Final = json.dumps(args, sort_keys=True)
         cache_key: Final = hashlib.sha256(args_str.encode("utf-8")).hexdigest()
         return cache_key
 
-    def get_cache(self, credentials: dict, service_name: str) -> Any | None:
+    def get_cache(self, credentials: Mapping[str, object], service_name: str) -> Any | None:
         key_name: Final = self.get_cache_key(args={**credentials, "service_name": service_name})
         response: Final = self.cache.get_cache(key=key_name)
         return response
 
-    def set_cache(self, credentials: dict, service_name: str, logging_obj: object) -> None:
+    def set_cache(self, credentials: Mapping[str, object], service_name: str, logging_obj: object) -> None:
         key_name: Final = self.get_cache_key(args={**credentials, "service_name": service_name})
         self.cache.set_cache(key=key_name, value=logging_obj)

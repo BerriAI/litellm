@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -15,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -26,12 +28,13 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import PromptSecurityGuardrailConfigModel
 
 
 _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
 _SANITIZE_FILE_QUEUED_STATUSES: Final = frozenset({"created", "in progress"})
 _PROTECT_ROLES: Final = frozenset({"system", "user", "assistant"})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PromptSecurityGuardrailMissingSecrets(Exception):
@@ -82,10 +85,6 @@ class _ProtectResult(TypedDict, total=False):
 
 class _ProtectResponse(TypedDict, total=False):
     result: ReadOnly[_ProtectResult]
-
-
-class _SanitizeUploadResponse(TypedDict, total=False):
-    jobId: ReadOnly[str]
 
 
 class _SanitizeMetadata(TypedDict, total=False):
@@ -177,7 +176,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -248,8 +247,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         texts: list[str],
         images: list[str],
-        structured_messages: list,
-        request_data: dict,
+        structured_messages: Sequence[AllMessageValues],
+        request_data: object,
         user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side guardrail checks."""
@@ -528,8 +527,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         upload_response.raise_for_status()
-        upload_result: Final[_SanitizeUploadResponse] = upload_response.json()
-        job_id: Final = upload_result.get("jobId")
+        upload_result: Final = _DECODED_JSON.validate_python(upload_response.json())
+        job_id: Final = require_get(upload_result).get("jobId")
 
         self._log_api_response(
             url=f"{self.api_base}/api/sanitizeFile",
@@ -605,7 +604,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             detail=f"{resource_name} blocked by Prompt Security. Violations: {', '.join(violations)}",
         )
 
-    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
+    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict[str, object]:
         """Process and sanitize image_url items."""
         image_url_data: Final = item.get("image_url", {})
         url: Final = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
@@ -644,7 +643,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             verbose_proxy_logger.error("Error sanitizing image file: %s", e)
             raise HTTPException(status_code=500, detail=f"File sanitization failed: {e}")
 
-    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
+    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict[str, object]:
         """Process and sanitize document/file items."""
         doc_data: Final = item.get("document") or item.get("file") or item
         url_key: Final = "file_data" if isinstance(doc_data, dict) and not doc_data.get("url") else "url"
@@ -740,7 +739,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return processed_messages
 
-    def filter_messages_by_role(self, messages: list) -> list:
+    def filter_messages_by_role(self, messages: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
         """Filter messages to only include standard OpenAI/Anthropic roles.
 
         Behavior depends on check_tool_results flag:
@@ -749,7 +748,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
-        filtered_messages: Final = []
+        filtered_messages: Final[list[Mapping[str, object]]] = []
         transformed_count = 0
         filtered_count = 0
 
@@ -792,21 +791,21 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return filtered_messages
 
-    def _build_headers(self, user_api_key_alias: str | None = None) -> dict:
+    def _build_headers(self, user_api_key_alias: str | None = None) -> dict[str, str | None]:
         headers: Final = {"APP-ID": self.api_key, "Content-Type": "application/json"}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
         return headers
 
     @staticmethod
-    def _redact_headers(headers: dict) -> dict:
+    def _redact_headers(headers: Mapping[str, str | None]) -> dict[str, str | None]:
         return {name: ("REDACTED" if name.lower() == "app-id" else value) for name, value in headers.items()}
 
     def _log_api_request(
         self,
         method: str,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str | None],
         payload: object,
     ) -> None:
         verbose_proxy_logger.debug(
@@ -831,7 +830,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PromptSecurityGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import (
             PromptSecurityGuardrailConfigModel,
         )

@@ -1,5 +1,7 @@
 //! The fields of `datetime.fromtimestamp(seconds, timezone.utc)`, and `datetime.fromisoformat(text)`.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 /// A UTC `datetime`'s fields, as Python's `datetime` exposes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UtcDateTime {
@@ -26,6 +28,19 @@ impl UtcDateTime {
             second: (of_day % 60) as u32,
             microsecond,
         }
+    }
+
+    /// `datetime.fromtimestamp(at, timezone.utc)` for a Rust clock reading, its nanoseconds cut
+    /// to whole microseconds.
+    pub fn from_system_time(at: SystemTime) -> Self {
+        let micros = match at.duration_since(UNIX_EPOCH) {
+            Ok(after) => i64::try_from(after.as_micros()).unwrap_or(i64::MAX),
+            Err(before) => i64::try_from(before.duration().as_micros()).map_or(i64::MIN, |m| -m),
+        };
+        Self::from_timestamp(
+            micros.div_euclid(1_000_000),
+            micros.rem_euclid(1_000_000) as u32,
+        )
     }
 }
 

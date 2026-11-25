@@ -13,14 +13,14 @@ SIGNATURE_ERROR: Final = json.dumps(
         "type": "error",
         "error": {
             "type": "invalid_request_error",
-            "message": "messages.2.content.0.thinking.signature.str: Input should be a valid string",
+            "message": "messages.3.content.0: Invalid `signature` in `thinking` block",
         },
     }
 ).encode()
 TOOLS: Final = ({"name": "lookup", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}}},)
 
 
-def _history_with_unsigned_thinking(identity: str) -> tuple[dict[str, object], ...]:
+def _history_with_foreign_signed_thinking(identity: str) -> tuple[dict[str, object], ...]:
     return (
         {"role": "user", "content": [{"type": "text", "text": f"first question {identity}"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]},
@@ -28,7 +28,11 @@ def _history_with_unsigned_thinking(identity: str) -> tuple[dict[str, object], .
         {
             "role": "assistant",
             "content": [
-                {"type": "thinking", "thinking": "replayed from another provider", "signature": None},
+                {
+                    "type": "thinking",
+                    "thinking": "replayed from another deployment",
+                    "signature": "c2lnbmVkLWVsc2V3aGVyZQ==",
+                },
                 {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}},
             ],
         },
@@ -37,21 +41,14 @@ def _history_with_unsigned_thinking(identity: str) -> tuple[dict[str, object], .
 
 
 @pytest.mark.covers("providers.anthropic_messages.missing_thinking_signature_400_retries_without_thinking_blocks")
-def test_missing_thinking_signature_400_retries_once_without_thinking_blocks_and_returns_200(
+def test_invalid_thinking_signature_400_retries_once_without_thinking_blocks_and_returns_200(
     gateway: Gateway,
 ) -> None:
     identity: Final = "thinking-signature-" + uuid.uuid4().hex
-    history: Final = _history_with_unsigned_thinking(identity)
+    history: Final = _history_with_foreign_signed_thinking(identity)
     tool_use_only_turn: Final = {
         "role": "assistant",
         "content": [{"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}}],
-    }
-    unsigned_thinking_turn: Final = {
-        "role": "assistant",
-        "content": [
-            {"type": "thinking", "thinking": "replayed from another provider"},
-            {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}},
-        ],
     }
 
     def respond(request: Request) -> Reply:
@@ -61,7 +58,7 @@ def test_missing_thinking_signature_400_retries_once_without_thinking_blocks_and
         assert body["model"] == MODEL
         assert body["tools"] == list(TOOLS), body
         if body["messages"][3]["content"][0]["type"] == "thinking":
-            assert body["messages"] == [*history[:3], unsigned_thinking_turn, history[4]], body
+            assert body["messages"] == list(history), body
             assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}, body
             return Reply(status=400, body=SIGNATURE_ERROR)
         assert body["messages"] == [*history[:3], tool_use_only_turn, history[4]], body

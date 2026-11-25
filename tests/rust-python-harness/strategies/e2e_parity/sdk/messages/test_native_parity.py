@@ -20,9 +20,11 @@ R request, S response, C callbacks, F covered by a fallback detector today)
 """
 
 import asyncio
+import base64
 import contextlib
 import copy
 import datetime
+import functools
 import gc
 import gzip
 import json
@@ -30,6 +32,8 @@ import logging
 import math
 import os
 import re
+import tempfile
+import threading
 import time
 import uuid
 from collections.abc import (
@@ -45,11 +49,15 @@ from collections.abc import (
 )
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import MappingProxyType
 from typing import ClassVar, Final, cast
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
@@ -68,6 +76,7 @@ from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.rules import Rules
 from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
@@ -352,6 +361,10 @@ MARKED_TEXTS_REPLY: Final = (
 ).encode()
 
 
+def _text(text: object) -> dict[str, object]:  # mutable-ok: a block of the messages kwarg's list of dicts
+    return {"type": "text", "text": text}
+
+
 def _non_string_tool_result_texts(
     *texts: object,
 ) -> list[dict[str, object]]:  # mutable-ok: the messages kwarg is a list of dicts
@@ -514,6 +527,11 @@ def _tls(**settings: object) -> Mapping[str, object]:
 CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO: Final = (
     "The caller client's ReadTimeout from a stalled stream reaches the caller without litellm_debug_info, "
     "which Python's stream mapping attaches from the deployment's litellm_params"
+)
+V_LOCATION_NEWLINE_REFUSED: Final = (
+    "V (owner ruling, review #2): a vertex_location with a trailing newline is refused at validation "
+    "with litellm's 'Invalid vertex_location format' ValueError; Python accepts it and fails later "
+    "with InvalidURL"
 )
 E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
@@ -1634,6 +1652,27 @@ FALLBACK_CASES: Final = (
         "drop_params_keeps_string_tool_result_texts",
         _kw(messages=_non_string_tool_result_texts("\uf8fflitellm-raw-json:1", "kept"), drop_params=True),
     ),
+    Case(
+        "non_string_user_texts_sent_without_drop_params",
+        _kw(messages=[{"role": "user", "content": [_text(None), _text(5), _text("Hi.")]}]),
+    ),
+    Case(
+        "drop_params_drops_non_string_user_texts",
+        _kw(messages=[{"role": "user", "content": [_text(None), _text(5), _text("Hi.")]}], drop_params=True),
+    ),
+    Case(
+        "drop_params_drops_a_user_turn_left_with_no_text",
+        _kw(
+            messages=[dict(USER), {"role": "assistant", "content": "Paris."}, {"role": "user", "content": [_text(None)]}],
+            drop_params=True,
+        ),
+    ),
+    Case(
+        "drop_params_that_leaves_no_message_rejected",
+        _kw(messages=[{"role": "user", "content": [_text(None)]}], drop_params=True),
+        upstream=(),
+    ),
+    Case("blank_texts_that_leave_no_message_rejected", _kw(messages=[{"role": "user", "content": [_text(" ")]}]), upstream=()),
     Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
@@ -3579,6 +3618,10 @@ MALFORMED_BASE_CASES: Final = tuple(
 )
 
 AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
+E4_UNTRACED_VERSION_REFUSAL: Final = (
+    "E4: Python logs the attributed anthropic-version refusal with the traceback of its raise in the transform; the "
+    "Rust host hands the refusal back unraised, so its failure log has none"
+)
 JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
         "type": "json_schema",
@@ -3901,7 +3944,7 @@ AZURE_SHAPING_CASES: Final = (
         model=AZURE_CLAUDE,
     ),
     Case(
-        "azure_ai_unparsed_message_non_string_text_block_dropped",
+        "azure_ai_unparsed_message_non_string_text_block_sent",
         _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
         model=AZURE_CLAUDE,
     ),
@@ -4208,6 +4251,93 @@ ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
     ),
 )
 
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+VERTEX_DEPLOYMENT: Final = MappingProxyType({"api_base": None, "vertex_project": "proj", "vertex_location": "us-east5"})
+_VERTEX_KEY: Final = (
+    rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+def _vertex_service_account(private_key: str, token_uri: str) -> str:
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "proj",
+            "private_key_id": "key-1",
+            "private_key": private_key,
+            "client_email": "parity@proj.iam.gserviceaccount.com",
+            "client_id": "1",
+            "token_uri": token_uri,
+        }
+    )
+
+
+E2_GOOGLE_AUTH_TEXT: Final = (
+    "E2: approved difference, the exception class matches but its text is Google's SDK's own "
+    "(cryptography's PEM error), which Rust cannot rebuild"
+)
+
+R4_ODD_TYPED_CREDENTIAL_FIELD: Final = (
+    "R4: approved difference, Rust reads credentials into typed fields, so a project_id that is not text is refused "
+    "as a ValueError when the credentials are read, where Python raises TypeError after minting a token"
+)
+# R3: approved difference, Rust words these login failures and their logs in litellm's own terms where Python
+# raises google-auth's or its own text, so they compare by exception class, status and attribution only.
+VERTEX_LITELLM_WORDED_LOGIN: Final = frozenset(
+    {
+        "vertex_ai_application_default_credentials_file_that_does_not_exist",
+        "vertex_ai_no_project_after_the_login",
+        "vertex_ai_adc_external_account_authorized_user_without_refresh_fields",
+        "vertex_ai_adc_external_account_authorized_user_that_cannot_load",
+        "vertex_ai_impersonated_credentials_are_refused",
+        "vertex_ai_service_account_without_a_private_key",
+        "vertex_ai_authorized_user_missing_a_field",
+        "vertex_ai_unsupported_region_is_overridden_with_a_warning",
+    }
+)
+_LOGIN_TEXT_FIELDS: Final = frozenset({"message", "details", "error_str", "error_message", "exception"})
+
+
+def _without_login_text(case: Case, aspect: str, value: object) -> object:
+    """A worded login failure or log with its text left out, for the cases in `VERTEX_LITELLM_WORDED_LOGIN`."""
+    if case.name not in VERTEX_LITELLM_WORDED_LOGIN:
+        return value
+    if aspect == "warnings" and isinstance(value, list | tuple):
+        return tuple("<log line>" for _ in cast(Sequence[object], value))
+    if aspect not in ("outcome", "logged_error") or not isinstance(value, Mapping):
+        return value
+    fields: Final = cast(Mapping[str, object], value)
+    return {name: "<login text>" if name in _LOGIN_TEXT_FIELDS else item for name, item in fields.items()}
+
+
+VERTEX_CREDENTIAL_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE, upstream=())
+    for case in (
+        Case(
+            "vertex_ai_credentials_file_that_does_not_exist",
+            _kw(**VERTEX_DEPLOYMENT, vertex_credentials="/nonexistent/vertex-key.json"),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_with_an_unloadable_key",
+            _kw(
+                **VERTEX_DEPLOYMENT,
+                vertex_credentials=_vertex_service_account(
+                    "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+                    "https://oauth2.googleapis.com/token",
+                ),
+            ),
+            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
+        ),
+        Case(
+            "vertex_ai_application_default_credentials_file_that_does_not_exist",
+            _kw(**VERTEX_DEPLOYMENT),
+            env=MappingProxyType({"GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/adc.json"}),
+        ),
+    )
+)
+
 AZURE_STREAM_CACHE_CASES: Final = tuple(
     replace(case, name=f"azure_ai_{case.name}", model=AZURE_CLAUDE)
     for case in CACHE_CASES
@@ -4229,6 +4359,518 @@ AZURE_PASSTHROUGH_CASES: Final = tuple(
             upstream=(_stream(TEXT_STREAM),),
         ),
     )
+)
+
+
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+_VERTEX_KEY: Final = (
+    rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+class _GoogleTokenEndpoint(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body: Final = json.dumps({"access_token": "ya29.parity", "expires_in": 3600, "token_type": "Bearer"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+_GOOGLE_TOKENS: Final = ThreadingHTTPServer(("127.0.0.1", 0), _GoogleTokenEndpoint)
+threading.Thread(target=_GOOGLE_TOKENS.serve_forever, daemon=True).start()
+VERTEX_ACCOUNT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "type": "service_account",
+        "project_id": "parity-project",
+        "private_key_id": "parity-key",
+        "private_key": _VERTEX_KEY,
+        "client_email": "parity@parity-project.iam.gserviceaccount.com",
+        "client_id": "1",
+        "token_uri": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+    }
+)
+
+
+def _vertex(**kwargs: object) -> Mapping[str, object]:
+    return _kw(
+        vertex_project="parity-project", vertex_location="us-east5", vertex_credentials=dict(VERTEX_ACCOUNT), **kwargs
+    )
+
+
+def _vertex_stream(name: str, **kwargs: object) -> Case:
+    return Case(name, _vertex(stream=True, **kwargs), model=VERTEX_CLAUDE, upstream=(_stream(TEXT_STREAM),))
+
+
+JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "json_schema", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}}
+)
+
+VERTEX_SHAPING_CASES: Final = (
+    Case("vertex_caller_authorization", _vertex(extra_headers={"Authorization": "Bearer caller"}), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_caller_lowercase_authorization",
+        _vertex(extra_headers={"authorization": "Bearer caller"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_caller_content_type", _vertex(extra_headers={"content-type": "text/plain"}), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_caller_betas_filtered",
+        _vertex(extra_headers={"anthropic-beta": "files-api-2025-04-14,context-1m-2025-08-07,not-a-beta"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_caller_beta_renamed",
+        _vertex(extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_caller_betas_all_dropped",
+        _vertex(extra_headers={"anthropic-beta": "mcp-client-2025-11-20"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_output_format_folded", _vertex(output_format=dict(JSON_SCHEMA_FORMAT)), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_output_format_wins_over_output_config_format",
+        _vertex(output_format=dict(JSON_SCHEMA_FORMAT), output_config={"format": {"type": "json_schema"}}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_string_output_format_refused", _vertex(output_format="json"), model=VERTEX_CLAUDE, upstream=()),
+    Case("vertex_string_output_format_dropped", _vertex(output_format="json", drop_params=True), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_unsupported_version_refused",
+        _vertex(extra_headers={"anthropic-version": "latest"}),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+        gaps=_gaps(logged_error=E4_UNTRACED_VERSION_REFUSAL),
+    ),
+    Case(
+        "vertex_unsupported_version_refused_before_output_format",
+        _vertex(extra_headers={"anthropic-version": "latest"}, output_format="json"),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+        gaps=_gaps(logged_error=E4_UNTRACED_VERSION_REFUSAL),
+    ),
+    Case(
+        "vertex_unsupported_version_dropped",
+        _vertex(extra_headers={"anthropic-version": "latest"}, drop_params=True),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_always_on_thinking_disabled_dropped",
+        _vertex(thinking={"type": "disabled"}),
+        model="vertex_ai/claude-sonnet-5-5@default",
+        warned=True,
+    ),
+    Case("vertex_base_version_doubled", _vertex(api_base_suffix="/v1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_beta_version_doubled", _vertex(api_base_suffix="/v1beta1/"), model=VERTEX_CLAUDE),
+    Case("vertex_base_query", _vertex(api_base_suffix="?k=1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_version_with_query", _vertex(api_base_suffix="/v1?k=1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_own_path", _vertex(api_base_suffix="/custom/path/"), model=VERTEX_CLAUDE),
+    _vertex_stream("vertex_base_stream"),
+    _vertex_stream("vertex_base_version_doubled_stream", api_base_suffix="/v1"),
+    _vertex_stream("vertex_base_slash_query_stream", api_base_suffix="/?k=1"),
+    _vertex_stream("vertex_base_own_path_query_stream", api_base_suffix="/custom/path?k=1"),
+)
+
+VERTEX_OPUS: Final = "vertex_ai/claude-opus-5-5"
+_VERTEX_IDENTITY: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key_team_id": "Team A",
+        "user_api_key_org_id": "Org.1",
+        "spend_logs_metadata": {"Project": "Billing Q4", "user_api_key_alias": "forged", "9lives": "x"},
+    }
+)
+_CALLER_LABELS: Final = base64.b64encode(
+    json.dumps({"env": "Prod", "user_api_key_team_id": "forged", "project": "caller"}).encode()
+).decode()
+_LABEL_FIELDS: Final = _kw(
+    vertex_request_label_fields=(
+        "user_api_key_hash",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+        "spend_logs_metadata",
+    )
+)
+
+
+def _labelled(**kwargs: object) -> Mapping[str, object]:
+    return _vertex(litellm_metadata=dict(_VERTEX_IDENTITY), **kwargs)
+
+
+VERTEX_LABELS_CASES: Final = (
+    Case("vertex_labels_from_identity", _labelled(), model=VERTEX_CLAUDE, settings=_LABEL_FIELDS),
+    Case(
+        "vertex_labels_replace_the_callers_header",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+        settings=_LABEL_FIELDS,
+    ),
+    Case(
+        "vertex_labels_drop_an_undecodable_header",
+        _labelled(extra_headers={"x-vertex-ai-labels": "not base64"}),
+        model=VERTEX_CLAUDE,
+        settings=_kw(vertex_request_label_fields="user_api_key_team_id"),
+    ),
+    Case(
+        "vertex_labels_with_unreserved_fields_keep_the_callers_labels",
+        _vertex(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+        settings=_kw(vertex_request_label_fields=["team"]),
+    ),
+    Case(
+        "vertex_labels_unset_keep_the_callers_header",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_labels_replace_a_header_python_cannot_encode",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": "ZWJ\u200djoined"}),
+        model=VERTEX_CLAUDE,
+        settings=_LABEL_FIELDS,
+    ),
+    Case(
+        "vertex_labels_unset_send_nothing_for_a_header_python_cannot_encode",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": "ZWJ\u200djoined"}),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+    ),
+    replace(_vertex_stream("vertex_labels_stream", litellm_metadata=dict(_VERTEX_IDENTITY)), settings=_LABEL_FIELDS),
+)
+
+_PROXY_CALL_ID: Final = "0b0c3d4e-proxy-call"
+
+
+class _ProxyLogger:
+    """Each leg gets a logging object built from the request alone, as the proxy builds it before the router adds
+    the deployment's params."""
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        logging_obj, _ = litellm.utils.function_setup(
+            "anthropic_messages",
+            Rules(),
+            datetime.datetime.now(),
+            model=VERTEX_CLAUDE,
+            messages=[dict(USER)],
+            litellm_call_id=_PROXY_CALL_ID,
+        )
+        return logging_obj
+
+
+def _proxied(**location: str) -> Mapping[str, object]:
+    return _kw(
+        vertex_project="parity-project",
+        vertex_credentials=dict(VERTEX_ACCOUNT),
+        litellm_logging_obj=_ProxyLogger(),
+        litellm_call_id=_PROXY_CALL_ID,
+        **location,
+    )
+
+
+VERTEX_REGIONAL_COST_CASES: Final = (
+    Case(
+        "vertex_deployment_global_location_prices_without_the_regional_uplift",
+        _proxied(vertex_location="global"),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_deployment_legacy_global_location_prices_without_the_regional_uplift",
+        _proxied(vertex_ai_location="global"),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_deployment_global_location_wins_over_the_environment",
+        _proxied(vertex_location="global"),
+        model=VERTEX_CLAUDE,
+        env=_kw(VERTEXAI_LOCATION="europe-west4"),
+    ),
+)
+
+_CLEAR_AT_TURNS: Final = _mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})
+
+VERTEX_BETA_GATED_CASES: Final = (
+    Case(
+        "vertex_clear_at_stripped_under_drop_params",
+        _vertex(drop_params=True, messages=_CLEAR_AT_TURNS),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+    Case(
+        "vertex_clear_at_kept_with_its_beta",
+        _vertex(
+            drop_params=True,
+            messages=_CLEAR_AT_TURNS,
+            extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
+        ),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+    Case("vertex_clear_at_kept_without_drop_params", _vertex(messages=_CLEAR_AT_TURNS), model=VERTEX_OPUS),
+    Case(
+        "vertex_clear_at_stripped_before_conversion",
+        _vertex(drop_params=True, messages=_CLEAR_AT_TURNS),
+        model=VERTEX_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "vertex_tool_addition_stripped_under_drop_params",
+        _vertex(
+            drop_params=True,
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                ]
+            ),
+            extra_headers=_beta("context-1m-2025-08-07"),
+        ),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+)
+
+
+def _service_account(name: str, **fields: JsonValue) -> Mapping[str, JsonValue]:
+    """A service account the parity token endpoint grants. Each case names its own account, so no case
+    reuses a login another case cached."""
+    return MappingProxyType(
+        {
+            "type": "service_account",
+            "client_email": f"{name}@parity.iam.gserviceaccount.com",
+            "private_key_id": name,
+            "private_key": _VERTEX_KEY,
+            "token_uri": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+            **fields,
+        }
+    )
+
+
+@functools.cache
+def _adc_directory() -> str:
+    return tempfile.mkdtemp(prefix="vertex-adc-")
+
+
+def _adc_file(name: str, info: Mapping[str, JsonValue]) -> str:
+    """A credentials file `GOOGLE_APPLICATION_CREDENTIALS` names for one case."""
+    path: Final = os.path.join(_adc_directory(), f"{name}.json")
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(dict(info), file)
+    return path
+
+
+def _vertex_login(**kwargs: object) -> Mapping[str, object]:
+    return MappingProxyType({"api_key": None, "vertex_location": "us-east5", **kwargs})
+
+
+VERTEX_AUTH_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE)
+    for case in (
+        Case(
+            "vertex_ai_service_account_names_the_project",
+            _vertex_login(vertex_credentials=dict(_service_account("a3-project", project_id="credentials-project"))),
+        ),
+        Case(
+            "vertex_ai_configured_project_outranks_the_credentials",
+            _vertex_login(
+                vertex_project="configured-project",
+                vertex_credentials=dict(_service_account("p2-configured", project_id="credentials-project")),
+            ),
+        ),
+        Case(
+            "vertex_ai_no_project_after_the_login",
+            _vertex_login(vertex_credentials=dict(_service_account("e1-no-project"))),
+            upstream=(),
+            warned=True,
+        ),
+        Case(
+            "vertex_ai_numeric_project_after_the_login",
+            _vertex_login(vertex_credentials=dict(_service_account("e1-numeric-project", project_id=7))),
+            upstream=(),
+            warned=True,
+            gaps=_gaps(
+                **dict.fromkeys(("outcome", "logged", "logged_error", "warnings"), R4_ODD_TYPED_CREDENTIAL_FIELD)
+            ),
+        ),
+        Case(
+            "vertex_ai_invalid_location_after_the_login",
+            _vertex_login(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="US EAST",
+                vertex_credentials=dict(_service_account("p3-location")),
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user",
+            _vertex_login(vertex_project="adc-workforce"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce",
+                        {
+                            "type": "external_account_authorized_user",
+                            "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q",
+                            "refresh_token": "workforce-refresh",
+                            "token_url": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+                            "client_id": "workforce-client",
+                            "client_secret": "workforce-secret",
+                        },
+                    )
+                }
+            ),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user_without_refresh_fields",
+            _vertex_login(vertex_project="adc-workforce-token"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce-token",
+                        {"type": "external_account_authorized_user", "token": "file-token"},
+                    )
+                }
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user_that_cannot_load",
+            _vertex_login(vertex_project="adc-workforce-nothing"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce-nothing", {"type": "external_account_authorized_user"}
+                    )
+                }
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_location_with_one_trailing_newline",
+            _vertex_login(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="us-east5\n",
+                vertex_credentials=dict(_service_account("p3-newline")),
+            ),
+            upstream=(),
+            gaps=_gaps(
+                **dict.fromkeys(
+                    (
+                        "outcome",
+                        "logged",
+                        "logged_error",
+                        "logged_api_key",
+                        "logged_call",
+                        "logged_request",
+                        "logged_model_parameters",
+                    ),
+                    V_LOCATION_NEWLINE_REFUSED,
+                )
+            ),
+        ),
+        Case(
+            "vertex_ai_impersonated_credentials_are_refused",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "impersonated_service_account",
+                    "client_email": "sa@p.iam.gserviceaccount.com",
+                    "source_credentials": {"type": "authorized_user"},
+                },
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_service_account_without_a_private_key",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={"client_email": "sa@p.iam.gserviceaccount.com", "token_uri": "https://t"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_authorized_user_missing_a_field",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={"type": "authorized_user", "client_id": "c", "client_secret": "s"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_not_json",
+            _vertex_login(vertex_project="p", vertex_credentials="{oops"),
+            upstream=(),
+        ),
+        Case("vertex_ai_blank_credentials", _vertex_login(vertex_project="p", vertex_credentials="   "), upstream=()),
+        Case(
+            "vertex_ai_explicit_aws_without_a_region",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "external_account",
+                    "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws",
+                    "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_access_key_id": "AKIDPARITY",
+                },
+            ),
+            upstream=(),
+        ),
+    )
+)
+
+
+VERTEX_REGIONAL_CLAUDE: Final = "vertex_ai/claude-parity-regional"
+VERTEX_REGIONAL_CASES: Final = (
+    Case(
+        "vertex_ai_unsupported_region_is_overridden_with_a_warning",
+        _vertex_login(
+            vertex_project="p",
+            vertex_location="us-east5",
+            vertex_credentials=dict(_service_account("p1-regions-override", project_id="p")),
+        ),
+        model=VERTEX_REGIONAL_CLAUDE,
+        settings=MappingProxyType(
+            {
+                "model_cost": {
+                    **litellm.model_cost,
+                    VERTEX_REGIONAL_CLAUDE: {
+                        **litellm.model_cost[VERTEX_CLAUDE],
+                        "supported_regions": ["europe-west1", "asia-southeast1"],
+                    },
+                }
+            }
+        ),
+        warned=True,
+    ),
+    Case(
+        "vertex_ai_supported_regions_route_the_call",
+        _vertex_login(
+            vertex_project="p",
+            vertex_credentials=dict(_service_account("p1-regions", project_id="p")),
+        ),
+        model=VERTEX_REGIONAL_CLAUDE,
+        settings=MappingProxyType(
+            {
+                "model_cost": {
+                    **litellm.model_cost,
+                    VERTEX_REGIONAL_CLAUDE: {
+                        **litellm.model_cost[VERTEX_CLAUDE],
+                        "supported_regions": ["europe-west1", "us-east5-b"],
+                    },
+                }
+            }
+        ),
+    ),
 )
 
 
@@ -4263,7 +4905,14 @@ CASES: Final = (
     *AZURE_SHAPING_CASES,
     *AZURE_ERROR_CASES,
     *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
+    *VERTEX_CREDENTIAL_CASES,
     *AZURE_STREAM_CACHE_CASES,
+    *VERTEX_SHAPING_CASES,
+    *VERTEX_LABELS_CASES,
+    *VERTEX_REGIONAL_COST_CASES,
+    *VERTEX_BETA_GATED_CASES,
+    *VERTEX_AUTH_CASES,
+    *VERTEX_REGIONAL_CASES,
 )
 
 
@@ -4341,6 +4990,13 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "AZURE_CREDENTIAL",
         "AZURE_FEDERATED_TOKEN_FILE",
         "AZURE_AUTHORITY_HOST",
+        "VERTEXAI_CREDENTIALS",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEX_LOCATION",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
@@ -4803,10 +5459,47 @@ def parity_server(recording_server: RecordingServer) -> RecordingServer:
 _LEGS: Final[dict[str, tuple[Leg, Leg]]] = {}
 
 
+# The Python Vertex AI Messages request path is gone, so these cases compare Rust against the Python leg captured
+# once from it, with ports and temporary directories that change between runs written as placeholders.
+VERTEX_PYTHON_FIXTURES: Final = Path(__file__).parent / "fixtures" / "vertex"
+VERTEX_FIXTURE_CASES: Final = frozenset(
+    case.name
+    for case in (
+        *VERTEX_CREDENTIAL_CASES,
+        *VERTEX_SHAPING_CASES,
+        *VERTEX_LABELS_CASES,
+        *VERTEX_REGIONAL_COST_CASES,
+        *VERTEX_BETA_GATED_CASES,
+        *VERTEX_AUTH_CASES,
+        *VERTEX_REGIONAL_CASES,
+    )
+)
+_RUN_SPECIFIC: Final = (
+    (re.compile(r"127\.0\.0\.1:\d+"), "127.0.0.1:<port>"),
+    (re.compile(r"/tmp/vertex-adc-[A-Za-z0-9_]+"), "/tmp/vertex-adc-<dir>"),
+)
+
+
+def _fixture_form(leg: Leg) -> Leg:
+    """A leg as its captured fixture holds it: a JSON round trip with run-specific values replaced."""
+    text: Final = functools.reduce(
+        lambda text, rule: rule[0].sub(rule[1], text), _RUN_SPECIFIC, json.dumps(asdict(leg), default=repr)
+    )
+    return Leg(**json.loads(text))
+
+
+def _python_fixture(name: str) -> Leg:
+    return Leg(**json.loads((VERTEX_PYTHON_FIXTURES / f"{name}.json").read_text()))
+
+
 async def _legs(case: Case, server: RecordingServer, probe: FallbackProbe) -> tuple[Leg, Leg]:
-    if case.name not in _LEGS:
-        _LEGS[case.name] = (await _leg(case, server, probe=None), await _leg(case, server, probe=probe))
-        _dump(case.name, *_LEGS[case.name])
+    if case.name in _LEGS:
+        return _LEGS[case.name]
+    if case.name in VERTEX_FIXTURE_CASES:
+        _LEGS[case.name] = (_python_fixture(case.name), _fixture_form(await _leg(case, server, probe=probe)))
+        return _LEGS[case.name]
+    _LEGS[case.name] = (await _leg(case, server, probe=None), await _leg(case, server, probe=probe))
+    _dump(case.name, *_LEGS[case.name])
     return _LEGS[case.name]
 
 
@@ -4830,9 +5523,13 @@ async def test_native_messages_match_python(
         case "dispatch":
             assert not native.fell_back
         case "request":
-            assert _comparable(native.requests) == _comparable(python.requests)
+            assert _comparable(_with_decoded_labels(_with_parity_token(native.requests))) == _comparable(
+                _with_decoded_labels(python.requests)
+            )
         case "outcome":
-            assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
+            assert _without_login_text(case, aspect, native.outcome) == _without_login_text(
+                case, aspect, _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
+            )
         case "hidden_params":
             assert native.hidden_params == python.hidden_params
         case "logged":
@@ -4840,7 +5537,9 @@ async def test_native_messages_match_python(
         case "cached":
             assert native.cached == python.cached
         case "warnings":
-            assert native.warnings == python.warnings
+            assert _without_login_text(case, aspect, native.warnings) == _without_login_text(
+                case, aspect, python.warnings
+            )
         case "hook_inputs":
             assert native.hook_inputs == python.hook_inputs
         case "classified":
@@ -4850,8 +5549,8 @@ async def test_native_messages_match_python(
         case "stream_type":
             assert native.stream_type == _stream_type_reference(case, python.stream_type)
         case "logged_error":
-            assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(
-                _logged_error_reference(case, python.callback_kwargs.get(aspect))
+            assert _comparable(_without_login_text(case, aspect, native.callback_kwargs.get(aspect))) == _comparable(
+                _without_login_text(case, aspect, _logged_error_reference(case, python.callback_kwargs.get(aspect)))
             )
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
@@ -4899,9 +5598,68 @@ def _stream_type_reference(case: Case, python: object) -> object:
     writer. Main's agentic and short-circuit paths already hand back the stream Python returns."""
     provider: Final = str(case.kwargs.get("custom_llm_provider") or case.model.partition("/")[0])
     wrapped: Final = frozenset(wrapping.name for wrapping in (*AGENTIC_CASES, *SHORT_CIRCUIT_CASES))
-    if provider == "azure_ai" or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
+    if provider in ("azure_ai", "vertex_ai") or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
         return python
     return "AsyncStream"
+
+
+def _decoded_labels(value: str) -> object:
+    try:
+        return tuple(json.loads(base64.b64decode(value, validate=True)).items())
+    except ValueError:
+        return value
+
+
+def _with_decoded_labels(requests: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The requests with a labels header read as its ordered labels: by owner ruling (2026-11-17) Rust writes the
+    header's JSON compactly, where Python's `json.dumps` puts a space after each separator."""
+    return tuple(
+        {
+            **request,
+            "headers": {
+                name: _decoded_labels(value) if name == "x-vertex-ai-labels" and isinstance(value, str) else value
+                for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
+            },
+        }
+        for request in requests
+    )
+
+
+# Q1 (owner ruling 2026-11-19): approved difference, Rust signs a service account's token itself with Google's
+# Rust SDK, a self-signed JWT, where google-auth mints one at the account's token_uri. A request carrying the parity
+# service account's own JWT compares as the token Python's parity token endpoint granted.
+_PARITY_TOKEN: Final = "Bearer ya29.parity"
+_SERVICE_ACCOUNT_SCOPE: Final = "https://www.googleapis.com/auth/cloud-platform"
+
+
+def _is_service_account_jwt(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("Bearer "):
+        return False
+    parts: Final = value.removeprefix("Bearer ").split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        claims: Final = _OBJECT.validate_json(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:
+        return False
+    return (
+        str(claims.get("iss", "")).endswith(".iam.gserviceaccount.com")
+        and claims.get("scope") == _SERVICE_ACCOUNT_SCOPE
+    )
+
+
+def _with_parity_token(requests: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The requests with a service account's self-signed JWT read as the parity token Python sends."""
+    return tuple(
+        {
+            **request,
+            "headers": {
+                name: _PARITY_TOKEN if name == "authorization" and _is_service_account_jwt(value) else value
+                for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
+            },
+        }
+        for request in requests
+    )
 
 
 def _comparable(value: object) -> object:
@@ -5645,7 +6403,6 @@ async def test_an_anthropic_stream_stays_main_s_execution_stream(
 # By the owner's ruling anthropic, which has no Python path, keeps main's native route where the azure_ai port
 # matched Python. Each case pairs an anthropic call with what main's route does for it; the azure_ai cases of
 # the same behaviour compare with Python in `CASES`.
-_UNPARSED_TEXT: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": 5})
 _SIGNED_COMPACTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"type": "compaction", "content": "Summary.", "signature": "sig"}
 )
@@ -5654,10 +6411,6 @@ _TOOL_REFERENCE_ADDITION: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 ANTHROPIC_SENT_AS_IS_CASES: Final = (
-    Case(
-        "anthropic_unparsed_message_non_string_text_block_sent",
-        _kw(messages=[{"role": "user", "content": [dict(_UNPARSED_TEXT), {"type": "text", "text": "Hi."}]}]),
-    ),
     Case(
         "anthropic_unparsed_message_tool_use_id_sent",
         _kw(

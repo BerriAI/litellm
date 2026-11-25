@@ -1,3 +1,5 @@
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
@@ -34,6 +36,21 @@ class PythonServer:
     keepalive_seconds: int
     graceful_timeout_seconds: float
     trusted_proxies: str
+    config_path: str | None
+
+
+def local_config_path(cli_config: str | None, environ: Mapping[str, str]) -> str | None:
+    """The local YAML file the proxy loads its config from, by the precedence of ``proxy_server.initialize``.
+
+    ``CONFIG_FILE_PATH`` decides alone once it is set, even when it names no file, and ``--config`` is read otherwise.
+    ``None`` when neither names a YAML file on disk or when ``LITELLM_CONFIG_BUCKET_NAME`` moves the config to a bucket.
+    """
+    path: Final = environ.get("CONFIG_FILE_PATH", cli_config)
+    if path is None or environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        return None
+    if not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in (".yaml", ".yml"):
+        return None
+    return os.path.abspath(path)
 
 
 class UvicornCliParams(BaseModel):

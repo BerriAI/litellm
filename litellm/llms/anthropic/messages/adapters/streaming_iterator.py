@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     Protocol,
@@ -32,6 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_items,
     finish_evidence_of,
+    joined,
 )
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
@@ -66,7 +66,9 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
-_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_THINKING_BLOCK: Final[TypeAdapter[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = TypeAdapter(
+    ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 _AnthropicStreamEvent: TypeAlias = dict[str, object] | MessageBlockDelta | ContentBlockDelta
@@ -379,7 +381,11 @@ class _CombinedChunkSplitter:
             reasoning_content = (
                 getattr(copied_delta, "reasoning_content", None) if "reasoning_content" in group else None
             )
-            thinking_blocks = getattr(copied_delta, "thinking_blocks", None) if "thinking_blocks" in group else None
+            thinking_blocks = (
+                copied_delta.thinking_blocks
+                if "thinking_blocks" in group and hasattr(copied_delta, "thinking_blocks")
+                else None
+            )
             unsigned_text = _CombinedChunkSplitter._unsigned_thinking_text(thinking_blocks) if thinking_blocks else None
             if unsigned_text:
                 reasoning_content = unsigned_text
@@ -576,7 +582,7 @@ class _CombinedChunkSplitter:
 
     @staticmethod
     def _unsigned_thinking_text(
-        blocks: Sequence[Mapping[str, Any]],
+        blocks: Sequence[Mapping[str, object]],
     ) -> str | None:
         """Return the combined thinking text when no block carries a signature.
 
@@ -588,10 +594,13 @@ class _CombinedChunkSplitter:
         """
         if any(block.get("signature") for block in blocks if isinstance(block, dict)):
             return None
-        thinking_text: Final = "".join(
-            block.get("thinking") or ""
-            for block in blocks
-            if isinstance(block, dict) and block.get("type") == "thinking"
+        thinking_text: Final = joined(
+            "",
+            (
+                block.get("thinking") or ""
+                for block in blocks
+                if isinstance(block, dict) and block.get("type") == "thinking"
+            ),
         )
         return thinking_text or None
 
@@ -706,7 +715,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Per-instance queue for buffering multiple chunks. Must be initialized
         # here (not at class level) so concurrent streams don't share the same
         # deque and corrupt each other's SSE event order.
-        self.chunk_queue: deque = deque()
+        self.chunk_queue: deque[_AnthropicStreamEvent] = deque()
         # Per-instance default content block. Must be initialized here (not at
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in
@@ -719,9 +728,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
-        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
-            "list[ModelResponseStream] | None", getattr(self.completion_stream, "chunks", None)
-        )
+        return self._combined_chunk_splitter.chunks
 
     @property
     def finish_evidence(self) -> FinishEvidence:
@@ -729,11 +736,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":
-        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
-            "list[AllMessageValues] | None", getattr(self.completion_stream, "messages", None)
-        )
+        return self._combined_chunk_splitter.messages
 
-    def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> MessageBlockDelta:
+    def _merge_usage_into_held_stop_reason_chunk(self, chunk: "ModelResponseStream") -> MessageBlockDelta:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
 
         Shared by both the sync ``__next__`` and async ``__anext__`` paths so

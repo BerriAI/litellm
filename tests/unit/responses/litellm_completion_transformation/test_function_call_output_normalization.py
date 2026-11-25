@@ -8,14 +8,16 @@ we normalize it to text/image blocks or a string.
 
 import json
 from copy import deepcopy
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_result
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.openai import ChatCompletionToolMessage
 
 
 def _normalize_media_content(kind: str, parts: list[dict[str, object]]) -> object:
@@ -126,6 +128,16 @@ def test_media_normalization_preserves_formats_references_and_metadata(kind: str
             "keep",
         ),
         ([{"type": "input_image", "file_id": "file-only"}], '[{"type": "input_image", "file_id": "file-only"}]'),
+        ([{"type": "tool_reference"}], '[{"type": "tool_reference"}]'),
+        (
+            [{"type": "tool_reference", "tool_name": ""}, {"type": "tool_reference", "tool_name": 17}],
+            '[{"type": "tool_reference", "tool_name": ""}, {"type": "tool_reference", "tool_name": 17}]',
+        ),
+        ([{"type": "input_text", "text": "keep"}, {"type": "tool_reference", "tool_name": None}], "keep"),
+        (
+            {"type": "tool_reference", "tool_name": "get_weather"},
+            '{"type": "tool_reference", "tool_name": "get_weather"}',
+        ),
         ({"ids": {7}}, "{'ids': {7}}"),
         ([{"type": "unknown", "ids": {7}}], "[{'type': 'unknown', 'ids': {7}}]"),
     ],
@@ -188,3 +200,110 @@ def test_computer_screenshot_output_remains_structured_media() -> None:
             "image_url": {"url": "data:image/png;base64,AAAA", "detail": "auto"},
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "output", "expected_content"),
+    [
+        (
+            "function_call_output",
+            [
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "tool_reference", "tool_name": "get_forecast"},
+            ],
+            [
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "tool_reference", "tool_name": "get_forecast"},
+            ],
+        ),
+        (
+            "custom_tool_call_output",
+            [
+                {"type": "input_text", "text": "Loaded "},
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "output_text", "text": ""},
+                {"type": "text", "text": " and "},
+                {"type": "tool_reference", "tool_name": "get_forecast"},
+            ],
+            [
+                {"type": "text", "text": "Loaded "},
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "text", "text": " and "},
+                {"type": "tool_reference", "tool_name": "get_forecast"},
+            ],
+        ),
+        (
+            "tool_result",
+            [
+                {"type": "tool_reference", "tool_name": ""},
+                {"type": "tool_reference", "tool_name": "get_weather", "extra": 1},
+                {"type": "unknown", "value": 17},
+            ],
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+        ),
+    ],
+    ids=["reference-only", "interleaved-with-text", "malformed-and-unknown-beside-a-valid-reference"],
+)
+def test_tool_references_reach_anthropic_in_order(
+    kind: str, output: list[dict[str, object]], expected_content: list[dict[str, str]]
+) -> None:
+    original: Final = deepcopy(output)
+    messages: Final = (
+        LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+            {"type": kind, "call_id": "call_load_tools", "output": output}, keep_tool_references=True
+        )
+    )
+
+    assert messages == [{"role": "tool", "tool_call_id": "call_load_tools", "content": expected_content}]
+    assert convert_to_anthropic_tool_result(
+        cast(ChatCompletionToolMessage, messages[0])  # cast-ok: the whole tool message is asserted above
+    ) == {
+        "type": "tool_result",
+        "tool_use_id": "call_load_tools",
+        "content": expected_content,
+    }
+    assert output == original
+
+
+_REFERENCE_ONLY: Final = [{"type": "tool_reference", "tool_name": "get_weather"}]
+_TEXT_THEN_REFERENCE: Final = [
+    {"type": "input_text", "text": "Loaded "},
+    {"type": "tool_reference", "tool_name": "get_weather"},
+]
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "output", "expected_content"),
+    [
+        ("claude-opus-5-5", "anthropic", _REFERENCE_ONLY, _REFERENCE_ONLY),
+        ("claude-opus-5-5", "anthropic", _TEXT_THEN_REFERENCE, [{"type": "text", "text": "Loaded "}, *_REFERENCE_ONLY]),
+        ("gpt-5.6", "openai", _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
+        ("gemini-3.1-pro-preview", "vertex_ai", _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
+        ("gpt-5.6", "openai", _TEXT_THEN_REFERENCE, "Loaded "),
+        ("my-batch-alias", None, _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
+        ("my-batch-alias", None, _TEXT_THEN_REFERENCE, "Loaded "),
+    ],
+    ids=[
+        "anthropic-reference-only",
+        "anthropic-text-then-reference",
+        "openai-keeps-json",
+        "vertex-gemini-keeps-json",
+        "openai-keeps-text",
+        "unresolved-alias-keeps-json",
+        "unresolved-alias-keeps-text",
+    ],
+)
+def test_only_anthropic_routes_receive_tool_references(
+    model: str, custom_llm_provider: str | None, output: list[dict[str, str]], expected_content: object
+) -> None:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[
+            {"type": "function_call", "call_id": "call_route_refs", "name": "load_tools", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_route_refs", "output": output},
+        ],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert [message["content"] for message in request["messages"] if message["role"] == "tool"] == [expected_content]

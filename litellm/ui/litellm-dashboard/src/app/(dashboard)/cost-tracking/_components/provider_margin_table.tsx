@@ -11,6 +11,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 
 interface ProviderMarginTableProps {
   marginConfig: MarginConfig;
+  disabled?: boolean;
   onMarginChange: (provider: string, value: number | { percentage?: number; fixed_amount?: number }) => void;
   onRemoveProvider: (provider: string, providerDisplayName: string) => void;
 }
@@ -21,10 +22,13 @@ interface ProviderMarginRow {
 }
 
 const marginRowDisplayName = (provider: string, t: TFunction): string =>
-  provider === "global" ? t("costTracking.marginTable.global") : getProviderLogoAndName(provider).displayName;
+  provider === "global" || provider === "customer"
+    ? t(`costTracking.marginTable.${provider}`)
+    : getProviderLogoAndName(provider).displayName;
 
 const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   marginConfig,
+  disabled = false,
   onMarginChange,
   onRemoveProvider,
 }) => {
@@ -96,6 +100,8 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     .sort((a, b) => {
       if (a.provider === "global") return -1;
       if (b.provider === "global") return 1;
+      if (a.provider === "customer") return -1;
+      if (b.provider === "customer") return 1;
       const displayA = getProviderLogoAndName(a.provider).displayName;
       const displayB = getProviderLogoAndName(b.provider).displayName;
       return displayA.localeCompare(displayB);
@@ -112,6 +118,13 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
               return (
                 <div className="flex items-center space-x-2">
                   <span className="font-medium">{t("costTracking.marginTable.globalAllProviders")}</span>
+                </div>
+              );
+            }
+            if (row.provider === "customer") {
+              return (
+                <div className="flex items-center space-x-2">
+                  <span className="font-medium">{t("costTracking.marginTable.customerRequests")}</span>
                 </div>
               );
             }
@@ -135,6 +148,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                   <>
                     <div className="flex items-center gap-2">
                       <Input
+                        disabled={disabled}
                         value={editPercentage}
                         onChange={(e) => setEditPercentage(e.target.value)}
                         placeholder="10"
@@ -142,19 +156,25 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                         autoFocus
                       />
                       <span className="text-muted-foreground">%</span>
-                      <span className="text-muted-foreground">+</span>
-                      <span className="text-muted-foreground">$</span>
-                      <Input
-                        value={editFixedAmount}
-                        onChange={(e) => setEditFixedAmount(e.target.value)}
-                        placeholder="0.001"
-                        className="w-24"
-                      />
+                      {row.provider !== "customer" && (
+                        <>
+                          <span className="text-muted-foreground">+</span>
+                          <span className="text-muted-foreground">$</span>
+                          <Input
+                            disabled={disabled}
+                            value={editFixedAmount}
+                            onChange={(e) => setEditFixedAmount(e.target.value)}
+                            placeholder="0.001"
+                            className="w-24"
+                          />
+                        </>
+                      )}
                     </div>
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       aria-label={t("costTracking.marginTable.actions.save", { name: displayName })}
+                      disabled={disabled}
                       onClick={() => handleSaveEdit(row.provider)}
                       className="cursor-pointer text-success hover:text-success/80"
                     >
@@ -177,6 +197,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                       variant="ghost"
                       size="icon-sm"
                       aria-label={t("costTracking.marginTable.actions.edit", { name: displayName })}
+                      disabled={disabled}
                       onClick={() => handleStartEdit(row.provider, row.margin)}
                       className="cursor-pointer text-info hover:text-info/80"
                     >
@@ -198,6 +219,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                 variant="ghost"
                 size="icon-sm"
                 aria-label={t("costTracking.marginTable.actions.remove", { name: displayName })}
+                disabled={disabled}
                 onClick={() => onRemoveProvider(row.provider, displayName)}
                 className="cursor-pointer hover:text-destructive"
               >

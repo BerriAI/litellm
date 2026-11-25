@@ -5,6 +5,7 @@ import importlib
 import inspect
 import json
 import os
+import queue
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import ModuleType
 from typing import Final, Literal, Protocol
@@ -13,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, Omit, OpenAI, omit
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -2661,6 +2662,132 @@ async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_head
     assert json.loads(sent.content) == {**_WIRE_REQUEST, "vendor_flag": True}
     assert sent.headers["x-caller"] == "unit"
     assert sent.headers["authorization"] == "Bearer sk-test"
+
+
+_HEADER_WIRE_BASE: Final = "https://openai-compatible.example/v1"
+_EMBEDDING_RESPONSE_JSON: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+_CHAT_STREAM_CHUNK: Final = {
+    **_CHAT_RESPONSE_JSON,
+    "object": "chat.completion.chunk",
+    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+}
+_CHAT_STREAM_BODY: Final = f"data: {json.dumps(_CHAT_STREAM_CHUNK)}\n\ndata: [DONE]\n\n".encode()
+_HeaderCall = Literal[
+    "completion",
+    "completion_stream",
+    "acompletion",
+    "acompletion_stream",
+    "embedding",
+    "aembedding",
+    "embedding_float",
+    "aembedding_float",
+]
+_HEADER_CALLS_BYPASSING_SDK_TRANSFORM: Final[tuple[_HeaderCall, ...]] = (
+    "completion",
+    "completion_stream",
+    "acompletion",
+    "acompletion_stream",
+    "embedding",
+    "aembedding",
+)
+_ALL_HEADER_CALLS: Final[tuple[_HeaderCall, ...]] = (
+    *_HEADER_CALLS_BYPASSING_SDK_TRANSFORM,
+    "embedding_float",
+    "aembedding_float",
+)
+
+
+def _recording_transport(sent: queue.SimpleQueue[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        if request.url.path.endswith("/embeddings"):
+            return httpx.Response(200, json=_EMBEDDING_RESPONSE_JSON)
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(200, content=_CHAT_STREAM_BODY, headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+
+    return httpx.MockTransport(respond)
+
+
+async def _call_with_extra_headers(
+    call: _HeaderCall, extra_headers: Mapping[str, object], transport: httpx.MockTransport
+) -> None:
+    chat: Final = {"model": "openai/gpt-5.4", "messages": _MESSAGES, "num_retries": 0, "extra_headers": extra_headers}
+    embed: Final = {
+        "model": "openai/text-embedding-3-small",
+        "input": ["hi"],
+        "num_retries": 0,
+        "extra_headers": extra_headers,
+    }
+    with OpenAI(
+        api_key="sk-test", base_url=_HEADER_WIRE_BASE, max_retries=0, http_client=httpx.Client(transport=transport)
+    ) as sync_client:
+        async with AsyncOpenAI(
+            api_key="sk-test",
+            base_url=_HEADER_WIRE_BASE,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as async_client:
+            match call:
+                case "completion":
+                    litellm.completion(client=sync_client, **chat)
+                case "completion_stream":
+                    list(litellm.completion(client=sync_client, stream=True, **chat))
+                case "acompletion":
+                    await litellm.acompletion(client=async_client, **chat)
+                case "acompletion_stream":
+                    async for _ in await litellm.acompletion(client=async_client, stream=True, **chat):
+                        pass
+                case "embedding":
+                    litellm.embedding(client=sync_client, **embed)
+                case "aembedding":
+                    await litellm.aembedding(client=async_client, **embed)
+                case "embedding_float":
+                    litellm.embedding(client=sync_client, encoding_format="float", **embed)
+                case "aembedding_float":
+                    await litellm.aembedding(client=async_client, encoding_format="float", **embed)
+
+
+@pytest.mark.parametrize("call", _ALL_HEADER_CALLS)
+@pytest.mark.parametrize(
+    ("authorization", "expected_authorization"),
+    ((omit, None), (Omit(), None), ("Bearer caller", "Bearer caller"), (None, "Bearer sk-test")),
+    ids=("omit", "fresh-omit-instance", "string-override", "default"),
+)
+async def test_extra_headers_control_the_sdk_authorization_header_on_the_wire(
+    call: _HeaderCall,
+    authorization: str | Omit | None,
+    expected_authorization: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
+    sent: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+    auth_header: Final = {} if authorization is None else {"Authorization": authorization}
+
+    await _call_with_extra_headers(call, {**auth_header, "x-caller": "unit"}, _recording_transport(sent))
+
+    request: Final = sent.get_nowait()
+    assert sent.empty()
+    assert request.headers.get("authorization") == expected_authorization
+    assert request.headers["x-caller"] == "unit"
+
+
+@pytest.mark.parametrize("call", _HEADER_CALLS_BYPASSING_SDK_TRANSFORM)
+async def test_extra_headers_with_a_non_string_value_fail_before_any_request(
+    call: _HeaderCall, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
+    sent: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    with pytest.raises(litellm.InternalServerError):
+        await _call_with_extra_headers(call, {"x-caller": 1}, _recording_transport(sent))
+
+    assert sent.empty()
 
 
 def _developer_message_after_a_user_turn() -> list[dict[str, str]]:

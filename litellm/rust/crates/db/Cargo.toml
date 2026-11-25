@@ -13,9 +13,10 @@ litellm-error.workspace = true
 litellm-secret-value.workspace = true
 serde.workspace = true
 sqlx.workspace = true
+sqlx-core.workspace = true
 strum.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["macros", "net", "sync", "time"] }
 
 [dev-dependencies]
 rstest.workspace = true

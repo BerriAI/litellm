@@ -16,7 +16,6 @@ vi.mock("./panels/ModelRetrySettingsPanel", () => ({ default: () => <div data-te
 vi.mock("./panels/ModelGroupAliasPanel", () => ({ default: () => <div data-testid="panel-alias" /> }));
 vi.mock("./panels/PriceDataPanel", () => ({ default: () => <div data-testid="panel-price" /> }));
 vi.mock("./panels/AccessGroupBudgetsPanel", () => ({ default: () => <div data-testid="panel-budgets" /> }));
-vi.mock("@/components/molecules/DecisionModelsBanner", () => ({ default: () => null }));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -162,7 +161,6 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => {
 vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
   fetchTeamFilterOptions: vi.fn().mockResolvedValue({ keyAliases: [], organizationIds: [], userIds: [] }),
   fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
 const createMockTeamData = (overrides = {}) => ({

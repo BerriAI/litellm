@@ -89,15 +89,14 @@ async def test_catalog_refresh_keeps_selected_toolset_with_current_grants_and_co
     async def read_toolsets(where: Mapping[str, Mapping[str, Sequence[str]]]) -> tuple[MCPToolset, ...]:
         return tuple(toolset for toolset in toolsets if toolset.toolset_id in where["toolset_id"]["in"])
 
-    tables: Final = SimpleNamespace(
-        litellm_objectpermissiontable=SimpleNamespace(find_unique=AsyncMock(return_value=live_grants)),
-        litellm_mcptoolsettable=SimpleNamespace(find_many=read_toolsets),
-    )
+    tables: Final = SimpleNamespace(litellm_mcptoolsettable=SimpleNamespace(find_many=read_toolsets))
     database: Final = SimpleNamespace(db=tables, writer_db=tables)
-    install_rust_auth_stores(monkeypatch).key.rows["catalog-key-hash"] = {
+    stores: Final = install_rust_auth_stores(monkeypatch)
+    stores.key.rows["catalog-key-hash"] = {
         "token": "catalog-key-hash",
         "object_permission_id": grants.object_permission_id,
     }
+    stores.object_permission.seed(grants.object_permission_id, live_grants)
     cache: Final = DualCache()
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)

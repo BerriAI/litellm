@@ -403,17 +403,17 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         title={t("organizations.view.addMember.title")}
         roles={[
           {
-            label: "org_admin",
+            label: t("organizations.view.editMember.roles.orgAdmin"),
             value: "org_admin",
             description: t("organizations.view.addMember.roles.orgAdmin"),
           },
           {
-            label: "internal_user",
+            label: t("organizations.view.editMember.roles.internalUser"),
             value: "internal_user",
             description: t("organizations.view.addMember.roles.internalUser"),
           },
           {
-            label: "internal_user_viewer",
+            label: t("organizations.view.editMember.roles.internalUserViewer"),
             value: "internal_user_viewer",
             description: t("organizations.view.addMember.roles.internalUserViewer"),
           },

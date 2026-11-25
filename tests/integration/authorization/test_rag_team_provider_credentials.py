@@ -30,6 +30,7 @@ from integration._support.client import (
     Scenario,
     eventually,
     gateway_from_environment,
+    list_value,
     object_value,
     string_value,
 )
@@ -51,6 +52,7 @@ AZURE_API_KEY: Final = "integration-rag-azure-key"
 JWT_KEY_ID: Final = "integration-rag-team-provider-jwt"
 WILDCARD_MODEL: Final = "openai/gpt-4o-mini"
 BARE_WILDCARD_MODEL: Final = "gpt-4o-mini"
+FAMILY_WILDCARD_MODEL: Final = "gpt-*"
 OPENAI: Final[Mapping[str, JsonValue]] = MappingProxyType({"custom_llm_provider": "openai"})
 DOCUMENT: Final = ("document.txt", b"team provider credentials", "text/plain")
 BATCH_INPUT_ROW: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -67,6 +69,7 @@ OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 PREFIXED: Final = re.compile(r"^/(team|wildcard|shared|environment|credential|caller|gemini|azure|bedrock)(/[^?]*)")
 STORE_FILES: Final = re.compile(r"^/v1/vector_stores/([^/]+)/files$")
+STORE_FILE: Final = re.compile(r"^/v1/vector_stores/([^/]+)/files/([^/]+)$")
 FILE_CONTENT: Final = re.compile(r"^/v1/files/([^/]+)/content$")
 FILE_ITEM: Final = re.compile(r"^/v1/files/([^/]+)$")
 BATCH_ITEM: Final = re.compile(r"^/v1/batches/([^/]+)$")
@@ -123,6 +126,7 @@ class Tenants:
     team_w_key: str
     wildcard_bare_key: str
     wildcard_prefixed_key: str
+    wildcard_family_key: str
     wildcard_global_key: str
     team_s: str
     team_s_key: str
@@ -266,9 +270,24 @@ def _owned_reply(prefix: str, identity: str, payload: Mapping[str, JsonValue]) -
     return _json_reply(payload) if _owned_by(prefix, identity) else _error_reply(404)
 
 
+def _store_file_object(store_id: str, file_id: str) -> dict[str, JsonValue]:
+    return {
+        "id": file_id,
+        "object": "vector_store.file",
+        "created_at": int(time.time()),
+        "vector_store_id": store_id,
+        "status": "completed",
+        "last_error": None,
+        "usage_bytes": len(DOCUMENT[1]),
+    }
+
+
 def _openai_get(route: str, prefix: str) -> Reply:
-    if route in {"/v1/files", "/v1/batches"}:
+    if route in {"/v1/files", "/v1/batches"} or STORE_FILES.match(route) is not None:
         return _list_reply()
+    store_file: Final = STORE_FILE.match(route)
+    if store_file is not None:
+        return _owned_reply(prefix, store_file[2], _store_file_object(store_file[1], store_file[2]))
     content: Final = FILE_CONTENT.match(route)
     if content is not None:
         return _batch_input_reply() if _owned_by(prefix, content[1]) else _error_reply(404)
@@ -282,6 +301,11 @@ def _openai_get(route: str, prefix: str) -> Reply:
 
 
 def _openai_delete(route: str, prefix: str) -> Reply:
+    store_file: Final = STORE_FILE.match(route)
+    if store_file is not None:
+        return _owned_reply(
+            prefix, store_file[2], {"id": store_file[2], "object": "vector_store.file.deleted", "deleted": True}
+        )
     file_item: Final = FILE_ITEM.match(route)
     if file_item is None:
         return _error_reply(404)
@@ -696,6 +720,7 @@ def _tenants(gateway: Gateway, scenario: Scenario, upstream: str) -> Tenants:
         team_w_key=scenario.key(team_id=team_w),
         wildcard_bare_key=scenario.key(team_id=team_w, models=[BARE_WILDCARD_MODEL]),
         wildcard_prefixed_key=scenario.key(team_id=team_w, models=[WILDCARD_MODEL]),
+        wildcard_family_key=scenario.key(team_id=team_w, models=[FAMILY_WILDCARD_MODEL]),
         wildcard_global_key=scenario.key(team_id=team_w, models=[global_model]),
         team_s=team_s,
         team_s_key=scenario.key(team_id=team_s),
@@ -1029,18 +1054,24 @@ def test_files_upload_keeps_the_accessible_deployment_fallback(
 
 @pytest.mark.parametrize(
     ("caller", "model"),
-    (("wildcard_bare_key", BARE_WILDCARD_MODEL), ("wildcard_prefixed_key", WILDCARD_MODEL)),
-    ids=("bare_model", "prefixed_model"),
+    (
+        ("wildcard_bare_key", BARE_WILDCARD_MODEL),
+        ("wildcard_prefixed_key", WILDCARD_MODEL),
+        ("wildcard_family_key", BARE_WILDCARD_MODEL),
+    ),
+    ids=("bare_model", "prefixed_model", "family_wildcard"),
 )
 def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deployment(
-    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_prefixed_key"], model: str
+    rag_rig: RagRig,
+    caller: Literal["wildcard_bare_key", "wildcard_prefixed_key", "wildcard_family_key"],
+    model: str,
 ) -> None:
     key: Final = getattr(rag_rig.tenants, caller)
 
     ingested: Final = _ingest(rag_rig.gateway, key)
     store_id: Final = _completed_store(rag_rig, ingested)
-    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
-    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+    assert _provider_file_id(ingested).startswith("file-wildcard-"), ingested.text
     rows: Final = _store_rows(store_id)
     assert [row["team_id"] for row in rows] == [rag_rig.tenants.team_w], rows
     assert WILDCARD_API_KEY not in json.dumps(rows), rows
@@ -1059,8 +1090,8 @@ def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and
 
     ingested: Final = _ingest(rag_rig.gateway, tenants.wildcard_global_key)
     store_id: Final = _completed_store(rag_rig, ingested)
-    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
-    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+    assert _provider_file_id(ingested).startswith("file-wildcard-"), ingested.text
 
     response: Final = _query(
         rag_rig.gateway, tenants.wildcard_global_key, tenants.global_model, {**OPENAI, "vector_store_id": store_id}
@@ -1073,9 +1104,54 @@ def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and
     )
 
 
-def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_deployment(rag_rig: RagRig) -> None:
+def _restricted_wildcard_key(tenants: Tenants, caller: Literal["wildcard_bare_key", "wildcard_family_key"]) -> str:
+    match caller:
+        case "wildcard_bare_key":
+            return tenants.wildcard_bare_key
+        case "wildcard_family_key":
+            return tenants.wildcard_family_key
+
+
+@pytest.mark.parametrize(
+    ("method", "file_path"),
+    (("GET", ""), ("GET", "/{file_id}"), ("DELETE", "/{file_id}")),
+    ids=("list", "retrieve", "delete"),
+)
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
+def test_vector_store_file_calls_by_a_key_restricted_under_the_team_wildcard_use_the_team_deployment(
+    rag_rig: RagRig,
+    caller: Literal["wildcard_bare_key", "wildcard_family_key"],
+    method: Literal["GET", "DELETE"],
+    file_path: str,
+) -> None:
+    key: Final = _restricted_wildcard_key(rag_rig.tenants, caller)
+    ingested: Final = _ingest(rag_rig.gateway, key)
+    store_id: Final = _completed_store(rag_rig, ingested)
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+
+    response: Final = rag_rig.gateway.request(
+        method,
+        f"/v1/vector_stores/{store_id}/files{file_path.format(file_id=_ingested_file_id(ingested))}",
+        key=key,
+    )
+
+    assert response.status_code == 200, response.text
+    assert rag_rig.signatures() == (
+        (
+            "wildcard",
+            method,
+            f"/v1/vector_stores/{store_id}/files{file_path.format(file_id=_provider_file_id(ingested))}",
+            f"Bearer {WILDCARD_API_KEY}",
+        ),
+    )
+
+
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
+def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_deployment(
+    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
+) -> None:
     response: Final = rag_rig.gateway.request_multipart(
-        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=rag_rig.tenants.wildcard_bare_key
+        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=_restricted_wildcard_key(rag_rig.tenants, caller)
     )
 
     assert response.status_code == 200, response.text
@@ -1085,12 +1161,16 @@ def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_
 @pytest.mark.parametrize("batch_options", ({}, {"litellm_credential_name": "no-such-credential"}), ids=("plain", "credential_name"))
 @pytest.mark.parametrize(
     ("caller", "prefix", "api_key", "reads_input"),
-    (("team_a_key", "team", TEAM_API_KEY, False), ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True)),
-    ids=("team_key", "restricted_wildcard_key"),
+    (
+        ("team_a_key", "team", TEAM_API_KEY, False),
+        ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True),
+        ("wildcard_family_key", "wildcard", WILDCARD_API_KEY, True),
+    ),
+    ids=("team_key", "restricted_wildcard_key", "family_wildcard_key"),
 )
 def test_batch_create_reads_the_input_and_creates_the_batch_through_the_team_deployment(
     rag_rig: RagRig,
-    caller: Literal["team_a_key", "wildcard_bare_key"],
+    caller: Literal["team_a_key", "wildcard_bare_key", "wildcard_family_key"],
     prefix: str,
     api_key: str,
     reads_input: bool,
@@ -1959,7 +2039,6 @@ FOLLOW_UP_CALLS: Final = (
     ("GET", "/v1/files/{file_id}", "/v1/files/{file_id}"),
     ("GET", "/v1/files/{file_id}/content", "/v1/files/{file_id}/content"),
     ("DELETE", "/v1/files/{file_id}", "/v1/files/{file_id}"),
-    ("GET", "/v1/files?purpose=batch&custom_llm_provider=openai", "/v1/files"),
     ("GET", "/v1/batches/{batch_id}", "/v1/batches/{batch_id}"),
     ("POST", "/v1/batches/{batch_id}/cancel", "/v1/batches/{batch_id}/cancel"),
 )
@@ -1967,7 +2046,6 @@ FOLLOW_UP_CALL_IDS: Final = (
     "file_retrieve",
     "file_content",
     "file_delete",
-    "file_list",
     "batch_retrieve",
     "batch_cancel",
 )
@@ -1977,11 +2055,12 @@ def _bearer(key: str) -> Mapping[str, str]:
     return MappingProxyType({"Authorization": f"Bearer {key}"})
 
 
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
 @pytest.mark.parametrize(("method", "path", "route"), FOLLOW_UP_CALLS, ids=FOLLOW_UP_CALL_IDS)
 def test_files_and_batches_calls_by_a_key_restricted_under_the_team_wildcard_use_the_team_deployment(
-    rag_rig: RagRig, method: str, path: str, route: str
+    rag_rig: RagRig, method: str, path: str, route: str, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
 ) -> None:
-    key: Final = rag_rig.tenants.wildcard_bare_key
+    key: Final = _restricted_wildcard_key(rag_rig.tenants, caller)
     file_id, batch_id = _batch_for(rag_rig, _bearer(key))
 
     response: Final = rag_rig.gateway.request(method, path.format(file_id=file_id, batch_id=batch_id), key=key)
@@ -1990,6 +2069,26 @@ def test_files_and_batches_calls_by_a_key_restricted_under_the_team_wildcard_use
     assert rag_rig.signatures() == (
         ("wildcard", method, route.format(file_id=file_id, batch_id=batch_id), f"Bearer {WILDCARD_API_KEY}"),
     )
+
+
+def _listed_file_ids(rig: RagRig, headers: Mapping[str, str]) -> list[str]:
+    response: Final = rig.gateway.request("GET", "/v1/files?custom_llm_provider=openai", headers=headers)
+    assert response.status_code == 200, response.text
+    return sorted(string_value(object_value(file)["id"]) for file in list_value(object_value(response.json())["data"]))
+
+
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
+def test_file_list_by_a_key_restricted_under_the_team_wildcard_gains_only_its_upload_without_an_upstream_call(
+    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
+) -> None:
+    headers: Final = _bearer(_restricted_wildcard_key(rag_rig.tenants, caller))
+    listed_before: Final = _listed_file_ids(rag_rig, headers)
+    file_id, _ = _batch_for(rag_rig, headers)
+
+    listed: Final = _listed_file_ids(rag_rig, headers)
+
+    assert listed == sorted((*listed_before, file_id))
+    assert rag_rig.signatures() == ()
 
 
 def test_batch_list_by_a_key_restricted_under_the_team_wildcard_is_answered_by_the_proxy_without_an_upstream_call(
@@ -2248,6 +2347,20 @@ def test_forwarded_provider_key_on_files_and_batches_follow_up_calls_replaces_th
     assert rag_rig.signatures() == (
         (prefix, method, route.format(file_id=file_id, batch_id=batch_id), f"Bearer {FORWARDED_API_KEY}"),
     )
+
+
+@pytest.mark.parametrize("caller", ("team_a_key", "wildcard_bare_key"), ids=("team_key", "restricted_wildcard_key"))
+def test_file_list_with_a_forwarded_provider_key_gains_only_the_callers_upload_without_an_upstream_call(
+    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"]
+) -> None:
+    headers: Final = _forwarding(getattr(rag_rig.tenants, caller))
+    listed_before: Final = _listed_file_ids(rag_rig, headers)
+    file_id, _ = _batch_for(rag_rig, headers)
+
+    listed: Final = _listed_file_ids(rag_rig, headers)
+
+    assert listed == sorted((*listed_before, file_id))
+    assert rag_rig.signatures() == ()
 
 
 @pytest.mark.parametrize(
