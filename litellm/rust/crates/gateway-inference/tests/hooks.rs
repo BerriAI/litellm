@@ -562,3 +562,174 @@ async fn an_answer_without_an_id_is_logged_under_the_call_id() {
         (json!("call-7"), json!("call-7"))
     );
 }
+
+/// A callback that keeps the spend log input the failure hook hands it.
+struct FailureLog {
+    manifest: Manifest,
+    logged: Mutex<Vec<Value>>,
+}
+
+impl FailureLog {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            manifest: Manifest {
+                selection: Selection::named("failure-log"),
+                subscriptions: vec![Subscription {
+                    reads: FieldSet::of(&[Field::SpendLogInput]),
+                    ..Subscription::on(Hook::PostCallFailure)
+                }],
+                has_request_state: false,
+            },
+            logged: Mutex::default(),
+        })
+    }
+
+    /// The row the one failure logged, once it was.
+    async fn row(&self) -> Value {
+        for _ in 0..200 {
+            if let Some(input) = self.logged.lock().first() {
+                return input["rows"][0]["row"].clone();
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("no failure was logged")
+    }
+}
+
+impl Callback for FailureLog {
+    type State = ();
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
+        if let Ok(Some(logged)) = input.fields.raw(Field::SpendLogInput) {
+            self.logged.lock().push(logged.clone());
+        }
+        Box::pin(async { Ok(None) })
+    }
+}
+
+/// What a failure's row names of where it failed and why.
+fn named(row: &Value) -> Value {
+    let error = &row["metadata"]["error_information"];
+    json!({
+        "names_a_deployment": row["metadata"]["model_info"]["id"].as_str().is_some_and(|id| !id.is_empty()),
+        "api_base": row["litellm_params"]["api_base"],
+        "status": row["metadata"]["status"],
+        "error_code": error["error_code"],
+        "error_class": error["error_class"],
+        "llm_provider": error["llm_provider"],
+    })
+}
+
+#[rstest]
+#[case::the_provider_fails_it(false)]
+#[case::its_stream_breaks(true)]
+#[tokio::test]
+async fn a_failed_calls_spend_log_names_the_deployment_and_the_error(#[case] stream: bool) {
+    let log = FailureLog::new();
+    let callback: Arc<dyn ErasedCallback> = log.clone();
+    let upstream = answering(ResponseTemplate::new(500).set_body_json(
+        json!({"type": "error", "error": {"type": "api_error", "message": "down"}}),
+    ))
+    .await;
+    let base = match stream {
+        false => upstream.uri(),
+        true => support::truncating_upstream("event: message_start\ndata: {}\n\n").await,
+    };
+    let app = support::app_with_callbacks("anthropic/test-model", &base, vec![callback]);
+    let _ = to_bytes(ask(app, stream).await.into_body(), 4096).await;
+
+    let row = log.row().await;
+    let error_class = match stream {
+        false => "InternalServerError",
+        true => "APIConnectionError",
+    };
+    assert_eq!(
+        (named(&row), row["metadata"]["model_group"].clone()),
+        (
+            json!({"names_a_deployment": true, "api_base": base, "status": "failure",
+                "error_code": "500", "error_class": error_class,
+                "llm_provider": "anthropic"}),
+            json!("public/model")
+        )
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_call_refused_before_routing_logs_a_failure_on_no_deployment() {
+    let upstream = answering(message()).await;
+    let log = FailureLog::new();
+    let callbacks: Vec<Arc<dyn ErasedCallback>> = vec![Recording::answering(refuses), log.clone()];
+    let app = support::app_with_callbacks("anthropic/test-model", &upstream.uri(), callbacks);
+    let _ = to_bytes(ask(app, false).await.into_body(), 4096).await;
+
+    assert_eq!(
+        named(&log.row().await),
+        json!({"names_a_deployment": false, "api_base": null, "status": "failure", "error_code": "429",
+            "error_class": "HTTPException", "llm_provider": ""})
+    );
+}
+
+/// A provider that answers 500 and notes the base it was called at, in the order the
+/// deployments were called.
+struct Failing {
+    base: String,
+    called: Arc<Mutex<Vec<String>>>,
+}
+
+impl wiremock::Respond for Failing {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        self.called.lock().push(self.base.clone());
+        ResponseTemplate::new(500).set_body_json(
+            json!({"type": "error", "error": {"type": "api_error", "message": "down"}}),
+        )
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_retried_calls_failure_names_the_deployment_its_last_attempt_ran_on() {
+    let called = Arc::new(Mutex::new(Vec::new()));
+    let mut deployments = Vec::new();
+    for _ in 0..2 {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(Failing {
+                base: upstream.uri(),
+                called: called.clone(),
+            })
+            .mount(&upstream)
+            .await;
+        deployments.push((
+            support::test_params("anthropic/test-model", &upstream.uri()),
+            upstream,
+        ));
+    }
+    let log = FailureLog::new();
+    let callback: Arc<dyn ErasedCallback> = log.clone();
+    let app = support::app_over_with_callbacks(
+        deployments
+            .iter()
+            .map(|(params, _)| params.clone())
+            .collect(),
+        json!({"num_retries": 1, "allowed_fails": 0, "retry_after": 0}),
+        vec![callback],
+    );
+    let _ = to_bytes(ask(app, false).await.into_body(), 4096).await;
+
+    let row = log.row().await;
+    let called = called.lock().clone();
+    let bases: std::collections::HashSet<&String> = called.iter().collect();
+    assert_eq!(
+        (bases.len(), row["litellm_params"]["api_base"].clone()),
+        (2, json!(called.last()))
+    );
+}

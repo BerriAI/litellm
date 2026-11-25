@@ -1,6 +1,6 @@
-//! The `spend_log_input` field of a call the gateway served, worked out by `fields.rs` the way
-//! `rust_spend_log_inputs.py` builds it for the proxy: who the call is charged to, what kind of
-//! call it was, and the row builder's input document for its one spend log row.
+//! The `spend_log_input` field of a call the gateway served or failed, worked out by `fields.rs`
+//! the way `rust_spend_log_inputs.py` builds it for the proxy: who the call is charged to, what
+//! kind of call it was, and the row builder's input document for its one spend log row.
 //!
 //! The fields the document leaves at their defaults, and why each default holds, are noted where
 //! they are left out or set. It builds no logging payload yet, so the row reads the call from the
@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use jiff::{Timestamp, tz::TimeZone};
 use litellm_gateway_inference::{
     CallType, ServedCall,
-    record::{Charged, unix},
+    record::{AttemptOn, Charged, FailureFacts, unix},
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde::Serialize;
@@ -36,6 +36,22 @@ const CACHE_OFF: &str = "Cache OFF";
 /// - `batch_accounting`: false. `/v1/messages` is the only route served, and it runs no batch.
 /// - `response` and `kwargs_response_cost`: none. The gateway builds no logging payload yet, and
 ///   the cost comes from `Field::Cost`, which the served attempt's settled cost fills.
+///
+/// `SpendLogInput::Failure` leaves the same `settings` at their defaults, for the same reason:
+/// `disable_error_logs` and `disable_pre_routing_error_logs` are keys the config types do not
+/// name, so admit sends a config that sets either to Python. Its other fields:
+/// - `enrich`: true. The failure is never Python's `DBLookupDeadlineExceeded`, which `host/auth`
+///   has no counterpart of.
+/// - `track`: true, as `tracks_failure_spend` decides with default settings. The endpoint wrote
+///   no failure row of its own, since the gateway has none; error logs are on; a pre-routing
+///   rejection is skipped only with `disable_pre_routing_error_logs`; `/v1/messages` runs
+///   inference checks, so its route is trackable; and it is no dashboard session info route.
+/// - `window_resets`: none, as on success.
+/// - `rows`: the one row of the call. Accepted differences: no failure is charged, where Python
+///   prices a provider read timeout, a client disconnect or a total timeout that ran out, and
+///   writes an `<id>-attempt-N` row for each earlier retry that timed out; and a failure whose
+///   attempt settled its cost first costs nothing too. `fields.rs` answers `Field::Cost` with
+///   `failure_row_response_cost: 0.0` for it and leaves `Field::BilledRetryAttempts` out.
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SpendLogInput<'a> {
@@ -45,6 +61,12 @@ enum SpendLogInput<'a> {
         stream: bool,
         stream_complete: bool,
         row: RowRequest<'a>,
+    },
+    Failure {
+        identity: Identity<'a>,
+        enrich: bool,
+        track: bool,
+        rows: [RowRequest<'a>; 1],
     },
 }
 
@@ -100,6 +122,33 @@ struct Metadata<'a> {
     model_info: ModelInfo<'a>,
     deployment: Option<&'a str>,
     status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_information: Option<ErrorInformation<'a>>,
+}
+
+/// `StandardLoggingPayloadErrorInformation` as the failure row's metadata stores it. The
+/// traceback is empty, since the gateway raised no Python exception. Accepted difference: the
+/// keys Python sets to `None` for the errors the gateway serves, and `normalized_error`, are left
+/// out.
+#[derive(Serialize)]
+struct ErrorInformation<'a> {
+    error_code: &'a str,
+    error_class: &'a str,
+    llm_provider: &'a str,
+    traceback: &'static str,
+    error_message: &'a str,
+}
+
+impl<'a> ErrorInformation<'a> {
+    fn of(failure: &'a FailureFacts) -> Self {
+        Self {
+            error_code: &failure.error_code,
+            error_class: &failure.error_class,
+            llm_provider: failure.llm_provider.as_deref().unwrap_or_default(),
+            traceback: "",
+            error_message: &failure.error_message,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -182,6 +231,7 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
             },
             deployment: model,
             status: "success",
+            error_information: None,
         },
         litellm_params: LitellmParams {
             api_base: deployment.and_then(|deployment| deployment.params.api_base.as_deref()),
@@ -206,6 +256,80 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
         stream: served.stream,
         stream_complete: served.stream,
         row: RowRequest { row },
+    };
+    serde_json::to_value(input).ok()
+}
+
+/// What a failed call tells its spend log input.
+pub(super) struct Failed<'a> {
+    pub(super) call_type: CallType,
+    pub(super) route: &'static str,
+    pub(super) charged: &'a Charged,
+    pub(super) call_id: Option<&'a str>,
+    pub(super) trace_id: &'a str,
+    pub(super) start: SystemTime,
+    pub(super) end: SystemTime,
+    /// The model the request named, which a call that was never routed is logged under.
+    pub(super) model: Option<&'a str>,
+    pub(super) provider: Option<&'a str>,
+    /// The latest attempt's deployment, `None` for a call refused before it was routed.
+    pub(super) attempt: Option<&'a AttemptOn>,
+    pub(super) failure: &'a FailureFacts,
+}
+
+/// The `spend_log_input` document of `failed`: its one row is the success row of a call that
+/// used nothing, its `status` `failure` and its metadata naming the error.
+pub(super) fn failure(failed: &Failed<'_>) -> Option<serde_json::Value> {
+    let deployment = failed.attempt.map(|on| &*on.deployment);
+    let model = deployment.map_or(failed.model, |deployment| {
+        Some(deployment.params.model.as_str())
+    });
+    let charged = failed.charged;
+    let now = SystemTime::now();
+    let row = Row {
+        call_type: failed.call_type.into(),
+        cache_hit: false,
+        now: unix(now),
+        fallback_session_id: uuid::Uuid::new_v4().to_string(),
+        start_time: Moment::of(failed.start)?,
+        end_time: Moment::of(failed.end)?,
+        completion_start_time: Moment::of(failed.end)?,
+        usage: None,
+        metadata: Metadata {
+            user_api_key: charged.key_hash.as_deref(),
+            user_api_key_hash: charged.key_hash.as_deref(),
+            user_api_key_alias: charged.key_alias.as_deref(),
+            user_api_key_user_id: charged.user_id.as_deref(),
+            user_api_key_request_route: failed.route,
+            model_group: failed.attempt.map_or("", |on| on.model_group.as_str()),
+            model_info: ModelInfo {
+                id: deployment.map(|deployment| deployment.id.as_str()),
+            },
+            deployment: deployment.map(|deployment| deployment.params.model.as_str()),
+            status: "failure",
+            error_information: Some(ErrorInformation::of(failed.failure)),
+        },
+        litellm_params: LitellmParams {
+            api_base: deployment.and_then(|deployment| deployment.params.api_base.as_deref()),
+            litellm_call_id: failed.call_id,
+        },
+        kwargs: Kwargs {
+            model,
+            custom_llm_provider: failed.provider,
+            litellm_call_id: failed.call_id,
+            litellm_trace_id: failed.trace_id,
+        },
+        cache_key: CACHE_OFF,
+    };
+    let input = SpendLogInput::Failure {
+        identity: Identity {
+            token: charged.key_hash.as_deref(),
+            user_id: charged.user_id.as_deref(),
+            key_alias: charged.key_alias.as_deref(),
+        },
+        enrich: true,
+        track: true,
+        rows: [RowRequest { row }],
     };
     serde_json::to_value(input).ok()
 }
@@ -389,6 +513,184 @@ mod tests {
         assert_eq!(
             (row.api_key.as_str(), row.user.as_str()),
             ("litellm_proxy_master_key", "default_user_id")
+        );
+    }
+
+    fn on(deployment: Arc<Deployment>) -> AttemptOn {
+        AttemptOn {
+            model_group: "claude".to_owned(),
+            deployment,
+        }
+    }
+
+    fn upstream_500() -> FailureFacts {
+        FailureFacts {
+            error_code: "500".to_owned(),
+            error_class: "InternalServerError".to_owned(),
+            llm_provider: Some("anthropic".to_owned()),
+            error_message: "the provider failed".to_owned(),
+        }
+    }
+
+    fn failed_input(attempt: Option<&AttemptOn>, failure: &FailureFacts) -> Value {
+        failure_of(&key(), attempt, failure)
+    }
+
+    fn failure_of(charged: &Charged, attempt: Option<&AttemptOn>, failure: &FailureFacts) -> Value {
+        super::failure(&Failed {
+            call_type: CallType::AnthropicMessages,
+            route: "/v1/messages",
+            charged,
+            call_id: Some("call-1"),
+            trace_id: "trace-1",
+            start: at(1_795_000_000, 250_000),
+            end: at(1_795_000_002, 0),
+            model: Some("claude"),
+            provider: attempt.map(|_| "anthropic"),
+            attempt,
+            failure,
+        })
+        .unwrap()
+    }
+
+    /// The row the spend log callback builds from a failure's one row, under the call id.
+    fn failure_row(input: &Value) -> litellm_callbacks_spend_log::SpendLogRow {
+        let rows = input["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        row(&json!({"row": rows[0]}))
+    }
+
+    #[rstest]
+    fn the_spend_log_callback_reads_a_failed_calls_input_as_a_tracked_failure() {
+        let attempt = on(deployment());
+        let parsed: Parsed =
+            serde_json::from_value(failed_input(Some(&attempt), &upstream_500())).unwrap();
+        let Parsed::Failure(failure) = parsed else {
+            panic!("a failed call is a failure")
+        };
+        assert_eq!(
+            (
+                failure.identity.token,
+                failure.identity.key_alias,
+                failure.enrich,
+                failure.track,
+                failure.window_resets,
+                failure.rows.len(),
+                failure.settings,
+            ),
+            (
+                Some("a".repeat(64)),
+                Some("ci".to_owned()),
+                true,
+                true,
+                vec![],
+                1,
+                litellm_callbacks_spend_logger::hook_input::Settings::default(),
+            )
+        );
+    }
+
+    #[rstest]
+    fn a_routed_failures_row_names_the_deployment_and_the_error() {
+        let attempt = on(deployment());
+        let row = failure_row(&failed_input(Some(&attempt), &upstream_500()));
+        let metadata: Value = serde_json::from_str(&row.metadata).unwrap();
+        assert_eq!(
+            (
+                (
+                    row.model.as_str(),
+                    row.model_group.as_str(),
+                    row.model_id.as_str(),
+                    row.api_base.as_str(),
+                    row.custom_llm_provider.as_str(),
+                ),
+                (row.prompt_tokens, row.completion_tokens, row.total_tokens),
+                row.completion_start_time.as_deref(),
+                row.status,
+                metadata["status"].clone(),
+                metadata["error_information"].clone(),
+            ),
+            (
+                (
+                    "anthropic/claude-haiku-5-5",
+                    "claude",
+                    "claude-a",
+                    "https://api.anthropic.com",
+                    "anthropic",
+                ),
+                (0, 0, 0),
+                Some("2026-11-18T11:06:42+00:00"),
+                SpendLogStatus::Failure,
+                json!("failure"),
+                json!({
+                    "error_code": "500",
+                    "error_class": "InternalServerError",
+                    "llm_provider": "anthropic",
+                    "traceback": "",
+                    "error_message": "the provider failed",
+                }),
+            )
+        );
+    }
+
+    #[rstest]
+    fn a_call_refused_before_routing_names_no_deployment() {
+        let refused = FailureFacts {
+            error_code: "429".to_owned(),
+            error_class: "HTTPException".to_owned(),
+            llm_provider: None,
+            error_message: "too many requests".to_owned(),
+        };
+        let row = failure_row(&failed_input(None, &refused));
+        let metadata: Value = serde_json::from_str(&row.metadata).unwrap();
+        assert_eq!(
+            (
+                row.model.as_str(),
+                row.model_group.as_str(),
+                row.model_id.as_str(),
+                row.api_base.as_str(),
+                row.custom_llm_provider.as_str(),
+                row.status,
+                metadata["error_information"]["error_class"].clone(),
+                metadata["error_information"]["llm_provider"].clone(),
+            ),
+            (
+                "claude",
+                "",
+                "",
+                "",
+                "",
+                SpendLogStatus::Failure,
+                json!("HTTPException"),
+                json!(""),
+            )
+        );
+    }
+
+    #[rstest]
+    fn a_stream_that_broke_is_logged_as_the_connection_error_it_ended_on() {
+        let attempt = on(deployment());
+        let broke = FailureFacts {
+            error_code: "500".to_owned(),
+            error_class: "APIConnectionError".to_owned(),
+            llm_provider: Some("anthropic".to_owned()),
+            error_message: String::new(),
+        };
+        let row = failure_row(&failed_input(Some(&attempt), &broke));
+        let metadata: Value = serde_json::from_str(&row.metadata).unwrap();
+        assert_eq!(
+            (
+                row.model_id.as_str(),
+                row.status,
+                metadata["error_information"]["error_code"].clone(),
+                metadata["error_information"]["error_class"].clone(),
+            ),
+            (
+                "claude-a",
+                SpendLogStatus::Failure,
+                json!("500"),
+                json!("APIConnectionError"),
+            )
         );
     }
 }

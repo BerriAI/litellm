@@ -543,6 +543,14 @@ mod tests {
         "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
         "router_settings.optional_pre_call_checks"
     )]
+    #[case::error_logs_turned_off(
+        "general_settings:\n  disable_error_logs: true\n",
+        "general_settings.disable_error_logs"
+    )]
+    #[case::pre_routing_error_logs_turned_off(
+        "general_settings:\n  disable_pre_routing_error_logs: true\n",
+        "general_settings.disable_pre_routing_error_logs"
+    )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(
         "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",

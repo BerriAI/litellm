@@ -810,6 +810,49 @@ mod tests {
         );
     }
 
+    /// A request admit sends to Python never reaches the native routes, so the route's failure
+    /// hooks never run for it and the spend log callback writes no failure row for it: Python
+    /// writes its own.
+    #[rstest]
+    #[tokio::test]
+    async fn a_request_admit_sends_to_python_never_reaches_a_native_route() {
+        litellm_gateway::install_crypto_provider();
+        let config = Config::from_yaml(
+            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n      input_cost_per_token: 0.001\ngeneral_settings:\n  master_key: gateway-key\n",
+        )
+        .unwrap();
+        let NativeState { state, admit, .. } =
+            native_state(Some(unstored(config)), &Environment::default())
+                .await
+                .unwrap();
+        let reached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = reached.clone();
+        let native = tower::service_fn(move |_: Request| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Ok::<_, Infallible>(Response::new(axum::body::Body::empty())) }
+        });
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer gateway-key")
+            .body(axum::body::Body::from(
+                r#"{"model":"claude","max_tokens":8,"messages":[]}"#,
+            ))
+            .unwrap();
+
+        let live = Arc::new(Live::new(Served::new(state.clone(), admit, native)));
+        let response = tower::ServiceExt::oneshot(alone(live), request)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response.status(),
+                reached.load(std::sync::atomic::Ordering::SeqCst)
+            ),
+            (StatusCode::NOT_IMPLEMENTED, 0)
+        );
+        state.close().await;
+    }
+
     #[rstest]
     #[tokio::test]
     async fn without_a_config_python_answers_every_request() {
