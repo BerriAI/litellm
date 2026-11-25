@@ -98,7 +98,7 @@ def test_sync_bridged_turn_names_an_upstream_param_as_the_responses_field_the_ca
             input="hi",
             responses_api_request=_request_sending_every_renamed_field(),
             custom_llm_provider="openai",
-            api_key="sk-bridge-test",
+            request_kwargs={"api_key": "sk-bridge-test"},
         )
 
     assert upstream.call_count == 1
@@ -117,7 +117,7 @@ async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field
         responses_api_request=_request_sending_every_renamed_field(),
         custom_llm_provider="openai",
         _is_async=True,
-        api_key="sk-bridge-test",
+        request_kwargs={"api_key": "sk-bridge-test"},
     )
 
     with pytest.raises(litellm.BadRequestError) as raised:
@@ -142,8 +142,7 @@ def test_bridged_turn_names_no_responses_field_the_caller_did_not_send(
             input="hi",
             responses_api_request={"user": "user-1"},
             custom_llm_provider="openai",
-            api_key="sk-bridge-test",
-            max_tokens=100000,
+            request_kwargs={"api_key": "sk-bridge-test", "max_tokens": 100000},
         )
 
     assert upstream.call_count == 1
@@ -172,7 +171,7 @@ def test_bridged_turn_names_a_message_path_by_the_request_field_the_message_came
             input="hi",
             responses_api_request=responses_api_request,
             custom_llm_provider="openai",
-            api_key="sk-bridge-test",
+            request_kwargs={"api_key": "sk-bridge-test"},
         )
 
     assert upstream.call_count == 1
@@ -190,7 +189,7 @@ async def test_bridged_follow_up_names_no_request_field_for_a_message_path_insid
         responses_api_request={"previous_response_id": "resp_stored"},
         custom_llm_provider="openai",
         _is_async=True,
-        api_key="sk-bridge-test",
+        request_kwargs={"api_key": "sk-bridge-test"},
     )
 
     stored_turns: Final = _StoredTurns((_stored_mcp_turn("resp_stored"),))
@@ -247,7 +246,7 @@ async def test_a_first_turn_stores_an_empty_path_to_the_root_so_a_fork_off_it_re
             responses_api_request={},
             custom_llm_provider="openai",
             _is_async=True,
-            litellm_metadata=litellm_metadata,
+            request_kwargs={"litellm_metadata": litellm_metadata},
         )
 
     assert captured["litellm_metadata"] == {"user_api_key": "hashed", PREVIOUS_RESPONSE_IDS_METADATA_KEY: []}
@@ -448,23 +447,43 @@ async def test_bridged_turn_with_a_client_field_named_previous_response_client_i
     assert isinstance(response, ResponsesAPIResponse)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("client_field", ["caller_input", "names_non_string_fields"])
-async def test_bridged_turn_with_a_client_field_named_like_a_bridge_keyword_reaches_the_provider(client_field: str):
-    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
-    client: Final = AsyncHTTPHandler()
-    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+_CLIENT_FIELDS_NAMED_LIKE_BRIDGE_KEYWORDS: Final = (
+    "caller_input",
+    "names_non_string_fields",
+    "responses_api_request",
+    "request_input",
+    "litellm_completion_request",
+    "summarizes_into_compaction",
+    "_is_async",
+    "request_kwargs",
+)
 
-    response = await litellm.aresponses(
-        model="azure_ai/claude-sonnet-4-6",
-        api_base="https://fake-foundry-resource.services.ai.azure.com",
-        api_key="fake-api-key",
-        input="Double it",
-        client=client,
-        **{client_field: "from the client body"},
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("client_field", _CLIENT_FIELDS_NAMED_LIKE_BRIDGE_KEYWORDS)
+async def test_bridged_turn_forwards_a_client_field_named_like_a_bridge_keyword_to_the_provider(
+    asynchronous: bool, client_field: str
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    request: Final = {
+        "model": "azure_ai/claude-sonnet-4-6",
+        "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+        "api_key": "fake-api-key",
+        "input": "Double it",
+        client_field: "from the client body",
+    }
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    response: Final = (
+        await litellm.aresponses(**request, client=async_client)
+        if asynchronous
+        else litellm.responses(**request, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(provider))))
     )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert provider.request_body[client_field] == "from the client body"
     assert isinstance(response, ResponsesAPIResponse)
 
 
@@ -943,7 +962,7 @@ async def test_bridged_follow_up_after_a_client_tool_search_reports_auto_for_an_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("client_field", ["caller_input", "names_non_string_fields"])
+@pytest.mark.parametrize("client_field", _CLIENT_FIELDS_NAMED_LIKE_BRIDGE_KEYWORDS)
 async def test_bridged_follow_up_after_a_client_tool_search_with_a_client_field_named_like_a_bridge_keyword_reaches_the_provider(
     client_field: str,
 ):
@@ -968,6 +987,7 @@ async def test_bridged_follow_up_after_a_client_tool_search_with_a_client_field_
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert provider.request_body[client_field] == "from the client body"
     assert isinstance(response, ResponsesAPIResponse)
 
 
@@ -1017,7 +1037,7 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
             responses_api_request={"tools": [namespace]},
             custom_llm_provider="gemini",
             _is_async=is_async,
-            litellm_logging_obj=logging_obj,
+            request_kwargs={"litellm_logging_obj": logging_obj},
         )
         if inspect.iscoroutine(outcome):
             await outcome
@@ -1077,7 +1097,7 @@ async def test_bridged_turn_logs_a_shortened_name_known_only_from_an_earlier_cal
             responses_api_request={"tools": []},
             custom_llm_provider="gemini",
             _is_async=False,
-            litellm_logging_obj=logging_obj,
+            request_kwargs={"litellm_logging_obj": logging_obj},
         )
 
     logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
@@ -1122,7 +1142,7 @@ def test_spend_logs_name_a_bridged_call_by_the_tool_the_caller_gets_back(returne
             responses_api_request={"tools": tools},
             custom_llm_provider="anthropic",
             _is_async=False,
-            litellm_logging_obj=logging_obj,
+            request_kwargs={"litellm_logging_obj": logging_obj},
         )
 
     response: Final = litellm.ModelResponse(

@@ -5291,7 +5291,7 @@ def _bridged_completion_kwargs(
             responses_api_request={"tools": tools},
             custom_llm_provider="anthropic",
             _is_async=False,
-            litellm_logging_obj=logging_obj,
+            request_kwargs={"litellm_logging_obj": logging_obj},
         )
     return captured.value.kwargs
 

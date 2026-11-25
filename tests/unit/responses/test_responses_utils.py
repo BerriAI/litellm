@@ -1,9 +1,12 @@
 from importlib import import_module
 import base64
+import json
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 import litellm
@@ -826,36 +829,35 @@ class TestResponsesAPIProviderSpecificParams:
         assert "temperature" in result
 
 
-def test_responses_extra_body_forwarded_to_completion_transformation_handler():
-    """
-    Regression test: extra_body must be forwarded to response_api_handler
-    when responses_api_provider_config is None (completion transformation path).
+def test_responses_extra_body_reaches_the_chat_completions_request_of_the_bridge(respx_mock: respx.MockRouter):
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
 
-    Before the fix, extra_body was a named parameter of responses() but was
-    not passed to litellm_completion_transformation_handler.response_api_handler(),
-    so it was silently dropped.
-    """
-    with (
-        patch.object(
-            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
-            return_value=None,
-        ),
-        patch.object(
-            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
-        ) as mock_handler,
+    with patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
+        return_value=None,
     ):
-        mock_handler.return_value = MagicMock()
-
         litellm.responses(
             model="openai/gpt-4o",
             input="Hello",
             extra_body={"custom_key": "custom_value"},
+            api_key="fake-provider-api-key",
+            num_retries=0,
         )
 
-        mock_handler.assert_called_once()
-        call_kwargs = mock_handler.call_args
-        # extra_body can be a positional or keyword arg; check both
-        assert call_kwargs.kwargs.get("extra_body") == {"custom_key": "custom_value"}
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read())["custom_key"] == "custom_value"
 
 
 def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
