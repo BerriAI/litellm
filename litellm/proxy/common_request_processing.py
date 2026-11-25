@@ -720,10 +720,20 @@ async def _bill_drained_stream_after_disconnect(stream: CustomStreamWrapper, dis
         return
     except BaseException:
         with anyio.CancelScope(shield=True):
+            await disconnected.bill_partial_spend()
             await _settle_detached_stream(disconnected, drained=False)
         raise
     with anyio.CancelScope(shield=True):
         await _settle_detached_stream(disconnected, drained=drained)
+
+
+async def bill_detached_stream_drains_on_shutdown() -> None:
+    """Stop the drains still running at shutdown, so each bills the chunks it has read before the spend flush."""
+    drains: Final = tuple(_DETACHED_STREAM_DRAINS)
+    await asyncio.sleep(0)  # a drain cancelled before its first step would never bill
+    for drain in drains:
+        drain.cancel()
+    await asyncio.gather(*drains, return_exceptions=True)
 
 
 async def _settle_detached_stream(disconnected: _DisconnectedStream, drained: bool) -> None:

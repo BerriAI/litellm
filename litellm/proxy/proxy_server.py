@@ -550,6 +550,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     _is_azure_model_router_request,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _should_return_raw_model_name,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     arm_disconnect_drain,
+    bill_detached_stream_drains_on_shutdown,
     close_guarded_stream,
     create_response,
     is_azure_model_router_request,
@@ -2215,6 +2216,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
+            await bill_detached_stream_drains_on_shutdown()
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:
