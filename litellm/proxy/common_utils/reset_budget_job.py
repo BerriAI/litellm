@@ -1543,15 +1543,13 @@ class ResetBudgetJob:
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
             for u in updated_users:
-                expected_temp_budget: Final = (
-                    (u.row.temp_budget_increase, u.row.temp_budget_expiry) if rollover_enabled else None
-                )
-                require_active_temp_budget: Final = (
+                expected_temp_budget, require_active_temp_budget = (
+                    (u.row.temp_budget_increase, u.row.temp_budget_expiry) if rollover_enabled else None,
                     rollover_enabled
                     and calculate_active_temp_budget_increase(
                         u.row.temp_budget_increase, u.row.temp_budget_expiry, calculated_at
                     )
-                    > 0
+                    > 0,
                 )
                 if _has_personal_rollover(u.row) and u.row.budget_reset_at is not None:
                     uow.users.queue_credit_reset(

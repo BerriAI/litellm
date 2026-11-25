@@ -143,9 +143,11 @@ async def _fill_from_redis(
     except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET
         verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
         return
-    for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
+    for entry, value, ttl in (
+        (entry, found.get(entry.cache_key), cache.default_in_memory_ttl if entry.ttl is None else entry.ttl)
+        for entry in entries
+    ):
         if value is not None:
-            ttl: Final = cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
             if entry is user_entry and generation is not None:
                 _ = cache.store.set_local_if_current(generation, entry.cache_key, value, ttl)
             else:
