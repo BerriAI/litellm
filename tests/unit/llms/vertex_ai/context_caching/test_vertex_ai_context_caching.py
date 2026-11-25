@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents
 from litellm.llms.vertex_ai.context_caching.transformation import transform_openai_messages_to_gemini_context_caching
@@ -2944,8 +2945,12 @@ async def test_a_files_api_file_before_the_mark_reaches_the_gemini_cache_as_a_li
 
 
 async def _vertex_cache_check(
-    messages: list[AllMessageValues], optional_params: dict[str, object], model: str, use_async: bool
-) -> tuple[tuple[list[AllMessageValues], dict, str | None], list[httpx.Request]]:
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    model: str,
+    use_async: bool,
+    litellm_params: Mapping[str, object] | None = None,
+) -> tuple[tuple[list[AllMessageValues], dict[str, object], str | None], list[httpx.Request]]:
     calls: Final[list[httpx.Request]] = []
     transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
     request: Final = {
@@ -2960,6 +2965,7 @@ async def _vertex_cache_check(
         "vertex_project": "test-project",
         "vertex_location": "us-central1",
         "vertex_auth_header": "test-token",
+        "litellm_params": litellm_params,
     }
     result: Final = (
         await ContextCachingEndpoints().async_check_and_create_cache(
@@ -2971,6 +2977,38 @@ async def _vertex_cache_check(
         )
     )
     return result, calls
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_private_extensionless_gs_image_before_the_mark_is_typed_with_the_request_credentials(
+    monkeypatch: pytest.MonkeyPatch, use_async: bool
+) -> None:
+    lookups: Final[list[tuple[str, str | None, object]]] = []
+
+    def record_lookup(image_url: str, vertex_project: str | None = None, vertex_credentials: object = None) -> str:
+        lookups.append((image_url, vertex_project, vertex_credentials))
+        return "image/png"
+
+    monkeypatch.setattr(gemini_transformation, "_get_gcs_object_content_type", record_lookup)
+    _, calls = await _vertex_cache_check(
+        _conversation_cached_through_notes(
+            _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
+        ),
+        {},
+        "gemini-2.5-flash",
+        use_async,
+        litellm_params={"vertex_project": "request-project", "vertex_credentials": "request-credentials"},
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert lookups == [("gs://private-bucket/button", "request-project", "request-credentials")]
+    assert created["contents"][0]["parts"][1] == {
+        "file_data": {"mime_type": "image/png", "file_uri": "gs://private-bucket/button"}
+    }
 
 
 @pytest.mark.parametrize(
