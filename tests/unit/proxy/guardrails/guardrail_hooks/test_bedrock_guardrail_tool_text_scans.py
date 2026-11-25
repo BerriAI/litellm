@@ -37,7 +37,7 @@ MASKED_SECRET: Final = f"transfer to account {MASKED_CARD}"
 NUMERIC_CARD: Final = "4111111111111111"
 ARGUMENTS: Final = f'{{"note": "{SECRET}"}}'
 MASKED_ARGUMENTS: Final = json.dumps({"note": MASKED_SECRET})
-MASKED_TOOL_CALL_TEXT: Final = f"send_payment\nnote\n{MASKED_SECRET}"
+MASKED_TOOL_CALL_TEXT: Final = f"send_payment\nnote: {MASKED_SECRET}"
 PASS: Final = {"action": "NONE", "outputs": [], "assessments": []}
 BLOCK: Final = {
     "action": "GUARDRAIL_INTERVENED",
@@ -449,20 +449,24 @@ async def test_blocked_generated_tool_call_response_never_carries_the_tool_call(
         pytest.param(
             "request",
             _function_tool_call(json.dumps({CARD: "note"})),
-            f"send_payment\n{MASKED_CARD}\nnote",
+            f"send_payment\n{MASKED_CARD}: note",
             id="request",
         ),
         pytest.param("response", _function_tool_call(ARGUMENTS), MASKED_TOOL_CALL_TEXT, id="response"),
     ],
 )
+@pytest.mark.parametrize("event_hook", [None, ["pre_call", "logging_only"]], ids=["default", "also-logging-only"])
 async def test_a_blocked_tool_call_answers_its_own_error_without_a_text_scan(
-    input_type: Literal["request", "response"], tool_call: dict[str, object], masked_text: str
+    input_type: Literal["request", "response"],
+    tool_call: dict[str, object],
+    masked_text: str,
+    event_hook: list[str] | None,
 ) -> None:
     bedrock: Final = _Bedrock(blocked="forbidden", masked=CARD)
     request_data: Final[dict[str, object]] = {"metadata": {}}
 
     with pytest.raises(HTTPException) as blocked:
-        await _guardrail(scan_tool_calls=True, bedrock=bedrock).apply_guardrail(
+        await _guardrail(scan_tool_calls=True, bedrock=bedrock, event_hook=event_hook).apply_guardrail(
             inputs={"texts": ["forbidden words"], "tool_calls": [tool_call]},
             request_data=request_data,
             input_type=input_type,
@@ -484,12 +488,12 @@ async def test_generated_tool_call_scan_sends_no_grounding_source() -> None:
         input_type="response",
     )
 
-    assert bedrock.blocks(0) == ["send_payment", "note", SECRET]
+    assert bedrock.blocks(0) == ["send_payment", f"note: {SECRET}"]
     assert all("qualifiers" not in item["text"] for item in bedrock.requests[0]["content"])
 
 
 @pytest.mark.asyncio
-async def test_tool_call_is_scanned_as_one_block_per_name_key_and_value() -> None:
+async def test_tool_call_is_scanned_as_one_block_per_name_and_key_value_pair() -> None:
     bedrock: Final = _Bedrock()
     arguments: Final = (
         '{"note": "say \\"hi\\"", "amount": 12.50, "urgent": true, "memo": "", "ref": null, '
@@ -507,23 +511,38 @@ async def test_tool_call_is_scanned_as_one_block_per_name_key_and_value() -> Non
 
     assert bedrock.blocks(0) == [
         "send_payment",
-        "note",
-        'say "hi"',
-        "amount",
-        "12.50",
+        'note: say "hi"',
+        "amount: 12.50",
         "urgent",
         "memo",
         "ref",
         "tags",
         "vip",
         "3",
-        "note",
-        "shadowed",
+        "note: shadowed",
         "search",
-        "query",
-        "invoices",
+        "query: invoices",
     ]
     assert len(bedrock.requests) == 1
+
+
+def _password_masked_next_to_its_key(request: httpx.Request) -> httpx.Response:
+    texts: Final = [item["text"]["text"] for item in json.loads(request.content)["content"]]
+    if "password: hunter2" not in texts:
+        return httpx.Response(200, json=PASS)
+    outputs: Final = [{"text": text.replace("password: hunter2", "password: {PASSWORD}")} for text in texts]
+    return httpx.Response(200, json={**MASK, "outputs": outputs})
+
+
+@pytest.mark.asyncio
+async def test_a_value_bedrock_only_finds_next_to_its_key_is_masked_in_place() -> None:
+    tool_call: Final = _function_tool_call('{"username": "jdoe42", "password": "hunter2"}')
+
+    guarded: Final = await _guardrail(scan_tool_calls=True, bedrock=_password_masked_next_to_its_key).apply_guardrail(
+        inputs={"texts": [], "tool_calls": [tool_call]}, request_data={}, input_type="request"
+    )
+
+    assert guarded["tool_calls"] == [_function_tool_call('{"username": "jdoe42", "password": "{PASSWORD}"}')]
 
 
 @pytest.mark.asyncio
@@ -541,7 +560,7 @@ async def test_only_tool_calls_new_to_the_session_are_scanned() -> None:
             input_type="request",
         )
 
-    assert bedrock.blocks(1) == ["search", "query", "invoices"]
+    assert bedrock.blocks(1) == ["search", "query: invoices"]
     assert len(bedrock.requests) == 2
 
 
@@ -552,7 +571,7 @@ async def test_message_text_spelling_out_a_tool_call_does_not_mark_the_tool_call
     session_id: Final = str(uuid.uuid4())
 
     await guardrail.apply_guardrail(
-        inputs={"texts": [json.dumps(["send_payment", "note", SECRET], ensure_ascii=False)]},
+        inputs={"texts": [json.dumps(["send_payment", f"note: {SECRET}"], ensure_ascii=False)]},
         request_data={"litellm_session_id": session_id},
         input_type="request",
     )
@@ -562,7 +581,7 @@ async def test_message_text_spelling_out_a_tool_call_does_not_mark_the_tool_call
         input_type="request",
     )
 
-    assert bedrock.blocks(1) == ["send_payment", "note", SECRET]
+    assert bedrock.blocks(1) == ["send_payment", f"note: {SECRET}"]
 
 
 @pytest.mark.asyncio
@@ -586,7 +605,7 @@ async def test_tool_call_without_a_clean_verdict_is_scanned_again_next_turn(
                 input_type="request",
             )
 
-    assert bedrock.blocks(1) == ["send_payment", "note", SECRET]
+    assert bedrock.blocks(1) == ["send_payment", f"note: {SECRET}"]
 
 
 def _violence_scored(severity: float) -> Callable[[httpx.Request], httpx.Response]:
@@ -999,7 +1018,7 @@ async def test_custom_tool_call_input_is_scanned() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("scan_tool_calls", "expected"), [(True, f"send_payment\nnote\n{SECRET}"), (False, "")])
+@pytest.mark.parametrize(("scan_tool_calls", "expected"), [(True, f"send_payment\nnote: {SECRET}"), (False, "")])
 async def test_legacy_function_call_in_history_is_scanned_as_input_only_when_opted_in(
     scan_tool_calls: bool, expected: str
 ) -> None:
@@ -1017,7 +1036,7 @@ async def test_legacy_function_call_in_history_is_scanned_as_input_only_when_opt
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("scan_tool_calls", "expected"), [(True, f"send_payment\nnote\n{SECRET}"), (False, "")])
+@pytest.mark.parametrize(("scan_tool_calls", "expected"), [(True, f"send_payment\nnote: {SECRET}"), (False, "")])
 async def test_generated_legacy_function_call_is_scanned_as_output_only_when_opted_in(
     scan_tool_calls: bool, expected: str
 ) -> None:

@@ -63,6 +63,7 @@ class _WritableArguments:
 class TextBlock:
     text: str
     value_path: ValuePath | None
+    value_prefix: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,28 +130,38 @@ def _flattened(groups: Iterable[tuple[TextBlock, ...] | None]) -> tuple[TextBloc
     return tuple(chain.from_iterable(group for group in materialized if group is not None))
 
 
-def _pair_blocks(key: str, value: object, path: ValuePath, max_depth: int) -> tuple[TextBlock, ...] | None:
-    value_blocks: Final = _node_blocks(value, path, max_depth)
-    if value_blocks is None:
-        return None
-    return ((TextBlock(key, None),) if key else ()) + value_blocks
+def _leaf_text(node: object) -> str | None:
+    match node:
+        case _JsonNumber(text=text):
+            return text
+        case str() if node:
+            return node
+        case _:
+            return None
 
 
-def _node_blocks(node: object, path: ValuePath, max_depth: int) -> tuple[TextBlock, ...] | None:
-    if len(path) > max_depth:
-        return None
+def _child_blocks(node: object, path: ValuePath, max_depth: int) -> tuple[TextBlock, ...] | None:
     match node:
         case _JsonObject(pairs=pairs):
             return _flattened(
-                _pair_blocks(key, value, (*path, index), max_depth) for index, (key, value) in enumerate(pairs)
+                _node_blocks(value, (*path, index), max_depth, key) for index, (key, value) in enumerate(pairs)
             )
-        case _JsonNumber(text=text):
-            return (TextBlock(text, path),)
-        case str() if node:
-            return (TextBlock(node, path),)
         case _:
             items: Final = as_object_list(node) or ()
-            return _flattened(_node_blocks(item, (*path, index), max_depth) for index, item in enumerate(items))
+            return _flattened(_node_blocks(item, (*path, index), max_depth, "") for index, item in enumerate(items))
+
+
+def _node_blocks(node: object, path: ValuePath, max_depth: int, key: str) -> tuple[TextBlock, ...] | None:
+    if len(path) > max_depth:
+        return None
+    leaf: Final = _leaf_text(node)
+    if leaf is not None:
+        prefix: Final = f"{key}: " if key else ""
+        return (TextBlock(prefix + leaf, path, prefix),)
+    children: Final = _child_blocks(node, path, max_depth)
+    if children is None:
+        return None
+    return ((TextBlock(key, None, ""),) if key else ()) + children
 
 
 def _argument_blocks(arguments: _Arguments | None, max_depth: int) -> tuple[TextBlock, ...] | None:
@@ -158,9 +169,9 @@ def _argument_blocks(arguments: _Arguments | None, max_depth: int) -> tuple[Text
         case None:
             return ()
         case _RawTextArguments(text=text):
-            return (TextBlock(text, ()),) if text else ()
+            return (TextBlock(text, (), ""),) if text else ()
         case _JsonTextArguments(tree=tree) | _StructuredArguments(tree=tree):
-            return _node_blocks(tree, (), max_depth)
+            return _node_blocks(tree, (), max_depth, "")
 
 
 def _writable_arguments(
@@ -199,7 +210,7 @@ def tool_call_text(tool_call: object, max_depth: int) -> ToolCallText | None:
     name: Final = _field(source, "name")
     return ToolCallText(
         tool_call=tool_call,
-        blocks=((TextBlock(name, None),) if isinstance(name, str) and name else ()) + argument_blocks,
+        blocks=((TextBlock(name, None, ""),) if isinstance(name, str) and name else ()) + argument_blocks,
         writable=_writable_arguments(tool_call, wrapper_field, source, arguments_field, arguments),
     )
 
@@ -212,17 +223,23 @@ def _block_offsets(tool_calls: Sequence[ToolCallText]) -> tuple[int, ...]:
     return tuple(accumulate((len(tool_call.blocks) for tool_call in tool_calls), initial=0))
 
 
-def _maskable_positions_of(tool_call: ToolCallText, offset: int) -> tuple[int, ...]:
+def _value_prefixes_of(tool_call: ToolCallText, offset: int) -> tuple[tuple[int, str], ...]:
     if tool_call.writable is None:
         return ()
-    return tuple(offset + index for index, block in enumerate(tool_call.blocks) if block.value_path is not None)
+    return tuple(
+        (offset + index, block.value_prefix)
+        for index, block in enumerate(tool_call.blocks)
+        if block.value_path is not None
+    )
 
 
-def maskable_positions(tool_calls: Sequence[ToolCallText]) -> frozenset[int]:
-    return frozenset(
-        chain.from_iterable(
-            _maskable_positions_of(tool_call, offset)
-            for tool_call, offset in zip(tool_calls, _block_offsets(tool_calls), strict=False)
+def maskable_value_prefixes(tool_calls: Sequence[ToolCallText]) -> Mapping[int, str]:
+    return MappingProxyType(
+        dict(
+            chain.from_iterable(
+                _value_prefixes_of(tool_call, offset)
+                for tool_call, offset in zip(tool_calls, _block_offsets(tool_calls), strict=False)
+            )
         )
     )
 
@@ -277,7 +294,7 @@ def _masked_tool_call(tool_call: ToolCallText, masked_texts: Sequence[str]) -> o
     writable: Final = tool_call.writable
     masks: Final = MappingProxyType(
         {
-            block.value_path: masked_text
+            block.value_path: masked_text.removeprefix(block.value_prefix)
             for block, masked_text in zip(tool_call.blocks, masked_texts, strict=True)
             if block.value_path is not None and masked_text != block.text
         }

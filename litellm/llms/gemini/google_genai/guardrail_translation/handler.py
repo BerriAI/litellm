@@ -142,9 +142,15 @@ def _continues(function_call: object) -> bool:
     return _camel_or_snake(function_call, "willContinue", "will_continue") is True
 
 
+def _starts_function_call(function_call: object) -> bool:
+    return bool(_field(function_call, "name")) or bool(as_str_mapping(_field(function_call, "args")))
+
+
 def _function_call_groups(function_calls: Sequence[object]) -> tuple[tuple[object, ...], ...]:
     starts: Final = tuple(
-        index for index in range(len(function_calls)) if index == 0 or not _continues(function_calls[index - 1])
+        index
+        for index in range(len(function_calls))
+        if index == 0 or not _continues(function_calls[index - 1]) or _starts_function_call(function_calls[index])
     )
     return tuple(tuple(function_calls[start:end]) for start, end in pairwise((*starts, len(function_calls))))
 
@@ -200,11 +206,44 @@ def _tool_calls_payload(groups: Sequence[Sequence[object]]) -> tuple[ChatComplet
     return tuple(_tool_call(group, index) for index, group in enumerate(groups))
 
 
-def _write_function_call_args(function_call: object, args: Mapping[str, object]) -> None:
-    if isinstance(function_call, dict):
-        function_call["args"] = dict(args)  # rebind-ok: guardrail write-back rewrites the caller's part in place
+def _set_field(container: object, name: str, value: object) -> None:
+    if isinstance(container, dict):
+        container[name] = value  # rebind-ok: guardrail write-back rewrites the caller's part in place
         return
-    setattr(function_call, "args", dict(args))  # noqa: B010  # SDK parts are typed as object here
+    setattr(container, name, value)
+
+
+def _string_value_field(partial_arg: object) -> str | None:
+    return next((name for name in ("stringValue", "string_value") if isinstance(_field(partial_arg, name), str)), None)
+
+
+def _write_partial_path(
+    partial_args: Sequence[object], returned: object, sent_text: str, guardrail_name: str | None
+) -> None:
+    if not isinstance(returned, str):
+        raise unappliable_request_rewrite(guardrail_name)
+    if returned == sent_text:
+        return
+    fields: Final = tuple(field for field in map(_string_value_field, partial_args) if field is not None)
+    if len(fields) != len(partial_args):
+        raise unappliable_request_rewrite(guardrail_name)
+    for index, (partial_arg, field) in enumerate(zip(partial_args, fields, strict=True)):
+        _set_field(partial_arg, field, returned if index == 0 else "")
+
+
+def _write_group_args(group: Sequence[object], args: Mapping[str, object], guardrail_name: str | None) -> None:
+    partial_args: Final = tuple(chain.from_iterable(_partial_args(function_call) for function_call in group))
+    sent_partial_values: Final = _partial_values_by_path(group)
+    head_args: Final = {key: value for key, value in args.items() if key not in sent_partial_values}
+    if head_args != (as_str_mapping(_field(group[0], "args")) or {}):
+        _set_field(group[0], "args", head_args)
+    for path, sent_text in sent_partial_values.items():
+        _write_partial_path(
+            tuple(partial_arg for partial_arg in partial_args if _partial_arg_path(partial_arg) == path),
+            args.get(path),
+            sent_text,
+            guardrail_name,
+        )
 
 
 def _guardrailed_args(returned_tool_call: object, guardrail_name: str | None) -> Mapping[str, object]:
@@ -213,12 +252,6 @@ def _guardrailed_args(returned_tool_call: object, guardrail_name: str | None) ->
     if parsed is None:
         raise unappliable_request_rewrite(guardrail_name)
     return parsed
-
-
-def _writable_function_call(group: Sequence[object], guardrail_name: str | None) -> object:
-    if len(group) != 1 or _partial_args(group[0]):
-        raise unappliable_request_rewrite(guardrail_name)
-    return group[0]
 
 
 def _write_back_function_calls(
@@ -237,9 +270,7 @@ def _write_back_function_calls(
         if stream_item_field(stream_item_field(returned, "function"), "arguments") != sent["function"].get("arguments")
     )
     for group, returned in changed:
-        _write_function_call_args(
-            _writable_function_call(group, guardrail_name), _guardrailed_args(returned, guardrail_name)
-        )
+        _write_group_args(group, _guardrailed_args(returned, guardrail_name), guardrail_name)
 
 
 def _part_texts(text_parts: Sequence[object]) -> tuple[str, ...]:

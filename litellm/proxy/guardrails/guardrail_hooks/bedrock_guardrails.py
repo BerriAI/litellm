@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import contextlib
+import contextvars
 import copy
 import json
 import re
@@ -57,7 +58,7 @@ from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
 from litellm.llms.bedrock.guardrail_tool_calls import (
     ToolCallText,
     block_texts,
-    maskable_positions,
+    maskable_value_prefixes,
     masked_tool_calls,
     tool_call_scan_key,
     tool_call_text,
@@ -107,6 +108,7 @@ if TYPE_CHECKING:
     from botocore.credentials import Credentials
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 from litellm.types.utils import (
     CallTypes,
@@ -136,6 +138,9 @@ _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS: Final = 0.5
 _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
 _DECODED_JSON: Final = TypeAdapter(object)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
+_logging_only_scan_guardrail: Final[contextvars.ContextVar["BedrockGuardrail | None"]] = contextvars.ContextVar(
+    "litellm_bedrock_logging_only_scan", default=None
+)
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
 # InvokeGuardrailChecks accepts at most 10 content blocks per message. A message with
@@ -304,7 +309,7 @@ class _MaskAnywhere:
 
 @dataclass(frozen=True, slots=True)
 class _MaskOnlyAt:
-    positions: frozenset[int]
+    value_prefixes: Mapping[int, str]
 
 
 _MaskPolicy: TypeAlias = _MaskAnywhere | _MaskOnlyAt
@@ -321,16 +326,21 @@ def _masks_outside_policy(
     match policy:
         case _MaskAnywhere():
             return False
-        case _MaskOnlyAt(positions=positions):
+        case _MaskOnlyAt(value_prefixes=value_prefixes):
             if response.get("action") != "GUARDRAIL_INTERVENED":
                 return False
             outputs: Final = response.get("outputs") or []
             if len(outputs) != len(content):
                 return True
             return any(
-                index not in positions and output.get("text") != _content_text(item)
+                output.get("text") != _content_text(item)
+                and not _keeps_prefix(output.get("text"), value_prefixes.get(index))
                 for index, (output, item) in enumerate(zip(outputs, content, strict=True))
             )
+
+
+def _keeps_prefix(text: str | None, prefix: str | None) -> bool:
+    return text is not None and prefix is not None and text.startswith(prefix)
 
 
 def _one_output_per_line(response: BedrockGuardrailResponse) -> BedrockGuardrailResponse:
@@ -3519,7 +3529,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         input_type: Literal["request", "response"],
     ) -> Sequence[object]:
-        """Scan tool-call names, argument keys and argument values as text blocks.
+        """Scan tool-call names and arguments as text blocks, each scalar value in one block with its key.
 
         A request tool call gets masked values written back into its arguments. A mask
         the arguments cannot carry (a name, a key, a generated tool call) blocks instead.
@@ -3539,7 +3549,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 },
             )
         if input_type == "response":
-            await self._scan_tool_call_blocks(scannable, frozenset(), request_data, input_type)
+            await self._scan_tool_call_blocks(scannable, MappingProxyType({}), request_data, input_type)
             return tool_calls
         return await self._scan_request_tool_calls(tool_calls, scannable, request_data)
 
@@ -3560,7 +3570,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         to_scan: Final = tuple(scannable[index] for index in scan_indices)
         response: Final = await self._scan_tool_call_blocks(
-            to_scan, maskable_positions(to_scan), request_data, "request"
+            to_scan, maskable_value_prefixes(to_scan), request_data, "request"
         )
         if response.get("action") != "GUARDRAIL_INTERVENED":
             if bedrock_error_type(response) is None:
@@ -3582,14 +3592,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _scan_tool_call_blocks(
         self,
         tool_calls: Sequence[ToolCallText],
-        maskable: frozenset[int],
+        value_prefixes: Mapping[int, str],
         request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         input_type: Literal["request", "response"],
     ) -> BedrockGuardrailResponse:
         blocks: Final = block_texts(tool_calls)
         if not blocks:
             return BedrockGuardrailResponse()
-        mask_policy: Final = _MaskOnlyAt(positions=maskable)
+        mask_policy: Final = _MaskOnlyAt(value_prefixes=value_prefixes)
         if input_type == "response":
             return await self.make_bedrock_api_request(
                 source="OUTPUT",
@@ -3669,12 +3679,26 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 tool_calls=tool_calls, request_data=request_data, input_type=input_type
             )
         except Exception:
-            if self.event_hook is not None and self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+            if _logging_only_scan_guardrail.get() is self:
                 with contextlib.suppress(Exception):
                     await self._apply_guardrail_to_texts(
                         inputs=inputs, request_data=request_data, input_type=input_type
                     )
             raise
+
+    async def _scan_logged_call(
+        self,
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
+        response: object | None,
+        translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
+        token: Final = _logging_only_scan_guardrail.set(self)
+        try:
+            await super()._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
+        finally:
+            _logging_only_scan_guardrail.reset(token)
 
     async def _apply_guardrail_to_texts(
         self,

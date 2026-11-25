@@ -5,6 +5,7 @@ Tests for the Google GenAI generateContent guardrail translation handler.
 import copy
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import chain
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -480,11 +481,66 @@ async def test_streamed_partial_function_call_args_reach_the_guardrail_whole(
     ]
 
 
+HIDDEN_CARD: Final = "4111-1111-1111-1111"
+
+
 @pytest.mark.asyncio
-async def test_masked_partial_function_call_args_in_the_request_are_rejected() -> None:
+@pytest.mark.parametrize(
+    ("next_call", "next_value"),
+    [
+        pytest.param({"args": {"card": "safe"}}, "safe", id="own-args"),
+        pytest.param({"name": "export_records"}, "export_records", id="own-name"),
+    ],
+)
+async def test_a_call_with_its_own_name_or_args_after_will_continue_hides_nothing_from_the_scan(
+    next_call: Mapping[str, object], next_value: str
+) -> None:
+    first_call: Final = {"name": "send_payment", "willContinue": True, "args": {"card": HIDDEN_CARD}}
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "model", "parts": [{"functionCall": first_call}, {"functionCall": dict(next_call)}]}],
+    }
+    guardrail: Final = _ToolCallGuardrail()
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    (inputs,) = guardrail.seen
+    scanned: Final = json.dumps(inputs["tool_calls"])
+    assert HIDDEN_CARD in scanned
+    assert next_value in scanned
+
+
+def _partial_card_text(parts: Sequence[Mapping[str, object]]) -> str:
+    partial_args: Final = chain.from_iterable(part["functionCall"].get("partialArgs", ()) for part in parts)
+    return "".join(partial_arg["stringValue"] for partial_arg in partial_args)
+
+
+@pytest.mark.asyncio
+async def test_masked_partial_function_call_args_in_the_request_are_written_back() -> None:
     data: Final = {
         "model": "gemini-2.5-flash",
         "contents": [{"role": "model", "parts": copy.deepcopy(list(STREAMED_FUNCTION_CALL_PARTS))}],
+    }
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_masking_card_numbers)
+    )
+
+    parts: Final = data["contents"][0]["parts"]
+    assert _partial_card_text(parts) == "[CARD] 1111"
+    assert parts[0] == STREAMED_FUNCTION_CALL_PARTS[0]
+    assert parts[3] == STREAMED_FUNCTION_CALL_PARTS[3]
+
+
+@pytest.mark.asyncio
+async def test_masked_non_string_partial_function_call_arg_in_the_request_is_rejected() -> None:
+    streamed_number: Final = [
+        {"functionCall": {"name": "send_payment", "willContinue": True}},
+        {"functionCall": {"partialArgs": [{"jsonPath": "$.card", "numberValue": 4111}]}},
+    ]
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "model", "parts": copy.deepcopy(streamed_number)}],
     }
 
     with pytest.raises(UnappliableRequestRewrite):
@@ -492,4 +548,4 @@ async def test_masked_partial_function_call_args_in_the_request_are_rejected() -
             data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_masking_card_numbers)
         )
 
-    assert data["contents"][0]["parts"] == list(STREAMED_FUNCTION_CALL_PARTS)
+    assert data["contents"][0]["parts"] == streamed_number
