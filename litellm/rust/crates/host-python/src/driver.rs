@@ -28,11 +28,8 @@ type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
 type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
-type StartMachine<P, M> = Box<
-    dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
-        + Send
-        + Sync,
->;
+type StartMachine<D, M> =
+    Box<dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, D) -> PyResult<M> + Send + Sync>;
 type Body = Coroutine<Yielded, PyResult<Py<PyAny>>>;
 
 pub struct CallOptions {
@@ -131,7 +128,7 @@ where
     caller: PythonCaller,
     parts: SharedParts<H, L>,
     native: NativeMachine<M>,
-    start: Option<StartMachine<ProtocolOf<H>, M>>,
+    start: Option<StartMachine<<H as PythonBinding>::Decoded, M>>,
     streaming: bool,
     detached: bool,
     drains: bool,
@@ -661,11 +658,7 @@ where
 
 pub fn run_call<H, M, L>(
     py: Python<'_>,
-    start: impl FnOnce(
-        Python<'_>,
-        &Bound<'_, PyDict>,
-        <H::Protocol as Protocol>::Request,
-    ) -> PyResult<M>
+    start: impl FnOnce(Python<'_>, &Bound<'_, PyDict>, H::Decoded) -> PyResult<M>
     + Send
     + Sync
     + 'static,

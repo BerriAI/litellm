@@ -87,7 +87,7 @@ class CustomSecretManager(BaseSecretManager):
     def __init__(
         self,
         secret_manager_name: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Initialize the CustomSecretManager.
@@ -127,7 +127,7 @@ class CustomSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
@@ -152,7 +152,7 @@ class CustomSecretManager(BaseSecretManager):
         description: str | None = None,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
+        tags: dict[str, object] | list[object] | None = None,
     ) -> dict[str, object]:
         """
         Asynchronously write a secret to your custom secret manager.
@@ -185,7 +185,7 @@ class CustomSecretManager(BaseSecretManager):
         recovery_window_in_days: int | None = 7,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Asynchronously delete a secret from your custom secret manager.
 

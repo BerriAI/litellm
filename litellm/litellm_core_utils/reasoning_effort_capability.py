@@ -7,15 +7,15 @@ chat gate uses: medium and high are unconditional, minimal and low are opt-out (
 explicit false), xhigh is opt-in, and none is opt-out except on the azure gpt-5 family, whose chat
 config refuses it without an explicit true.
 
-The Responses gate reads none, minimal, low and xhigh as opt-out. Neither gate judges max, which
-Chat Completions refuses and Responses honors on the gpt-6 family, so its flag is advisory and
+The Responses gate reads none, minimal, low and xhigh as opt-out. Neither gate reads a flag for max,
+which Chat Completions refuses and Responses honors on the gpt-6 family, so its flag is advisory and
 advertised opt-in: outside the gpt-6 rows every entry carrying supports_max_reasoning_effort is
 Claude-family, where anthropic/chat/transformation.py gates max on the output_config path, so an
 explicit flag is the only signal that the tier is real.
 
 A deployment the map describes with no effort flags at all resolves to None rather than to the
-opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
-bedrock nova entries among them take neither none nor minimal, so composing a set out of the
+opt-out defaults. Most of the map's reasoning entries carry no flag, and the o1, o3-mini, o4-mini,
+xai and bedrock nova entries among them take neither none nor minimal, so composing a set out of the
 defaults alone would advertise levels those providers reject.
 
 The advertisement order is the REASONING_EFFORT declaration order, which is presentation only. It
@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_f
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.utils import catalog_with_runtime_registrations
 
 RequestedReasoningEffort: TypeAlias = str | Mapping[str, object] | None
 
@@ -115,6 +116,13 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     if not isinstance(entry, dict):
         return None
     return declared_reasoning_efforts(entry)
+
+
+def declared_reasoning_efforts_for_map_key(key: str) -> tuple[str, ...] | None:
+    """The levels the catalog row itself lists, never a router deployment's copy of its own
+    model_info on the shared key, since that copy would gate every sibling deployment of the model."""
+    row: Final = catalog_with_runtime_registrations().get(key)
+    return _declared_levels(row.get(_DECLARED_EFFORTS_KEY)) if row is not None else None
 
 
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"
@@ -228,13 +236,17 @@ def _rounding(value: object) -> ReasoningEffortRounding | None:
             return None
 
 
-def _deployment_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
+def configured_reasoning_effort_rounding() -> ReasoningEffortRounding:
+    return _rounding(litellm.reasoning_effort_rounding) or "up"
+
+
+def deployment_reasoning_effort_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
     own_info: Final = as_str_mapping(deployment_model_info)
     own: Final = _rounding(own_info.get(_ROUNDING_KEY)) if own_info is not None else None
-    return own or _rounding(litellm.reasoning_effort_rounding) or "up"
+    return own or configured_reasoning_effort_rounding()
 
 
-def _requested_level(requested: RequestedReasoningEffort) -> str | None:
+def _requested_level(requested: object) -> str | None:
     if isinstance(requested, str):
         return requested
     fields: Final = as_str_mapping(requested)
@@ -282,7 +294,7 @@ def resolve_deployment_reasoning_effort(
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
     if declared is None:
         return unchanged
-    rounding: Final = _deployment_rounding(deployment_model_info)
+    rounding: Final = deployment_reasoning_effort_rounding(deployment_model_info)
     rounded_level: Final = (
         None
         if requested_level == _DEFAULT_EFFORT
@@ -447,6 +459,45 @@ def reasoning_effort_needs_allowing(
     return "reasoning_effort" not in (
         get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model) or ()
     )
+
+
+def _gpt_5_row_declared_reasoning_efforts(
+    model: str, custom_llm_provider: str, base_model: str | None
+) -> tuple[str, ...] | None:
+    from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+    from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+
+    match custom_llm_provider:
+        case "openai":
+            if not OpenAIGPT5Config.is_openai_gpt_5_model(model):
+                return None
+            return OpenAIGPT5Config.row_declared_reasoning_efforts(model)
+        case "azure":
+            azure_model: Final = base_model or model
+            if not AzureOpenAIGPT5Config.is_model_gpt_5_model(azure_model):
+                return None
+            return AzureOpenAIGPT5Config.row_declared_reasoning_efforts(azure_model)
+        case "azure_ai":
+            foundry_model: Final = AzureAIStudioConfig.gpt_5_base_model(model, base_model) or model
+            if not AzureAIGPT5Config.is_model_gpt_5_model(foundry_model):
+                return None
+            return AzureAIGPT5Config.row_declared_reasoning_efforts(foundry_model)
+        case _:
+            return None
+
+
+def gpt_5_row_refuses_reasoning_effort(
+    requested: object, *, model: str, custom_llm_provider: str, base_model: str | None, deployment_model_info: object
+) -> bool:
+    """Whether a gpt-5-family deployment's map row lists its levels and leaves the requested one out,
+    judged on the model each provider's chat mapper reads. Both gates refuse such a level on every
+    route, so a router step that adds an effort drops it, as it drops a param the deployment lacks."""
+    level: Final = _requested_level(requested)
+    if level is None or level in (deployment_reasoning_effort_levels(deployment_model_info) or ()):
+        return False
+    declared: Final = _gpt_5_row_declared_reasoning_efforts(model, custom_llm_provider, base_model)
+    return declared is not None and level not in declared
 
 
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
