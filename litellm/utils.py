@@ -8115,6 +8115,7 @@ def _look_up_model_info(
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
                 output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
+                output_cost_per_image_token_flex=_model_info.get("output_cost_per_image_token_flex", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
