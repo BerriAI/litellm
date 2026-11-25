@@ -11,7 +11,7 @@ ENTITY: Final = TypeAdapter(Entity)
 class Change(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    op: Literal["upsert", "delete", "resync"]
+    op: Literal["upsert", "delete", "resync", "fleet_team"]
     kind: Kind = "dataplane"
     name: str = Field(default="", max_length=2048)
     entity: Entity = Field(default_factory=dict)

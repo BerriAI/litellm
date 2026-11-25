@@ -217,7 +217,9 @@ def batch_completion_models(*args: object, **kwargs):
     return None  # If no response is received from any model
 
 
-def batch_completion_models_all_responses(*args: object, **kwargs: object):
+def batch_completion_models_all_responses(
+    *args: object, **kwargs: object
+) -> Sequence[ModelResponse | CustomStreamWrapper | Coroutine[object, object, ModelResponse | CustomStreamWrapper]]:
     """
     Send a request to multiple language models concurrently and return a list of responses
     from all models that respond.

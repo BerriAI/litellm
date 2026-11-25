@@ -187,7 +187,7 @@ class SkillsInjectionHook(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         """

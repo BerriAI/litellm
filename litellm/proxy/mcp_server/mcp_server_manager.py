@@ -3043,22 +3043,10 @@ class MCPServerManager:
         store) onto its in-memory object so token refresh authenticates after a restart. A
         best-effort no-op when the DB is unreachable at config-load time."""
         from litellm.proxy.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # circular import
-            hydrate_config_server_dcr_client,
+            hydrate_config_dcr_clients,
         )
 
-        for server in servers if servers is not None else self.config_mcp_servers.values():
-            try:
-                if await hydrate_config_server_dcr_client(server):
-                    verbose_logger.debug(
-                        "hydrated persisted DCR client onto config MCP server server_id=%s",
-                        server.server_id,
-                    )
-            except Exception as exc:  # noqa: BLE001  # best-effort hydration; never fail config load
-                verbose_logger.debug(
-                    "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s",
-                    server.server_id,
-                    exc,
-                )
+        await hydrate_config_dcr_clients(servers if servers is not None else tuple(self.config_mcp_servers.values()))
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -6872,7 +6860,7 @@ class MCPServerManager:
         mcp_server: MCPServer,
         original_tool_name: str,
         arguments: _ToolArguments,
-        tasks: list,
+        tasks: list[asyncio.Task[object]],
         mcp_auth_header: str | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         oauth2_headers: dict[str, str] | None,

@@ -153,7 +153,7 @@ class BaseSkillsAPIConfig(ABC):
         skill_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> tuple[str, dict]:
         """
         Transform get skill request
@@ -191,7 +191,7 @@ class BaseSkillsAPIConfig(ABC):
         skill_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> tuple[str, dict]:
         """
         Transform delete skill request

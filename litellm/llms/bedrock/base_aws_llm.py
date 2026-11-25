@@ -1710,7 +1710,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws-external-anthropic",
         ],
         headers: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         model: str | None = None,

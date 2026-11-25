@@ -10,7 +10,7 @@ Usage:
 
 import asyncio
 import os
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
@@ -120,8 +120,8 @@ async def _mock_async_handler_get(
 async def _mock_async_handler_delete(
     self: "AsyncHTTPHandler",
     url,
-    data=None,
-    json=None,
+    data: Mapping[str, object] | str | bytes | None = None,
+    json: dict[str, object] | None = None,
     params: dict[object, object] | None = None,
     headers: dict[object, object] | None = None,
     timeout: "float | httpx.Timeout | None" = None,

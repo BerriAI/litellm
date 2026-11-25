@@ -175,6 +175,36 @@ class RespRedis:
             writer.close()
 
 
+@dataclass
+class LostSeedReplyRedis(RespRedis):
+    """Applies the first cold seed of ``counter`` and never answers on that connection again."""
+
+    counter: str = ""
+    armed: bool = True
+
+    def _is_seed(self, command: tuple[str, ...]) -> bool:
+        name: Final = command[0].upper()
+        if name == "INCRBYFLOAT":
+            return command[1] == self.counter
+        return name == "EVAL" and SET_MAX_SCRIPT_MARKER in command[1] and command[3] == self.counter
+
+    async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        silent = False
+        try:
+            while header := await reader.readline():
+                command: Final = tuple([await _bulk_string(reader) for _ in range(int(header[1:]))])
+                reply: Final = self.answer(command)
+                if self.armed and self._is_seed(command):
+                    self.armed = False
+                    silent = True
+                if silent:
+                    continue
+                writer.write(reply)
+                await writer.drain()
+        finally:
+            writer.close()
+
+
 async def _stop_serving(server: asyncio.Server) -> None:
     server.close()
     connections: Final = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]

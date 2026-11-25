@@ -204,7 +204,7 @@ class AzureTextCompletion(BaseAzureLLM):
         max_retries: int,
         azure_ad_token: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,  # this is the AsyncAzureOpenAI
-        litellm_params: dict = {},
+        litellm_params: dict[str, object] = {},
     ):
         response = None
         try:
@@ -268,7 +268,7 @@ class AzureTextCompletion(BaseAzureLLM):
         timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict = {},
+        litellm_params: dict[str, object] = {},
     ):
         max_retries: Final = data.pop("max_retries", 2)
         if not isinstance(max_retries, int):
@@ -321,7 +321,7 @@ class AzureTextCompletion(BaseAzureLLM):
         timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict = {},
+        litellm_params: dict[str, object] = {},
     ):
         try:
             # init AzureOpenAI Client
