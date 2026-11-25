@@ -67,28 +67,40 @@ def usable_deferred_tools_mode(model_info: object, provider: str | None) -> Defe
     return mode
 
 
-def builds_tools_without_deferral(provider: str | None, model: str) -> bool:
+def builds_tools_without_deferral(provider: str | None, model: str, model_info: object, api_base: str | None) -> bool:
     match provider:
         case "gemini":
             return True
         case "vertex_ai" | "vertex_ai_beta":
-            return get_vertex_ai_model_route(model) == VertexAIModelRoute.GEMINI
+            route_params: Final = {
+                "api_base": api_base,
+                "base_model": (as_str_mapping(model_info) or {}).get("base_model"),
+            }
+            return get_vertex_ai_model_route(model, route_params) == VertexAIModelRoute.GEMINI
         case "bedrock":
             return BedrockModelInfo.get_bedrock_route(model) in ("converse", "converse_like", "chat_completions")
         case _:
             return False
 
 
-def routed_deferred_tools_mode(model_info: object, provider: str | None, model: str) -> DeferredToolsMode:
+def routed_deferred_tools_mode(
+    model_info: object, provider: str | None, model: str, api_base: str | None
+) -> DeferredToolsMode:
     mode: Final = usable_deferred_tools_mode(model_info, provider)
-    return "drop" if mode == "passthrough" and builds_tools_without_deferral(provider, model) else mode
+    return (
+        "drop"
+        if mode == "passthrough" and builds_tools_without_deferral(provider, model, model_info, api_base)
+        else mode
+    )
 
 
-def unusable_deferred_tools_refusal(model_info: object, provider: str | None, model: str) -> str | None:
+def unusable_deferred_tools_refusal(
+    model_info: object, provider: str | None, model: str, api_base: str | None
+) -> str | None:
     mode: Final = deferred_tools_mode(model_info)
-    if routed_deferred_tools_mode(model_info, provider, model) == mode:
+    if routed_deferred_tools_mode(model_info, provider, model, api_base) == mode:
         return None
-    if mode == "passthrough" and builds_tools_without_deferral(provider, model):
+    if mode == "passthrough" and builds_tools_without_deferral(provider, model, model_info, api_base):
         return (
             f"model_info.deferred_tools passthrough keeps defer_loading on each tool, but the {provider} route "
             f"LiteLLM uses for {model} does not support it. Pick emulate or drop for this deployment, or set "

@@ -1453,7 +1453,7 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             keeps_deferral=routed_deferred_tools_mode(
-                deployment_model_info, custom_llm_provider, anthropic_message_request["model"]
+                deployment_model_info, custom_llm_provider, anthropic_message_request["model"], api_base
             )
             == "passthrough",
         )
