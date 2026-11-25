@@ -197,7 +197,9 @@ impl Admit {
 
     /// A caller with a budget holds what the call may cost before it runs, and only a
     /// `/v1/messages` call the gateway prices as Python does is held natively, so any other goes
-    /// to Python.
+    /// to Python. Without the hold, under `disable_budget_reservation`, Python checks the budgets
+    /// as the call is authenticated, which the gateway does not yet, so that caller goes to Python
+    /// too.
     fn budget_hold(
         &self,
         caller: &Authenticated<NativeRows>,
@@ -206,6 +208,12 @@ impl Admit {
     ) -> Result<Option<Hold>, Reason> {
         if budgets::counters(caller, budgets::Settings::default()).is_empty() {
             return Ok(None);
+        }
+        if self.config.general_settings.disable_budget_reservation {
+            return Err(Reason::new(
+                Refused::Settings,
+                "general_settings.disable_budget_reservation",
+            ));
         }
         let unheld = || Reason::new(Refused::Body, "budget_hold");
         if path != checks::MESSAGES {
@@ -496,12 +504,25 @@ mod tests {
         })
     }
 
+    const HELD_MODEL: &str = "model_list:\n  - model_name: held-model\n    litellm_params:\n      model: anthropic/held-model\n      api_key: provider-key\n";
+
     async fn holding_one_model() -> Admit {
-        let config = "model_list:\n  - model_name: held-model\n    litellm_params:\n      model: anthropic/held-model\n      api_key: provider-key\n";
-        let prices = Arc::new(host::HoldPrices::of(config).await);
+        let prices = Arc::new(host::HoldPrices::of(HELD_MODEL).await);
         Admit {
             host: NativeHost::default().with_prices(prices),
             ..Admit::over(&Config::default(), Vec::new())
+        }
+    }
+
+    async fn holding_nothing() -> Admit {
+        let config = Config::from_yaml(&format!(
+            "{HELD_MODEL}general_settings:\n  disable_budget_reservation: true\n"
+        ))
+        .unwrap();
+        let prices = Arc::new(host::HoldPrices::of(HELD_MODEL).await);
+        Admit {
+            host: NativeHost::default().with_prices(prices),
+            ..Admit::over(&config, Vec::new())
         }
     }
 
@@ -538,6 +559,25 @@ mod tests {
             hold.map(|hold| hold.is_some())
                 .map_err(|reason| (reason.why, reason.over.to_string())),
             expected.map_err(|over| (Refused::Body, over.to_owned()))
+        );
+    }
+
+    #[rstest]
+    #[case::a_budgeted_caller(budgeted(), Err((Refused::Settings, "general_settings.disable_budget_reservation")))]
+    #[case::a_caller_with_no_budget(crate::test_support::master(), Ok(false))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn without_the_hold_a_budgeted_call_goes_to_python(
+        #[case] caller: Authenticated<NativeRows>,
+        #[case] expected: Result<bool, (Refused, &str)>,
+    ) {
+        let admit = holding_nothing().await;
+
+        let hold = admit.budget_hold(&caller, "/v1/messages", &sent("held-model"));
+
+        assert_eq!(
+            hold.map(|hold| hold.is_some())
+                .map_err(|reason| (reason.why, reason.over.to_string())),
+            expected.map_err(|(why, over)| (why, over.to_owned()))
         );
     }
 }
