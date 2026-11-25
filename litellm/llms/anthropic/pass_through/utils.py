@@ -210,37 +210,105 @@ def openai_strict_json_schema(schema: object) -> object:
     properties: Final = _object_mapping(source.get("properties"))
     closing: Final[Mapping[str, object]] = (
         {"required": list(properties), "additionalProperties": False}
-        if properties is not None and _is_object_type(source.get("type"))
+        if properties is not None and _includes_type(source.get("type"), "object")
         else {}
     )
     return {**{key: _strict_subschema(key, value) for key, value in source.items()}, **closing}
 
 
-def leaves_an_object_open(schema: object) -> bool:
+_OPENAI_STRICT_MODE_KEYWORDS: Final = frozenset(
+    {
+        "type",
+        "enum",
+        "const",
+        "format",
+        "pattern",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "items",
+        "properties",
+        "required",
+        "additionalProperties",
+        "anyOf",
+        *_SUBSCHEMA_MAP_KEYWORDS,
+        "title",
+        "description",
+        "default",
+        "examples",
+        "$schema",
+        "$id",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "nullable",
+        "contentEncoding",
+        "contentMediaType",
+        "discriminator",
+    }
+)
+_OPENAI_STRICT_MODE_FORMATS: Final = frozenset(
+    {"date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"}
+)
+_OPENAI_STRICT_MODE_TYPE_KEYWORDS: Final = frozenset({"type", "anyOf", "enum"})
+
+
+def fits_openai_strict_mode(schema: object) -> bool:
     source: Final = _object_mapping(schema)
     if source is None:
         return False
-    if _is_object_type(source.get("type")) and _object_mapping(source.get("properties")) is None:
+    if "$ref" in source:
+        return all(key == "$ref" or key in _SUBSCHEMA_MAP_KEYWORDS for key in source) and _subschemas_fit(source)
+    return (
+        all(key in _OPENAI_STRICT_MODE_KEYWORDS or key.startswith("x-") for key in source)
+        and not _OPENAI_STRICT_MODE_TYPE_KEYWORDS.isdisjoint(source)
+        and _has_strict_mode_format(source)
+        and _has_strict_mode_shape(source)
+        and _subschemas_fit(source)
+    )
+
+
+def _has_strict_mode_format(source: Mapping[str, object]) -> bool:
+    if "format" not in source:
         return True
-    return any(_subschema_leaves_an_object_open(key, value) for key, value in source.items())
+    schema_format: Final = source["format"]
+    return isinstance(schema_format, str) and schema_format in _OPENAI_STRICT_MODE_FORMATS
 
 
-def _subschema_leaves_an_object_open(key: str, value: object) -> bool:
+def _has_strict_mode_shape(source: Mapping[str, object]) -> bool:
+    schema_type: Final = source.get("type")
+    if _includes_type(schema_type, "array") and "items" not in source:
+        return False
+    return not _includes_type(schema_type, "object") or _object_mapping(source.get("properties")) is not None
+
+
+def _subschemas_fit(source: Mapping[str, object]) -> bool:
+    subschemas: Final = chain.from_iterable(_subschemas(key, value) for key, value in source.items())
+    return all(fits_openai_strict_mode(subschema) for subschema in subschemas)
+
+
+def _subschemas(key: str, value: object) -> tuple[object, ...]:
     if key == "items":
-        return leaves_an_object_open(value)
+        return (value,)
     if key == "properties" or key in _SUBSCHEMA_MAP_KEYWORDS:
         named: Final = _object_mapping(value)
-        return named is not None and any(leaves_an_object_open(subschema) for subschema in named.values())
+        return (None,) if named is None else tuple(named.values())
     if key in _SUBSCHEMA_LIST_KEYWORDS:
         variants: Final = _json_array(value)
-        return variants is not None and any(leaves_an_object_open(variant) for variant in variants)
-    return False
+        return (None,) if variants is None else tuple(variants)
+    return ()
 
 
-def _is_object_type(schema_type: object) -> bool:
-    """Whether a ``type`` keyword names an object, alone or in a union such as ``["object", "null"]``."""
+def _includes_type(schema_type: object, name: str) -> bool:
     types: Final = _json_array(schema_type)
-    return schema_type == "object" if types is None else "object" in types
+    return schema_type == name if types is None else name in types
 
 
 def _strict_subschema(key: str, value: object) -> object:

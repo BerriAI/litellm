@@ -34,10 +34,10 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 from litellm.llms.anthropic.pass_through.utils import (
     REASONING_EFFORT_OFF,
     content_blocks,
+    fits_openai_strict_mode,
     is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
-    leaves_an_object_open,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
     requested_reasoning_summary,
@@ -310,14 +310,14 @@ def _field_translations(request: Mapping[str, object]) -> tuple[_Translation, ..
 def _text_format(output_format: Mapping[str, object] | None) -> _Translation:
     """A json_schema format goes up strict, as Anthropic structured outputs guarantee the schema. Making every
     property required keeps strict output valid against the caller's schema. An explicit ``strict: false``, a schema
-    that is not JSON, or one with a map or free-form object, which OpenAI's strict mode rejects, goes up as is."""
+    that is not JSON, or one using what OpenAI's strict mode rejects, such as a free-form object, goes up as is."""
     if output_format is None or output_format.get("type") != "json_schema":
         return _Translation(fields={})
     schema: Final = output_format.get("schema")
     if not schema:
         return _Translation(fields={})
     strict_schema: Final = None if output_format.get("strict") is False else as_json_object(schema)
-    if strict_schema is None or leaves_an_object_open(strict_schema):
+    if strict_schema is None or not fits_openai_strict_mode(strict_schema):
         loose: Final = {"type": "json_schema", "name": _STRUCTURED_OUTPUT_NAME, "schema": schema, "strict": False}
         return _Translation(fields={"text": {"format": loose}})
     strict: Final = {
