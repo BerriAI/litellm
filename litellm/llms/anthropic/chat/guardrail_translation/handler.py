@@ -13,7 +13,8 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+import sys
+from collections.abc import Callable, Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
@@ -25,12 +26,11 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
-    truncate_tool_name,
 )
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
@@ -55,6 +55,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     unappliable_request_rewrite,
 )
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -75,6 +76,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
+    from litellm import Router
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -128,6 +130,27 @@ class ToolUseInputTarget:
 
 MessageTextTarget = MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
 InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
+
+
+class DeploymentLookup(Protocol):
+    def get_model_list(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]] | None: ...
+
+
+def _proxy_router() -> "Router | None":
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return None
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+def _deployment_consumes_cache_control(deployment: Mapping[str, object]) -> bool:
+    deployment_model: Final = (as_str_mapping(deployment.get("litellm_params")) or {}).get("model")
+    return isinstance(deployment_model, str) and LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(
+        deployment_model
+    )
 
 
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -369,9 +392,10 @@ class AnthropicMessagesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def __init__(self):
+    def __init__(self, deployment_lookup: Callable[[], DeploymentLookup | None] = _proxy_router):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+        self._deployment_lookup: Final = deployment_lookup
 
     def post_call_hook_response(self, response: object) -> object:
         if not isinstance(response, ModelResponse):
@@ -587,12 +611,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             for event in AnthropicMessagesHandler._parse_sse_data_line(line)
         )
 
-    def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
+    def _translate_to_openai(self, data: dict, *, keep_cache_control: bool = False) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(keep_cache_control=keep_cache_control).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
             preserve_midturn_system=True,
         )
@@ -634,7 +658,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
         translation_source: Final = {key: value for key, value in data.items() if key != "system"}
-        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
+        request_fields: Final = _as_str_mapping(data)
+        request_model: Final = request_fields.get("model")
+        keep_cache_control: Final = self._serves_cache_control(
+            request_model if isinstance(request_model, str) else "", get_request_team_id(request_fields)
+        )
+        chat_completion_compatible_request: Final = self._translate_to_openai(
+            translation_source, keep_cache_control=keep_cache_control
+        )
 
         full_structured_messages: Final = cast(
             list[AllMessageValues],
@@ -643,7 +674,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_midturn_system_message: Final = any(
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        hoisted_system_message: Final = (
+            None if skip_system else self._hoisted_top_level_system_message(request_fields, keep_cache_control)
+        )
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
         # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
@@ -783,7 +816,16 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
+    def _serves_cache_control(self, model: str, team_id: str | None) -> bool:
+        if LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(model):
+            return True
+        router: Final = self._deployment_lookup() if model else None
+        deployments: Final = router.get_model_list(model_name=model, team_id=team_id) if router is not None else None
+        return any(map(_deployment_consumes_cache_control, deployments or ()))
+
+    def _hoisted_top_level_system_message(
+        self, data: Mapping[str, object], keep_cache_control: bool
+    ) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
@@ -793,7 +835,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 "model": data.get("model") or "",
                 "messages": [],
                 "system": system,
-            }
+            },
+            keep_cache_control=keep_cache_control,
         )
         hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None

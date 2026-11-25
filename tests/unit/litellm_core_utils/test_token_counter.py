@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 import anyio.to_thread
 import pytest
 import tiktoken
-from tokenizers import Regex, Tokenizer, models, pre_tokenizers
+from tokenizers import Regex, Tokenizer, models, pre_tokenizers, processors
 
 from unittest.mock import AsyncMock, patch
 
@@ -1205,6 +1205,51 @@ def test_token_counter_with_redacted_thinking_content():
     with_block = [user_turn, {"role": "assistant", "content": [redacted_block, reply]}, follow_up]
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
+
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_nothing_for_a_fallback_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+
+    with_block: Final = [user_turn, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    without_block: Final = [user_turn, {"role": "assistant", "content": [reply, reply]}]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
+
+def test_token_counter_counts_nothing_for_a_fallback_block_with_a_tokenizer_that_adds_a_bos_token() -> None:
+    bos_tokenizer: Final = Tokenizer(models.WordLevel(vocab={"[UNK]": 0, "[BOS]": 1}, unk_token="[UNK]"))
+    bos_tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    bos_tokenizer.post_processor = processors.TemplateProcessing(single="[BOS] $A", special_tokens=[("[BOS]", 1)])
+    custom_tokenizer: Final = {"type": "huggingface_tokenizer", "tokenizer": bos_tokenizer}
+    reply: Final = {"type": "text", "text": "Hello"}
+    fallback_block: Final = {"type": "fallback", "from": {"model": "first-model"}, "to": {"model": "second-model"}}
+
+    with_block: Final = [{"role": "assistant", "content": [reply, fallback_block]}]
+    without_block: Final = [{"role": "assistant", "content": [reply]}]
+
+    assert token_counter(messages=with_block, custom_tokenizer=custom_tokenizer) == token_counter(
+        messages=without_block, custom_tokenizer=custom_tokenizer
+    )
+
+
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_the_text_a_fallback_block_carries_like_a_text_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    carried: Final = "Text a caller put on the block. " * 20
+
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": carried}]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": carried}]}]
+
+    assert token_counter(model=model, messages=with_fallback) == token_counter(model=model, messages=with_text)
+
 
 def test_token_counter_with_tool_reference_block():
     """

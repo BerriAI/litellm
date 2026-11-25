@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -504,6 +508,15 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
 
 
+_TOOL_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON tool objects  # mutable-ok: fallbacks reuse tools edited in place
+    return isinstance(value, dict)
+
+
 def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
@@ -543,7 +556,11 @@ def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> S
     return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
-def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+def _schema_node(value: object) -> dict[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def normalize_json_schema_custom_types_to_object(schema: object) -> None:
     """
     In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
 
@@ -555,32 +572,19 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
-        node = stack.pop()
-        if not isinstance(node, dict):
+        node = _schema_node(stack.pop())
+        if node is None or id(node) in seen:
             continue
-        node_id = id(node)
-        if node_id in seen:
-            continue
-        seen.add(node_id)
+        seen.add(id(node))
         if node.get("type") == "custom":
             node["type"] = "object"
-        items = node.get("items")
-        if isinstance(items, dict):
-            stack.append(items)
-        addl = node.get("additionalProperties")
-        if isinstance(addl, dict):
-            stack.append(addl)
-        props = node.get("properties")
-        if isinstance(props, dict):
-            for sub in props.values():
-                if isinstance(sub, dict):
-                    stack.append(sub)
+        stack.extend((node.get("items"), node.get("additionalProperties")))
+        for container in ("properties", "$defs"):
+            stack.extend((_schema_node(node.get(container)) or {}).values())
         for combiner in ("allOf", "anyOf", "oneOf"):
-            arr = node.get(combiner)
-            if isinstance(arr, list):
-                for sub in arr:
-                    if isinstance(sub, dict):
-                        stack.append(sub)
+            branches = node.get(combiner)
+            if isinstance(branches, list):
+                stack.extend(branches)
 
 
 def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
@@ -608,17 +612,19 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
 
 def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
     """
-    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Bedrock Invoke (Anthropic Messages) requires each custom tool to include ``name``.
     Some clients send only ``input_schema``; Bedrock then errors with
     ``tools.0.custom.name: Field required``.
 
-    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` on a custom tool whose name
+    is missing or blank. Typed tools pass through as sent, since a toolset entry refuses
+    any name and a dated tool accepts only its fixed one.
     """
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for i, tool in enumerate(tools):
-        if not isinstance(tool, dict):
+    for i, tool in enumerate(_TOOL_ITEMS_ADAPTER.validate_python(tools)):
+        if not _is_str_keyed_dict(tool) or tool.get("type") not in (None, "custom"):
             continue
         name = tool.get("name")
         if name is None or (isinstance(name, str) and not name.strip()):
@@ -1034,6 +1040,11 @@ def _bedrock_price_map_flag(model: str, flag: str) -> bool:
     return any(entry is not None and entry.get(flag) is True for entry in _bedrock_price_map_entries(model))
 
 
+def _bedrock_price_map_value(model: str, flag: str) -> bool | None:
+    values: Final = (entry.get(flag) for entry in _bedrock_price_map_entries(model) if entry is not None)
+    return next((value for value in values if isinstance(value, bool)), None)
+
+
 def _price_map_entry_lists_endpoint(entry: Mapping[str, object] | None, endpoint: str) -> bool:
     endpoints: Final = None if entry is None else entry.get("supported_endpoints")
     return isinstance(endpoints, (list, tuple)) and endpoint in endpoints
@@ -1364,6 +1375,16 @@ def _converse_target_model(model: str, base_model: str | None) -> str:
 
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
+def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
+    if model is None:
+        return False
+    listed: Final = (
+        _bedrock_price_map_value(model, "supports_tool_schema_defs"),
+        _bedrock_price_map_value(get_bedrock_base_model(model), "supports_tool_schema_defs"),
+    )
+    return next((flag for flag in listed if flag is not None), _is_claude_behind_any_region_prefix(model))
 
 
 def _is_claude_behind_any_region_prefix(model: str) -> bool:
@@ -1995,9 +2016,9 @@ def get_bedrock_chat_config(model: str):
 _BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _load_bedrock_response_stream_shape():
+def _load_bedrock_response_stream_shape(service_name: str = "bedrock-runtime"):
     """
-    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+    Load the ResponseStream shape from botocore's bundled schema for ``service_name``.
 
     Returns ``None`` if botocore is unavailable or the service model cannot be
     loaded.
@@ -2008,13 +2029,14 @@ def _load_bedrock_response_stream_shape():
 
         loader: Final = Loader()
         service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
-            loader.load_service_model("bedrock-runtime", "service-2")
+            loader.load_service_model(service_name, "service-2")
         )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not load bedrock-runtime response stream shape "
-            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            "litellm: could not load %s response stream shape, "
+            "so its event-stream decoding will be unavailable. Error: %s",
+            service_name,
             e,
         )
         return None
@@ -2029,6 +2051,11 @@ def get_bedrock_response_stream_shape():
     decoding is actually needed.
     """
     return _load_bedrock_response_stream_shape()
+
+
+@functools.lru_cache(maxsize=1)
+def get_bedrock_agent_response_stream_shape() -> Shape | None:
+    return _load_bedrock_response_stream_shape("bedrock-agent-runtime")
 
 
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")

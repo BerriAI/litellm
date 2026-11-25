@@ -6,10 +6,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import (
     TypeIs,  # noqa: TID251  # narrows a client input item before its mark is read
     assert_never,
@@ -32,8 +32,15 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
     is_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     drops_unsupported_params,
@@ -77,7 +84,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import CostPerToken, CustomPricingLiteLLMParams, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -228,6 +235,7 @@ async def aresponses_api_with_mcp(
         mcp_tools_with_litellm_proxy,
         other_tools,
     ) = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
+    raise_if_mcp_tool_choice_forces_a_gateway_server(tool_choice, mcp_tools_with_litellm_proxy, model)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
@@ -461,6 +469,47 @@ async def aresponses_api_with_mcp(
     return response
 
 
+def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[str, float]:
+    return MappingProxyType(
+        litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+    )
+
+
+class _DeploymentModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: object = None
+
+
+_DEPLOYMENT_MODEL_INFO: Final[TypeAdapter[_DeploymentModelInfo | object]] = TypeAdapter(
+    Annotated[_DeploymentModelInfo | object, Field(union_mode="left_to_right")]
+)
+
+
+def _is_router_deployment(deployment_model_info: object) -> bool:
+    """A Router stamps the deployment's model_info (with its id) onto every call it routes."""
+    parsed: Final = _DEPLOYMENT_MODEL_INFO.validate_python(deployment_model_info)
+    return isinstance(parsed, _DeploymentModelInfo) and parsed.id is not None
+
+
+_COST_PER_TOKEN: Final = TypeAdapter(CostPerToken)
+
+
+def _per_call_cost_per_token(litellm_params: GenericLiteLLMParams) -> CostPerToken | None:
+    if litellm_params.input_cost_per_token is None or litellm_params.output_cost_per_token is None:
+        return None
+    return _COST_PER_TOKEN.validate_python(
+        litellm_params.model_dump(
+            include={
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "cache_read_input_token_cost",
+                "cache_creation_input_token_cost",
+            },
+            exclude_none=True,
+        )
+    )
+
+
 def _bridges_to_chat_completions(
     responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
 ) -> bool:
@@ -553,6 +602,22 @@ def _raise_untranslatable_responses_fields(
             f"If you want to use these params dynamically send allowed_openai_params={fields} in your request."
         ),
     )
+
+
+def _chat_completions_bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+    model: str,
+    custom_llm_provider: str | None,
+) -> Mapping[str, object]:
+    bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
+    if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
+        _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+    chat_kwargs: Final = bridged_audio_output_request(bridge_kwargs, model, custom_llm_provider)
+    if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(chat_kwargs, "/v1/responses")
+    return chat_kwargs
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
@@ -1601,10 +1666,11 @@ def responses(
             return _file_search_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
-            bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
-            if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
-                _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+            chat_kwargs: Final = _chat_completions_bridge_kwargs(
+                kwargs, responses_api_provider_config, allowed_openai_params, model, custom_llm_provider
+            )
             return litellm_completion_transformation_handler.response_api_handler(
+                (previous_response_id,) if previous_response_id else (),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
@@ -1615,7 +1681,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **bridge_kwargs,
+                **chat_kwargs,
             )
 
         # Get optional parameters for the responses API
@@ -1635,6 +1701,7 @@ def responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
+                **_per_call_custom_pricing(litellm_params),
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
@@ -1645,6 +1712,9 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
+        if not _is_router_deployment(deployment_model_info):
+            litellm_logging_obj.custom_cost_per_token = _per_call_cost_per_token(litellm_params)
+            litellm_logging_obj.custom_cost_per_second = litellm_params.cost_per_second
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
 

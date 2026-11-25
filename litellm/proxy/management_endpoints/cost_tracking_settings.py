@@ -29,6 +29,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.prompt_cache_prediction import router as prompt_cache_prediction_router
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     CostBreakdown,
@@ -118,9 +119,7 @@ def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
                 model_info: Final = first_deployment.get("model_info", {})
                 custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
                 provider: Final = str(custom_llm_provider) if custom_llm_provider is not None else None
-                # base_model wins (needed for Azure custom deployment names)
-                base_model: Final = model_info.get("base_model") or litellm_params.get("base_model")
-                resolved_model: Final = base_model or litellm_params.get("model")
+                resolved_model: Final = next(iter(deployment_pricing_models(first_deployment)), None)
                 if resolved_model:
                     verbose_proxy_logger.debug("Resolved model '%s' to '%s' from router", model, resolved_model)
                     custom_cost_per_token: Final = _extract_custom_pricing(

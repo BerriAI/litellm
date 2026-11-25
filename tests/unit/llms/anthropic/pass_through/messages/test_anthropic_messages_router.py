@@ -11,6 +11,7 @@ from zlib import crc32
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -616,4 +617,301 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
     assert response["stop_reason"] == "tool_use"
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": tool_input}
+    ]
+
+
+_NON_STRING_TEXTS: Final = (pytest.param(None, id="null"), pytest.param(5, id="number"))
+
+
+def _prompt_with_text(text: object) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": _PROMPT}, {"type": "text", "text": text}]}]
+
+
+_CLEAN_PROMPT: Final = [{"role": "user", "content": [{"type": "text", "text": _PROMPT}]}]
+_BLANK_BEFORE_NULL_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": ""}, {"type": "text", "text": None}, {"type": "text", "text": _PROMPT}],
+    }
+]
+
+
+async def _responses_input_sent(respx_mock: respx.MockRouter, messages: list[dict[str, object]]) -> object:
+    route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_OPENAI_BODY)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": _ALIAS,
+                "litellm_params": {"model": _OPENAI_MODEL, "api_key": "fake-key", "drop_params": True},
+            }
+        ],
+        num_retries=0,
+    )
+    await router.aanthropic_messages(model=_ALIAS, max_tokens=64, messages=messages)
+    return json.loads(route.calls.last.request.read())["input"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+async def test_responses_bridge_drop_params_drops_a_non_string_user_text_and_the_turn_it_empties(
+    respx_mock: respx.MockRouter, text: object
+) -> None:
+    history: Final[list[dict[str, object]]] = [
+        *_CLEAN_PROMPT,
+        {"role": "assistant", "content": [{"type": "text", "text": _JOKE}]},
+    ]
+
+    beside_text: Final = await _responses_input_sent(respx_mock, _prompt_with_text(text))
+    own_turn: Final = await _responses_input_sent(
+        respx_mock, [*history, {"role": "user", "content": [{"type": "text", "text": text}]}]
+    )
+
+    assert beside_text == await _responses_input_sent(respx_mock, _CLEAN_PROMPT)
+    assert own_turn == await _responses_input_sent(respx_mock, history)
+
+
+async def _native_body_sent(
+    respx_mock: respx.MockRouter,
+    messages: list[dict[str, object]],
+    deployment_params: Mapping[str, object],
+    **params: object,
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
+    )
+    deployment: Final = {
+        "model_name": _ALIAS,
+        "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "fake-key", **deployment_params},
+    }
+    await Router(model_list=[deployment]).aanthropic_messages(messages=messages, model=_ALIAS, max_tokens=64, **params)
+    return json.loads(route.calls.last.request.read())
+
+
+_DROP_PARAMS_SOURCES: Final = (
+    pytest.param({"drop_params": True}, {}, False, id="deployment"),
+    pytest.param({}, {"drop_params": True}, False, id="request"),
+    pytest.param({}, {}, True, id="global"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_drops_a_non_string_user_text_from_every_source(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    text: object,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+
+    dropped: Final = await _native_body_sent(respx_mock, _prompt_with_text(text), deployment_params, **request_params)
+    only_null: Final = await _native_body_sent(
+        respx_mock,
+        [*_CLEAN_PROMPT, {"role": "user", "content": [{"type": "text", "text": text}]}],
+        deployment_params,
+        **request_params,
+    )
+    blank_beside: Final = await _native_body_sent(
+        respx_mock, _BLANK_BEFORE_NULL_PROMPT, deployment_params, **request_params
+    )
+
+    assert dropped["messages"] == _CLEAN_PROMPT
+    assert only_null["messages"] == _CLEAN_PROMPT
+    assert blank_beside["messages"] == _CLEAN_PROMPT
+
+
+_SYSTEM_TEXT: Final = {"type": "text", "text": "Answer in one word"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_drops_a_non_string_system_text_and_a_system_prompt_it_empties(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    text: object,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    non_string: Final = {"type": "text", "text": text}
+
+    dropped: Final = await _native_body_sent(
+        respx_mock, _CLEAN_PROMPT, deployment_params, system=[non_string, _SYSTEM_TEXT], **request_params
+    )
+    emptied: Final = await _native_body_sent(
+        respx_mock, _CLEAN_PROMPT, deployment_params, system=[non_string], **request_params
+    )
+
+    assert dropped["system"] == [_SYSTEM_TEXT]
+    assert dropped["messages"] == emptied["messages"] == _CLEAN_PROMPT
+    assert "system" not in emptied
+
+
+@pytest.mark.asyncio
+async def test_native_anthropic_still_strips_empty_user_text_and_non_string_assistant_text_without_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    sent: Final = await _native_body_sent(
+        respx_mock,
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": _PROMPT}, {"type": "text", "text": " "}, {"type": "text"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": None}, {"type": "text", "text": _JOKE}]},
+            {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "again"}]},
+        ],
+        {},
+    )
+
+    assert sent["messages"] == [
+        *_CLEAN_PROMPT,
+        {"role": "assistant", "content": [{"type": "text", "text": _JOKE}]},
+        {"role": "user", "content": [{"type": "text", "text": "again"}]},
+    ]
+
+
+_EMPTIED_MESSAGES_ERROR: Final = (
+    "litellm.BadRequestError: messages: no message has content left after dropping empty or non-string text blocks"
+)
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"litellm.BadRequestError: {field}: Input should be a valid string"
+
+
+_REJECTED_REQUESTS: Final = (
+    pytest.param(
+        [{"role": "user", "content": [{"type": "text", "text": None}]}],
+        {"drop_params": True},
+        _EMPTIED_MESSAGES_ERROR,
+        id="only-null-dropped",
+    ),
+    pytest.param(
+        [
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
+            {"role": "user", "content": [{"type": "text", "text": " "}, {"type": "text", "text": None}]},
+        ],
+        {"drop_params": True},
+        _EMPTIED_MESSAGES_ERROR,
+        id="every-turn-emptied",
+    ),
+    pytest.param(
+        _prompt_with_text(None), {}, _non_string_text_error("messages.0.content.1.text"), id="null-beside-text"
+    ),
+    pytest.param(_prompt_with_text(5), {}, _non_string_text_error("messages.0.content.1.text"), id="number-beside-text"),
+    pytest.param(
+        _BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text"), id="blank-before-null"
+    ),
+    pytest.param(
+        _CLEAN_PROMPT,
+        {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+        _non_string_text_error("system.1.text"),
+        id="null-system-text",
+    ),
+    pytest.param(
+        _prompt_with_text(None),
+        {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+        _non_string_text_error("messages.0.content.1.text"),
+        id="null-user-text-before-null-system-text",
+    ),
+)
+_EVERY_MESSAGES_PATH: Final = (
+    pytest.param("anthropic/claude-opus-5-5", "anthropic", id="native-anthropic"),
+    pytest.param("openai/gpt-5.6", "openai", id="responses-bridge"),
+    pytest.param("gemini/gemini-3.8-flash", "gemini", id="chat-completions-bridge"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
+@pytest.mark.parametrize(("messages", "request_params", "error"), _REJECTED_REQUESTS)
+@pytest.mark.parametrize(("model", "provider"), _EVERY_MESSAGES_PATH)
+async def test_a_non_string_user_text_or_a_request_left_with_no_message_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter,
+    model: str,
+    provider: str,
+    messages: list[dict[str, object]],
+    request_params: Mapping[str, object],
+    error: str,
+    stream: bool,
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+    router: Final = Router(
+        model_list=[{"model_name": _ALIAS, "litellm_params": {"model": model, "api_key": "fake-key"}}], num_retries=0
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await router.aanthropic_messages(
+            model=_ALIAS, max_tokens=64, messages=messages, stream=stream, **request_params
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.llm_provider == provider
+    assert rejected.value.message.partition("\n\n")[0] == error
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_non_string_user_text_answers_its_own_400_when_the_model_names_no_known_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await litellm.anthropic.messages.acreate(
+            model="unknown-provider-model", api_key="fake-key", max_tokens=64, messages=_prompt_with_text(None)
+        )
+
+    assert rejected.value.message.partition("\n\n")[0] == _non_string_text_error("messages.0.content.1.text")
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(("messages", "request_params", "error"), _REJECTED_REQUESTS)
+def test_sync_messages_create_answers_the_same_400_for_a_non_string_user_text_or_no_message_left(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], request_params: Mapping[str, object], error: str
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model="anthropic/claude-opus-5-5", api_key="fake-key", max_tokens=64, messages=messages, **request_params
+        )
+
+    assert rejected.value.message.partition("\n\n")[0] == error
+    assert rejected.value.llm_provider == "anthropic"
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_native_messages_strip_empty_blocks_beside_a_non_string_tool_result_text(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body())
+    )
+    tool_use: Final = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+    tool_result: Final = {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": None}]}
+
+    await _router(_ALIAS, _ANTHROPIC_MODEL).aanthropic_messages(
+        model=_ALIAS,
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": _PROMPT},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}, tool_use]},
+            {"role": "user", "content": [tool_result, {"type": "text", "text": " "}]},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.read())["messages"] == [
+        {"role": "user", "content": _PROMPT},
+        {"role": "assistant", "content": [tool_use]},
+        {"role": "user", "content": [tool_result]},
     ]
