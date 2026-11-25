@@ -377,12 +377,14 @@ def _server_spans_by_route(exporter):
 
 class _OuterTracer:
     def __init__(self, app: ASGIApp) -> None:
-        self.app: Final = app
+        self.app = app
         self.paths: Final[list[str]] = []
+        self.ran_inside_a_server_span: Final[list[bool]] = []
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             self.paths.append(scope["path"])
+            self.ran_inside_a_server_span.append(trace.get_current_span().get_span_context().is_valid)
         await self.app(scope, receive, send)
 
 
@@ -390,6 +392,16 @@ class _AppWrappedByAnotherTracer(FastAPI):
     def build_middleware_stack(self) -> ASGIApp:
         self.outer_tracer = _OuterTracer(super().build_middleware_stack())
         return self.outer_tracer
+
+
+class _AppWrappedByAnOpaqueCallable(FastAPI):
+    def build_middleware_stack(self) -> ASGIApp:
+        stack: Final = super().build_middleware_stack()
+
+        async def opaque(scope: Scope, receive: Receive, send: Send) -> None:
+            await stack(scope, receive, send)
+
+        return opaque
 
 
 def _app_with_error_handler(
@@ -427,8 +439,24 @@ def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monke
 
     server_spans: Final = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
     assert sorted((span.attributes or {})["http.route"] for span in server_spans) == ["/crash", "/ok"]
-    assert _server_spans_by_route(exporter)["/crash"].status.status_code is StatusCode.ERROR
+    crashed: Final = _server_spans_by_route(exporter)["/crash"]
+    assert crashed.status.status_code is StatusCode.ERROR
+    assert [event.name for event in crashed.events] == ["exception"]
     assert app.outer_tracer.paths == ["/ok", "/crash"]
+    assert app.outer_tracer.ran_inside_a_server_span == [False, False]
+    assert handled == ["/crash"]
+
+
+def test_a_wrapper_that_hides_the_middleware_stack_keeps_serving_without_server_spans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, exporter = _exporting_provider()
+    client, handled = _app_with_error_handler(monkeypatch, _AppWrappedByAnOpaqueCallable(), provider)
+
+    assert client.get("/ok").status_code == 200
+    assert client.get("/crash").status_code == 500
+
+    assert [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER] == []
     assert handled == ["/crash"]
 
 

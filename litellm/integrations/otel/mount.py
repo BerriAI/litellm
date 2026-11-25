@@ -14,7 +14,7 @@ when the feature gate is off.
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
@@ -130,6 +130,23 @@ def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: Mapping[s
         pass
 
 
+@runtime_checkable
+class _WrapsAnApp(Protocol):
+    app: "ASGIApp"
+
+
+def _holder_of_server_error_middleware(stack: object, server_error_type: type) -> "_WrapsAnApp | None":
+    """Return the middleware another tracer wrapped directly around Starlette's error middleware.
+
+    ``None`` when the stack is Starlette's own, or when a wrapper does not expose ``app``.
+    """
+    if not isinstance(stack, _WrapsAnApp) or isinstance(stack, server_error_type):
+        return None
+    if isinstance(stack.app, server_error_type):
+        return stack
+    return _holder_of_server_error_middleware(stack.app, server_error_type)
+
+
 def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | None" = None) -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
@@ -184,10 +201,15 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
 
         excluded_urls: Final = os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", _DEFAULT_EXCLUDED_URLS)
         plain_stack: Final = app.build_middleware_stack
+        outer_wrappers: Final[list[tuple[ASGIApp, _WrapsAnApp]]] = []  # mutable-ok: filled while one stack is built
 
         def server_error_stack() -> "ASGIApp":
             stack: Final = plain_stack()
-            return stack if isinstance(stack, ServerErrorMiddleware) else ServerErrorMiddleware(app=stack)
+            holder: Final = _holder_of_server_error_middleware(stack, ServerErrorMiddleware)
+            if holder is None:
+                return stack
+            outer_wrappers.append((stack, holder))
+            return holder.app
 
         app.build_middleware_stack = server_error_stack  # rebind-ok: the instrumentation skips any other outermost type
         FastAPIInstrumentor.instrument_app(
@@ -203,7 +225,13 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
         instrumented_stack: Final = app.build_middleware_stack
 
         def build_middleware_stack() -> "ASGIApp":
-            return _RequestTraceExclusionMiddleware(instrumented_stack(), excluded_urls)
+            outer_wrappers.clear()
+            instrumented: Final = instrumented_stack()
+            if not outer_wrappers:
+                return _RequestTraceExclusionMiddleware(instrumented, excluded_urls)
+            whole_stack, holder = outer_wrappers[-1]
+            holder.app = instrumented
+            return _RequestTraceExclusionMiddleware(whole_stack, excluded_urls)
 
         app.build_middleware_stack = build_middleware_stack  # rebind-ok: wrap the complete ASGI stack
         if get_global_response_propagator() is None:
