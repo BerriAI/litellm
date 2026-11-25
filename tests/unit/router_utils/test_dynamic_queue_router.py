@@ -864,6 +864,89 @@ async def test_a_fallback_target_sending_its_own_credentials_skips_the_queue_and
         assert isinstance(outcome, DynamicQueueTimeoutError)
 
 
+_ANTHROPIC_CALLER_KEY: Final = "sk-ant-api03-caller-key"
+_AWS_IAM: Final = {"aws_access_key_id": "AKIAEXAMPLEEXAMPLE00", "aws_secret_access_key": "example-secret"}
+_BEDROCK: Final = {"model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0", "aws_region_name": "us-east-1"}
+_OPENAI_OWN_KEY: Final = {"model": "openai/gpt-5.6", "api_key": "sk-openai-deployment"}
+
+
+@pytest.fixture
+def _no_destination_endpoint_or_bearer_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "BEDROCK_MANTLE_API_KEY",
+        "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+
+@pytest.mark.usefixtures("_no_destination_endpoint_or_bearer_from_env")
+@pytest.mark.parametrize(
+    ("caller_key", "backup_params", "target_params", "queued"),
+    [
+        (_ANTHROPIC_CALLER_KEY, _OPENAI_OWN_KEY, {}, True),
+        (_ANTHROPIC_CALLER_KEY, {**_BEDROCK, **_AWS_IAM, "api_key": "bedrock-bearer"}, {}, True),
+        (_ANTHROPIC_CALLER_KEY, {**_BEDROCK, **_AWS_IAM}, {}, True),
+        ("caller-own-key", {**_BEDROCK, **_AWS_IAM}, {}, True),
+        ("caller-own-key", _OPENAI_OWN_KEY, {}, False),
+        (_ANTHROPIC_CALLER_KEY, {**_OPENAI_OWN_KEY, "api_base": "https://gateway.local/v1"}, {}, False),
+        (_ANTHROPIC_CALLER_KEY, _OPENAI_OWN_KEY, {"api_key": "sk-openai-target"}, False),
+        (_ANTHROPIC_CALLER_KEY, {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-backup"}, {}, False),
+    ],
+    ids=[
+        "anthropic_key_left_behind_for_the_openai_deployment_key",
+        "anthropic_key_left_behind_for_the_bedrock_bearer",
+        "anthropic_key_left_behind_for_bedrock_iam",
+        "opaque_key_left_behind_for_bedrock_iam",
+        "opaque_caller_key_sent_to_openai",
+        "anthropic_key_sent_to_a_custom_gateway",
+        "fallback_target_key_sent_to_openai",
+        "anthropic_key_kept_on_an_anthropic_fallback",
+    ],
+)
+async def test_a_fallback_hop_waits_in_the_queue_only_when_it_runs_on_the_deployments_own_credentials(
+    caller_key: str, backup_params: Mapping[str, object], target_params: Mapping[str, object], queued: bool
+) -> None:
+    timer: Final = ManualTimer()
+    host: Final = _QueueHost(timer)
+    router: Final = _on_the_clock(
+        host,
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-deployment"},
+                "model_info": {"id": "primary-1"},
+            },
+            {"model_name": "backup", "litellm_params": dict(backup_params), "model_info": {"id": "backup-1"}},
+        ],
+        default_priority=0,
+        num_retries=0,
+        dynamic_queue={"enabled": True, "max_waiting": 8, "queue_timeout": 0.5},
+    )
+    await _congest_directly(host, "deployment:backup-1")
+
+    fallback: Final = {"model": "backup", "mock_response": "served", **target_params}
+    outcome: Final = await _waited(
+        timer,
+        router.acompletion(
+            model="primary",
+            messages=MESSAGES,
+            api_key=caller_key,
+            mock_response=_provider_error(429),
+            fallbacks=[fallback],
+        ),
+        0.25,
+    )
+
+    served: Final = isinstance(outcome, litellm.ModelResponse) and "served" in str(outcome)
+    assert (isinstance(outcome, DynamicQueueTimeoutError), served, timer.at) == (
+        (True, False, 0.5) if queued else (False, True, 0.0)
+    )
+
+
 async def test_a_group_left_only_cooling_with_the_queues_redis_unreachable_fails_as_it_would_without_the_queue() -> (
     None
 ):
