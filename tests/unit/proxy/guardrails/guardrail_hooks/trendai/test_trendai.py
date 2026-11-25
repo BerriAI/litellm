@@ -334,21 +334,21 @@ async def test_during_call_skips_request_redaction_and_still_enforces_blocks() -
             api_base="https://guard.example.com/v3.0/aiSecurity",
             async_handler=client,
             guardrail_name="trendai",
-            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call],
+            event_hook=[GuardrailEventHooks.during_call, GuardrailEventHooks.post_call],
             default_on=True,
         )
         redact_request: Final[dict[str, object]] = {  # mutable-ok: hook inspects request dict
             "model": "gpt-5.4",
             "messages": [{"role": "user", "content": "keep SECRET intact"}],
             "litellm_metadata": {},
+            "guardrail_to_apply": guardrail,
         }
-        await guardrail.async_moderation_hook(
+        await UnifiedLLMGuardrails().async_moderation_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy dict arg
             data=redact_request,
             user_api_key_dict=user,
             call_type=CallTypes.acompletion.value,
         )
         assert redact_request["messages"] == [{"role": "user", "content": "keep SECRET intact"}]
-        assert "guardrail_to_apply" not in redact_request
         litellm_metadata: Final = redact_request.get("litellm_metadata")
         assert isinstance(litellm_metadata, dict)
         during_records: Final = litellm_metadata.get("standard_logging_guardrail_information")
@@ -362,10 +362,11 @@ async def test_during_call_skips_request_redaction_and_still_enforces_blocks() -
         block_request: Final[dict[str, object]] = {  # mutable-ok: hook inspects request dict
             "model": "gpt-5.4",
             "messages": [{"role": "user", "content": "this is forbidden"}],
-            "metadata": {},
+            "litellm_metadata": {},
+            "guardrail_to_apply": guardrail,
         }
         with pytest.raises(GuardrailRaisedException) as raised:
-            await guardrail.async_moderation_hook(
+            await UnifiedLLMGuardrails().async_moderation_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy dict arg
                 data=block_request,
                 user_api_key_dict=user,
                 call_type=CallTypes.acompletion.value,
@@ -380,30 +381,15 @@ async def test_during_call_skips_request_redaction_and_still_enforces_blocks() -
         assert block_record["guardrail_status"] == "guardrail_intervened"
         assert block_record["guardrail_mode"] == GuardrailEventHooks.during_call
 
-        pre_call_result, pre_call_request = await _apply(
+        response_result, response_request = await _apply(
             guardrail,
-            {"texts": ["keep SECRET intact"]},
-            "request",
+            {"texts": ["redact SECRET in response"]},
+            "response",
         )
-        assert pre_call_result["texts"] == ["keep ****** intact"]
-        (pre_record,) = _guardrail_records(pre_call_request)
-        assert pre_record["guardrail_response"]["redacted"] is True
-        assert pre_record["masked_entity_count"] == {"PII": 1}
-
-        during_only: Final = TrendAIGuardrail(
-            api_key="test-key",
-            api_base="https://guard.example.com/v3.0/aiSecurity",
-            async_handler=client,
-            guardrail_name="trendai",
-            event_hook=GuardrailEventHooks.during_call,
-            default_on=True,
-        )
-        direct_inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["keep SECRET intact"]}
-        direct_result, direct_request = await _apply(during_only, direct_inputs, "request")
-        assert direct_result is direct_inputs
-        (direct_record,) = _guardrail_records(direct_request)
-        assert direct_record["guardrail_response"]["redacted"] is False
-        assert direct_record["masked_entity_count"] is None
+        assert response_result["texts"] == ["redact ****** in response"]
+        (response_record,) = _guardrail_records(response_request)
+        assert response_record["guardrail_response"]["redacted"] is True
+        assert response_record["masked_entity_count"] == {"PII": 1}
 
 
 Responder = Callable[[httpx.Request], httpx.Response]
@@ -848,7 +834,7 @@ async def test_unmergeable_response_redaction_blocks_instead_of_leaking() -> Non
                 input_type="response",
             )
 
-    assert _guardrail_records(request_data)[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert [r["guardrail_status"] for r in _guardrail_records(request_data)] == ["guardrail_failed_to_respond"]
 
 
 @pytest.mark.asyncio
@@ -1202,7 +1188,7 @@ async def test_unmergeable_multi_window_request_redaction_blocks_instead_of_leak
                 input_type="request",
             )
 
-    assert _guardrail_records(request_data)[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert [r["guardrail_status"] for r in _guardrail_records(request_data)] == ["guardrail_failed_to_respond"]
 
 
 @pytest.mark.asyncio

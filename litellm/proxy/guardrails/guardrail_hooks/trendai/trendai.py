@@ -2,7 +2,6 @@
 # This file has been modified for integration into LiteLLM.
 
 import asyncio
-import contextvars
 import os
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -46,8 +45,6 @@ from ._text import apply_window_redaction, locate_request_prompt, redact_request
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.utils import CallTypesLiteral
 
 GUARDRAIL_NAME: Final = SupportedGuardrailIntegrations.TRENDAI.value
 OPENAI_CHAT_COMPLETION_RESPONSE_V1: Final = "OpenAIChatCompletionResponseV1"
@@ -61,9 +58,6 @@ _TREND_AI_SECURITY_PATH: Final = "/v3.0/aiSecurity"
 _RESPONSE_MODEL: Final = "guardrailed-response"
 _REDACTION_FAILED_MESSAGE: Final = "Trend AI Guard could not apply the requested redaction"
 _NO_ENTITIES: Final[Mapping[str, int]] = MappingProxyType({})
-_during_call_guardrail: Final[contextvars.ContextVar["TrendAIGuardrail | None"]] = contextvars.ContextVar(
-    "trendai_during_call_guardrail", default=None
-)
 
 
 class _AsyncHTTPClient(Protocol):
@@ -79,7 +73,6 @@ class _AsyncHTTPClient(Protocol):
 
 class TrendAIGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
-    use_native_during_call_hook: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -154,37 +147,7 @@ class TrendAIGuardrail(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
-    async def async_moderation_hook(
-        self,
-        data: dict[str, object],  # mutable-ok: CustomLogger.async_moderation_hook contract
-        user_api_key_dict: "UserAPIKeyAuth",
-        call_type: "CallTypesLiteral",
-    ) -> object:
-        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-            UnifiedLLMGuardrails,
-        )
-
-        token: Final = _during_call_guardrail.set(self)
-        hook_data: Final[dict[str, object]] = {  # mutable-ok: UnifiedLLMGuardrails pops guardrail_to_apply
-            **data,
-            "guardrail_to_apply": self,
-        }
-        try:
-            return await UnifiedLLMGuardrails().async_moderation_hook(  # pyright: ignore[reportUnknownMemberType]  # UnifiedLLMGuardrails types data as bare dict
-                data=hook_data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-            )
-        finally:
-            if "litellm_metadata" not in data and "litellm_metadata" in hook_data:
-                data["litellm_metadata"] = hook_data[  # rebind-ok: preserve telemetry recorded by UnifiedLLMGuardrails
-                    "litellm_metadata"
-                ]
-            _during_call_guardrail.reset(token)
-
     def _is_during_call_request(self) -> bool:
-        if _during_call_guardrail.get() is self:
-            return True
         return self._event_hook_is_event_type(GuardrailEventHooks.during_call) and not self._event_hook_is_event_type(
             GuardrailEventHooks.pre_call
         )
@@ -223,29 +186,28 @@ class TrendAIGuardrail(CustomGuardrail):
         returned_redaction: Final = any(_is_redacting(scan.result) for scan in scans)
         skip_redaction: Final = self._is_during_call_request()
         has_redaction: Final = returned_redaction and not skip_redaction
+        event_type: Final = GuardrailEventHooks.during_call if skip_redaction else None
         if returned_redaction and skip_redaction:
             verbose_proxy_logger.warning(
                 "Trend AI Guard: skipping request redaction in during_call mode; use pre_call for request redaction"
             )
-        self._record_scan(
-            verdict,
-            request_data,
-            started_at,
-            event_type=GuardrailEventHooks.during_call if skip_redaction else None,
-            redacted=has_redaction,
-        )
-        self._enforce(verdict)
-        if not has_redaction:
+        if self._blocks_verdict(verdict) or not has_redaction:
+            self._record_scan(verdict, request_data, started_at, event_type=event_type, redacted=has_redaction)
+            self._enforce(verdict)
             return inputs
         redacted: Final = _merge_request_redactions(prompt.prompt, scans)
         if redacted is None:
             self._raise_redaction_failure(request_data, started_at, event_type=None)
         redacted_texts: Final = redact_request_texts(prompt.texts, redacted)
         if prompt.message_index is None:
+            self._record_scan(verdict, request_data, started_at, event_type=None, redacted=True)
+            self._enforce(verdict)
             return {**inputs, "texts": list(redacted_texts)}
         rewritten_message: Final = message_with_slot_texts(messages[prompt.message_index], redacted_texts)
         if rewritten_message is None:
             self._raise_redaction_failure(request_data, started_at, event_type=None)
+        self._record_scan(verdict, request_data, started_at, event_type=None, redacted=True)
+        self._enforce(verdict)
         return {
             **inputs,
             "structured_messages": [
@@ -269,20 +231,19 @@ class TrendAIGuardrail(CustomGuardrail):
         scans: Final = tuple([await self._scan_response_windows(text, model) for text in texts])
         all_scans: Final = tuple(chain.from_iterable(scans))
         verdict: Final = _window_verdict(all_scans)
-        self._record_scan(
-            verdict,
-            request_data,
-            started_at,
-            event_type=None,
-            redacted=any(_is_redacting(scan.result) for scan in all_scans),
-        )
-        self._enforce(verdict)
+        has_redaction: Final = any(_is_redacting(scan.result) for scan in all_scans)
+        if self._blocks_verdict(verdict) or not has_redaction:
+            self._record_scan(verdict, request_data, started_at, event_type=None, redacted=has_redaction)
+            self._enforce(verdict)
+            return inputs
         redacted_texts: Final = tuple(
             _merge_window_redactions(text, text_scans) for text, text_scans in zip(texts, scans, strict=True)
         )
         merged_texts: Final = tuple(text for text in redacted_texts if text is not None)
         if len(merged_texts) != len(texts):
             self._raise_redaction_failure(request_data, started_at, event_type=None)
+        self._record_scan(verdict, request_data, started_at, event_type=None, redacted=True)
+        self._enforce(verdict)
         redacted_inputs: Final[GenericGuardrailAPIInputs] = {
             **inputs,
             "texts": list(merged_texts),
@@ -360,6 +321,17 @@ class TrendAIGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
             status_code=PROVIDER_UNAVAILABLE_STATUS,
         )
+
+    def _blocks_verdict(self, result: TrendAIScanResult) -> bool:
+        match result:
+            case TrendAIAllow():
+                return False
+            case TrendAIBlock():
+                return True
+            case TrendAIProviderFailure():
+                return self.fallback_on_error != "allow"
+            case _:
+                assert_never(result)
 
     def _enforce(self, result: TrendAIScanResult) -> str | None:
         """Raise for a block or a fail-closed provider failure; otherwise return any redacted content."""
