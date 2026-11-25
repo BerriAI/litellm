@@ -1,6 +1,7 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
+from litellm.litellm_core_utils.reasoning_effort_strength import ReasoningEffortRounding
 from litellm.llms.zai.chat.transformation import ZAIChatConfig
 
 from ..common_utils import get_bigmodel_api_key, get_bigmodel_url, is_unsupported_disabled_thinking
@@ -42,6 +43,8 @@ class BigModelChatConfig(ZAIChatConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
+        reasoning_effort_rounding: ReasoningEffortRounding | None = None,
+        declared_reasoning_efforts: Sequence[str] | None = None,
     ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
         mapped: Final = {
             **optional_params,

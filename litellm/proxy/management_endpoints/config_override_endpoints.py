@@ -198,11 +198,7 @@ def _mask_sensitive_fields(data: Mapping[str, object], sensitive_fields: set[str
 
 def get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, str | None]:
     """Read current env var values as fallback when no DB record exists."""
-    values: Final = {}
-    for field_name, env_var_name in env_var_mapping.items():
-        env_value = os.environ.get(env_var_name)
-        values[field_name] = env_value
-    return values
+    return {field_name: os.environ.get(env_var_name) for field_name, env_var_name in env_var_mapping.items()}
 
 
 _get_current_env_values: Final = get_current_env_values

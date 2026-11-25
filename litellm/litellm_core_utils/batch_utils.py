@@ -44,7 +44,7 @@ class InMemoryFile(io.BytesIO):
         self.content_type = content_type
 
 
-def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
+def parse_jsonl_with_embedded_newlines(content: str) -> list[object]:
     """
     Parse JSONL content that may contain JSON objects with embedded newlines in string values.
 
@@ -62,7 +62,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
         >>> parse_jsonl_with_embedded_newlines(content)
         [{"id":1,"msg":"Line 1\\nLine 2"}, {"id":2,"msg":"test"}]
     """
-    json_objects: Final = []
+    json_objects: Final[list[object]] = []
     buffer = ""
 
     for char in content:

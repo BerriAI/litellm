@@ -20,6 +20,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics, SlackAlerting
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.router import Router
 from litellm.types.router import ModelInfo as RouterModelInfo
@@ -28,6 +29,38 @@ from litellm.utils import get_api_base
 from datetime import timedelta
 from typing import Optional
 from litellm.proxy._types import WebhookEvent
+from litellm.integrations.lens.proxy.model_gateway import key_request
+from litellm.types.integrations.slack_alerting import VirtualKeyEvent
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
+
+
+@pytest.mark.asyncio
+async def test_key_creation_alert_redacts_the_credential_and_preserves_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    alerts: Final = SlackAlerting(
+        alerting=["slack"], alert_types=[AlertType.new_virtual_key_created], internal_usage_cache=DualCache()
+    )
+    alerts.periodic_started = True
+    secret: Final = "sk-lens-" + "a" * 64
+    request: Final = key_request(secret)
+    await alerts.send_virtual_key_event_slack(
+        VirtualKeyEvent(
+            created_by_user_id="gateway-admin",
+            created_by_user_role="proxy_admin",
+            created_by_key_alias=None,
+            request_kwargs={"data": request},
+        ),
+        AlertType.new_virtual_key_created,
+        "New Virtual Key Created",
+    )
+    queue: Final = TypeAdapter(list[AlertQueueItem]).validate_python(attribute_or_none(alerts, "log_queue"))
+    message: Final = queue[0]["payload"]["text"]
+    assert secret not in message
+    assert request.key_alias is not None and request.key_alias in message
+    assert "gateway-admin" in message
+    assert request.key == secret
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -800,6 +833,56 @@ async def test_daily_reports_unit_test(slack_alerting):
         await slack_alerting.send_daily_reports(router=router)
 
         mock_send_alert.assert_awaited_once()
+
+_GEMINI_ANSWER: Final = httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "failed_requests"),
+    [
+        pytest.param(
+            ImageRefusalError(
+                message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_GEMINI_ANSWER,
+                provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+                billed_answer=None,
+            ),
+            None,
+            id="refusal",
+        ),
+        pytest.param(
+            UnservedImageError(
+                message="Gemini returned no image, finishReason=STOP",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_GEMINI_ANSWER,
+                billed_answer=litellm.ImageResponse(data=[]),
+            ),
+            None,
+            id="answer-without-an-image",
+        ),
+        pytest.param(
+            litellm.InternalServerError(message="boom", llm_provider="gemini", model="gemini-3.1-flash-image"),
+            1,
+            id="server-error",
+        ),
+    ],
+)
+async def test_daily_reports_count_no_failed_request_for_an_image_answer_without_an_image(
+    exception: Exception, failed_requests: int | None
+):
+    cache: Final = DualCache()
+    slack_alerting: Final = SlackAlerting(alert_types=["daily_reports"], internal_usage_cache=cache, alerting=["slack"])
+
+    await slack_alerting.async_log_failure_event(
+        {"litellm_params": {"model_info": {"id": "dep-1"}}, "exception": exception}, None, None, None
+    )
+
+    assert await cache.async_get_cache(f"dep-1:{SlackAlertingCacheKeys.failed_requests_key.value}") == failed_requests
+
 
 @pytest.mark.asyncio
 async def test_send_daily_reports_ignores_zero_values():

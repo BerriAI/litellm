@@ -16,6 +16,7 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
     map_openai_image_params_to_gemini,
 )
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
 )
@@ -73,12 +74,12 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
@@ -95,7 +96,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
         return join_api_base(base_url, f"models/{model}:generateContent")
@@ -107,7 +108,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
@@ -177,6 +178,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         model_response.data = cast(list[OpenAIImage], data_list)
         if "usageMetadata" in payload:
             model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
+        if not data_list:
+            raise empty_image_response_error(payload, model, "gemini", raw_response, model_response)
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[dict[str, object]]:

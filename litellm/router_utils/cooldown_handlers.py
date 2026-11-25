@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -25,11 +26,12 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError, UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
@@ -141,9 +143,16 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
     return (
         is_advisor_orchestration_failure(exception)
-        or isinstance(exception, MissingMessageRoleError)
+        or isinstance(exception, (MissingMessageRoleError, UnresolvablePreviousResponseError))
+        or is_previous_response_rejected(exception)
+        or is_answer_without_an_image(exception)
         or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
+
+
+def is_previous_response_rejected(exception: BaseException | None) -> bool:
+    rejected_param: Final[object] = getattr(exception, "param", None)
+    return rejected_param == "previous_response_id"
 
 
 _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(
@@ -219,6 +228,11 @@ def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | flo
     return None
 
 
+class _CooldownPolicyModelInfo(TypedDict, total=False):
+    allowed_fails_policy: ReadOnly[object]
+    allowed_fails: ReadOnly[int | None]
+
+
 def _get_deployment_cooldown_policy(
     ctx: "RoutingContext",
     deployment: str,
@@ -235,7 +249,7 @@ def _get_deployment_cooldown_policy(
     dep: Final = ctx.registry().deployment_dict(deployment)
     if dep is None:
         return None, None
-    mi: Final[Mapping[str, Any]] = dep.get("model_info") or MappingProxyType({})
+    mi: Final[_CooldownPolicyModelInfo] = dep.get("model_info") or _CooldownPolicyModelInfo()
     raw: Final = mi.get("allowed_fails_policy")
     policy: Final[Mapping[str, int] | None] = raw if isinstance(raw, dict) else None
     allowed: Final[int | None] = mi.get("allowed_fails")

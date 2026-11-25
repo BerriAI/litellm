@@ -1,6 +1,9 @@
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
+
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,6 +14,10 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
+
+
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class CloudZeroLogger(CustomLogger):
@@ -28,7 +35,7 @@ class CloudZeroLogger(CustomLogger):
         api_key: str | None = None,
         connection_id: str | None = None,
         timezone: str | None = None,
-        **kwargs,
+        **kwargs: Unpack[_CustomLoggerOptions],
     ):
         """Initialize CloudZero logger with configuration from parameters or environment variables."""
         super().__init__(**kwargs)
@@ -156,7 +163,7 @@ class CloudZeroLogger(CustomLogger):
             verbose_logger.error("CloudZero Logger: Error exporting usage data: %s", e)
             raise
 
-    async def dry_run_export_usage_data(self, limit: int | None = 10000):
+    async def dry_run_export_usage_data(self, limit: int | None = 10000) -> Mapping[str, object]:
         """
         Returns the data that would be exported to CloudZero without actually sending it.
 

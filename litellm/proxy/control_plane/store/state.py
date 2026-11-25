@@ -157,25 +157,31 @@ class LiveState:
             remaining = retained
         return retained
 
+    def build_committed(self, entries: tuple[Entry, ...], revisions: Mapping[Key, str]) -> Snapshot | InvalidSnapshot:
+        candidates: Final = tuple(
+            row for row in entries if row.change.op == "upsert" and not self.protected(row.change.kind, row.change.name)
+        )
+        readable: Final = self._without_orphans(tuple(row for row in candidates if self._readable(row)))
+        snapshot: Final = self.build(readable, revisions)
+        if isinstance(snapshot, InvalidSnapshot):
+            return snapshot
+        quarantined: Final = frozenset((row.change.kind, row.change.name) for row in candidates).difference(
+            snapshot.entries
+        )
+        return replace(snapshot, quarantined=quarantined)
+
     def reload(self, entries: tuple[Entry, ...]) -> bool:
         incoming: Final[Mapping[Key, str]] = {(row.change.kind, row.change.name): row.revision for row in entries}
         versions: Final[Mapping[Key, str]] = {
             key: max((self.view.revisions.get(key, "0-0"), incoming.get(key, "0-0")), key=revision_key)
             for key in self.view.revisions.keys() | incoming.keys()
         }
-        candidates: Final = tuple(
-            row for row in entries if row.change.op == "upsert" and not self.protected(row.change.kind, row.change.name)
-        )
-        readable: Final = self._without_orphans(tuple(row for row in candidates if self._readable(row)))
-        snapshot: Final = self.build(readable, versions)
+        snapshot: Final = self.build_committed(entries, versions)
         if isinstance(snapshot, InvalidSnapshot):
             return False
-        quarantined: Final = frozenset((row.change.kind, row.change.name) for row in candidates).difference(
-            snapshot.entries
-        )
-        self.view = replace(snapshot, quarantined=quarantined)
-        if quarantined:
-            LOGGER.warning("Quarantined %d invalid runtime entities and dependent roles.", len(quarantined))
+        self.view = snapshot
+        if snapshot.quarantined:
+            LOGGER.warning("Quarantined %d invalid runtime entities and dependent roles.", len(snapshot.quarantined))
         return True
 
     def apply(self, entry: Entry) -> bool:
