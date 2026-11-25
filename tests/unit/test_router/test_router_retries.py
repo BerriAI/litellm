@@ -931,6 +931,43 @@ async def test_a_create_that_times_out_on_a_fallback_is_not_sent_to_the_next_fal
     assert "No fallback was attempted" not in raised.value.message
 
 
+async def test_a_batch_create_that_times_out_on_a_fallback_raises_the_fallbacks_timeout(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    primary_base: Final = "https://router-batch-dict-primary.test"
+    backup_base: Final = "https://router-batch-dict-backup.test"
+    primary_route: Final = respx_mock.post(url__startswith=primary_base).mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    backup_route: Final = respx_mock.post(url__startswith=backup_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "batch-primary",
+                "litellm_params": {
+                    "model": "azure/gpt-batch",
+                    "api_base": primary_base,
+                    "api_key": "sk-test",
+                    "api_version": "2025-04-01-preview",
+                },
+            }
+        ],
+        num_retries=0,
+        fallbacks=[{"batch-primary": [{"model": "batch-primary", "api_base": backup_base}]}],
+    )
+
+    with pytest.raises(openai.APITimeoutError) as raised:
+        await _create(router, "batch")
+
+    assert (primary_route.call_count, backup_route.call_count) == (1, 1)
+    assert create_may_already_exist(raised.value)
+    assert "No fallback was attempted" not in raised.value.message
+
+
 @pytest.mark.parametrize("unsent_timeout", [httpx.ConnectTimeout, httpx.PoolTimeout])
 @pytest.mark.parametrize(
     "num_retries, orders",

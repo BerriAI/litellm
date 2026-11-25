@@ -4681,7 +4681,7 @@ class _Driver:
         # The primary level reached the end of `async_function_with_fallbacks_common_utils`, the
         # only place the outcome message is appended: not its early raises, nor its order path.
         self._explains_failure: bool = False
-        self._order_chain_ran: bool = False
+        self._fallback_ran: bool = False
 
     def clear_errors(self) -> None:
         self._last_error = None
@@ -4885,7 +4885,7 @@ class _Driver:
             self._level_errors[at] = last_hop
         if at == self._base_level:
             self._explains_failure = False
-            self._order_chain_ran = True
+            self._fallback_ran = True
 
     def _logged_off_the_loop(self) -> bool:
         """Whether litellm logged the attempt's failure on a thread with no running loop. An async
@@ -4950,6 +4950,11 @@ class _Driver:
                 return
             self._explain_no_fallback_group(own, at)
         raised: Final = self._level_errors.get(at + 1, own) if event.get("last_hop") is True else own
+        if raised is not None and raised is not own and self._is_create_that_may_already_exist(raised):
+            self._level_errors[at] = raised
+            if at == self._base_level:
+                self._explains_failure = False
+                self._fallback_ran = True
         self.outcomes.failed_fallbacks(
             RoutingContext(self._core),  # pyright: ignore[reportArgumentType]  # the read uses registry() and health()
             truncate_fallback_error_detail(redact_string(str(raised))),
@@ -5889,10 +5894,7 @@ class _Driver:
             )
         if (
             self._base_level == 0
-            and (
-                self._explains_failure
-                or (not self._order_chain_ran and self._is_create_that_may_already_exist(primary))
-            )
+            and (self._explains_failure or (not self._fallback_ran and self._is_create_that_may_already_exist(primary)))
             and self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
             and hasattr(primary, "message")
         ):

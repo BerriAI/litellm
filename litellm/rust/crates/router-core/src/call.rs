@@ -305,6 +305,10 @@ fn ends_call(error: &Error) -> bool {
         || retried_failure(error).is_some_and(|failure| failure.queue_rejected())
 }
 
+fn may_have_created(error: &Error) -> bool {
+    retried_failure(error).is_some_and(|failure| failure.create_may_exist)
+}
+
 impl<H: RouterHost> Call<'_, H> {
     pub(crate) async fn call(
         &self,
@@ -421,7 +425,9 @@ impl<H: RouterHost> Call<'_, H> {
             match self.run_fallbacks(&mut level, vec![failover]).await {
                 Ok(response) => return Ok(response),
                 Err(Some(raised)) if ends_call(&raised) => return Err(raised),
-                Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
+                Err(raised)
+                    if !raised.as_ref().is_some_and(may_have_created)
+                        && defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
                     self.host.observe(&RouterEvent::OrderChainFailed {
@@ -451,7 +457,7 @@ impl<H: RouterHost> Call<'_, H> {
                 chain: true,
                 last_hop: last_hop_error.is_some(),
             });
-            return Err(error);
+            return Err(last_hop_error.filter(may_have_created).unwrap_or(error));
         }
         // The order path's `raise`, outside the `try` that re-raises the original error: only a
         // context window or content policy error stays the one the caller sees.
@@ -655,11 +661,7 @@ impl<H: RouterHost> Call<'_, H> {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
-                    Err(raised) if ends_call(&raised) => return Err(Some(raised)),
-                    Err(raised)
-                        if retried_failure(&raised)
-                            .is_some_and(|failure| failure.create_may_exist) =>
-                    {
+                    Err(raised) if ends_call(&raised) || may_have_created(&raised) => {
                         return Err(Some(raised));
                     }
                     Err(raised) => last_hop_error = Some(raised),

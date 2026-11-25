@@ -181,6 +181,8 @@ class CreatedOnSomeDeployments(Exception):
 def _request_it_sent(
     failure: httpx.TransportError | httpx.HTTPStatusError | openai.APIStatusError,
 ) -> httpx.Request | None:
+    if not isinstance(failure, httpx.TransportError) and failure.response.history:
+        return failure.response.history[0].request
     try:
         return failure.request
     except RuntimeError:

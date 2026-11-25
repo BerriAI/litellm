@@ -741,3 +741,12 @@ def test_a_gateway_timeout_says_a_create_may_exist_only_when_it_answered_a_write
     response: Final = httpx.Response(504, request=httpx.Request(method, "https://files.example.invalid/v1/files"))
 
     assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=response, body=None)) is may_exist
+
+
+def test_a_gateway_timeout_on_a_followed_redirect_says_the_create_may_exist() -> None:
+    upload: Final = httpx.Response(303, request=httpx.Request("POST", "https://files.example.invalid/v1/files"))
+    followed: Final = httpx.Response(
+        504, request=httpx.Request("GET", "https://files.example.invalid/v1/files"), history=[upload]
+    )
+
+    assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=followed, body=None))
