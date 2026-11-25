@@ -12437,6 +12437,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
         use_router: bool = False,
         release_tail: bool = True,
         reads_before_disconnect: int = 3,
+        include_usage: bool = False,
         settle: Callable[[], Awaitable[None]] | None = None,
     ) -> Router | None:
         from litellm.proxy.common_request_processing import arm_disconnect_drain
@@ -12450,7 +12451,9 @@ class TestStreamingDisconnectDrainsProviderUsage:
             else None
         )
         response: Final = (
-            await router.acompletion(model="m", messages=messages, stream=True)
+            await router.acompletion(
+                model="m", messages=messages, stream=True, stream_options={"include_usage": include_usage}
+            )
             if router is not None
             else await litellm.acompletion(model="late/m", messages=messages, stream=True)
         )
@@ -12458,11 +12461,12 @@ class TestStreamingDisconnectDrainsProviderUsage:
         stream: Final = response.__aiter__()
         for _ in range(reads_before_disconnect):
             await stream.__anext__()
-        waiting_for_tail: Final = asyncio.ensure_future(stream.__anext__())
-        await asyncio.sleep(0.05)
-        waiting_for_tail.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await waiting_for_tail
+        if not provider.tail.is_set():
+            waiting_for_tail: Final = asyncio.ensure_future(stream.__anext__())
+            await asyncio.sleep(0.05)
+            waiting_for_tail.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiting_for_tail
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=None,
             request_data={"litellm_logging_obj": response.logging_obj},
@@ -12495,14 +12499,22 @@ class TestStreamingDisconnectDrainsProviderUsage:
             assert await router.get_model_group_usage("m") == (2050, 1)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_read_the_usage_chunk", [False, True])
     async def test_disconnect_after_the_usage_chunk_still_counts_its_tokens_on_the_router(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, client_read_the_usage_chunk: bool
     ) -> None:
         provider: Final = _ProviderWithLateUsage(usage_before_tail=True)
         recorder: Final = _RecordingSuccessLogger()
+        if client_read_the_usage_chunk:
+            provider.tail.set()
 
         router: Final = await self._disconnect_mid_read(
-            monkeypatch, provider, recorder, use_router=True, reads_before_disconnect=4
+            monkeypatch,
+            provider,
+            recorder,
+            use_router=True,
+            reads_before_disconnect=5 if client_read_the_usage_chunk else 4,
+            include_usage=client_read_the_usage_chunk,
         )
 
         assert router is not None
