@@ -785,6 +785,32 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn a_stored_variable_reaches_the_key_limiter() {
+        let rows = Rows {
+            settings: Some(vec![
+                setting("general_settings", r#"{"store_model_in_db": true}"#),
+                setting(
+                    "environment_variables",
+                    r#"{"LITELLM_RATE_LIMIT_WINDOW_SIZE": "3600"}"#,
+                ),
+            ]),
+            ..rows_with(None, true, true)
+        };
+
+        let loaded = layered_over(FILE, &rows, &[]).await;
+        let state = crate::AppState::build(&loaded.config, &litellm_config::Environment::default())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (loaded.stored, state.key_limiter.window_size()),
+            (StoredConfig::Loaded, 3600)
+        );
+        state.close().await;
+    }
+
+    #[rstest]
     #[case::params_that_are_not_an_object(r#""anthropic/claude""#)]
     #[case::params_that_do_not_load(r#"{"model": ["not", "text"]}"#)]
     #[tokio::test]

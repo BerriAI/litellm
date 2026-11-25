@@ -132,6 +132,7 @@ impl Sent {
 #[case::store_model_in_db("store_model_in_db")]
 #[case::store_model_in_db_unread("store_model_in_db_unread")]
 #[case::ui_settings_unread("ui_settings_unread")]
+#[case::environment_variables("environment_variables")]
 #[case::store_model_in_db_objects("store_model_in_db_objects")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
@@ -173,7 +174,6 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
-        &Environment::default(),
         &state,
         scenario.stored.into(),
     ));
