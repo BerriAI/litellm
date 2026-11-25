@@ -11466,3 +11466,128 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+def _tool_call(call_id: str | None, arguments: str, index: int | None = None) -> Mapping[str, object]:
+    return {
+        **({"index": index} if index is not None else {}),
+        **({"id": call_id, "type": "function"} if call_id else {}),
+        "function": {**({"name": "get_weather"} if call_id else {}), "arguments": arguments},
+    }
+
+
+TAIPEI: Final = '{"city": "Taipei"}'
+KAOHSIUNG: Final = '{"city": "Kaohsiung"}'
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize(
+    ("upstream_tool_calls", "expected_indexes"),
+    [
+        pytest.param(
+            (_tool_call("call_a", TAIPEI), _tool_call("call_b", KAOHSIUNG)),
+            [0, 1],
+            id="whole-calls-without-index-gemini",
+        ),
+        pytest.param(
+            (_tool_call("call_a", TAIPEI, index=0), _tool_call("call_b", KAOHSIUNG, index=0)),
+            [0, 1],
+            id="whole-calls-all-at-index-0",
+        ),
+        pytest.param(
+            (
+                _tool_call("call_a", '{"city": ', index=0),
+                _tool_call(None, '"Taipei"}', index=0),
+                _tool_call("call_b", '{"city": ', index=1),
+                _tool_call(None, '"Kaohsiung"}', index=1),
+            ),
+            [0, 0, 1, 1],
+            id="openai-fragments",
+        ),
+        pytest.param(
+            (
+                _tool_call("call_a", '{"city": ', index=0),
+                _tool_call("call_a", '"Taipei"}', index=0),
+                _tool_call("call_b", '{"city": ', index=1),
+                _tool_call("call_b", '"Kaohsiung"}', index=1),
+            ),
+            [0, 0, 1, 1],
+            id="fragments-repeating-the-id",
+        ),
+    ],
+)
+async def test_parallel_tool_calls_streamed_under_one_index_get_their_own_index(
+    async_stream: bool,
+    transport: str,
+    upstream_tool_calls: Sequence[Mapping[str, object]],
+    expected_indexes: Sequence[int],
+    logging_obj: Logging,
+) -> None:
+    chunks: Final = (
+        *(
+            {"index": 0, "delta": {"role": "assistant", "tool_calls": [tool_call]}, "finish_reason": None}
+            for tool_call in upstream_tool_calls
+        ),
+        {"index": 0, "delta": {}, "finish_reason": "tool_calls"},
+    )
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-parallel",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": [choice],
+                }
+            )
+            + "\n\n"
+            for choice in chunks
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        received: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    assert [
+        tool_call.index for chunk in received for choice in chunk.choices for tool_call in choice.delta.tool_calls or ()
+    ] == expected_indexes
+    rebuilt: Final = litellm.stream_chunk_builder(received)
+    assert rebuilt is not None
+    assert [(tool_call.id, tool_call.function.arguments) for tool_call in rebuilt.choices[0].message.tool_calls] == [
+        ("call_a", TAIPEI),
+        ("call_b", KAOHSIUNG),
+    ]

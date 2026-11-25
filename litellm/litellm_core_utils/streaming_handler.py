@@ -66,6 +66,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CHOICE_LOGPROBS_OR_JSON,
     CacheCreationTokenDetails,
+    ChatCompletionDeltaToolCall,
     CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
@@ -651,6 +652,8 @@ class CustomStreamWrapper:
         )
         self.proxy_drops_choiceless_chunks: Final = getattr(logging_obj, "stream_usage_stripped", False) is True
         self.tool_call = False
+        self._tool_call_index_by_id: Mapping[str, int] = MappingProxyType({})
+        self._tool_call_index_by_upstream_index: Mapping[int, int] = MappingProxyType({})
         # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.chunks: list[ModelResponseStream] = []
         self._repeated_messages_count = 1
@@ -3098,8 +3101,35 @@ class CustomStreamWrapper:
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
         self.response_uptil_now += content if isinstance(content, str) else ""
+        if isinstance(delta, Delta) and delta.tool_calls:
+            for tool_call in delta.tool_calls:
+                if isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    tool_call.index = self._stream_tool_call_index(tool_call.index, tool_call.id)
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
+
+    def _stream_tool_call_index(self, upstream_index: int, tool_call_id: str | None) -> int:
+        """
+        Some OpenAI-compatible servers, such as Gemini's, stream each parallel tool call whole in its own chunk
+        under the same index (or with no index, which becomes 0). A new id at an index that already belongs to
+        another call starts a new tool call, so it gets the next free index. Otherwise clients that group streamed
+        tool calls by index, stream_chunk_builder included, merge the calls into one.
+        """
+        if tool_call_id and tool_call_id in self._tool_call_index_by_id:
+            return self._tool_call_index_by_id[tool_call_id]
+        if not tool_call_id:
+            return self._tool_call_index_by_upstream_index.get(upstream_index, upstream_index)
+        used: Final = frozenset(self._tool_call_index_by_id.values())
+        index: Final = (
+            max(used) + 1
+            if upstream_index in self._tool_call_index_by_upstream_index or upstream_index in used
+            else upstream_index
+        )
+        self._tool_call_index_by_id = MappingProxyType({**self._tool_call_index_by_id, tool_call_id: index})
+        self._tool_call_index_by_upstream_index = MappingProxyType(
+            {**self._tool_call_index_by_upstream_index, upstream_index: index}
+        )
+        return index
 
     def _raise_open_error(self, error: BaseLLMException | httpx.HTTPError) -> NoReturn:
         try:
