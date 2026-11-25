@@ -1729,34 +1729,54 @@ def test_cohere_v2_resent_assistant_thinking_becomes_cohere_thinking_content(
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
-    ("model", "cohere_turn"),
+    ("deployment", "resends_thinking"),
     [
-        (NON_REASONING_MODEL, {"role": "assistant", "content": "391"}),
-        (
-            "command-z-reasoning-unlisted",
+        pytest.param({"litellm_params": {"model": f"cohere_chat/v2/{NON_REASONING_MODEL}"}}, False, id="listed"),
+        pytest.param({"litellm_params": {"model": "cohere_chat/v2/command-z-reasoning-unlisted"}}, True, id="unlisted"),
+        pytest.param(
             {
-                "role": "assistant",
-                "content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}],
+                "litellm_params": {"model": "cohere_chat/cohere-fine-tune-on-command-a"},
+                "model_info": {"base_model": f"cohere_chat/{NON_REASONING_MODEL}"},
             },
+            False,
+            id="prefixed-base-model",
+        ),
+        pytest.param(
+            {
+                "litellm_params": {"model": "cohere_chat/cohere-fine-tune-without-reasoning"},
+                "model_info": {"supports_reasoning": False},
+            },
+            False,
+            id="deployment-declares-no-reasoning",
         ),
     ],
 )
 def test_cohere_v2_resent_thinking_goes_only_to_models_that_reason(
-    respx_mock: respx.MockRouter, model: str, cohere_turn: Mapping[str, object]
+    respx_mock: respx.MockRouter, deployment: Mapping[str, Mapping[str, object]], resends_thinking: bool
 ) -> None:
     follow_up: Final = {"role": "user", "content": "Now divide that by 17."}
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
         return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "23"}]}))
     )
-    assistant_turn: Final = {"role": "assistant", "content": "391", "reasoning_content": "17 * 23 is 391."}
-
-    litellm.completion(
-        model=f"cohere_chat/v2/{model}",
-        messages=[ARITHMETIC_QUESTION, assistant_turn, follow_up],
-        api_key="cohere-test-key",
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cohere-deployment",
+                "litellm_params": {**deployment["litellm_params"], "api_key": "cohere-test-key"},
+                "model_info": deployment.get("model_info", {}),
+            }
+        ]
     )
+    assistant_turn: Final = {"role": "assistant", "content": "391", "reasoning_content": "17 * 23 is 391."}
+    thinking_turn: Final = {
+        "role": "assistant",
+        "content": [{"type": "thinking", "thinking": "17 * 23 is 391."}, {"type": "text", "text": "391"}],
+    }
 
-    assert _sent_body(route)["messages"] == [ARITHMETIC_QUESTION, cohere_turn, follow_up]
+    router.completion(model="cohere-deployment", messages=[ARITHMETIC_QUESTION, assistant_turn, follow_up])
+
+    sent_turn: Final = thinking_turn if resends_thinking else {"role": "assistant", "content": "391"}
+    assert _sent_body(route)["messages"] == [ARITHMETIC_QUESTION, sent_turn, follow_up]
 
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
