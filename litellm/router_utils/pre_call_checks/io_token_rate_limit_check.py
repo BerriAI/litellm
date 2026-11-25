@@ -583,7 +583,7 @@ async def _increment_with_rollback(
 def io_token_pre_call_check(
     usage: RouterUsage,
     deployment: dict[str, object],
-) -> dict | None:
+) -> dict[str, object] | None:
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment

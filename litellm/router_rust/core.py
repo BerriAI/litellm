@@ -95,6 +95,12 @@ from litellm.router_api import (
 from litellm.router_attempt import for_requested_model, request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
 from litellm.router_python_host import PythonHost
+from litellm.router_rust.invoke.cache_controls import (
+    IGNORED_CACHE_CONTROLS_HEADER,
+    cache_lock,
+    strictest_cache_lock,
+    with_cache_lock,
+)
 from litellm.router_rust.invoke.endpoints import (
     AttemptCall,
     Plan,
@@ -218,7 +224,11 @@ from litellm.router_rust.surface.registry import (
     index_document,
     served_default_deployment,
 )
-from litellm.router_rust.surface.replay import track_live_registry, untrack_live_registry
+from litellm.router_rust.surface.replay import (
+    mark_request_scoped_registry,
+    track_live_registry,
+    untrack_live_registry,
+)
 from litellm.router_rust.surface.retries import (
     GroupPolicies,
     RustRetries,
@@ -2146,6 +2156,7 @@ class RustCore(
         callbacks, so it binds none either: router-core reads what they would do for the request
         (``OptionalChecks.outcome_callbacks``)."""
         if request_scoped:
+            mark_request_scoped_registry(self._hosted)
             self._serve_through_request_logging()
         if logging_obj is not None:
             self._checks.bind_to_request_logging(logging_obj)
@@ -4709,6 +4720,11 @@ class _Driver:
         self._served: tuple[str | None, Mapping[str, object]] = (None, MappingProxyType({}))
         # The latest attempt's deployment and call, which a blocked response is raised from.
         self._latest_call: tuple[Mapping[str, object], AttemptCall] | None = None
+        # The cache locks of the requested model, which its fallbacks follow: its latest attempted
+        # deployment's, or every configured one's when this driver attempted none (all cooled down,
+        # or a recovery call from a failed stream whose deployment is not among them).
+        self._cache_lock: Mapping[str, object] | None = None
+        self._cache_lock_known: bool = False
         # A sync attempt's stream is reading its first chunk, so a failure now is the stream's to log.
         self._reading_first_chunk: bool = False
         self._attempts: int = 0
@@ -5168,7 +5184,7 @@ class _Driver:
                 error.max_retries = event.get("max")  # pyright: ignore[reportAttributeAccessIssue]  # Python's router stamps the same attributes
                 error.num_retries = event.get("attempted")  # pyright: ignore[reportAttributeAccessIssue]  # same
 
-    def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall]":
+    def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall, Mapping[str, object]]":
         name: Final = step.get("model")
         requested: Final = str(name) if name is not None else str(self._request.get("model"))
         deployment: Mapping[str, object] = (  # rebind-ok: given its live params below
@@ -5186,14 +5202,26 @@ class _Driver:
         shape: Final = step.get("shape")
         if not isinstance(shape, AttemptShape):
             raise TypeError(f"the attempt step carries no AttemptShape: {shape!r}")
+        params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        if shape.fallback_model_group is None:
+            self._cache_lock, self._cache_lock_known = cache_lock(params), True
+        else:
+            if not self._cache_lock_known:
+                self._cache_lock, self._cache_lock_known = self._configured_cache_lock(), True
+            deployment = {  # rebind-ok: the fallback's params under the requested model's cache lock
+                **deployment,
+                "litellm_params": with_cache_lock(params, self._cache_lock),
+            }
+        request: Final = self._attempt_request(step, self._inherited_request(step, deployment, shape, requested))
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step, self._inherited_request(step, deployment, shape, requested)),
+            request,
             deployment,
             group=requested,
             requested=requested,
             fallback_model_group=shape.fallback_model_group,
+            authenticated=self._request,
         )
         self._strip_undecryptable_reasoning(step, shape, deployment, call.kwargs)
         shaped: Final = shape_attempt_kwargs(call.kwargs, deployment)
@@ -5206,7 +5234,24 @@ class _Driver:
         self._latest_call = (deployment, call)
         if call.refused is None:
             self._core._endpoints.counters.started(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        return deployment, call
+        return deployment, call, request
+
+    def _configured_cache_lock(self) -> Mapping[str, object] | None:
+        """The lock of the deployment a failed stream ran on, for its recovery call, else of every
+        deployment the request could route to (its alias and team resolved), the strictest of each."""
+        members: Final = tuple(
+            as_str_mapping(member) or {}
+            for member in self._core.registry().deployments(
+                str(self._request.get("model")), source="routable", request=self._request
+            )
+        )
+        cut: Final = tuple(
+            member
+            for member in members
+            if (as_str_mapping(member.get("model_info")) or {}).get("id") == self._cut_deployment
+        )
+        locks: Final = (cache_lock(as_str_mapping(member.get("litellm_params")) or {}) for member in cut or members)
+        return strictest_cache_lock(tuple(lock for lock in locks if lock is not None))
 
     def _strip_undecryptable_reasoning(
         self,
@@ -5493,7 +5538,7 @@ class _Driver:
         return tuple(release for release in releases if release is not None)
 
     async def _admit(
-        self, step: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
+        self, request: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
     ) -> Admission | None:
         """Only an async non-streaming chat attempt waits, on the deployment its ordinary pick chose."""
         request_queue: Final = current_request_queue()
@@ -5502,7 +5547,7 @@ class _Driver:
             return None
         if self._plan.sync or self._plan.kind != "chat" or call.kwargs.get("stream"):
             return None
-        if not self._core.queues_on(self._attempt_request(step))(deployment):
+        if not self._core.queues_on(request)(deployment):
             return None
         own_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
         admitted: Final = await request_queue.admit(capacity, call.model_name, partial(self._cooldown_left_s, own_id))
@@ -5639,7 +5684,7 @@ class _Driver:
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
-            deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            deployment, call, request = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
             enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
@@ -5649,7 +5694,7 @@ class _Driver:
                 compacted: Final = await compacted_attempt(self._core._port, self._plan, deployment, call)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # raised before the provider call, so no cooldown reads it
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
-            admission = await self._admit(step, deployment, call)  # rebind-ok: see above
+            admission = await self._admit(request, deployment, call)  # rebind-ok: see above
             # The deployment's max_parallel_requests slot; an open chat or speech stream takes it along.
             port = self._core._port  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core  # rebind-ok: the same port on every attempt
             with await self._slot_or_turn_back(port, deployment, call, admission) as slot:
@@ -5740,7 +5785,7 @@ class _Driver:
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
-            deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            deployment, call, _ = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
             if call.refused is not None:
                 log_refused_call_sync(call, call.refused)
                 raise call.refused
@@ -5866,6 +5911,9 @@ class _Driver:
         additional["x-litellm-model-group"] = name
         apply_quality_router_decision_headers(additional, kwargs)
         additional.update(complexity_router_decision_headers(kwargs))
+        ignored: Final = self._latest_call[1].ignored_cache_controls if self._latest_call is not None else ()
+        if ignored:
+            additional[IGNORED_CACHE_CONTROLS_HEADER] = ",".join(ignored)
         return response
 
     def _count_response(self, response: object, step: Mapping[str, object]) -> object:

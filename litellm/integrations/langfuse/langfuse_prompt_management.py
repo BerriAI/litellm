@@ -225,7 +225,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     ) -> tuple[
         str,
         list[AllMessageValues],
-        dict,
+        dict[str, object],
     ]:
         return self.get_chat_completion_prompt(
             model,

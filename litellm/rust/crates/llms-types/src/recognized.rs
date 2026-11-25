@@ -51,6 +51,16 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+/// `deserialize_with` for an optional typed field whose explicit `null` is refused like any other
+/// value that is not a `T`, so a caller's `null` is never re-sent as an absent key.
+pub fn non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 /// `deserialize_with` for an optional raw field whose explicit `null` Python forwards.
 pub fn present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
 where

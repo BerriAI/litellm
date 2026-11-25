@@ -151,7 +151,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Transform get skill request for Anthropic"""
         url: Final = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 
@@ -176,7 +176,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Transform delete skill request for Anthropic"""
         url: Final = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 

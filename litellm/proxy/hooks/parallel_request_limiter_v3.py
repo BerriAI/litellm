@@ -1393,7 +1393,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         kwargs: dict[str, object],
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """
         Mirror the pre-call rate-limit snapshot into the SLP so streaming
         success callbacks see the same ``x-ratelimit-*`` headers the

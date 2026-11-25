@@ -2,7 +2,8 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from collections.abc import Mapping, Sequence
+import itertools
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
 from pydantic import ValidationError
@@ -29,6 +30,18 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
     Usage,
 )
+
+_IMAGE_TOOL_RATE_FIELDS: Final = (
+    "input_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+    "output_cost_per_token",
+)
+_IMAGE_TOOL_RATE_SECTIONS: Final = ("litellm_params", "model_info")
+
+
+def _first_set(values: Iterable[object]) -> object:
+    return next((value for value in values if value is not None), None)
 
 
 def _output_item_field(output_item: object, field: str) -> object:
@@ -304,17 +317,49 @@ class StandardBuiltInToolCostTracking:
         except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; fall back
             verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
             return None
+        deployment_rates: Final = StandardBuiltInToolCostTracking._image_tool_deployment_rates(tool_model)
+
+        def rate(field: str) -> float:
+            configured: Final = deployment_rates.get(field)
+            return configured if configured is not None else cast(float, model_info.get(field) or 0)  # cast-ok: price
+
         image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
         token_cost: Final = (
-            (input_details.text_tokens if input_details else 0) * (model_info.get("input_cost_per_token") or 0)
-            + (input_details.image_tokens if input_details else 0) * (model_info.get("input_cost_per_image_token") or 0)
-            + (output_details.image_tokens if output_details else 0)
-            * (model_info.get("output_cost_per_image_token") or 0)
-            + (output_details.text_tokens if output_details else 0) * (model_info.get("output_cost_per_token") or 0)
+            (input_details.text_tokens if input_details else 0) * rate("input_cost_per_token")
+            + (input_details.image_tokens if input_details else 0) * rate("input_cost_per_image_token")
+            + (output_details.image_tokens if output_details else 0) * rate("output_cost_per_image_token")
+            + (output_details.text_tokens if output_details else 0) * rate("output_cost_per_token")
         )
-        return token_cost if token_cost > 0 else None
+        priced_at_zero: Final = bool(deployment_rates) and (input_details is not None or output_details is not None)
+        return token_cost if token_cost > 0 or priced_at_zero else None
+
+    @staticmethod
+    def _image_tool_deployment_rates(tool_model: str) -> Mapping[str, float]:
+        """The provider runs the tool model itself, so no deployment is picked for it: the rates of the
+        deployments named after the tool model apply only when every one of them configures the same ones."""
+        from litellm.router_rust.surface.replay import operator_registries
+
+        deployments: Final = itertools.chain.from_iterable(
+            registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
+            for registry in operator_registries()
+        )
+        configured: Final = frozenset(
+            tuple(
+                _first_set(_output_item_field(deployment.get(section), field) for section in _IMAGE_TOOL_RATE_SECTIONS)
+                for field in _IMAGE_TOOL_RATE_FIELDS
+            )
+            for deployment in deployments
+            if deployment.get("model_name") == tool_model
+        )
+        if len(configured) != 1:
+            return {}
+        return {
+            field: float(value)
+            for field, value in zip(_IMAGE_TOOL_RATE_FIELDS, next(iter(configured)), strict=True)
+            if isinstance(value, int | float)
+        }
 
     @staticmethod
     def _handle_image_generation_cost(response_object: object, custom_llm_provider: str | None) -> float:

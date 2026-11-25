@@ -2112,7 +2112,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return thinking
         return AnthropicThinkingParam(type=thinking.get("type", "enabled"), budget_tokens=max_tokens - 1)
 
-    def _extract_json_schema_from_response_format(self, value: dict | None) -> dict | None:
+    def _extract_json_schema_from_response_format(self, value: dict | None) -> dict[str, object] | None:
         if value is None:
             return None
         json_schema: dict | None = None
@@ -2587,7 +2587,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
         tools: list[AllAnthropicToolsValues | dict],
-    ) -> list[AllAnthropicToolsValues | dict]:
+    ) -> list[AllAnthropicToolsValues | dict[str, object]]:
         """if 'container_upload' in messages, add code_execution tool
 
         Takes the pass-through union because the translator emits ``role: "system"``

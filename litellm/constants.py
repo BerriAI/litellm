@@ -365,6 +365,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = get_env_int(
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
 PLACEHOLDER_API_KEY: Final = "fake-api-key"
+PLACEHOLDER_API_KEYS: Final = frozenset({PLACEHOLDER_API_KEY, "dummy-key"})
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -2325,12 +2326,17 @@ PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
 CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "accesskey",
     "accesstoken",
+    "accountkey",
     "apikey",
     "authtoken",
     "bearer",
     "clientsecret",
+    "connectionstring",
     "credential",
+    "encryptionkey",
     "idtoken",
+    "licensekey",
+    "masterkey",
     "passphrase",
     "passwd",
     "password",
@@ -2338,7 +2344,9 @@ CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "refreshtoken",
     "secret",
     "sessiontoken",
+    "sharedkey",
     "signingkey",
+    "subscriptionkey",
 )
 CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
     {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
