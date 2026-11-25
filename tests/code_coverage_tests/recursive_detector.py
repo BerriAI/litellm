@@ -113,6 +113,8 @@ IGNORE_FUNCTIONS = [
     "_aws_group_members",  # bedrock vector store filters: walks only a pydantic-validated filter, which pydantic-core stops at 255 levels of nesting.
     "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
+    "_cause_chain",  # openai common_utils: max depth set (_LONGEST_CAUSE_CHAIN links of __cause__ / __context__).
+    "_context_chain",  # router_rust core: max depth set (_LONGEST_CONTEXT_CHAIN links of __context__).
     "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
     "_without_token_data",  # guardrail fingerprint: max depth set (DEFAULT_MAX_RECURSE_DEPTH); hashes the subtree as is at the cap.
 ]
