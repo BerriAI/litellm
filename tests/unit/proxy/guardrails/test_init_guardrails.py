@@ -302,6 +302,69 @@ async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(
     assert (response.choices[0].message.content != llm_answer) is expect_output_scanned
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, expect_client_response_masked",
+    [
+        ("logging_only", False),
+        (["logging_only"], False),
+        ({"tags": {"team:audit": "logging_only"}, "default": "logging_only"}, False),
+        (["logging_only", "pre_call"], True),
+    ],
+)
+async def test_initialize_presidio_logging_only_masks_the_log_and_not_the_client_response(
+    mode, expect_client_response_masked, monkeypatch
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer = "Call me at 415-555-2671"
+    masked_answer = "Call me at <PHONE_NUMBER>"
+    callbacks = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode=mode,
+            default_on=True,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+
+    def _answer() -> ModelResponse:
+        return ModelResponse(
+            choices=[Choices(message=Message(role="assistant", content=llm_answer), index=0, finish_reason="stop")]
+        )
+
+    client_response = _answer()
+    data = {"metadata": {}}
+    for callback in callbacks:
+        if callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call):
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), client_response
+            )
+
+    logged_response = _answer()
+    for callback in callbacks:
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only):
+            await callback.async_logging_hook(
+                kwargs={"messages": [{"role": "user", "content": llm_answer}], "metadata": {}},
+                result=logged_response,
+                call_type="acompletion",
+            )
+
+    assert client_response.choices[0].message.content == (
+        masked_answer if expect_client_response_masked else llm_answer
+    ), f"client response for mode={mode!r}"
+    assert logged_response.choices[0].message.content == masked_answer, f"logged response for mode={mode!r}"
+
+
 @pytest.mark.parametrize(
     "config_value, expected",
     [(True, True), (False, False), (None, False)],

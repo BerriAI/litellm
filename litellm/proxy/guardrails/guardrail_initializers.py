@@ -121,9 +121,14 @@ def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
+def _is_logging_only_mode(mode: str | list[str] | Mode) -> bool:
+    hooks: Final = configured_event_hooks(mode)
+    return bool(hooks) and all(hook == GuardrailEventHooks.logging_only.value for hook in hooks)
+
+
 def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) -> str | list[str] | Mode:
     def output_hooks(hooks: str | list[str]) -> list[str]:
-        if not hooks or (not include_mcp and _is_mcp_only_mode(hooks)):
+        if not hooks or (not include_mcp and _is_mcp_only_mode(hooks)) or _is_logging_only_mode(hooks):
             return []
         return [GuardrailEventHooks.post_call.value]
 
