@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -20,7 +21,7 @@ from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.models.team import LiteLLM_TeamTableCachedObj, Member
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
@@ -189,6 +190,42 @@ async def test_a_team_read_that_fails_for_another_reason_reads_as_unreadable(mon
     )
 
     assert read is TeamMissing.UNREADABLE
+
+
+@pytest.mark.asyncio
+async def test_a_keys_project_reaches_the_identity_with_its_alias_and_every_metadata_value() -> None:
+    key: Final = "sk-project-key-0123456789abcdef"
+    hashed: Final = hashlib.sha256(key.encode()).hexdigest()
+    metadata: Final = {
+        "model_rpm_limit": {"model-a": 7},
+        "tags": ["blue", "green"],
+        "nested": {"on": True, "ratio": 0.5},
+    }
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(
+        AuthObject.virtual_key(hashed),
+        UserAPIKeyAuth(token=hashed, project_id="project-a", models=[]),
+        model_type=UserAPIKeyAuth,
+    )
+    cache.set_cache(
+        AuthObject.project("project-a"),
+        LiteLLM_ProjectTableCachedObj(project_id="project-a", project_alias="Project A", metadata=metadata),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    settings: Final = RustAuthSettings(
+        {}, JWT_AUTH, core.HostFacts(master_key="sk-master-key-0123456789abcdef", premium=True, has_db=True)
+    )
+
+    outcome: Final = await core.drive(
+        RustAuth.authenticate_key(core.request(key, "/chat/completions", "POST"), key, settings),
+        _host(cache=cache, api_key=key, prisma_client=MagicMock()),
+    )
+
+    identity: Final = outcome.identity
+    assert isinstance(identity, RustIdentity.VirtualKey), outcome.denial
+    project: Final = identity.context.project
+    assert project is not None
+    assert (project.project_alias, project.metadata) == ("Project A", metadata)
 
 
 @pytest.mark.asyncio

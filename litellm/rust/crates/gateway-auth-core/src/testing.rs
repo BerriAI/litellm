@@ -18,7 +18,7 @@ use crate::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
-        key::Owner,
+        key::{Owner, ProjectRecord},
     },
 };
 
@@ -33,7 +33,6 @@ impl Rows for Labels {
     type Team = String;
     type EndUser = String;
     type ObjectPermission = String;
-    type Project = String;
     type Membership = String;
 }
 
@@ -269,9 +268,12 @@ impl AuthHost for ScriptedHost {
         self.step("object_permission", format!("object_permission {id}"))?;
         Ok(Some(format!("permission {id}")))
     }
-    async fn project(&self, project_id: &str) -> Result<Option<String>, Error> {
+    async fn project(&self, project_id: &str) -> Result<Option<ProjectRecord>, Error> {
         self.step("project", format!("project {project_id}"))?;
-        Ok(Some(format!("project {project_id}")))
+        Ok(Some(ProjectRecord {
+            project_alias: Some(format!("project {project_id}")),
+            metadata: None,
+        }))
     }
     async fn proxy_budget_alert(&self, key: &String) -> Result<(), Error> {
         self.step("proxy_budget_alert", format!("proxy_budget_alert {key}"))

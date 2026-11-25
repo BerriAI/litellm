@@ -13,7 +13,7 @@ use litellm_gateway_auth_core::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
             ModelAccess, Org, RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
-        key::Owner,
+        key::{Owner, ProjectRecord},
     },
 };
 use pyo3::{Py, PyAny, Python};
@@ -58,7 +58,6 @@ impl Rows for PyRows {
     type Team = PyRow;
     type EndUser = PyRow;
     type ObjectPermission = PyRow;
-    type Project = PyRow;
     type Membership = PyRow;
 }
 
@@ -216,7 +215,7 @@ pub(crate) enum Ask {
     },
     Project {
         project_id: String,
-        reply: Reply<Option<PyRow>>,
+        reply: Reply<Option<ProjectRecord>>,
     },
     ProxyBudgetAlert {
         key: PyRow,
@@ -505,7 +504,7 @@ impl AuthHost for PythonAuthHost {
         let id = id.to_owned();
         self.ask(|reply| Ask::ObjectPermission { id, reply }).await
     }
-    async fn project(&self, project_id: &str) -> Result<Option<PyRow>, Error> {
+    async fn project(&self, project_id: &str) -> Result<Option<ProjectRecord>, Error> {
         let project_id = project_id.to_owned();
         self.ask(|reply| Ask::Project { project_id, reply }).await
     }

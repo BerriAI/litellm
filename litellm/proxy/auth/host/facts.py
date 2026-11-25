@@ -27,7 +27,7 @@ from litellm.types.router import AllowedModelRegion
 from litellm.types.semantic_cache import semantic_cache_params
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import RustManagedAgent
+    from litellm.rust_bridge._native import RustManagedAgent, RustProject
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +209,7 @@ def with_team(
     return token.model_copy(update={"team_object_permission": object_permission, "team_metadata": metadata})
 
 
-def with_project(token: UserAPIKeyAuth, project: LiteLLM_ProjectTable | None) -> UserAPIKeyAuth:
+def with_project(token: UserAPIKeyAuth, project: LiteLLM_ProjectTable | RustProject | None) -> UserAPIKeyAuth:
     if project is None:
         return token
     return token.model_copy(update={"project_metadata": project.metadata, "project_alias": project.project_alias})

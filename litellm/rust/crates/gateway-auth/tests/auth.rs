@@ -30,7 +30,6 @@ impl Rows for Held {
     type Team = ();
     type EndUser = ();
     type ObjectPermission = ();
-    type Project = ();
     type Membership = ();
 }
 

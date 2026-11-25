@@ -14,7 +14,7 @@ use crate::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
-        key::Owner,
+        key::{Owner, ProjectRecord},
     },
 };
 
@@ -30,7 +30,6 @@ pub trait Rows: Row {
     type Team: Row;
     type EndUser: Row;
     type ObjectPermission: Row;
-    type Project: Row;
     type Membership: Row;
 }
 
@@ -39,7 +38,6 @@ pub type UserRow<H> = <<H as AuthHost>::Rows as Rows>::User;
 pub type TeamRow<H> = <<H as AuthHost>::Rows as Rows>::Team;
 pub type EndUserRow<H> = <<H as AuthHost>::Rows as Rows>::EndUser;
 pub type ObjectPermissionRow<H> = <<H as AuthHost>::Rows as Rows>::ObjectPermission;
-pub type ProjectRow<H> = <<H as AuthHost>::Rows as Rows>::Project;
 pub type MembershipRow<H> = <<H as AuthHost>::Rows as Rows>::Membership;
 
 /// Code the operator wrote, which only a host that embeds their Python can run.
@@ -295,7 +293,7 @@ pub trait AuthHost: Send + Sync {
     fn project(
         &self,
         project_id: &str,
-    ) -> impl Future<Output = Result<Option<ProjectRow<Self>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<ProjectRecord>, Error>> + Send;
 
     /// Warms the cache with the rows auth reads before it knows the key's owners: the end user's,
     /// and the key under the hash of `unread`, the token whose key the caller does not hold yet.
