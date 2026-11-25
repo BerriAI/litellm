@@ -4,11 +4,44 @@ from typing import Final
 
 import pytest
 
-from litellm.llms.anthropic.messages.deferred_tool_emulation import DeferredToolEmulation
+from litellm.llms.anthropic.messages.deferred_tool_emulation import DeferredToolEmulation, deferred_tool_emulation
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 
 _GREP_TOOL: Final = {"name": "Grep", "input_schema": {"type": "object"}, "defer_loading": True}
-_EMULATION: Final = DeferredToolEmulation(deferred={"Grep": _GREP_TOOL})
+_DELETE_TOOL: Final = {"name": "Delete", "input_schema": {"type": "object"}, "defer_loading": True}
+_TOOL_SEARCH: Final = {"name": "ToolSearch", "input_schema": {"type": "object"}}
+_EMULATE: Final = {"deferred_tools": "emulate"}
+_EMULATION: Final = DeferredToolEmulation(deferred={"Grep": _GREP_TOOL}, loaded=frozenset({"Grep"}))
+
+
+def _tool_search_history(*loaded: str) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Find the tools you need"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_0", "name": "ToolSearch", "input": {"query": "tools"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_0",
+                    "content": [{"type": "tool_reference", "tool_name": name} for name in loaded],
+                }
+            ],
+        },
+    ]
+
+
+def _emulation(
+    tools: list[dict[str, object]], tool_choice: dict[str, object] | None, *loaded: str
+) -> DeferredToolEmulation:
+    emulation: Final = deferred_tool_emulation(
+        _EMULATE, tools=tools, tool_choice=tool_choice, messages=_tool_search_history(*loaded)
+    )
+    assert emulation is not None
+    return emulation
 
 
 def _dispatcher_stream_frames(dispatcher_input: str) -> tuple[bytes, ...]:
@@ -96,7 +129,74 @@ def test_a_sync_stream_that_also_iterates_async_restores_the_dispatcher_call_whe
 def test_a_forced_deferred_tool_is_forced_through_the_dispatcher(
     tool_choice: dict[str, object] | None, sent: dict[str, object] | None
 ) -> None:
-    assert _EMULATION.tool_choice(tool_choice) == sent
+    assert _emulation([_TOOL_SEARCH, _GREP_TOOL], tool_choice, "Grep").tool_choice(tool_choice) == sent
+
+
+def _dispatcher_response(dispatcher: str, tool_name: str) -> dict[str, object]:
+    return {
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": dispatcher, "input": {"name": tool_name, "input": {}}},
+        ]
+    }
+
+
+def test_a_forced_deferred_tool_cannot_be_swapped_for_another_deferred_tool() -> None:
+    tools: Final = [_TOOL_SEARCH, _GREP_TOOL, _DELETE_TOOL]
+    emulation: Final = _emulation(tools, {"type": "tool", "name": "Grep"}, "Grep", "Delete")
+    dispatcher_tool: Final = emulation.tools(tools)[-1]
+    swapped: Final = _dispatcher_response("CallLoadedTool", "Delete")
+
+    assert dispatcher_tool["input_schema"]["properties"]["name"]["enum"] == ["Grep"]
+    assert emulation.restored(swapped) == swapped
+    assert emulation.restored(_dispatcher_response("CallLoadedTool", "Grep"))["content"][0]["name"] == "Grep"
+
+
+def test_the_dispatcher_never_takes_the_name_of_a_tool_the_caller_sent() -> None:
+    own_tool: Final = {"name": "CallLoadedTool", "input_schema": {"type": "object"}}
+    tools: Final = [_TOOL_SEARCH, own_tool, _GREP_TOOL]
+    emulation: Final = _emulation(tools, None, "Grep")
+    sent_names: Final = [tool["name"] for tool in emulation.tools(tools)]
+    own_call: Final = _dispatcher_response("CallLoadedTool", "Grep")
+    dispatcher: Final = sent_names[-1]
+
+    assert len(sent_names) == len(set(sent_names))
+    assert emulation.restored(own_call) == own_call
+    assert emulation.restored(_dispatcher_response(dispatcher, "Grep"))["content"][0]["name"] == "Grep"
+
+
+def test_a_dispatcher_call_to_a_deferred_tool_tool_search_never_loaded_is_kept_as_sent() -> None:
+    emulation: Final = _emulation([_TOOL_SEARCH, _GREP_TOOL, _DELETE_TOOL], None, "Grep")
+    unloaded: Final = _dispatcher_response("CallLoadedTool", "Delete")
+
+    assert emulation.restored(unloaded) == unloaded
+    assert emulation.restored(_dispatcher_response("CallLoadedTool", "Grep"))["content"][0]["name"] == "Grep"
+
+
+class _ClosableSyncStream:
+    def __init__(self, frames: tuple[bytes, ...]) -> None:
+        self._frames: Final = iter(frames)
+        self.closed = False
+
+    def __iter__(self) -> "_ClosableSyncStream":
+        return self
+
+    def __next__(self) -> bytes:
+        return next(self._frames)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("frames_read", [0, 1], ids=["before_reading", "mid_stream"])
+def test_closing_a_restored_sync_stream_closes_the_provider_stream(frames_read: int) -> None:
+    upstream: Final = _ClosableSyncStream(_dispatcher_stream_frames(json.dumps({"name": "Grep", "input": {}})))
+    restored: Final = _EMULATION.restored(upstream)
+    for _ in range(frames_read):
+        next(restored)
+
+    restored.close()
+
+    assert upstream.closed
 
 
 @pytest.mark.asyncio

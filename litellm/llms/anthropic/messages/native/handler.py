@@ -948,7 +948,9 @@ def anthropic_messages_handler(
         )
         from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages
 
-        emulation: Final = deferred_tool_emulation(deployment_model_info, request_tools)
+        emulation: Final = deferred_tool_emulation(
+            deployment_model_info, tools=request_tools, tool_choice=request_tool_choice, messages=request_messages
+        )
         bridged_messages: Final = list(deferred_tools_messages(request_messages, emulation, deferred_tools))
         bridged_tools: Final = (
             request_tools if emulation is None or request_tools is None else list(emulation.tools(request_tools))

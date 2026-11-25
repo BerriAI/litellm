@@ -324,7 +324,9 @@ async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     [("claude-sonnet-4-5", "anthropic"), ("claude-sonnet-4-5", "vertex_ai")],
     ids=["anthropic", "vertex_ai_claude"],
 )
-def test_a_claude_target_gets_no_user_turn_for_a_trailing_empty_text_block(model: str, custom_llm_provider: str) -> None:
+def test_a_claude_target_gets_no_user_turn_for_a_trailing_empty_text_block(
+    model: str, custom_llm_provider: str
+) -> None:
     from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
 
     history: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
@@ -3198,6 +3200,7 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         ("anthropic/claude-opus-5-5", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
         ("openai/gpt-6.2-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
         ("azure/gpt-6.1-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
+        ("mistral/mistral-medium-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
         ("deepseek/deepseek-chat", {"deferred_tools": "emulate"}, {}, "set it to passthrough"),
         ("deepseek/deepseek-chat", {"deferred_tools": "native"}, {}, "set it to passthrough"),
         ("anthropic/claude-opus-5-5", {"deferred_tools": "drop"}, {}, "set it to passthrough"),
@@ -3211,6 +3214,7 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         "unknown_value_on_a_messages_api_route",
         "passthrough_where_deferral_needs_tool_search",
         "passthrough_on_azure",
+        "passthrough_where_the_chat_api_rejects_deferral",
         "emulate_on_a_messages_api_route",
         "native_on_a_messages_api_route",
         "drop_on_a_messages_api_route",
@@ -3248,8 +3252,16 @@ async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model, deferral_flags, fallback_warnings",
-    [("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", {None, True}, 0), ("openai/gpt-6.2-sol", {None}, 1)],
-    ids=["kept_where_the_provider_takes_it", "dropped_where_deferral_needs_tool_search"],
+    [
+        ("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", {None, True}, 0),
+        ("openai/gpt-6.2-sol", {None}, 1),
+        ("mistral/mistral-medium-latest", {None}, 1),
+    ],
+    ids=[
+        "kept_where_the_provider_takes_it",
+        "dropped_where_deferral_needs_tool_search",
+        "dropped_where_the_chat_api_rejects_deferral",
+    ],
 )
 async def test_passthrough_deferred_tools_fall_back_to_drop_under_drop_params_only_where_the_provider_rejects_them(
     model: str,
@@ -3552,9 +3564,7 @@ async def test_a_chat_backend_reads_which_tools_a_passthrough_tool_search_loaded
         model_info, httpx.Response(200, json=_dispatcher_chat_completion()), stream=False
     )
 
-    search_results: Final = [
-        message for message in body["messages"] if message.get("tool_call_id") == "toolu_search"
-    ]
+    search_results: Final = [message for message in body["messages"] if message.get("tool_call_id") == "toolu_search"]
     assert len(search_results) == 1
     content: Final = search_results[0]["content"]
     assert (content if isinstance(content, str) else "".join(part["text"] for part in content)) == search_result
