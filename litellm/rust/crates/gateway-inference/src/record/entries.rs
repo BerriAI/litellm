@@ -140,6 +140,8 @@ pub struct CallState {
     pub callback_time: Duration,
     /// What the request told of its caller as it came in, which [`super::scoped`] writes.
     pub request_facts: RequestFacts,
+    /// What the standard logging payload logs of the request.
+    pub logged_request: super::LoggedRequest,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -177,6 +179,7 @@ impl CallState {
             stream_response: false,
             callback_time: Duration::ZERO,
             request_facts: RequestFacts::default(),
+            logged_request: super::LoggedRequest::default(),
         }
     }
 

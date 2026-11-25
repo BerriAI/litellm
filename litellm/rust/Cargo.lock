@@ -5408,6 +5408,7 @@ name = "litellm-standard-logging"
 version = "0.1.0"
 dependencies = [
  "litellm-python-compat",
+ "regex",
  "rstest",
  "serde",
  "serde_json",

@@ -8,6 +8,7 @@
 
 mod attempt;
 mod entries;
+mod logged_request;
 mod request_facts;
 mod trace;
 
@@ -34,6 +35,7 @@ use tokio::task::futures::TaskLocalFuture;
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
     entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
+    logged_request::LoggedRequest,
     request_facts::RequestFacts,
 };
 
