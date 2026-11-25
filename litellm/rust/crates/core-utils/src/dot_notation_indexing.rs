@@ -2,77 +2,54 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Segment {
-    Field(String),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Segment<'a> {
+    Field(&'a str),
     Every,
     Index(usize),
 }
 
-fn parse_segments(path: &str) -> Option<Vec<Segment>> {
-    let mut segments = Vec::new();
-    let mut rest = path;
-    while !rest.is_empty() {
-        if let Some(after_open) = rest.strip_prefix('[') {
-            let (inside, after) = after_open.split_once(']')?;
-            segments.push(match inside {
-                "*" => Segment::Every,
-                index => Segment::Index(index.trim().parse().ok()?),
-            });
-            rest = after.strip_prefix('.').unwrap_or(after);
-            continue;
-        }
-        let end = rest.find(['.', '[']).unwrap_or(rest.len());
-        let (field, after) = rest.split_at(end);
-        if !field.is_empty() {
-            segments.push(Segment::Field(field.to_string()));
-        }
-        rest = after.strip_prefix('.').unwrap_or(after);
-    }
-    Some(segments)
-}
-
-/// Every path to delete, as a tree of the segments they share. A field that ends a path is
-/// deleted from the object holding it. A path that ends on an element or `[*]` deletes nothing.
-#[derive(Default)]
-struct Removals {
-    ends: bool,
-    fields: HashMap<String, Removals>,
-    every: Option<Box<Removals>>,
-    indexes: HashMap<usize, Removals>,
-}
-
-impl Removals {
-    fn insert(&mut self, segments: &[Segment]) {
-        let Some((segment, tail)) = segments.split_first() else {
-            self.ends = true;
-            return;
+/// The first segment of `path` and what follows it, or `None` when `path` is spent or its first
+/// segment does not parse.
+fn next_segment(path: &str) -> Option<(Segment<'_>, &str)> {
+    let path = path.trim_start_matches('.');
+    if let Some(after_open) = path.strip_prefix('[') {
+        let (inside, after) = after_open.split_once(']')?;
+        let segment = match inside {
+            "*" => Segment::Every,
+            index => Segment::Index(index.trim().parse().ok()?),
         };
-        match segment {
-            Segment::Field(name) => self.fields.entry(name.clone()).or_default().insert(tail),
-            Segment::Every => self.every.get_or_insert_default().insert(tail),
-            Segment::Index(index) => self.indexes.entry(*index).or_default().insert(tail),
-        }
+        return Some((segment, after.trim_start_matches('.')));
     }
+    let end = path.find(['.', '[']).unwrap_or(path.len());
+    if end == 0 {
+        return None;
+    }
+    let (field, after) = path.split_at(end);
+    Some((Segment::Field(field), after.trim_start_matches('.')))
 }
 
-/// Deletes what any of `trees` addresses under `value`. Each part of `value` is visited once,
-/// with every tree that reaches it, so paths that overlap through `[*]` and an index never walk
-/// the same element twice.
-fn prune(trees: &[&Removals], value: &mut Value) {
+/// Deletes what any of `paths` addresses under `value`, each path read one segment per level of
+/// `value`. A field that ends a path is deleted from the object holding it, and a path that ends
+/// on an element or `[*]` deletes nothing. Each part of `value` is visited once, with every path
+/// that reaches it, so paths that overlap through `[*]` and an index never walk the same element
+/// twice, and no path is read deeper than `value` goes.
+fn prune(paths: &HashSet<&str>, value: &mut Value) {
     match value {
         Value::Object(object) => {
-            let mut ending = HashSet::new();
-            let mut below: HashMap<&str, Vec<&Removals>> = HashMap::new();
-            trees
+            let mut ending: HashSet<&str> = HashSet::new();
+            let mut below: HashMap<&str, HashSet<&str>> = HashMap::new();
+            paths
                 .iter()
-                .flat_map(|tree| &tree.fields)
-                .for_each(|(name, field)| {
-                    if field.ends {
-                        ending.insert(name.as_str());
-                    } else {
-                        below.entry(name.as_str()).or_default().push(field);
+                .filter_map(|path| next_segment(path))
+                .for_each(|(segment, rest)| match segment {
+                    Segment::Field(name) if rest.is_empty() => {
+                        ending.insert(name);
                     }
+                    Segment::Field(name) => {
+                        below.entry(name).or_default().insert(rest);
+                    }
+                    Segment::Every | Segment::Index(_) => {}
                 });
             if ending.iter().any(|name| object.contains_key(*name)) {
                 object.retain(|key, _| !ending.contains(key.as_str()));
@@ -80,26 +57,32 @@ fn prune(trees: &[&Removals], value: &mut Value) {
             below
                 .iter()
                 .filter(|(name, _)| !ending.contains(*name))
-                .for_each(|(name, fields)| {
+                .for_each(|(name, rests)| {
                     if let Some(item) = object.get_mut(*name) {
-                        prune(fields, item);
+                        prune(rests, item);
                     }
                 });
         }
         Value::Array(items) => {
-            let every: Vec<&Removals> = trees
+            let mut every: HashSet<&str> = HashSet::new();
+            let mut at: HashMap<usize, HashSet<&str>> = HashMap::new();
+            paths
                 .iter()
-                .filter_map(|tree| tree.every.as_deref())
-                .collect();
-            let mut at: HashMap<usize, Vec<&Removals>> = HashMap::new();
-            trees
-                .iter()
-                .flat_map(|tree| &tree.indexes)
-                .for_each(|(index, tree)| at.entry(*index).or_default().push(tree));
+                .filter_map(|path| next_segment(path))
+                .filter(|(_, rest)| !rest.is_empty())
+                .for_each(|(segment, rest)| match segment {
+                    Segment::Every => {
+                        every.insert(rest);
+                    }
+                    Segment::Index(index) => {
+                        at.entry(index).or_default().insert(rest);
+                    }
+                    Segment::Field(_) => {}
+                });
             if every.is_empty() {
-                at.iter().for_each(|(index, indexed)| {
+                at.iter().for_each(|(index, rests)| {
                     if let Some(item) = items.get_mut(*index) {
-                        prune(indexed, item);
+                        prune(rests, item);
                     }
                 });
                 return;
@@ -108,7 +91,7 @@ fn prune(trees: &[&Removals], value: &mut Value) {
                 .iter_mut()
                 .enumerate()
                 .for_each(|(index, item)| match at.get(&index) {
-                    Some(indexed) => prune(&[every.as_slice(), indexed.as_slice()].concat(), item),
+                    Some(rests) => prune(&every.union(rests).copied().collect(), item),
                     None => prune(&every, item),
                 });
         }
@@ -122,12 +105,7 @@ pub fn delete_nested_values<'a>(
     mut value: Value,
     paths: impl IntoIterator<Item = &'a str>,
 ) -> Value {
-    let mut removals = Removals::default();
-    paths
-        .into_iter()
-        .filter_map(parse_segments)
-        .for_each(|segments| removals.insert(&segments));
-    prune(&[&removals], &mut value);
+    prune(&paths.into_iter().collect(), &mut value);
     value
 }
 
@@ -276,6 +254,14 @@ mod tests {
     #[case::unclosed_bracket("top[0")]
     fn leaves_the_value_untouched(body: Value, #[case] path: &str) {
         assert_eq!(delete_nested_values(body.clone(), [path]), body);
+    }
+
+    #[rstest]
+    #[case::absent_from_the_value(json!({"top": 0.7}))]
+    #[case::through_fields_the_value_holds(json!({"a": {"a": {"keep": 1}}}))]
+    fn a_path_far_deeper_than_the_value_leaves_it_untouched(#[case] body: Value) {
+        let path = vec!["a"; 100_000].join(".");
+        assert_eq!(delete_nested_values(body.clone(), [path.as_str()]), body);
     }
 
     #[rstest]
