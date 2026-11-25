@@ -667,11 +667,11 @@ async def _lookups(
     data: Mapping[str, object],
     ctx: CallContext[object],
 ) -> tuple[Mapping[str, object], PTUTeamCeiling | None]:
-    from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
     from litellm.proxy.auth.auth_utils import (
         _get_deployment_default_limit,  # pyright: ignore[reportPrivateUsage]  # the key's per-model default comes from the router's deployments
     )
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.proxy.common_utils.latest_alias_model_group import expand_latest_alias_model_groups
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         dynamic_rate_limiter_covers,
         model_has_recent_failures,
@@ -683,7 +683,7 @@ async def _lookups(
     auth: Final = _auth(data)
     team_id: Final = None if auth is None else auth.team_id
     model: Final = ctx.call.target.model if ctx.call is not None else ""
-    candidates: Final = expand_model_latest_alias(model)
+    candidates: Final = expand_latest_alias_model_groups(model)
     named: Final = tuple(candidate for candidate in candidates if candidate)
     groups: Final = {candidate: limiter.model_group_resolver(candidate) for candidate in named}
     resolved: Final = tuple(dict.fromkeys(group or candidate for candidate, group in groups.items()))

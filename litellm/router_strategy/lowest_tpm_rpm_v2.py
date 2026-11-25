@@ -26,6 +26,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
+from litellm.litellm_core_utils.model_latest_aliases import latest_alias_requested_deployment
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.llms.gemini.empty_image_response import (
     billed_deployment_tokens,
@@ -388,6 +389,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 deployment_name=model if isinstance(model, str) else None,
                 tokens=own_tokens if counted_tokens is None else max(0, own_tokens - counted_tokens),
             )
+            requested: Final = latest_alias_requested_deployment(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            if requested is not None and requested[0] != str(model_id):
+                await self.async_increment_tpm(
+                    deployment_id=requested[0], deployment_name=requested[1], tokens=own_tokens
+                )
 
             ### TESTING ###
             if self.test_flag:

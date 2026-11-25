@@ -449,32 +449,6 @@ async def _resolve_router_settings_model_group_alias(
     rewrite_request_model(request_data, request, target)
 
 
-async def _resolve_latest_alias_model_group(
-    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
-    valid_token: UserAPIKeyAuth,
-    request: Request | None,
-    route: str,
-) -> None:
-    from litellm.proxy.auth.auth_checks import latest_alias_versioned_model_group
-    from litellm.proxy.proxy_server import llm_router
-
-    requested: Final = request_data.get("model")
-    if request is None or llm_router is None or not isinstance(requested, str):
-        return
-    if (
-        not RouteChecks.is_llm_api_route(route=route)
-        or request_dispatched_to_pass_through_endpoint(request)
-        or request_dispatched_to_provider_pass_through(request)
-        or await read_raw_json_body(request=request) is None
-    ):
-        return
-    target: Final = latest_alias_versioned_model_group(requested, llm_router, valid_token.team_id)
-    if target is None:
-        return
-    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
-    rewrite_request_model(request_data, request, target)
-
-
 def _resolve_codex_native_chatgpt_model(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     valid_token: UserAPIKeyAuth,
@@ -514,7 +488,6 @@ async def normalize_model_for_auth(
 ) -> None:
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
-    await _resolve_latest_alias_model_group(request_data, valid_token, request, route)
     _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
 
 
@@ -3202,7 +3175,6 @@ async def _authorize_authenticated_request(
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
-    await _resolve_latest_alias_model_group(request_data, user_api_key_auth_obj, request, route)
     _resolve_codex_native_chatgpt_model(request_data, user_api_key_auth_obj, request, route)
 
     from litellm.proxy.auth.auth_checks import dashboard_model_billing_auth
@@ -3847,7 +3819,6 @@ async def enforce_key_and_fallback_model_access(
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
-    await _resolve_latest_alias_model_group(request_data, valid_token, request, route)
     _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
     config: Final = valid_token.config
 

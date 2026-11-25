@@ -24,6 +24,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.model_latest_aliases import latest_alias_requested_deployment
 from litellm.llms.gemini.empty_image_response import (
     billed_deployment_tokens,
     is_answer_without_an_image,
@@ -491,6 +492,9 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             await self._async_count_success_tokens(kwargs, f"{model_id}", f"{model}", int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            requested: Final = latest_alias_requested_deployment(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            if requested is not None and requested[0] != f"{model_id}":
+                await self._async_count_success_tokens(kwargs, *requested, int(total_tokens))  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)

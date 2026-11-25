@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import rate_card
+from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -124,7 +125,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
     safe_get_request_query_params,
 )
-from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
+from litellm.proxy.common_utils.latest_alias_model_group import (
+    latest_alias_targets,
+    shared_underlying_models,
+    underlying_models,
+)
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -5105,45 +5110,12 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
-def _underlying_models(deployments: Iterable[Mapping[str, object]] | None) -> Iterator[tuple[str, str]]:
-    for deployment in deployments or ():
-        name, params = deployment.get("model_name"), deployment.get("litellm_params")
-        underlying = params.get("model") if isinstance(params, Mapping) else None
-        if isinstance(name, str) and isinstance(underlying, str):
-            yield name, underlying
-
-
 def _latest_alias_targets(model: str, llm_router: RegistryReader, team_id: str | None) -> frozenset[str]:
     requested: Final = (
         model,
-        *(name for _, name in _underlying_models(llm_router.registry().deployments(model, team_id=team_id))),
+        *(name for _, name in underlying_models(llm_router.registry().deployments(model, team_id=team_id))),
     )
-    return frozenset(target for name in requested for target in expand_model_latest_alias(name)[1:])
-
-
-def _is_shared_deployment(deployment: Mapping[str, object]) -> bool:
-    info: Final = deployment.get("model_info")
-    return not (isinstance(info, Mapping) and info.get("team_id"))
-
-
-def latest_alias_versioned_model_group(model: str, llm_router: RegistryReader, team_id: str | None) -> str | None:
-    targets: Final = frozenset(
-        target
-        for _, name in _underlying_models(llm_router.registry().deployments(model, team_id=team_id))
-        for target in expand_model_latest_alias(name)[1:]
-    )
-    if len(targets) != 1:
-        return None
-    return next(
-        (
-            name
-            for name, underlying in _underlying_models(
-                deployment for deployment in llm_router.registry().deployments() if _is_shared_deployment(deployment)
-            )
-            if underlying in targets and name != model
-        ),
-        None,
-    )
+    return latest_alias_targets(requested)
 
 
 def _latest_alias_equivalent_models(
@@ -5154,11 +5126,9 @@ def _latest_alias_equivalent_models(
     registry: Final = llm_router.registry()
     targets: Final = _latest_alias_targets(model, llm_router, team_id)
     served: Final = frozenset(
-        (model, *(name for _, name in _underlying_models(registry.deployments(model, team_id=team_id))))
+        (model, *(name for _, name in underlying_models(registry.deployments(model, team_id=team_id))))
     )
-    shared: Final = tuple(
-        _underlying_models(deployment for deployment in registry.deployments() if _is_shared_deployment(deployment))
-    )
+    shared: Final = tuple(shared_underlying_models(registry.deployments()))
     return tuple(
         dict.fromkeys(
             (

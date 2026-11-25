@@ -31,8 +31,8 @@ from litellm.constants import (
     BATCH_ENQUEUED_TOKEN_TTL_SECONDS,
     MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
 )
-from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.latest_alias_model_group import expand_latest_alias_model_groups
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -232,7 +232,7 @@ def _tightest_limit_by_group(limits: Mapping[str, int], model_group_of: Callable
 
 
 def _model_groups(model: str, model_group_of: Callable[[str], str]) -> frozenset[str]:
-    names: Final = (*expand_model_latest_alias(model), _DATED_SNAPSHOT_SUFFIX.sub("", model))
+    names: Final = (*expand_latest_alias_model_groups(model), _DATED_SNAPSHOT_SUFFIX.sub("", model))
     return frozenset(model_group_of(candidate) for candidate in names)
 
 

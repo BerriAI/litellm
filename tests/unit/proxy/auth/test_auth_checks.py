@@ -2989,18 +2989,18 @@ def test_a_latest_alias_requested_by_its_provider_name_passes_on_its_versioned_n
 def test_a_latest_alias_is_served_by_the_model_group_of_the_model_it_points_to(
     requested: str, served_by: str | None
 ) -> None:
-    from litellm.proxy.auth.auth_checks import latest_alias_versioned_model_group
+    from litellm.proxy.common_utils.latest_alias_model_group import latest_alias_versioned_model_group
 
     router, _, _ = _latest_alias_router()
-    assert latest_alias_versioned_model_group(requested, router, None) == served_by
+    assert latest_alias_versioned_model_group(requested, router) == served_by
 
 
 def test_a_latest_alias_keeps_its_own_deployment_when_no_model_group_serves_the_model_it_points_to() -> None:
     from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
-    from litellm.proxy.auth.auth_checks import latest_alias_versioned_model_group
+    from litellm.proxy.common_utils.latest_alias_model_group import latest_alias_versioned_model_group
 
     alias: Final = next(iter(get_model_latest_aliases()["openai"]))
     router: Final = litellm.Router(
         model_list=[{"model_name": "latest", "litellm_params": {"model": f"openai/{alias}", "api_key": "test-api-key"}}]
     )
-    assert latest_alias_versioned_model_group("latest", router, None) is None
+    assert latest_alias_versioned_model_group("latest", router) is None

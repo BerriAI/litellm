@@ -12,6 +12,7 @@ from uuid import uuid4
 import httpx
 from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm.constants import ROUTE_CALL_TYPE_METADATA_KEY
@@ -24,9 +25,14 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_latest_aliases import LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.latest_alias_model_group import (
+    LATEST_ALIAS_REQUESTED_MODEL_GROUP_METADATA_KEY,
+    latest_alias_versioned_model_group,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
@@ -888,6 +894,52 @@ def _merge_router_settings_override(
     return _ROUTER_ONLY_SETTINGS.intersection(updates)
 
 
+def _is_request_metadata(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON object  # mutable-ok: the reroute is recorded on it
+    return isinstance(value, dict)
+
+
+async def _admit_on_latest_alias_deployment(llm_router: LitellmRouter, requested: str) -> Mapping[str, str] | None:
+    try:
+        deployment: Final = as_str_mapping(await llm_router.select(requested, {}))
+    except litellm.RateLimitError:
+        raise
+    except Exception:  # noqa: BLE001  # the versioned deployment serves the call, so only a spent limit refuses it
+        return None
+    if deployment is None:
+        return None
+    info, params = as_str_mapping(deployment.get("model_info")), as_str_mapping(deployment.get("litellm_params"))
+    deployment_id: Final = None if info is None else info.get("id")
+    model: Final = None if params is None else params.get("model")
+    if not isinstance(deployment_id, str) or not isinstance(model, str):
+        return None
+    await llm_router.async_routing_strategy_pre_call_checks(deployment=dict(deployment), parent_otel_span=None)
+    return {"id": deployment_id, "model": model}
+
+
+async def _serve_latest_alias_from_versioned_model_group(
+    data: dict[str, object],  # mutable-ok: request body is the proxy-wide mutable dict shared with route_request
+    llm_router: LitellmRouter | None,
+) -> None:
+    requested: Final = data.get("model")
+    metadata: Final = tuple(filter(_is_request_metadata, (data.get(key) for key in ("metadata", "litellm_metadata"))))
+    for value in metadata:
+        value.pop(LATEST_ALIAS_REQUESTED_MODEL_GROUP_METADATA_KEY, None)
+        value.pop(LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY, None)
+    if llm_router is None or not isinstance(requested, str):
+        return
+    target: Final = latest_alias_versioned_model_group(requested, llm_router)
+    if target is None:
+        return
+    admitted: Final = await _admit_on_latest_alias_deployment(llm_router, requested)
+    for value in metadata:
+        value[LATEST_ALIAS_REQUESTED_MODEL_GROUP_METADATA_KEY] = requested
+        if admitted is not None:
+            value[LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY] = admitted
+    data["model"] = target  # rebind-ok: route_request serves the shared request body it was handed
+
+
 async def route_request(
     data: dict[str, object],
     llm_router: LitellmRouter | None,
@@ -899,6 +951,7 @@ async def route_request(
     Common helper to route the request
     """
     enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
+    await _serve_latest_alias_from_versioned_model_group(data, llm_router)
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(

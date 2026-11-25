@@ -57,7 +57,6 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 )
 from litellm.litellm_core_utils.attempt_settlement import release_in_background
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
-from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -80,6 +79,7 @@ from litellm.proxy.auth.auth_utils import (
     team_models_counting_cached_tokens,
 )
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
+from litellm.proxy.common_utils.latest_alias_model_group import expand_latest_alias_model_groups
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
@@ -1927,7 +1927,7 @@ def _rate_limited_models(
         model,
         *(
             target
-            for candidate in expand_model_latest_alias(model.requested)[1:]
+            for candidate in expand_latest_alias_model_groups(model.requested)[1:]
             if (target := rate_limited_model(limiter, candidate)) is not None
         ),
     )
