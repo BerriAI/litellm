@@ -7,7 +7,7 @@ import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import Final, List, TypeAlias
+from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
     encode_tool_call_id_with_signature,
     function_call_prompt,
+    get_dummy_thought_signature,
     get_thought_signature_from_tool,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
@@ -9540,3 +9541,57 @@ def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
     growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
 
     assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"
+
+_UNSIGNED_TOOL_HISTORY: Final = (
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "18C and sunny"},
+)
+
+
+def _function_call_signatures(model: str, custom_llm_provider: str) -> list[object]:
+    contents: Final = gemini_convert_messages_with_history(
+        messages=cast(list[AllMessageValues], deepcopy(list(_UNSIGNED_TOOL_HISTORY))),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+    return [part.get("thoughtSignature") for content in contents for part in content["parts"] if "function_call" in part]
+
+
+def test_ai_studio_sends_the_placeholder_signature_once_a_gemini_3_successor_serves_a_retired_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google AI Studio serves a retired name with its successor_model from the deprecation_date, and Gemini 3
+    rejects an unsigned function call with a 400"""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini/gemini-2.5-zeta",
+        {"deprecation_date": "2000-01-01", "successor_model": "gemini/gemini-3.8-flash"},
+    )
+
+    assert _function_call_signatures("gemini-2.5-zeta", "gemini") == [get_dummy_thought_signature()]
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "row_key", "row"),
+    [
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "2999-01-01", "successor_model": "gemini/gemini-3.8-flash"}),
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "2000-01-01", "successor_model": "gemini/gemini-2.5-pro"}),
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "2000-01-01"}),
+        ("vertex_ai", "gemini/gemini-2.5-zeta", {"deprecation_date": "2000-01-01", "successor_model": "gemini/gemini-3.8-flash"}),
+        ("vertex_ai", "gemini-2.5-zeta", {"deprecation_date": "2000-01-01", "successor_model": "gemini-3.8-flash"}),
+    ],
+    ids=["before-deprecation", "pre-gemini-3-successor", "no-successor", "vertex-reads-no-ai-studio-row", "vertex-row"],
+)
+def test_unsigned_function_call_stays_unsigned_until_ai_studio_serves_a_gemini_3_successor(
+    custom_llm_provider: str, row_key: str, row: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, row)
+
+    assert _function_call_signatures("gemini-2.5-zeta", custom_llm_provider) == [None]

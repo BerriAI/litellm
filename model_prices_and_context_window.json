@@ -31594,7 +31594,9 @@
         "output_cost_per_token_flex": 1.25e-06,
         "output_cost_per_token_priority": 4.5e-06,
         "supports_audio_input": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gemini/gemini-3.5-flash-lite"
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -32154,7 +32156,9 @@
         "input_cost_per_token_flex": 6.25e-07,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_flex": 5e-06,
-        "supports_url_context": true
+        "supports_url_context": true,
+        "deprecation_date": "2026-12-01",
+        "successor_model": "gemini/gemini-3.8-flash"
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "deprecation_date": "2026-07-28",

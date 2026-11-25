@@ -1422,11 +1422,15 @@ def convert_to_gemini_tool_call_invoke(
         tool_calls: Final = message.get("tool_calls", None)
         function_call: Final = message.get("function_call", None)
 
+        from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
             VertexGeminiConfig,
         )
 
-        needs_dummy_signature: Final = model is not None and VertexGeminiConfig.is_gemini_3_or_newer(model)
+        needs_dummy_signature: Final = model is not None and (
+            VertexGeminiConfig.is_gemini_3_or_newer(model)
+            or (custom_llm_provider == "gemini" and GoogleAIStudioGeminiConfig.is_served_by_gemini_3_successor(model))
+        )
 
         if tool_calls is not None:
             for tool in tool_calls:

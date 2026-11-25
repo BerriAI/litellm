@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import ClassVar, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
@@ -85,7 +86,17 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 
+    @classmethod
+    def is_served_by_gemini_3_successor(cls, model: str) -> bool:
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        row: Final = rows.get(f"{cls._route}/{model.split('/')[-1]}", {})
+        successor: Final = row.get("successor_model")
+        return isinstance(successor, str) and is_past_deprecation_date(row) and cls._is_gemini_3_or_newer(successor)
+
     def get_supported_openai_params(self, model: str) -> list[str]:
+        penalty_params: Final = (
+            () if self.is_served_by_gemini_3_successor(model) else ("frequency_penalty", "presence_penalty")
+        )
         supported_params: Final = [
             "temperature",
             "top_p",
@@ -99,8 +110,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "n",
             "stop",
             "logprobs",
-            "frequency_penalty",
-            "presence_penalty",
+            *penalty_params,
             "seed",
             "modalities",
             "parallel_tool_calls",
