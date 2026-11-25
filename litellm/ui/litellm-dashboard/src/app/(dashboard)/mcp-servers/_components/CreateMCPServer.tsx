@@ -403,7 +403,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     } else {
       if (prefillData.url) prefillValues.url = prefillData.url;
-      if (prefillData.auth_type) prefillValues.auth_type = prefillData.auth_type;
+      prefillValues.auth_type = prefillData.auth_type || null;
     }
 
     setFieldsValue(form, prefillValues);

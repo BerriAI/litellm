@@ -2024,6 +2024,27 @@ describe("CreateMCPServer", () => {
       expect(screen.queryByText("Authorization URL (optional)")).not.toBeInTheDocument();
     });
 
+    it("should clear a preselected auth type when another catalog entry without one is picked", async () => {
+      const base = { description: "", category: "Productivity", transport: "http" };
+      const granola = {
+        ...base,
+        name: "granola",
+        title: "Granola",
+        url: "https://mcp.granola.ai/mcp",
+        auth_type: "oauth2",
+      };
+      const exa = { ...base, name: "exa", title: "Exa", url: "https://mcp.exa.ai/mcp" };
+
+      const { rerender } = render(<CreateMCPServer {...defaultProps} prefillData={granola} />);
+      expect(await screen.findByText("Authorization URL (optional)")).toBeInTheDocument();
+
+      rerender(<CreateMCPServer {...defaultProps} prefillData={exa} />);
+
+      await waitFor(() => expect(getServerNameInput()).toHaveValue("exa"));
+      expect(await screen.findByText("Select auth type")).toBeInTheDocument();
+      expect(screen.queryByText("Authorization URL (optional)")).not.toBeInTheDocument();
+    });
+
     const sqlitePrefill = {
       name: "sqlite",
       title: "SQLite",
