@@ -2650,7 +2650,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
         elif (
             event_type == ResponsesAPIStreamEvents.REFUSAL_DELTA.value
-            and isinstance(refusal := parsed_chunk.get("delta"), str)
+            and isinstance(refusal := require_attributes(parsed_chunk, _StreamEvent, "get").get("delta"), str)
             and refusal
         ):
             return ModelResponseStream(
