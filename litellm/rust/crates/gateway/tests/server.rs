@@ -74,6 +74,7 @@ fn without_stores(inference: Inference) -> AppState {
         keys: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
+        variables: Environment::default(),
         gateway_requests: None,
         gateway_requests_flush: None,
     }
@@ -1275,7 +1276,7 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         upstream.uri()
     ))
     .unwrap();
-    let config = litellm_gateway::load_config(&path).await.unwrap();
+    let config = litellm_gateway::load_config(&path).await.unwrap().config;
     let mut body = json!({
         "model": "public-model",
         "max_tokens": 8,

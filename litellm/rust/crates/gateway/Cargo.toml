@@ -7,9 +7,10 @@ repository.workspace = true
 
 [features]
 test-support = []
-fips = ["rustls/fips", "litellm-http/fips"]
+fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips"]
 
 [dependencies]
+litellm-at-rest.workspace = true
 litellm-python-compat.workspace = true
 litellm-env.workspace = true
 litellm-secret-value.workspace = true
@@ -64,6 +65,7 @@ tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompres
 uuid.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 litellm-gateway = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 litellm-db-testing.workspace = true
