@@ -309,7 +309,7 @@ class _ProviderHTTPException(Protocol):
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object] | None:
+def _openai_error_object(original_exception: object) -> Mapping[str, object] | None:
     raw_body: Final[object] = getattr(original_exception, "body", None)
     try:
         body: Final = (
@@ -317,10 +317,29 @@ def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object
             if raw_body is not None
             else _ERROR_BODY_ADAPTER.validate_json(getattr(original_exception, "message", ""))
         )
-        error: Final = _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
+        return _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
     except ValidationError:
         return None
-    return error if error.get("code") == "cyber_policy" else None
+
+
+def _reply_error_object(response: httpx.Response | None) -> Mapping[str, object] | None:
+    if response is None:
+        return None
+    try:
+        body: Final = _ERROR_BODY_ADAPTER.validate_json(response.content)
+        return _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
+    except ValidationError:
+        return None
+
+
+def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object] | None:
+    error: Final = _openai_error_object(original_exception)
+    return error if error is not None and error.get("code") == "cyber_policy" else None
+
+
+def _openai_moderation_blocked(original_exception: object, response: httpx.Response | None) -> bool:
+    error: Final = _openai_error_object(original_exception) or _reply_error_object(response)
+    return error is not None and error.get("code") == "moderation_blocked"
 
 
 def _litellm_proxy_response(
@@ -542,7 +561,7 @@ def _map_openai_exception(
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
         or ("Invalid prompt" in error_str and "violating our usage policy" in error_str)
         or ("request was rejected as a result of the safety system" in error_str.lower())
-        or "moderation_blocked" in error_str
+        or _openai_moderation_blocked(original_exception, response)
     ):
         raise ContentPolicyViolationError(
             message=f"ContentPolicyViolationError: {exception_provider} - {message}",

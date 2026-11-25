@@ -88,6 +88,37 @@ def test_openai_moderation_blocked_image_rejection_is_a_content_policy_violation
     assert caught.value.llm_provider == "openai"
 
 
+@pytest.mark.parametrize(
+    ("status_code", "error_type", "code", "expected"),
+    [
+        (400, "invalid_request_error", "invalid_value", litellm.BadRequestError),
+        (401, "invalid_request_error", "invalid_api_key", litellm.AuthenticationError),
+        (500, "server_error", None, litellm.InternalServerError),
+    ],
+)
+def test_moderation_blocked_in_message_text_without_the_structured_code_keeps_its_status_mapping(
+    status_code: int, error_type: str, code: str | None, expected: type[Exception]
+) -> None:
+    body: Final = {"code": code, "message": "Prompt quotes the word moderation_blocked", "type": error_type}
+    request: Final = httpx.Request("POST", "https://provider.example/v1/images/generations")
+    original: Final = OpenAIError(
+        status_code=status_code,
+        message=json.dumps({"error": body}),
+        request=request,
+        response=httpx.Response(status_code, request=request, json={"error": body}),
+    )
+    with pytest.raises(expected) as caught:
+        exception_type(
+            model="gpt-image-1",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert not isinstance(caught.value, litellm.ContentPolicyViolationError)
+    assert caught.value.status_code == status_code
+
+
 @pytest.mark.parametrize("shape", ["sdk", "http"])
 @pytest.mark.parametrize("code", ["cyber_policy", "invalid_prompt"])
 def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: str) -> None:
