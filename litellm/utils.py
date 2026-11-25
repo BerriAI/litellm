@@ -4109,6 +4109,13 @@ def declared_mid_conversation_system_support(
     return None
 
 
+def declares_system_first(model: str, custom_llm_provider: str | None, model_info: object) -> bool:
+    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
+    if deployment_declared is not None:
+        return not deployment_declared
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system")
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.

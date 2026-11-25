@@ -83,7 +83,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
+from litellm.utils import convert_to_model_response_object, declares_system_first
 
 from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -150,10 +150,12 @@ def translate_developer_role_for_openai_compatible_endpoint(
     in_place: Final = map_developer_role_to_system_role(messages=messages)
     if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
         return in_place
+    if not any(message["role"] in ("system", "developer") for message in messages[1:]):
+        return in_place
+    if not declares_system_first(model, custom_llm_provider, model_info):
+        return in_place
     placed: Final = _placed_for_system_first_model(messages)
     if _roles(placed) == _roles(in_place):
-        return in_place
-    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
         return in_place
     return placed
 

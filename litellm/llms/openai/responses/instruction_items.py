@@ -166,3 +166,14 @@ def later_system_items_as_user(input: str | ResponseInputParam) -> str | Respons
     if not any(_conversation_item_kind(item) == "system" for item in conversation):
         return input
     return [*items[:conversation_start], *_conversation_with_system_items_as_user(conversation)]
+
+
+def has_later_instruction_items(input: str | ResponseInputParam) -> bool:
+    return not isinstance(input, str) and any(_role(item) in _INSTRUCTION_ROLES for item in input[1:])
+
+
+def system_first_input_and_params(
+    input: str | ResponseInputParam, params: Mapping[str, object]
+) -> tuple[str | ResponseInputParam, Mapping[str, object]]:
+    folded_input, folded_params = instruction_items_folded(input, params, "user") or (input, params)
+    return later_system_items_as_user(folded_input), folded_params

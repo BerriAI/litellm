@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -5130,3 +5131,72 @@ def test_compact_request_keeps_stream_under_drop_params(config: OpenAIResponsesA
     )
 
     assert {key: data[key] for key in data if key != "input"} == {"model": "gpt-5.4-mini", "stream": True}
+
+
+_FIREWORKS_API_BASE: Final = "https://api.fireworks.ai/inference/v1"
+_SYSTEM_FIRST_DEPLOYMENT: Final = {"id": "system-first-deployment", "supports_mid_conversation_system": False}
+_LATER_SYSTEM_INPUT: Final = (
+    {"role": "user", "content": "Hi there"},
+    {"type": "message", "role": "assistant", "content": "Hello!"},
+    {"role": "system", "content": "Reply in French."},
+    {"role": "user", "content": "What is the capital of France?"},
+)
+
+
+def _input_sent_for_a_later_system_item(api_base: str, model_info: Mapping[str, object] | None) -> JsonValue:
+    with respx.mock() as router:
+        route: Final = router.post(f"{api_base}/responses").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "resp_system_first",
+                    "object": "response",
+                    "created_at": 1734366691,
+                    "status": "completed",
+                    "model": "qwen3p8-2p4t-a95b",
+                    "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+        litellm.responses(
+            model="openai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            api_key="sk-test",
+            api_base=api_base,
+            input=list(_LATER_SYSTEM_INPUT),
+            model_info=model_info,
+        )
+    return TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)["input"]
+
+
+def test_a_system_first_openai_compatible_deployment_gets_a_later_system_item_as_a_user_turn() -> None:
+    assert _input_sent_for_a_later_system_item(_FIREWORKS_API_BASE, _SYSTEM_FIRST_DEPLOYMENT) == [
+        *_LATER_SYSTEM_INPUT[:2],
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "input_text", "text": "Reply in French."},
+            ],
+        },
+        _LATER_SYSTEM_INPUT[3],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("api_base", "model_info"),
+    [
+        pytest.param(_FIREWORKS_API_BASE, None, id="undeclared"),
+        pytest.param(
+            _FIREWORKS_API_BASE,
+            {"id": "system-anywhere-deployment", "supports_mid_conversation_system": True},
+            id="declared-true",
+        ),
+        pytest.param("https://api.openai.com/v1", _SYSTEM_FIRST_DEPLOYMENT, id="openai-hosted"),
+    ],
+)
+def test_an_openai_deployment_keeps_a_later_system_item_in_place_unless_a_compatible_host_declares_system_first(
+    api_base: str, model_info: Mapping[str, object] | None
+) -> None:
+    assert _input_sent_for_a_later_system_item(api_base, model_info) == list(_LATER_SYSTEM_INPUT)

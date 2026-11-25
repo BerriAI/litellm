@@ -285,6 +285,8 @@ _ASSISTANT_ITEM: Final = {"type": "message", "role": "assistant", "content": "He
 _NEXT_USER_ITEM: Final = {"role": "user", "content": "What is the capital of France?"}
 _FUNCTION_CALL_ITEM: Final = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
 _FUNCTION_CALL_OUTPUT_ITEM: Final = {"type": "function_call_output", "call_id": "call_1", "output": "21C"}
+_CUSTOM_TOOL_CALL_ITEM: Final = {"type": "custom_tool_call", "call_id": "call_2", "name": "apply_patch", "input": "*"}
+_CUSTOM_TOOL_CALL_OUTPUT_ITEM: Final = {"type": "custom_tool_call_output", "call_id": "call_2", "output": "Done"}
 _REFERENCE_IMAGE_PART: Final = {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"}
 
 
@@ -349,6 +351,18 @@ _REMINDER_AS_USER_ITEM: Final = _reminder_as_user_item({"type": "input_text", "t
             None,
             (_FIRST_USER_ITEM, _FUNCTION_CALL_ITEM, _FUNCTION_CALL_OUTPUT_ITEM, _REMINDER_AS_USER_ITEM),
             id="between-a-function-call-and-its-output",
+        ),
+        pytest.param(
+            None,
+            (
+                _FIRST_USER_ITEM,
+                _CUSTOM_TOOL_CALL_ITEM,
+                {"role": "system", "content": "Reply in French."},
+                _CUSTOM_TOOL_CALL_OUTPUT_ITEM,
+            ),
+            None,
+            (_FIRST_USER_ITEM, _CUSTOM_TOOL_CALL_ITEM, _CUSTOM_TOOL_CALL_OUTPUT_ITEM, _REMINDER_AS_USER_ITEM),
+            id="between-a-custom-tool-call-and-its-output",
         ),
         pytest.param(
             None,

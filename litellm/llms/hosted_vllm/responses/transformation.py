@@ -6,24 +6,15 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
-from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.openai.responses.instruction_items import instruction_items_folded, later_system_items_as_user
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import declared_mid_conversation_system_support, deployment_model_info
-
-
-def _system_first_input_and_params(
-    input: str | ResponseInputParam, params: Mapping[str, object]
-) -> tuple[str | ResponseInputParam, Mapping[str, object]]:
-    folded_input, folded_params = instruction_items_folded(input, params, "user") or (input, params)
-    return later_system_items_as_user(folded_input), folded_params
+from litellm.utils import declares_system_first, deployment_model_info
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -80,29 +71,10 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return join_api_base(api_base, "v1/responses")
 
-    def transform_responses_api_request(
-        self,
-        model: str,
-        input: str | ResponseInputParam,
-        response_api_optional_request_params: dict[str, object],  # mutable-ok: overrides the base class signature
-        litellm_params: GenericLiteLLMParams,
-        headers: dict[str, str],  # mutable-ok: overrides the base class signature
-    ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
-        declared: Final = declared_mid_conversation_system_support(
-            model, self.custom_llm_provider.value, deployment_model_info(litellm_params)
-        )
-        placed_input, placed_params = (
-            _system_first_input_and_params(self._validate_input_param(input), response_api_optional_request_params)
-            if declared is False
-            else (input, response_api_optional_request_params)
-        )
-        return super().transform_responses_api_request(
-            model=model,
-            input=placed_input,
-            response_api_optional_request_params=dict(placed_params),
-            litellm_params=litellm_params,
-            headers=headers,
-        )
+    def _places_system_items_first(
+        self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+    ) -> bool:
+        return declares_system_first(model, self.custom_llm_provider.value, deployment_model_info(litellm_params))
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""
