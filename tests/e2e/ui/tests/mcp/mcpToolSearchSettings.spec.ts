@@ -86,6 +86,7 @@ test.describe("MCP tool search settings", () => {
     const saved = nextSave(page);
     await panel.getByRole("button", { name: "Save Settings" }).click();
     expect((await saved).postDataJSON()).toMatchObject({ top_k: 100 });
+    await expect(page.getByText("Settings updated successfully.", { exact: false })).toBeVisible();
   });
 
   test("keeps the edits and lets the user retry when the save fails", async ({ page }) => {
