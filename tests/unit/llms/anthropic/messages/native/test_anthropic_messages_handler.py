@@ -5,7 +5,7 @@ import logging
 import os
 import unittest.mock
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -3580,6 +3580,67 @@ async def test_emulated_deferred_tools_keep_one_tool_list_and_hand_claude_code_t
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "call_lyon", "name": "mcp__weather__get_forecast", "input": {"city": "Lyon"}}
     ]
+
+
+_LIST_NAMED_TOOL: Final = {"name": ["Read"], "description": "Read a file", "input_schema": {"type": "object"}}
+_LIST_TOOL_USE_ID_CONVERSATION: Final = [
+    *_TOOL_LOADED_CONVERSATION[:-1],
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": ["toolu_paris"], "content": "Sunny"}]},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, model_info, tools, messages",
+    [
+        (
+            "azure/gpt-6.1-sol",
+            {"deferred_tools": "native"},
+            [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _LIST_NAMED_TOOL],
+            _TOOL_LOADED_CONVERSATION,
+        ),
+        (
+            "fireworks_ai/accounts/fireworks/models/kimi-k3",
+            {"deferred_tools": "emulate"},
+            [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _LIST_NAMED_TOOL],
+            _TOOL_LOADED_CONVERSATION,
+        ),
+        (
+            "azure/gpt-6.1-sol",
+            {"deferred_tools": "native"},
+            [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL],
+            _LIST_TOOL_USE_ID_CONVERSATION,
+        ),
+    ],
+    ids=["native_list_tool_name", "emulate_list_tool_name", "native_list_tool_use_id"],
+)
+async def test_a_non_string_tool_name_or_tool_use_id_gets_the_provider_400_under_deferred_tools(
+    model: str,
+    model_info: Mapping[str, object],
+    tools: Sequence[object],
+    messages: Sequence[object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.route().mock(
+            return_value=httpx.Response(
+                400, json={"error": {"message": "Invalid type for a tool field", "type": "invalid_request_error"}}
+            )
+        )
+        with pytest.raises(litellm.exceptions.BadRequestError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=copy.deepcopy(messages),
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=tools,
+                model_info=model_info,
+            )
 
 
 _STRICT_FORECAST_TOOL: Final = {**_FORECAST_TOOL, "strict": True}
