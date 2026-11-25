@@ -216,7 +216,7 @@ async def test_acreate_file_sends_each_batch_upload_to_a_litellm_proxy_wildcard_
     assert response._hidden_params["target_model_names_by_deployment"] == {"wild": ("litellm_proxy/gpt-a",)}
 
 
-async def test_acreate_file_after_an_order_fallback_still_uploads_another_target_its_own_routing_picks(
+async def test_acreate_file_after_an_order_fallback_names_every_target_downstream_and_still_uploads_the_other_one(
     make_core: MakeCore, host: EndpointHost
 ):
     host.answer("*", lambda **kwargs: server_error() if kwargs.get("api_base") == "http://low" else None)
@@ -235,7 +235,10 @@ async def test_acreate_file_after_an_order_fallback_still_uploads_another_target
     )
     assert host.deployments_called("acreate_file") == ["wild-low", "wild-high"]
     assert response._hidden_params["covered_target_model_names"] == ()
-    assert _bucket(host.calls[1].kwargs, "extra_body")["target_model_names"] == "gpt-a"
+    assert _bucket(host.calls[1].kwargs, "extra_body")["target_model_names"] == "gpt-a,claude-b"
+    assert response._hidden_params["target_model_names_by_deployment"] == {
+        "wild-high": ("litellm_proxy/gpt-a", "litellm_proxy/claude-b")
+    }
 
 
 @pytest.mark.parametrize(

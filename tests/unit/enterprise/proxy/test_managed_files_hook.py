@@ -2571,11 +2571,17 @@ async def test_upload_skips_only_the_targets_an_earlier_upload_already_covers():
 
 
 @pytest.mark.asyncio
-async def test_a_later_litellm_proxy_upload_that_serves_more_targets_is_kept_and_both_go_on_delete():
+@pytest.mark.parametrize(
+    "later_upload_serves",
+    [pytest.param(("gpt-a", "gpt-b"), id="more-targets"), pytest.param(("gpt-b",), id="as-many-targets")],
+)
+async def test_a_later_litellm_proxy_upload_serving_at_least_as_many_targets_is_kept_and_both_go_on_delete(
+    later_upload_serves: tuple[str, ...],
+):
     router: Final = _FakeFilesRouter(
         {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
         provider="litellm_proxy",
-        served_targets_by_model={"gpt-a": ("gpt-a",), "gpt-b": ("gpt-a", "gpt-b")},
+        served_targets_by_model={"gpt-a": ("gpt-a",), "gpt-b": later_upload_serves},
     )
     managed_files, mock_prisma = _make_real_managed_files_instance()
 

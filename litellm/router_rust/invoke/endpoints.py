@@ -710,6 +710,16 @@ _COVERED_TARGET_MODEL_NAMES_KEY: Final = "covered_target_model_names"
 _TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY: Final = "target_model_names_by_deployment"
 _TARGET_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 _NO_SERVED_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
+_TARGET_ORDER_KEY: Final = "_target_order"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _TargetRouting:
+    own: Mapping[str, Mapping[str, str]]
+    at_reached_order: Mapping[str, Mapping[str, str]]
+
+
+_NO_TARGET_ROUTING: Final = _TargetRouting(own=MappingProxyType({}), at_reached_order=MappingProxyType({}))
 
 
 def _deployment_id(deployment: Mapping[str, object]) -> str:
@@ -2451,7 +2461,7 @@ class RustEndpoints:
             batch_api=True,
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
-        names_by_target: Final = await self._stripped_names_by_target(
+        routing: Final = await self._target_routing(
             request,
             tuple(target for target in dict.fromkeys(target_model_names) if target != requested),
             deployments,
@@ -2493,7 +2503,7 @@ class RustEndpoints:
                     _deployment_id(deployment),
                     ordered_targets,
                     (requested, stripped),
-                    names_by_target,
+                    routing.at_reached_order,
                 )
                 kwargs_copy["extra_body"] = MappingProxyType(
                     {**as_dict(kwargs_copy.get("extra_body")), _TARGET_MODEL_NAMES_KEY: served_names}  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # litellm's untyped helpers and request values
@@ -2525,11 +2535,11 @@ class RustEndpoints:
         if hidden is not None:
             hidden["model_file_id_mapping"] = mapping
             hidden[_COVERED_TARGET_MODEL_NAMES_KEY] = _covered_targets(
-                names_by_target, frozenset(_deployment_id(as_dict(d)) for d in deployments)
+                routing.own, frozenset(_deployment_id(as_dict(d)) for d in deployments)
             )
             hidden[_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY] = {
                 _deployment_id(as_dict(d)): _served_targets(
-                    _deployment_id(as_dict(d)), ordered_targets, requested, names_by_target
+                    _deployment_id(as_dict(d)), ordered_targets, requested, routing.at_reached_order
                 )
                 for d in deployments
                 if self._is_litellm_proxy(d)
@@ -2549,13 +2559,24 @@ class RustEndpoints:
         params: Final = as_dict(as_dict(deployment).get("litellm_params"))
         return self._stripped_model_and_provider(params)[1] == LlmProviders.LITELLM_PROXY.value
 
-    async def _stripped_names_by_target(
+    async def _target_routing(
         self, request: Mapping[str, object], targets: Sequence[str], deployments: Sequence[object]
-    ) -> Mapping[str, Mapping[str, str]]:
+    ) -> _TargetRouting:
         if not targets or is_batch_upload(request) or not any(self._is_litellm_proxy(d) for d in deployments):
-            return MappingProxyType({})
-        own_routing: Final = without(request, "_target_order")
-        served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, own_routing) for t in targets))
+            return _NO_TARGET_ROUTING
+        own_routing: Final = without(request, _TARGET_ORDER_KEY)
+        if _TARGET_ORDER_KEY not in request:
+            own: Final = await self._stripped_names_by_target(own_routing, targets)
+            return _TargetRouting(own=own, at_reached_order=own)
+        own_and_reached: Final = await asyncio.gather(
+            self._stripped_names_by_target(own_routing, targets), self._stripped_names_by_target(request, targets)
+        )
+        return _TargetRouting(own=own_and_reached[0], at_reached_order=own_and_reached[1])
+
+    async def _stripped_names_by_target(
+        self, request: Mapping[str, object], targets: Sequence[str]
+    ) -> Mapping[str, Mapping[str, str]]:
+        served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, request) for t in targets))
         return MappingProxyType(dict(zip(targets, served, strict=True)))
 
     async def _stripped_names_by_deployment(self, target: str, request: Mapping[str, object]) -> Mapping[str, str]:

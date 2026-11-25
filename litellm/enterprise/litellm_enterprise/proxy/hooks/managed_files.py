@@ -456,9 +456,14 @@ def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, .
     )
 
 
+def _keep_rank(uploads: Sequence[_ProviderUpload], index: int) -> tuple[int, int]:
+    served_target_count: Final = uploads[index].served_target_count
+    return served_target_count, index if served_target_count else -index
+
+
 def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int) -> bool:
     same_deployment: Final = tuple(i for i, upload in enumerate(uploads) if upload.model_id == uploads[index].model_id)
-    return max(same_deployment, key=lambda i: uploads[i].served_target_count) == index
+    return max(same_deployment, key=lambda i: _keep_rank(uploads, i)) == index
 
 
 def _upload_from_trailing_id_fields(decoded_unified_file_id: str) -> _ProviderUpload:
