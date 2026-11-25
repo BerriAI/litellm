@@ -13,6 +13,7 @@ from openai.types.responses.response_compaction_item import ResponseCompactionIt
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
@@ -5464,7 +5465,12 @@ _NO_SAMPLING_ROWS: Final = (
         id="bedrock_mantle-regional-row",
     ),
 )
-_SAMPLED_REQUEST: Final = {"temperature": 0.0, "top_p": 0.9, "reasoning": {"effort": "medium"}, "stream": True}
+_SAMPLED_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {
+    "temperature": 0.0,
+    "top_p": 0.9,
+    "reasoning": {"effort": "medium"},
+    "stream": True,
+}
 _NO_SAMPLING: Final = {"supports_sampling_params": False}
 
 
@@ -5481,7 +5487,7 @@ def test_a_row_without_sampling_support_drops_temperature_and_top_p_and_keeps_th
     model: str,
     row_key: str,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, _NO_SAMPLING))
+    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
 
     mapped: Final = config().map_openai_params(
         response_api_optional_params=copy.deepcopy(_SAMPLED_REQUEST), model=model, drop_params=True
@@ -5490,7 +5496,13 @@ def test_a_row_without_sampling_support_drops_temperature_and_top_p_and_keeps_th
     assert mapped == {"reasoning": {"effort": "medium"}, "stream": True}, mapped
 
 
-@pytest.mark.parametrize("sent", ["temperature", "top_p"])
+@pytest.mark.parametrize(
+    "request_params, sent",
+    [
+        pytest.param({"temperature": 0.5}, "temperature", id="temperature"),
+        pytest.param({"top_p": 0.5}, "top_p", id="top_p"),
+    ],
+)
 @pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
 def test_a_row_without_sampling_support_refuses_each_sampling_param_without_drop_params(
     local_model_cost_map: None,
@@ -5498,12 +5510,13 @@ def test_a_row_without_sampling_support_refuses_each_sampling_param_without_drop
     config: type[OpenAIResponsesAPIConfig],
     model: str,
     row_key: str,
+    request_params: ResponsesAPIOptionalRequestParams,
     sent: str,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, _NO_SAMPLING))
+    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
 
     with pytest.raises(litellm.UnsupportedParamsError, match=f"support {sent}: .*supports_sampling_params: false"):
-        config().map_openai_params(response_api_optional_params={sent: 0.5}, model=model, drop_params=False)
+        config().map_openai_params(response_api_optional_params=request_params, model=model, drop_params=False)
 
 
 @pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
@@ -5514,7 +5527,7 @@ def test_a_row_without_sampling_support_drops_default_sampling_values_without_dr
     model: str,
     row_key: str,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, _NO_SAMPLING))
+    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
 
     mapped: Final = config().map_openai_params(
         response_api_optional_params={"temperature": 1, "top_p": 1, "stream": True}, model=model, drop_params=False
@@ -5526,7 +5539,9 @@ def test_a_row_without_sampling_support_drops_default_sampling_values_without_dr
 def test_global_drop_params_drops_sampling_for_a_row_without_sampling_support(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, "sampling-test-model", _responses_row("sampling-test-model", _NO_SAMPLING))
+    monkeypatch.setitem(
+        model_cost_table.published(), "sampling-test-model", _responses_row("sampling-test-model", _NO_SAMPLING)
+    )
     monkeypatch.setattr(litellm, "drop_params", True)
 
     mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
@@ -5546,7 +5561,7 @@ def test_a_row_without_the_sampling_flag_forwards_temperature_and_top_p(
     model: str,
     row_key: str,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, {}))
+    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, {}))
 
     mapped: Final = config().map_openai_params(
         response_api_optional_params=copy.deepcopy(_SAMPLED_REQUEST), model=model, drop_params=True
@@ -5585,7 +5600,7 @@ def test_a_sampling_flag_on_a_row_this_route_does_not_own_is_ignored(
     row_key: str,
     row: dict[str, object],
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, row_key, row)
+    monkeypatch.setitem(model_cost_table.published(), row_key, row)
 
     mapped: Final = config().map_openai_params(
         response_api_optional_params={"temperature": 0.0, "top_p": 0.9}, model="sampling-test-model", drop_params=False
