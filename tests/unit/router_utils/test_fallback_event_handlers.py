@@ -172,12 +172,14 @@ async def _walk(router: RefusingFallbackRouter, fallback_model_group: list[str])
 @pytest.mark.parametrize(
     "previous_response_id",
     [
-        "resp_unknown",
+        ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="gemini", model_id="bridged-1", response_id="ZJ8uaPqXOd2N1PIPrIK6sQk"
+        ),
         ResponsesAPIRequestUtils._build_responses_api_response_id(
             custom_llm_provider="azure_ai", model_id="bridged-1", response_id="chatcmpl-turn-one"
         ),
     ],
-    ids=["unknown-id", "id-the-chat-bridge-answered"],
+    ids=["gemini-turn-the-chat-bridge-answered", "azure-turn-the-chat-bridge-answered"],
 )
 async def test_a_follow_up_refused_on_a_fallback_ends_the_walk_before_the_next_group(previous_response_id: str):
     router: Final = RefusingFallbackRouter(previous_response_id)
@@ -199,13 +201,12 @@ async def test_a_fallback_that_cannot_rebuild_a_response_a_provider_holds_hands_
 
 
 @pytest.mark.asyncio
-async def test_a_walk_that_fails_after_a_refusal_answers_with_the_refusal():
+async def test_a_walk_that_fails_after_a_refusal_answers_with_the_last_fallbacks_error():
     router: Final = RefusingFallbackRouter(_PROVIDER_HELD_RESPONSE_ID)
 
-    with pytest.raises(UnresolvablePreviousResponseError) as refused:
+    with pytest.raises(litellm.InternalServerError, match="fallback failed"):
         await _walk(router, ["bridged-hop", "failing-fallback"])
 
-    assert refused.value.param == "previous_response_id"
     assert router.attempted_model_groups == ("bridged-hop", "failing-fallback")
 
 
@@ -976,7 +977,31 @@ class TestTriggerCooldownForFailedDeployment:
 
             mock_set_cooldown.assert_not_called()
 
-    def test_a_refused_follow_up_does_not_count_toward_the_fallback_deployments_failures(self):
+    @pytest.mark.parametrize(
+        "refusal",
+        [
+            pytest.param(
+                previous_response_not_found(("resp_unknown",), "gpt-5.4-mini", "openai"), id="litellm-refusal"
+            ),
+            pytest.param(
+                litellm.BadRequestError(
+                    message="Previous response with id 'resp_gone' not found.",
+                    model="gpt-5.4-mini",
+                    llm_provider="openai",
+                    body={
+                        "type": "invalid_request_error",
+                        "param": "previous_response_id",
+                        "code": "previous_response_not_found",
+                        "message": "Previous response with id 'resp_gone' not found.",
+                    },
+                ),
+                id="provider-400-naming-the-previous-response",
+            ),
+        ],
+    )
+    def test_a_refused_follow_up_does_not_count_toward_the_fallback_deployments_failures(
+        self, refusal: litellm.BadRequestError
+    ):
         router: Final = Router(
             model_list=[
                 {
@@ -986,7 +1011,6 @@ class TestTriggerCooldownForFailedDeployment:
                 }
             ]
         )
-        refusal: Final = previous_response_not_found(("resp_unknown",), "gpt-5.4-mini", "openai")
         refusal.failed_deployment_id = "fallback-deployment"
 
         _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=refusal)
@@ -2664,6 +2688,11 @@ def _provider_error(status_code: int) -> httpx.Response:
             litellm.InternalServerError(message="overloaded", model="m", llm_provider="openai"),
             False,
             id="500 still falls back",
+        ),
+        pytest.param(
+            previous_response_not_found((_PROVIDER_HELD_RESPONSE_ID,), "m", "openai"),
+            False,
+            id="a follow-up to a turn a provider holds keeps its fallbacks",
         ),
     ],
 )

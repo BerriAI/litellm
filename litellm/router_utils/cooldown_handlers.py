@@ -78,7 +78,16 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
 
 
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
-    return is_advisor_orchestration_failure(exception) or isinstance(exception, UnresolvablePreviousResponseError)
+    return (
+        is_advisor_orchestration_failure(exception)
+        or isinstance(exception, UnresolvablePreviousResponseError)
+        or is_previous_response_rejected(exception)
+    )
+
+
+def is_previous_response_rejected(exception: BaseException | None) -> bool:
+    rejected_param: Final[object] = getattr(exception, "param", None)
+    return rejected_param == "previous_response_id"
 
 
 _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(

@@ -643,6 +643,38 @@ async def test_a_follow_up_to_a_native_turn_a_bridged_fallback_cannot_rebuild_go
 
 
 @pytest.mark.asyncio
+async def test_a_follow_up_to_a_native_turn_whose_only_fallback_cannot_rebuild_it_gets_the_first_groups_error():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "native",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-api-key"},
+                "model_info": {"id": "n1"},
+            },
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+        ],
+        fallbacks=[{"native": ["bridged"]}],
+    )
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="n1", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(litellm.InternalServerError):
+            await router.aresponses(
+                model="native", input="Double it", previous_response_id=native_turn_id, mock_testing_fallbacks=True
+            )
+
+
+@pytest.mark.asyncio
 async def test_a_follow_up_to_a_native_turn_the_bridged_group_cannot_rebuild_goes_to_its_fallback():
     router: Final = litellm.Router(
         model_list=[

@@ -249,7 +249,10 @@ def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupporte
         return False
     if isinstance(exception, litellm.UnsupportedParamsError):
         return True
-    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+    if isinstance(
+        exception,
+        (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError, UnresolvablePreviousResponseError),
+    ):
         return False
     return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
 
@@ -850,8 +853,7 @@ async def run_async_fallback(
         except UnknownPreviousResponseError:
             raise
         except Exception as e:
-            if not isinstance(error_from_fallbacks, UnresolvablePreviousResponseError):
-                error_from_fallbacks = e
+            error_from_fallbacks = e
             fallback_errors = fallback_errors + (get_fallback_error_info(e),)
             await log_failure_fallback_event(
                 original_model_group=original_model_group,

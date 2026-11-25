@@ -8,7 +8,7 @@ import pytest
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils, held_by_a_provider
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams
 from litellm.types.utils import Usage
 
@@ -937,3 +937,40 @@ class TestResponsesInputToChatMessages:
         assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
             [reasoning_item, user_message, "stray"]
         ) == [user_message]
+
+
+@pytest.mark.parametrize(
+    "response_id, held",
+    [
+        pytest.param(
+            ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "native-1", "resp_abc"),
+            True,
+            id="native-openai-turn",
+        ),
+        pytest.param(
+            ResponsesAPIRequestUtils._build_responses_api_response_id("azure", "native-2", "resp_def"),
+            True,
+            id="native-azure-turn",
+        ),
+        pytest.param("resp_abc", True, id="unwrapped-native-turn"),
+        pytest.param(
+            ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "bridged-1", "chatcmpl-abc"),
+            False,
+            id="openai-chat-bridge-turn",
+        ),
+        pytest.param(
+            ResponsesAPIRequestUtils._build_responses_api_response_id("gemini", "bridged-2", "ZJ8uaPqXOd2N1PIPrIK6sQk"),
+            False,
+            id="gemini-chat-bridge-turn",
+        ),
+        pytest.param(
+            ResponsesAPIRequestUtils._build_responses_api_response_id("anthropic", "bridged-3", "msg_01abc"),
+            False,
+            id="anthropic-chat-bridge-turn",
+        ),
+    ],
+)
+def test_held_by_a_provider_is_true_only_for_a_turn_a_responses_api_provider_stored(
+    response_id: str, held: bool
+) -> None:
+    assert held_by_a_provider(response_id) is held

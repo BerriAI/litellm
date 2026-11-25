@@ -8288,7 +8288,7 @@ class Router:
                 )
 
                 return response
-        except UnresolvablePreviousResponseError:
+        except UnknownPreviousResponseError:
             raise
         except Exception as new_exception:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
