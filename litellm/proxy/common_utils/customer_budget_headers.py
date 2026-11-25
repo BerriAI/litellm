@@ -42,7 +42,7 @@ def _scope_headers(scope: CustomerScopeAuth) -> Mapping[str, str]:
                 ),
                 *(
                     _budget_headers(
-                        prefix, f"-{window.budget_duration}", window.spend, window.max_budget, window.reset_at
+                        prefix, f"-{window.budget_duration.strip()}", window.spend, window.max_budget, window.reset_at
                     )
                     for window in scope.budget_window_usage
                 ),

@@ -143,3 +143,23 @@ def test_a_budget_rejection_outside_a_customer_carries_no_customer_budget_header
         litellm.BudgetExceededError(current_cost=7.0, max_budget=6.0, message="over budget"), ENABLED
     )
     assert not rejection.headers
+
+
+@pytest.mark.parametrize("stored_duration", ("1d ", "1d\n"))
+def test_whitespace_a_stored_duration_ends_with_stays_out_of_the_header_name(stored_duration: str) -> None:
+    hierarchy: Final = CustomerHierarchyAuth(
+        scopes=(
+            CustomerScopeAuth(
+                key="app_customer_org",
+                entity_id="app-1:org-1",
+                budget_window_usage=(
+                    CustomerBudgetWindowUsage(budget_duration=stored_duration, spend=1.0, max_budget=2.0),
+                ),
+            ),
+        )
+    )
+    assert dict(customer_budget_headers(hierarchy, ENABLED)) == {
+        "x-litellm-app-customer-org-spend-1d": "1.0",
+        "x-litellm-app-customer-org-max-budget-1d": "2.0",
+        "x-litellm-app-customer-org-remaining-budget-1d": "1.0",
+    }

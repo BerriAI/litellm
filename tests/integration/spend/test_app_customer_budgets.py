@@ -4,6 +4,7 @@ from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
+from itertools import product
 from math import isclose
 from pathlib import Path
 from typing import Final
@@ -454,8 +455,9 @@ def test_responses_report_each_app_customer_budget_window_before_and_at_the_cap(
             organization: Final = _budget_headers(response, "org")
             assert {
                 f"{field}-{duration}"
-                for field in ("spend", "max-budget", "remaining-budget", "budget-reset-at")
-                for duration in ("1d", "30d")
+                for field, duration in product(
+                    ("spend", "max-budget", "remaining-budget", "budget-reset-at"), ("1d", "30d")
+                )
             } == set(organization), response.headers
             return {name: float(value) for name, value in organization.items() if "reset-at" not in name}
 
