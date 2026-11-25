@@ -2388,13 +2388,21 @@ def test_bedrock_nova_deployment_bills_a_clip_kind_it_does_not_price_at_the_list
 
 
 def test_bedrock_nova_deployment_with_only_a_token_price_bills_clips_at_its_region_rates(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    unpriced: Final = _nova_deployment_clip_cost(respx_mock, "us-gov-west-1")
-    token_priced: Final = _nova_deployment_clip_cost(respx_mock, "us-gov-west-1", input_cost_per_token=0.001)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"bedrock/eu-test-1/{_NOVA_MODEL_ID}",
+        {
+            **litellm.model_cost[_NOVA_MODEL_ID],
+            "input_cost_per_audio_per_second": 3.0,
+            "input_cost_per_video_per_second": 7.0,
+        },
+    )
 
-    assert unpriced != _nova_deployment_clip_cost(respx_mock), "the region needs its own clip rates for this test"
-    assert token_priced == pytest.approx(unpriced)
+    assert _nova_deployment_clip_cost(respx_mock, "eu-test-1", input_cost_per_token=0.001) == pytest.approx(
+        2.5 * 3.0 + 6.5 * 7.0
+    )
 
 
 def test_bedrock_nova_deployment_priced_at_zero_per_token_bills_clips_at_nothing(
