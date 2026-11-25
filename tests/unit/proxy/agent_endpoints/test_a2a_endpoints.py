@@ -1630,6 +1630,109 @@ async def test_get_agent_card_0_3_card_with_a2a_version_1_0_header():
 
 
 @pytest.mark.asyncio
+async def test_get_agent_card_1_0_normalizes_legacy_security_fields():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.a2a.agent_card import merge_agent_card
+
+    agent = _make_agent_mock()
+    agent.agent_card_params = merge_agent_card(
+        {
+            "protocolVersion": "1.0",
+            "name": "Example Agent",
+            "description": "Example agent.",
+            "url": "http://backend-agent:10001",
+            "skills": [
+                {
+                    "id": "get_products",
+                    "name": "Get products",
+                    "tags": ["products"],
+                    "description": "Find products in the catalog.",
+                }
+            ],
+        },
+        proxy_url="http://localhost:4000/a2a/test-agent",
+        proxy_base_url="http://localhost:4000",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {}
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode())
+    assert body["securitySchemes"] == {
+        "LiteLLMKey": {
+            "httpAuthSecurityScheme": {
+                "scheme": "bearer",
+                "description": "LiteLLM virtual key",
+            }
+        }
+    }
+    assert body["securityRequirements"] == [{"schemes": {"LiteLLMKey": {"list": []}}}]
+    assert "security" not in body
+
+
+@pytest.mark.asyncio
+async def test_get_agent_card_0_3_with_flat_security_strips_supported_interfaces():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.a2a.agent_card import merge_agent_card
+
+    agent = _make_agent_mock()
+    agent.agent_card_params = merge_agent_card(
+        {
+            "protocolVersion": "0.3",
+            "name": "Legacy Agent",
+            "description": "Pinned to 0.3",
+            "url": "http://backend-agent:10001",
+        },
+        proxy_url="http://localhost:4000/a2a/test-agent",
+        proxy_base_url="http://localhost:4000",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {}
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode())
+    assert "supportedInterfaces" not in body
+    assert "securityRequirements" not in body
+    assert body["url"] == "http://localhost:4000/a2a/test-agent"
+    assert body["securitySchemes"] == {
+        "LiteLLMKey": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "LiteLLM virtual key",
+        }
+    }
+    assert body["security"] == [{"LiteLLMKey": []}]
+
+
+@pytest.mark.asyncio
 async def test_get_extended_agent_card_uses_proxy_base_url_when_set(monkeypatch):
     """Regression: proxied extended cards must rewrite url to the public proxy base."""
     from litellm.proxy._types import UserAPIKeyAuth

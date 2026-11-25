@@ -24,12 +24,14 @@ The two wire shapes:
   ``Task`` result is a bare object without ``kind``.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.proxy.a2a.agent_card import normalize_protocol_version
 
 A2AVersion = Literal["0.3", "1.0"]
@@ -38,6 +40,186 @@ JsonDict = dict[str, object]
 
 _V1_SEND_ENVELOPE_KEYS: Final = frozenset({"message", "task"})
 _V1_STREAM_ENVELOPE_KEYS: Final = frozenset({"message", "task", "statusUpdate", "artifactUpdate"})
+_V03_TYPE_TO_V1_SECURITY_SCHEME_KEY: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "apiKey": "apiKeySecurityScheme",
+        "http": "httpAuthSecurityScheme",
+        "oauth2": "oauth2SecurityScheme",
+        "openIdConnect": "openIdConnectSecurityScheme",
+        "mutualTLS": "mtlsSecurityScheme",
+    }
+)
+_V1_SECURITY_SCHEME_KEY_TO_V03_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {v1_key: v03_type for v03_type, v1_key in _V03_TYPE_TO_V1_SECURITY_SCHEME_KEY.items()}
+)
+
+
+def _convert_security_scheme_to_v1(scheme: Mapping[str, object]) -> JsonDict:
+    scheme_type: Final = scheme.get("type")
+    if not isinstance(scheme_type, str):
+        return dict(scheme)
+    wrapper_key: Final = _V03_TYPE_TO_V1_SECURITY_SCHEME_KEY.get(scheme_type)
+    if wrapper_key is None:
+        return dict(scheme)
+    has_location: Final = "location" in scheme
+    inner: Final[JsonDict] = {
+        ("location" if scheme_type == "apiKey" and key == "in" and not has_location else key): value
+        for key, value in scheme.items()
+        if key != "type"
+    }
+    return {wrapper_key: inner}
+
+
+def _convert_security_scheme_to_v03(scheme: Mapping[str, object]) -> JsonDict:
+    if "type" in scheme or len(scheme) != 1:
+        return dict(scheme)
+    wrapper_key, raw_inner = next(iter(scheme.items()))
+    v03_type: Final = _V1_SECURITY_SCHEME_KEY_TO_V03_TYPE.get(wrapper_key)
+    inner: Final = as_str_mapping(raw_inner)
+    if v03_type is None or inner is None:
+        return dict(scheme)
+    has_in: Final = "in" in inner
+    flat: Final[JsonDict] = {
+        "type": v03_type,
+        **{
+            ("in" if v03_type == "apiKey" and key == "location" and not has_in else key): value
+            for key, value in inner.items()
+        },
+    }
+    return flat
+
+
+def _extract_v1_scopes(raw_entry: object) -> tuple[object, ...]:
+    entry: Final = as_str_mapping(raw_entry)
+    if entry is None:
+        return ()
+    raw_list: Final = as_object_list(entry.get("list"))
+    return tuple(raw_list) if raw_list is not None else ()
+
+
+def _convert_security_requirement_to_v1(item: object) -> object:
+    req: Final = as_str_mapping(item)
+    if req is None:
+        return item
+    if len(req) == 1 and as_str_mapping(req.get("schemes")) is not None:
+        return dict(req)
+    schemes: Final[JsonDict] = {
+        scheme_name: {"list": list(scopes) if (scopes := as_object_list(raw_scopes)) is not None else []}
+        for scheme_name, raw_scopes in req.items()
+    }
+    return {"schemes": schemes}
+
+
+def _convert_security_requirement_to_v03(item: object) -> object:
+    req: Final = as_str_mapping(item)
+    if req is None:
+        return item
+    raw_schemes: Final = as_str_mapping(req.get("schemes"))
+    if len(req) != 1 or raw_schemes is None:
+        return dict(req)
+    return {scheme_name: list(_extract_v1_scopes(raw_entry)) for scheme_name, raw_entry in raw_schemes.items()}
+
+
+def _is_v03_security_scheme(scheme: object) -> bool:
+    mapping: Final = as_str_mapping(scheme)
+    if mapping is None:
+        return False
+    scheme_type: Final = mapping.get("type")
+    return isinstance(scheme_type, str) and scheme_type in _V03_TYPE_TO_V1_SECURITY_SCHEME_KEY
+
+
+def _is_v1_security_scheme(scheme: object) -> bool:
+    mapping: Final = as_str_mapping(scheme)
+    if mapping is None or "type" in mapping or len(mapping) != 1:
+        return False
+    wrapper_key, raw_inner = next(iter(mapping.items()))
+    return wrapper_key in _V1_SECURITY_SCHEME_KEY_TO_V03_TYPE and as_str_mapping(raw_inner) is not None
+
+
+def _has_mismatched_security(card: Mapping[str, object], target: A2AVersion) -> bool:
+    source_key: Final = "security" if target == "1.0" else "securityRequirements"
+    if source_key in card:
+        return True
+    scheme_check: Final = _is_v03_security_scheme if target == "1.0" else _is_v1_security_scheme
+    schemes: Final = as_str_mapping(card.get("securitySchemes"))
+    if schemes is not None and any(scheme_check(s) for s in schemes.values()):
+        return True
+    skills: Final = as_object_list(card.get("skills"))
+    if skills is not None:
+        return any((skill_map := as_str_mapping(skill)) is not None and source_key in skill_map for skill in skills)
+    return False
+
+
+def _normalize_security_container(
+    container: Mapping[str, object],
+    *,
+    source_key: str,
+    target_key: str,
+    convert_req: Callable[[object], object],
+) -> JsonDict:
+    normalized: Final[JsonDict] = {k: v for k, v in container.items() if k != source_key}
+    raw_reqs: Final = as_object_list(container.get(source_key))
+    if target_key not in normalized and raw_reqs is not None:
+        normalized[target_key] = [convert_req(item) for item in raw_reqs]
+    return normalized
+
+
+def _normalize_skill_security(
+    skill: object,
+    *,
+    source_key: str,
+    target_key: str,
+    convert_req: Callable[[object], object],
+) -> object:
+    skill_map: Final = as_str_mapping(skill)
+    if skill_map is None or source_key not in skill_map:
+        return skill
+    return _normalize_security_container(
+        skill_map,
+        source_key=source_key,
+        target_key=target_key,
+        convert_req=convert_req,
+    )
+
+
+def _convert_security_schemes(schemes: Mapping[str, object], target: A2AVersion) -> JsonDict:
+    converter: Final = _convert_security_scheme_to_v1 if target == "1.0" else _convert_security_scheme_to_v03
+    converted: Final[JsonDict] = {}
+    for name, raw_scheme in schemes.items():
+        scheme_map = as_str_mapping(raw_scheme)
+        converted[name] = converter(scheme_map) if scheme_map is not None else raw_scheme
+    return converted
+
+
+def _normalize_card_security(card: JsonDict, target: A2AVersion) -> JsonDict:
+    if not _has_mismatched_security(card, target):
+        return card
+    source_key: Final = "security" if target == "1.0" else "securityRequirements"
+    target_key: Final = "securityRequirements" if target == "1.0" else "security"
+    convert_req: Final = (
+        _convert_security_requirement_to_v1 if target == "1.0" else _convert_security_requirement_to_v03
+    )
+    normalized: Final = _normalize_security_container(
+        card,
+        source_key=source_key,
+        target_key=target_key,
+        convert_req=convert_req,
+    )
+    schemes: Final = as_str_mapping(card.get("securitySchemes"))
+    if schemes is not None:
+        normalized["securitySchemes"] = _convert_security_schemes(schemes, target)
+    skills: Final = as_object_list(card.get("skills"))
+    if skills is not None:
+        normalized["skills"] = [
+            _normalize_skill_security(
+                skill,
+                source_key=source_key,
+                target_key=target_key,
+                convert_req=convert_req,
+            )
+            for skill in skills
+        ]
+    return normalized
 
 
 def _dump_03(model: BaseModel) -> JsonDict:
@@ -126,7 +308,7 @@ def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
 
     current: Final = _detect_card_version(card)
     if current == target and not (target == "0.3" and "supportedInterfaces" in card):
-        return card
+        return _normalize_card_security(card, target)
     return _best_effort(lambda: _convert_agent_card(card, target), card, label="agent card")
 
 
@@ -307,13 +489,15 @@ def _convert_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     )
 
     if target == "0.3":
+        prepared_v1: Final = _normalize_card_security(card, "1.0")
         pb: Final = pb2_v10.AgentCard()
-        ParseDict(card, pb, ignore_unknown_fields=True)
+        ParseDict(prepared_v1, pb, ignore_unknown_fields=True)
         lowered: Final = _dump_03(to_compat_agent_card(pb))
         lowered.pop("additionalInterfaces", None)
         return lowered
 
-    core: Final = to_core_agent_card(types_v03.AgentCard.model_validate(card))
+    prepared_v03: Final = _normalize_card_security(card, "0.3")
+    core: Final = to_core_agent_card(types_v03.AgentCard.model_validate(prepared_v03))
     return MessageToDict(core, preserving_proto_field_name=False)
 
 

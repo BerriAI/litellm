@@ -323,3 +323,235 @@ def test_detect_card_version_normalizes_semver_protocol_version():
         _detect_card_version({"protocolVersion": "0.3.0", "supportedInterfaces": []})
         == "0.3"
     )
+
+
+def test_agent_card_1_0_normalizes_flat_0_3_security_fields():
+    from copy import deepcopy
+
+    from a2a.compat.v0_3.conversions import ParseDict, pb2_v10
+
+    from litellm.proxy.a2a.agent_card import (
+        merge_agent_card,
+        point_agent_card_at_proxy,
+    )
+
+    merged = merge_agent_card(
+        {
+            "protocolVersion": "1.0",
+            "name": "Example Agent",
+            "description": "Example agent.",
+            "url": "https://upstream.example/a2a",
+            "skills": [
+                {
+                    "id": "get_products",
+                    "name": "Get products",
+                    "tags": ["products"],
+                    "description": "Find products in the catalog.",
+                }
+            ],
+        },
+        proxy_url="https://proxy.example.com/a2a/example-agent",
+        proxy_base_url="https://proxy.example.com",
+    )
+    served_input = point_agent_card_at_proxy(merged, "https://proxy.example.com/a2a/example-agent")
+    snapshot = deepcopy(served_input)
+
+    out = normalize_agent_card(served_input, "1.0")
+
+    assert served_input == snapshot
+    assert out["securitySchemes"] == {
+        "LiteLLMKey": {
+            "httpAuthSecurityScheme": {
+                "scheme": "bearer",
+                "description": "LiteLLM virtual key",
+            }
+        }
+    }
+    assert out["securityRequirements"] == [{"schemes": {"LiteLLMKey": {"list": []}}}]
+    assert "security" not in out
+
+    ParseDict(
+        out["securitySchemes"]["LiteLLMKey"],
+        pb2_v10.SecurityScheme(),
+        ignore_unknown_fields=False,
+    )
+    ParseDict(
+        out["securityRequirements"][0],
+        pb2_v10.SecurityRequirement(),
+        ignore_unknown_fields=False,
+    )
+    pb_card = pb2_v10.AgentCard()
+    ParseDict(out, pb_card, ignore_unknown_fields=True)
+    assert pb_card.security_schemes["LiteLLMKey"].http_auth_security_scheme.scheme == "bearer"
+    assert len(pb_card.security_requirements) == 1
+
+
+def test_agent_card_security_normalization_all_scheme_types_round_trip():
+    from a2a.compat.v0_3.conversions import ParseDict, pb2_v10
+
+    card_1_0_with_legacy_sec = {
+        "protocolVersion": "1.0",
+        "name": "Multi Auth Agent",
+        "description": "Tests all five A2A security scheme types.",
+        "version": "1.0.0",
+        "supportedInterfaces": [
+            {
+                "url": "https://proxy.example.com/a2a/multi",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "securitySchemes": {
+            "http_s": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "Bearer token",
+            },
+            "api_s": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-Key",
+                "description": "Header key",
+            },
+            "oauth_s": {
+                "type": "oauth2",
+                "flows": {
+                    "clientCredentials": {
+                        "tokenUrl": "https://auth.example/token",
+                        "scopes": {"read": "Read access"},
+                    }
+                },
+            },
+            "oidc_s": {
+                "type": "openIdConnect",
+                "openIdConnectUrl": "https://idp.example/.well-known/openid-configuration",
+            },
+            "mtls_s": {
+                "type": "mutualTLS",
+                "description": "Client cert",
+            },
+        },
+        "security": [{"http_s": [], "oauth_s": ["read"]}],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [
+            {
+                "id": "s1",
+                "name": "Skill One",
+                "description": "Desc",
+                "tags": ["tag"],
+                "security": [{"api_s": []}],
+            }
+        ],
+    }
+
+    out_1_0 = normalize_agent_card(card_1_0_with_legacy_sec, "1.0")
+    assert "security" not in out_1_0
+    assert out_1_0["securityRequirements"] == [{"schemes": {"http_s": {"list": []}, "oauth_s": {"list": ["read"]}}}]
+    assert out_1_0["securitySchemes"]["http_s"] == {
+        "httpAuthSecurityScheme": {
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Bearer token",
+        }
+    }
+    assert out_1_0["securitySchemes"]["api_s"] == {
+        "apiKeySecurityScheme": {
+            "location": "header",
+            "name": "X-API-Key",
+            "description": "Header key",
+        }
+    }
+    assert out_1_0["securitySchemes"]["oauth_s"] == {
+        "oauth2SecurityScheme": {
+            "flows": {
+                "clientCredentials": {
+                    "tokenUrl": "https://auth.example/token",
+                    "scopes": {"read": "Read access"},
+                }
+            }
+        }
+    }
+    assert out_1_0["securitySchemes"]["oidc_s"] == {
+        "openIdConnectSecurityScheme": {"openIdConnectUrl": "https://idp.example/.well-known/openid-configuration"}
+    }
+    assert out_1_0["securitySchemes"]["mtls_s"] == {"mtlsSecurityScheme": {"description": "Client cert"}}
+    assert "security" not in out_1_0["skills"][0]
+    assert out_1_0["skills"][0]["securityRequirements"] == [{"schemes": {"api_s": {"list": []}}}]
+
+    for scheme in out_1_0["securitySchemes"].values():
+        ParseDict(scheme, pb2_v10.SecurityScheme(), ignore_unknown_fields=False)
+
+    card_with_0_3_interface = {
+        **out_1_0,
+        "supportedInterfaces": [
+            {
+                "url": "https://proxy.example.com/a2a/multi",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "0.3",
+            }
+        ],
+    }
+    lowered_0_3 = normalize_agent_card(card_with_0_3_interface, "0.3")
+    assert "supportedInterfaces" not in lowered_0_3
+    assert "securityRequirements" not in lowered_0_3
+    assert lowered_0_3["security"] == [{"http_s": [], "oauth_s": ["read"]}]
+    assert lowered_0_3["securitySchemes"]["api_s"] == {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Header key",
+    }
+    assert lowered_0_3["securitySchemes"]["mtls_s"] == {
+        "type": "mutualTLS",
+        "description": "Client cert",
+    }
+    assert lowered_0_3["skills"][0]["security"] == [{"api_s": []}]
+    assert "securityRequirements" not in lowered_0_3["skills"][0]
+
+    same_version_0_3_card = {k: v for k, v in out_1_0.items() if k != "supportedInterfaces"}
+    same_version_0_3_card["protocolVersion"] = "0.3"
+    same_version_0_3_card["url"] = "https://proxy.example.com/a2a/multi"
+    same_version_0_3 = normalize_agent_card(same_version_0_3_card, "0.3")
+    assert "securityRequirements" not in same_version_0_3
+    assert same_version_0_3["security"] == [{"http_s": [], "oauth_s": ["read"]}]
+    assert same_version_0_3["securitySchemes"]["http_s"]["type"] == "http"
+    assert same_version_0_3["securitySchemes"]["api_s"]["in"] == "header"
+    assert "location" not in same_version_0_3["securitySchemes"]["api_s"]
+    assert same_version_0_3["skills"][0]["security"] == [{"api_s": []}]
+    assert "securityRequirements" not in same_version_0_3["skills"][0]
+
+
+def test_agent_card_0_3_with_supported_interfaces_and_flat_security_schemes_lowers_cleanly():
+    from litellm.proxy.a2a.agent_card import (
+        merge_agent_card,
+        point_agent_card_at_proxy,
+    )
+
+    merged = merge_agent_card(
+        {
+            "protocolVersion": "0.3",
+            "name": "Legacy Agent",
+            "description": "Pinned to 0.3",
+            "url": "https://upstream.example/a2a",
+        },
+        proxy_url="https://proxy.example.com/a2a/legacy-agent",
+        proxy_base_url="https://proxy.example.com",
+    )
+    served_input = point_agent_card_at_proxy(merged, "https://proxy.example.com/a2a/legacy-agent")
+
+    out = normalize_agent_card(served_input, "0.3")
+
+    assert "supportedInterfaces" not in out
+    assert "securityRequirements" not in out
+    assert out["protocolVersion"] == "0.3"
+    assert out["url"] == "https://proxy.example.com/a2a/legacy-agent"
+    assert out["securitySchemes"] == {
+        "LiteLLMKey": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "LiteLLM virtual key",
+        }
+    }
+    assert out["security"] == [{"LiteLLMKey": []}]
