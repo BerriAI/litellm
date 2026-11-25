@@ -39,6 +39,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
     from litellm.repositories.prisma_protocols import TableActions
@@ -413,7 +415,7 @@ async def _migrate_callback_vars_table(
     return report
 
 
-def _iter_callback_var_dicts(metadata: dict[str, object]):
+def _iter_callback_var_dicts(metadata: dict[str, object]) -> "Iterator[Mapping[object, object]]":
     """Yield each ``callback_vars`` dict in a metadata structure.
 
     Mirrors ``_transform_callback_vars``: credentials live both under
@@ -519,8 +521,8 @@ async def _scan_one_table(
     prisma_client: object,
     location: str,
     db_attr: str,
-    json_columns: tuple,
-    scalar_columns: tuple,
+    json_columns: tuple[str, ...],
+    scalar_columns: tuple[str, ...],
 ) -> LocationReport:
     report: Final = LocationReport(location=location)
     table: Final[TableActions[object] | None] = getattr(prisma_client.db, db_attr, None)

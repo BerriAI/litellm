@@ -27,7 +27,7 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     messages: ReadOnly[list]
     optional_params: ReadOnly[dict[str, object]]
     litellm_params: ReadOnly[dict[str, object]]
-    headers: ReadOnly[dict]
+    headers: ReadOnly[dict[str, object]]
     model_response: ReadOnly["ModelResponse"]
     logging_obj: ReadOnly["LiteLLMLoggingObj"]
     custom_llm_provider: ReadOnly[str]
@@ -47,7 +47,7 @@ class ResponsesToCompletionBridgeHandler:
         self.transformation_handler = LiteLLMResponsesTransformationHandler()
 
     @staticmethod
-    def _resolve_stream_flag(optional_params: dict, litellm_params: dict) -> bool:
+    def _resolve_stream_flag(optional_params: dict[str, object], litellm_params: dict[str, object]) -> bool:
         stream = optional_params.get("stream")
         if stream is None:
             stream = litellm_params.get("stream", False)
@@ -62,7 +62,7 @@ class ResponsesToCompletionBridgeHandler:
     @staticmethod
     def _coerce_response_object(
         response_obj: object,
-        hidden_params: dict | None,
+        hidden_params: Mapping[object, object] | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
             response = response_obj
@@ -164,7 +164,7 @@ class ResponsesToCompletionBridgeHandler:
         )
 
     def completion(
-        self, *args, **kwargs
+        self, *args: object, **kwargs
     ) -> Union[
         Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
@@ -286,7 +286,7 @@ class ResponsesToCompletionBridgeHandler:
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
-    async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(self, *args: object, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 

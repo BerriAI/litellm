@@ -1,6 +1,6 @@
-import { Bell, Plus } from "lucide-react";
+import { Bell } from "lucide-react";
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
@@ -275,18 +275,6 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 
 const CALLBACK_CONFIG_ALIASES: Record<string, string> = { s3_v2: "s3" };
 const CALLBACK_UNSUPPORTED_PARAMS: Record<string, readonly string[]> = { s3: ["s3_partition_granularity"] };
-
-interface DynamicParamConfig {
-  type?: string;
-  ui_name?: string;
-  required?: boolean;
-  options?: string[];
-}
-
-interface CallbackConfigWithParams {
-  id: string;
-  dynamic_params?: Record<string, DynamicParamConfig>;
-}
 
 const findCallbackConfig = <T extends { id: string }>(
   callbackConfigs: readonly T[],
@@ -621,14 +609,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             {t("shell.nav.items.loggingAndAlerts")}
           </PageHeaderTitle>
           <PageHeaderDescription>{t("shell.pageDescriptions.loggingAndAlerts")}</PageHeaderDescription>
-          {activeTab === "logging-callbacks" && (
-            <PageHeaderControls>
-              <Button onClick={() => setShowAddCallbacksModal(true)}>
-                <Plus />
-                {t("loggingAndAlerts.loggingCallbacks.table.add")}
-              </Button>
-            </PageHeaderControls>
-          )}
         </PageHeader>
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)} className="gap-6">
           <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
@@ -644,6 +624,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               callbacks={callbacks}
               availableCallbacks={allCallbacks}
               isLoading={isLoadingCallbacks}
+              onAdd={() => setShowAddCallbacksModal(true)}
               onEdit={(cb) => {
                 setSelectedEditCallback(cb);
                 setShowEditCallback(true);

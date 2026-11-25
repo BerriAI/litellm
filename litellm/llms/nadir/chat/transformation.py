@@ -1,5 +1,5 @@
 import math
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -8,6 +8,10 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_response
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _SUPPORTED_OPENAI_PARAMS: Final = (
     "extra_headers",
@@ -47,12 +51,12 @@ class NadirConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: object,
-        request_data: dict,  # mutable-ok: signature fixed by the base interface
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict[str, object],  # mutable-ok: signature fixed by the base interface
         messages: list[AllMessageValues],  # mutable-ok: signature fixed by the base interface
-        optional_params: dict,  # mutable-ok: signature fixed by the base interface
-        litellm_params: dict,  # mutable-ok: signature fixed by the base interface
-        encoding: object,
+        optional_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        litellm_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

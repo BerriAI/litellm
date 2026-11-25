@@ -147,7 +147,7 @@ def _header_value(headers: Mapping[str, str], name: str) -> str | None:
 
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
-    _hidden_params: dict
+    _hidden_params: dict[str, builtins.object]
     usage: "Usage | None"
     response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
@@ -478,7 +478,7 @@ class OpenAIFileObject(LiteLLMBaseModel):
     litellm_details_fallback: bool | None = None
     """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
 
-    _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
 
     @field_validator("object", mode="before")
     @classmethod
@@ -511,19 +511,19 @@ class OpenAIFileObject(LiteLLMBaseModel):
         )
         return {key: value for key, value in serialized.items() if key not in fields_to_omit}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: _JsonValue = None) -> _JsonValue:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> _JsonValue:
+    def __getitem__(self, key: str) -> _JsonValue:
         # Allow dictionary-style access to attributes
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: _JsonValue):
         try:
             return self.model_dump()
         except Exception:
@@ -1328,6 +1328,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "area",
     "width",
     "height",
     "guidance",
@@ -1417,18 +1418,24 @@ class ResponsesAPIModeration(TypedDict, total=False):
     model: Required[ReadOnly[str]]
 
 
+class ResponsesAPIBackgroundOptions(TypedDict, total=False):
+    completion_window: ReadOnly[Literal["soonest", "2h", "8h"]]
+    continuation_id: ReadOnly[str]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
     include: list[ResponseIncludable] | None
     instructions: str | None
     max_output_tokens: int | None
-    metadata: dict[str, Any] | None
+    metadata: Mapping[str, object] | None
     parallel_tool_calls: bool | None
     previous_response_id: str | None
     reasoning: Reasoning | None
     store: bool | None
     background: bool | None
+    background_options: ReadOnly[ResponsesAPIBackgroundOptions | None]
     stream: bool | None
     temperature: float | None
     text: Optional["ResponseText"]
@@ -1661,7 +1668,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     user: str | None = None
     store: bool | None = None
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -1687,7 +1694,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("usage", mode="before")
     @classmethod
-    def validate_usage(cls, value):
+    def validate_usage(cls, value: _JsonValue) -> _JsonValue:
         """Convert usage dict to ResponseAPIUsage object if needed"""
         if value is None:
             return value
@@ -1855,7 +1862,7 @@ class ResponseInProgressEvent(BaseResponsesStreamEvent):
 class ResponseCompletedEvent(BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     response: ResponsesAPIResponse
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2529,6 +2536,11 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeInputAudioBufferCleared(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.cleared"]]
+    event_id: ReadOnly[str]
+
+
 class OpenAIRealtimeErrorDetail(TypedDict):
     type: ReadOnly[str]
     message: ReadOnly[str]
@@ -2664,6 +2676,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeInputAudioBufferCleared
     | OpenAIRealtimeOutputVideoDelta
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
@@ -2706,7 +2719,7 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     """A list of moderation objects."""
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2886,13 +2899,13 @@ class OpenAIVideoObject(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None) -> _JsonValue:
+    def get(self, key: str, default: _JsonValue = None) -> _JsonValue:
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> _JsonValue:
+    def __getitem__(self, key: str) -> _JsonValue:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):

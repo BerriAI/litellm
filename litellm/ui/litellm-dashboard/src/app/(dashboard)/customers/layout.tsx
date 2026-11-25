@@ -24,7 +24,7 @@ export default function CustomersLayout({ children }: { children: ReactNode }) {
   return (
     <>
       {limits?.limits_apply && (
-        <div className="space-y-3 px-6 pt-4">
+        <div className="space-y-3">
           <p className="text-xs text-muted-foreground">
             <Trans
               i18nKey="customerPortal.limits.byline"
