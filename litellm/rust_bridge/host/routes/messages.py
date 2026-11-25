@@ -40,6 +40,7 @@ _BODY_FIELDS: Final = frozenset(
         "cache_control",
         "reasoning_effort",
         "safeguards",
+        "billing_policy",
     }
 )
 

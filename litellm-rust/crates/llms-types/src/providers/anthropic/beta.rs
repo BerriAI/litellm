@@ -124,12 +124,14 @@ pub enum AnthropicBeta {
     ToolSearchTool20251019,
     #[strum(serialize = "inline-tools-2026-09-15")]
     InlineTools20260915,
+    #[strum(serialize = "user-profiles-billing-2026-10-01")]
+    UserProfilesBilling20261001,
     #[strum(default, transparent)]
     Other(String),
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 40] = [
+    pub const KNOWN: [Self; 41] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -170,6 +172,7 @@ impl AnthropicBeta {
         Self::ToolExamples20251029,
         Self::ToolSearchTool20251019,
         Self::InlineTools20260915,
+        Self::UserProfilesBilling20261001,
     ];
 
     pub fn as_str(&self) -> &str {
@@ -198,6 +201,13 @@ impl AnthropicBeta {
             Self::AdvancedToolUse20251120 | Self::ContextManagement20250627 => {
                 &[BetaProvider::BedrockConverse]
             }
+            Self::UserProfilesBilling20261001 => &[
+                BetaProvider::BedrockConverse,
+                BetaProvider::Bedrock,
+                BetaProvider::BedrockMantle,
+                BetaProvider::VertexAi,
+                BetaProvider::Databricks,
+            ],
             Self::AdvisorTool20260301 | Self::Compact20260904 => &[
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
@@ -409,6 +419,7 @@ mod tests {
             AnthropicBeta::AdvancedToolUse20251120,
             AnthropicBeta::FastMode20260201,
             AnthropicBeta::AdvisorTool20260301,
+            AnthropicBeta::UserProfilesBilling20261001,
             AnthropicBeta::PerTurnControl20260701,
             AnthropicBeta::DangerousToolUse20260903,
             AnthropicBeta::Bash20241022,

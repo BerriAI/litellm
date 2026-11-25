@@ -145,6 +145,21 @@ def _anthropic_base_url_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
 
 
+@pytest.mark.parametrize("drop_params", (False, True))
+def test_billing_policy_is_forwarded_as_sent_even_under_drop_params_without_its_beta(drop_params: bool) -> None:
+    """`billing_policy` says who pays. Dropping it would bill the request the default way with no error, so a leg
+    that does not send `user-profiles-billing-2026-10-01` forwards it and the provider answers its own 400."""
+    billing_policy: Final = {"type": "billing_policy"}
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "billing_policy": dict(billing_policy)},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert request["billing_policy"] == billing_policy
+
+
 def _request_with_sampling_params(
     config: AnthropicMessagesConfig, model: str, version: str, drop_params: bool, api_base: str | None = None
 ) -> dict[str, object]:
