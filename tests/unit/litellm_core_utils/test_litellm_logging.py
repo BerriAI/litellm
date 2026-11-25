@@ -515,7 +515,9 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
 
     cost: Final = logger.response_cost_calculator(response)
 
-    expected_additional: Final = additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    expected_additional: Final = (
+        additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    )
     assert cost == pytest.approx((0.0 if covered else 100 * 0.01 + 10 * 0.02) + expected_additional)
 
 
@@ -3032,7 +3034,9 @@ async def test_failure_callbacks_release_exception_without_losing_traceback(
         def record(self, kwargs: dict[str, object]) -> None:
             failure: Final = kwargs.get("exception")
             trace: Final = kwargs.get("traceback_exception")
-            scoped: Final = logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            scoped: Final = (
+                logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            )
             scoped.dynamic_failure_callbacks = []
             scoped.failure_handler(cast(Exception, failure), cast(str, trace))
             observations.put_nowait(
@@ -11588,6 +11592,38 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
             custom_logger_init_args={},
         )
         assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_mixpanel_dispatch_needs_otel_v2_and_builds_one_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    def built() -> object:
+        return logging_module.build_custom_logger_compatible_class(
+            "mixpanel", internal_usage_cache=None, llm_router=None
+        )
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "test-token")
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="LITELLM_OTEL_V2"):
+            built()
+        assert logging_module.get_custom_logger_compatible_class("mixpanel") is None
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        logger: Final = built()
+        assert isinstance(logger, OpenTelemetryV2)
+        assert logger.callback_name == "mixpanel"
+        assert built() is logger
+        assert logging_module.get_custom_logger_compatible_class("mixpanel") is logger
     finally:
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
