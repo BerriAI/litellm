@@ -314,7 +314,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 fn = tool.get("function")
                 if isinstance(fn, dict) and fn.get("name"):
                     names.append(str(fn["name"]))
-            names.extend(_native_declaration_names(tool))
+        names.extend(chain.from_iterable(map(_native_declaration_names, list_field(data, "tools"))))
         for fn in list_field(data, "functions"):
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
@@ -1499,14 +1499,8 @@ class _BlockedChunk(TypedDict):
 
 
 def _native_declaration_names(tool: object) -> tuple[str, ...]:
-    if not isinstance(tool, dict):
-        return ()
-    declarations: Final = tool.get("functionDeclarations") or tool.get("function_declarations")
-    return tuple(
-        str(declaration["name"])
-        for declaration in (declarations if isinstance(declarations, list) else ())
-        if isinstance(declaration, dict) and declaration.get("name")
-    )
+    declarations: Final = list_field(tool, "functionDeclarations") or list_field(tool, "function_declarations")
+    return tuple(name for declaration in declarations if (name := openai_tool_name(declaration)))
 
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
