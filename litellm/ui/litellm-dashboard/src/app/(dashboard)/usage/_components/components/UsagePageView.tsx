@@ -6,7 +6,8 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { BarChart3, Download, Link2, Search, X } from "lucide-react";
+import { skipToken, useQuery } from "@tanstack/react-query";
+import { BarChart3, Clock, Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -43,6 +44,7 @@ import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter"
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
+  spendAccountingStatusCall,
   Organization,
   requestErrorActivityCall,
   tagListCall,
@@ -163,6 +165,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams, isAdmin);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
+  const shouldCheckAccountingDelay =
+    isAdmin && usageView === "global" && selectedTab === "cost" && urlParams.user === null;
+  const { data: accountingDelay } = useQuery({
+    queryKey: ["spendAccountingStatus", accessToken],
+    queryFn: shouldCheckAccountingDelay && accessToken ? () => spendAccountingStatusCall(accessToken) : skipToken,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
 
   const selectedClient = CLIENT_USAGE_VIEWS.includes(usageView) ? urlParams.client : null;
 
@@ -273,7 +283,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.user.aggregated(dailyActivityRequest as DailyActivityRequest),
     enabled: dailyActivityRequest !== null,
-    deps: [accessToken, startTime, endTime, effectiveUserId],
+    deps: [accessToken, startTime, endTime, effectiveUserId, Boolean(accountingDelay)],
   });
   // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
   // rest of the page is deployment-wide too: an admin's global view with no user selected.
@@ -562,6 +572,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       loading={loading}
                       requestCountsPending={requestCountsPending}
                       budget={currentUser?.max_budget ?? null}
+                      accountingNotice={
+                        shouldCheckAccountingDelay && accountingDelay ? (
+                          <Alert variant="warning" role="status">
+                            <Clock aria-hidden="true" />
+                            <AlertTitle>{t("usage.pageView.accountingDelay.title")}</AlertTitle>
+                            <AlertDescription className="text-inherit">
+                              {t("usage.pageView.accountingDelay.detail", {
+                                count: accountingDelay.pending_count,
+                                minutes: Math.floor(accountingDelay.oldest_pending_seconds / 60),
+                              })}
+                            </AlertDescription>
+                          </Alert>
+                        ) : null
+                      }
                       subscriptionCosts={
                         <SubscriptionCosts
                           accessToken={accessToken}

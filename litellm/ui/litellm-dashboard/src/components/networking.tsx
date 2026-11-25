@@ -2285,6 +2285,9 @@ export const keyAliasesCall = async (
   }
 };
 
+export const spendAccountingStatusCall = (accessToken: string) =>
+  apiClient.get("/spend/accounting/status", { accessToken });
+
 export const gatewayDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
   /**
    * Get gateway request counts (SGR) recorded by the proxy middleware.

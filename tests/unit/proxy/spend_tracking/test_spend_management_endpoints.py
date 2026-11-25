@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import timezone
 from functools import partial
 from types import SimpleNamespace
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import prisma
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
@@ -25,8 +25,10 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset
+from litellm.proxy.deps.database import get_database
+from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset, router
 from litellm.proxy.utils import hash_token_if_needed
+from litellm.repositories.database import Database
 from tests.unit.proxy.db.fake_prisma_engine import (
     ReadTargetOf,
     statement_timeout_error,
@@ -43,6 +45,59 @@ def _default_date_range():
         (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S"),
         now.strftime("%Y-%m-%d %H:%M:%S"),
     )
+
+
+@pytest.fixture
+def accounting_status_client() -> Iterator[tuple[TestClient, AsyncMock]]:
+    query_raw = AsyncMock()
+    prisma_client = MagicMock()
+    prisma_client.tx.return_value.__aenter__.return_value = SimpleNamespace(query_raw=query_raw)
+    app = FastAPI()
+    app.include_router(router)
+
+    async def authenticate(request: Request) -> UserAPIKeyAuth:
+        role = LitellmUserRoles(request.headers["x-test-user-role"])
+        return UserAPIKeyAuth(user_role=role)
+
+    async def database() -> Database:
+        return Database(prisma=prisma_client, native=None)
+
+    app.dependency_overrides[ps.user_api_key_auth] = authenticate
+    app.dependency_overrides[get_database] = database
+    with TestClient(app) as client:
+        yield client, query_raw
+
+
+def test_accounting_status_reports_delayed_deliveries_even_after_switching_to_legacy(
+    accounting_status_client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, query = accounting_status_client
+    monkeypatch.setitem(ps.general_settings, "use_spend_logs_ledger", False)
+    query.side_effect = [
+        [{"pending_count": 1, "parked_count": 0, "oldest_pending_seconds": 301}],
+        [{"pending_count": 1, "parked_count": 0, "oldest_pending_seconds": 300}],
+    ]
+    headers = {"x-test-user-role": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value}
+
+    delayed = client.get("/spend/accounting/status", headers=headers)
+    recovered = client.get("/spend/accounting/status", headers=headers)
+
+    assert delayed.status_code == recovered.status_code == 200
+    assert delayed.json() == {"pending_count": 1, "oldest_pending_seconds": 301}
+    assert recovered.json() is None
+
+
+def test_accounting_status_does_not_expose_the_proxy_backlog_to_internal_users(
+    accounting_status_client: tuple[TestClient, AsyncMock],
+) -> None:
+    client, query = accounting_status_client
+    response = client.get(
+        "/spend/accounting/status", headers={"x-test-user-role": LitellmUserRoles.INTERNAL_USER.value}
+    )
+
+    assert response.status_code == 403
+    query.assert_not_awaited()
 
 
 def _filter_logs_by_date_range(logs, where):

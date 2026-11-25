@@ -16,6 +16,7 @@ interface UsageOverviewProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
+  accountingNotice?: ReactNode;
   subscriptionCosts: ReactNode;
   topKeys: ReactNode;
   topUsers: ReactNode;
@@ -29,6 +30,7 @@ export default function UsageOverview({
   totals,
   loading,
   requestCountsPending,
+  accountingNotice,
   subscriptionCosts,
   topKeys,
   topUsers,
@@ -49,6 +51,7 @@ export default function UsageOverview({
         spendDetails={<SpendDisplayCurrency usdSpend={totals.spend} loading={loading} />}
       />
 
+      {accountingNotice}
       {subscriptionCosts}
 
       <UsageBreakdownChart results={results} loading={loading} />

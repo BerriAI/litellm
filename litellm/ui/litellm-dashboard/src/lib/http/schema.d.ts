@@ -17352,6 +17352,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/accounting/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend Accounting Status
+         * @description Return the current spend accounting delay, if any. Proxy admin roles only.
+         */
+        get: operations["get_spend_accounting_status_spend_accounting_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/calculate": {
         parameters: {
             query?: never;
@@ -51119,6 +51139,13 @@ export interface components {
             /** Total Chars */
             total_chars: number;
         };
+        /** SpendAccountingDelay */
+        SpendAccountingDelay: {
+            /** Oldest Pending Seconds */
+            oldest_pending_seconds: number;
+            /** Pending Count */
+            pending_count: number;
+        };
         /** SpendAnalyticsPaginatedResponse */
         SpendAnalyticsPaginatedResponse: {
             metadata?: components["schemas"]["DailySpendMetadata"];
@@ -82269,6 +82296,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spend_accounting_status_spend_accounting_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAccountingDelay"] | null;
                 };
             };
         };

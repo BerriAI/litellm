@@ -15909,6 +15909,11 @@
         "description": "When a reusable credential is used, it will appear as a tag prefixed with <prefix/>in this view.",
         "close": "Close"
       },
+      "accountingDelay": {
+        "title": "Usage totals may be delayed",
+        "detail_one": "Recent spend may be missing from these totals. {{count}} delivery pending. Oldest wait {{minutes}} min.",
+        "detail_other": "Recent spend may be missing from these totals. {{count}} deliveries pending. Oldest wait {{minutes}} min."
+      },
       "clientScope": {
         "allUsers": "All users",
         "myUsage": "My usage"

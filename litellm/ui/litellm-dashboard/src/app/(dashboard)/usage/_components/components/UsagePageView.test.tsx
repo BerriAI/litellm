@@ -85,6 +85,7 @@ vi.mock("@/components/networking", () => ({
   dailyActivityKeySearchCall: vi.fn(),
   dailyActivityModelTopKeysCall: vi.fn(),
   dailyActivityExportCall: vi.fn(),
+  spendAccountingStatusCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   requestErrorActivityCall: vi.fn(),
   tagListCall: vi.fn(),
@@ -287,6 +288,7 @@ describe("UsagePage", () => {
   const mockUserDailyActivityUserPageCall = vi.mocked(networking.userDailyActivityUserPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
+  const mockSpendAccountingStatusCall = vi.mocked(networking.spendAccountingStatusCall);
   const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
   const mockSubscriptionUsageCall = vi.mocked(networking.subscriptionUsageCall);
   const mockUseAgents = vi.mocked(useAgents);
@@ -523,6 +525,8 @@ describe("UsagePage", () => {
 
   beforeEach(() => {
     testQueryClient.clear();
+    mockSpendAccountingStatusCall.mockReset();
+    mockSpendAccountingStatusCall.mockResolvedValue(null);
     mockSubscriptionUsageCall.mockReset();
     mockSubscriptionUsageCall.mockResolvedValue(mockSubscriptionUsage);
     mockClientUsagePanel.mockClear();
@@ -631,6 +635,27 @@ describe("UsagePage", () => {
       expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
       rendered.unmount();
     }
+  });
+
+  it("warns administrators during accounting delays and refreshes spend when the delay clears", async () => {
+    mockSpendAccountingStatusCall.mockResolvedValue({ pending_count: 1, oldest_pending_seconds: 497 });
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    expect(await screen.findByText("Usage totals may be delayed")).toBeVisible();
+    expect(screen.getByText(/1 delivery pending\. Oldest wait 8 min\./)).toBeVisible();
+    expect(await overview().findByText("$125.75")).toBeVisible();
+
+    mockSpendAccountingStatusCall.mockResolvedValue(null);
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, total_spend: 210.5 },
+    });
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["spendAccountingStatus"] });
+    });
+
+    expect(await overview().findByText("$210.50")).toBeVisible();
+    expect(screen.queryByText("Usage totals may be delayed")).not.toBeInTheDocument();
   });
 
   it("lets a proxy admin edit subscription fees but shows an admin viewer the same card read-only", async () => {

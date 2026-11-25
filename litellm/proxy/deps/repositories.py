@@ -1,4 +1,8 @@
-from typing import Annotated, TypeAlias
+from typing import (
+    Annotated,
+    TypeAlias,
+    cast,  # noqa: TID251  # generated Prisma transactions cannot express the ledger protocol
+)
 
 from fastapi import Depends
 
@@ -11,6 +15,7 @@ from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
+from litellm.repositories.accounting_delivery_repository import AccountingDeliveryRepository, LedgerDatabase
 from litellm.repositories.alert_repository import AlertRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
@@ -19,6 +24,19 @@ from litellm.repositories.performance_alert_repository import PerformanceAlertRe
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
+
+
+async def get_accounting_delivery_repository(database: DatabaseDep) -> AccountingDeliveryRepository | None:
+    if database is None:
+        return None
+    return AccountingDeliveryRepository(
+        cast(LedgerDatabase, database.prisma)  # cast-ok: PrismaClient.tx routes ledger reads to the writer
+    )
+
+
+AccountingDeliveryRepositoryDep: TypeAlias = Annotated[
+    AccountingDeliveryRepository | None, Depends(get_accounting_delivery_repository)
+]
 
 
 async def get_user_banner_repository(database: DatabaseDep) -> UserBannerStore | None:
