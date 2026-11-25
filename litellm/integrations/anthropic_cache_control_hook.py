@@ -836,7 +836,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -845,7 +845,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Apply cache control directives based on specified injection points.
 
@@ -1396,12 +1396,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def apply_to_anthropic_messages_request(
-        messages: list[dict],
+        messages: list[dict[str, object]],
         system: str | list | None,
         injection_points: Sequence[CacheControlInjectionPoint],
         openai_dialect: bool = False,
         external_breakpoints: int = 0,
-    ) -> tuple[list[dict], str | list | None, list[CacheControlInjectionPoint]]:
+    ) -> tuple[list[dict[str, object]], str | list | None, list[CacheControlInjectionPoint]]:
         """Apply cache control injection for the Anthropic-native v1/messages endpoint.
 
         ``external_breakpoints`` is the client's breakpoint count outside ``messages`` and
@@ -1815,7 +1815,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None = None,
         tools: Sequence[object] | None = None,
         api_base: str | None = None,
-    ) -> tuple[list[dict], str | list | None]:
+    ) -> tuple[list[dict[str, object]], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
         Configured points are applied even when the client marked its own
@@ -1947,7 +1947,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """Async version - delegates to sync since no async operations needed."""
         return self.get_chat_completion_prompt(
             model=model,

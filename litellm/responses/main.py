@@ -100,7 +100,7 @@ from litellm.responses.mcp.round_billing import (
     summed_cost_breakdown,
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponsesAPIRequestUtils, answered_by_the_chat_bridge
 from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1081,17 +1081,6 @@ def _bridges_to_chat_completions(
 
 
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
-
-
-_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
-
-
-def answered_by_the_chat_bridge(response_id: object) -> bool:
-    return isinstance(
-        response_id, str
-    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
-        _CHAT_COMPLETION_ID_PREFIX
-    )
 
 
 def follows_a_bridged_model_router_turn(
@@ -3448,7 +3437,7 @@ def compact_responses(
 # ---------------------------------------------------------------------------
 
 
-def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
+def _build_litellm_metadata_for_ws(kwargs: dict) -> dict[str, object]:
     metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
     guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
@@ -3470,7 +3459,7 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
     return LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
 
 
-_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
+_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"generate", "input", "previous_response_id"})
 
 
 def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) -> str:

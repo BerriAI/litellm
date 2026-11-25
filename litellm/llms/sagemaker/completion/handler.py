@@ -38,6 +38,7 @@ from ..common_utils import (
     client_error_details,
     with_inference_component_hint,
 )
+from ..embedding.cohere_transformation import cohere_extra_body_params
 from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
@@ -155,19 +156,19 @@ class SagemakerLLM(BaseAWSLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
         print_verbose: object,
         encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict: object = {},
         hf_model_name: str | None = None,
         logger_fn: object = None,
         acompletion: bool = False,
-        headers: dict = {},
+        headers: dict[str, object] = {},
     ):
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)
@@ -422,8 +423,8 @@ class SagemakerLLM(BaseAWSLLM):
         model_response: ModelResponse,
         model_id: str | None,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ):
         data: Final = await sagemaker_config.async_transform_request(
             model=model,
@@ -483,11 +484,11 @@ class SagemakerLLM(BaseAWSLLM):
         aws_region_name: str,
         encoding: "Tokenizer | None",
         model_response: ModelResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model_id: str | None,
-        headers: dict,
-        litellm_params: dict,
+        headers: dict[str, object],
+        litellm_params: dict[str, object],
     ):
         timeout: Final = 300.0
         async_handler: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.SAGEMAKER)
@@ -564,7 +565,7 @@ class SagemakerLLM(BaseAWSLLM):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: list[str] | list[int] | list[list[int]],  # mutable-ok: mirrors the provider transform contract
         model_response: EmbeddingResponse,
         print_verbose: Callable[[str], object],
         encoding: object,
@@ -612,9 +613,13 @@ class SagemakerLLM(BaseAWSLLM):
         inference_component_name: Final = embedding_params.get("model_id")
         if inference_component_name is not None and not isinstance(inference_component_name, str):
             raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
-        body_params: Final = {k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")}
+        extra_body: Final = extra_body_fields(embedding_params)
+        body_params: Final = {
+            **cohere_extra_body_params(provider_config, input, extra_body),
+            **{k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")},
+        }
         request_data: Final = {
-            **extra_body_fields(embedding_params),
+            **extra_body,
             **provider_config.transform_embedding_request(endpoint_name, input, body_params, {}),
         }
         data: Final = json.dumps(request_data).encode("utf-8")

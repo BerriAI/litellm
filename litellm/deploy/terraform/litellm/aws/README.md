@@ -22,7 +22,7 @@ already provisioned (often by another team, in another Terraform state).
 
 **Networking.** Set `vpc_id` plus `public_subnet_ids` and `private_subnet_ids`
 and no VPC, subnet, route table, internet gateway, or NAT gateway is created.
-The ALB goes in the public subnets, the ECS tasks and any subnet group the
+The ALB goes in the public subnets by default, the ECS tasks and any subnet group the
 stack still needs go in the private ones, and `vpc_cidr` / `azs` go unused.
 The private subnets need their own egress (NAT gateway, or VPC endpoints
 covering ECR, S3, CloudWatch Logs, and Secrets Manager) since tasks pull
@@ -204,6 +204,16 @@ otel_headers_secret_arn = "arn:aws:secretsmanager:us-west-2:111122223333:secret:
 `no_content`; flip `otel_capture_message_content = "prompt_and_completion"`
 only after auditing what lands in the backend, since prompts and
 completions are typically sensitive.
+
+```hcl
+otel_capture_message_content = "no_content"
+turn_off_message_logging     = true
+```
+
+Use these settings together to keep prompts and responses out of LiteLLM
+message logging and OpenTelemetry message content. The logging setting
+preserves other proxy configuration. It does not remove customer metadata
+from all telemetry.
 
 Vendor presets (Arize, Phoenix, Langfuse OTel, Weave, Langtrace, Levo,
 AgentOps) live under `proxy_config.litellm_settings.callbacks` and are
@@ -523,7 +533,58 @@ the per-component images. To pull from a private registry:
   in Secrets Manager and set `repositoryCredentials.credentialsParameter`
   on the task def container — extend `ecs.tf` accordingly.
 
+## Customer-owned secrets
+
+For a Terraform runner that must not receive these credential values, have
+the customer bootstrap in Secrets Manager and pass only the resulting ARNs:
+
+| Input | Secret value |
+| --- | --- |
+| `litellm_master_key_secret_arn` | A plain string starting with `sk-` |
+| `ui_password_secret_arn` | An optional plain string for the backend UI login |
+
+Names can be chosen by the customer, for example
+`<tenant>-litellm-<env>-master-key` and `<tenant>-litellm-<env>-ui-password`.
+Keep the corresponding plaintext variables empty. A CloudFormation
+bootstrap can generate the UI password directly with `GenerateSecretString`.
+For the master key, generate the complete `sk-`-prefixed value inside the
+customer account. `GenerateSecretString` does not add a prefix to a generated
+plain string. Do not export the secret values from the bootstrap.
+
+For a new module-created Aurora cluster, set `db_manage_master_password = true`.
+RDS creates its own Secrets Manager secret. Only the bootstrap task reads
+its `password` field. The proxy continues to authenticate to Aurora using
+IAM. The RDS create API cannot initialize a new cluster from a different
+existing Secrets Manager ARN.
+
+The module grants `secretsmanager:GetSecretValue` to the ECS task execution
+role on the referenced ARNs. The default Secrets Manager managed key needs
+no additional ECS key grant. If the customer uses a customer-managed KMS
+key, authorize that role for `kms:Decrypt` on the key and allow the action
+in any permissions boundary. For cross-account secrets, also allow the
+execution role in the secret resource policy and KMS key policy. The
+Terraform runner does not need to read secret versions.
+
+Changing an existing deployment to these options does not remove values
+from prior state versions. Rotate any previously managed credentials and
+handle historical state according to the customer's retention policy.
+
+## IAM permissions boundary
+
+Set `permissions_boundary` to the ARN of an existing IAM managed policy
+to limit the ECS task execution, shared task, and UI task roles. The policy
+must allow the permissions those roles need. It does not grant permissions
+on its own. If omitted, the module does not set a permissions boundary.
+
 ## TLS
+
+Set `private_ingress = true` to use an internal ALB. The ALB uses two or
+more private subnets in different availability zones. With an existing VPC,
+omit `public_subnet_ids` and supply those private subnets in
+`private_subnet_ids`. Clients still need network reachability to the ALB
+through the VPC or a connected network. The TLS settings below apply to both
+public and internal ALBs. For HTTPS, point a private DNS record covered by
+the certificate at the ALB DNS name.
 
 `terraform plan` refuses to provision an HTTP-only ALB by default — TLS
 is the supported posture. Two paths:

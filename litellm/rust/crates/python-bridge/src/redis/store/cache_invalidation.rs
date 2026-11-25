@@ -102,7 +102,7 @@ impl NativeCacheInvalidation {
         let apply_python = self.apply_python.clone();
         let python_caches = self.python_caches.clone();
         let context = self.context.clone();
-        let task = self.channel.runtime().spawn(async move {
+        let task = litellm_call_scope::spawn_detached_on(self.channel.runtime(), async move {
             while let Some(invalidation) = messages.next().await {
                 cache_invalidation::apply(&invalidation, &auth_cache, &spend_counters);
                 let apply_python = apply_python.clone();

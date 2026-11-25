@@ -12,6 +12,15 @@ use crate::{
 const BACKOFF_INITIAL: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 
+/// What a subscription that keeps itself alive goes through: every time it subscribes, every time
+/// its connection is lost or a subscribe fails, and each message published while it is subscribed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Subscription {
+    Subscribed,
+    Lost,
+    Message(Vec<u8>),
+}
+
 /// A subscription the way redis-py's `PubSub` holds one: a dedicated RESP2 connection that sends
 /// `SUBSCRIBE`, authenticated once when it connects.
 #[derive(Clone)]
@@ -65,38 +74,43 @@ impl Subscriber {
         })
     }
 
-    pub(crate) fn messages(self, channel: String) -> BoxStream<'static, Vec<u8>> {
+    pub(crate) fn events(self, channel: String) -> BoxStream<'static, Subscription> {
         futures_util::stream::unfold(
             (self, channel, None::<PubSubStream>, BACKOFF_INITIAL),
             |(subscriber, channel, live, backoff)| async move {
                 let mut live = live;
                 let mut backoff = backoff;
-                loop {
-                    let Some(current) = live.as_mut() else {
-                        match subscriber.subscribe(&channel).await {
-                            Ok(subscribed) => {
-                                live = Some(subscribed);
-                                backoff = BACKOFF_INITIAL;
-                            }
-                            Err(error) => {
-                                tracing::warn!(%error, ?backoff, "Redis subscribe failed, retrying");
-                                tokio::time::sleep(backoff).await;
-                                backoff = (backoff * 2).min(BACKOFF_MAX);
-                            }
+                let event = match live.as_mut() {
+                    None => match subscriber.subscribe(&channel).await {
+                        Ok(subscribed) => {
+                            live = Some(subscribed);
+                            backoff = BACKOFF_INITIAL;
+                            Subscription::Subscribed
                         }
-                        continue;
-                    };
-                    match current.next().await {
+                        Err(error) => {
+                            tracing::warn!(%error, ?backoff, "Redis subscribe failed, retrying");
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(BACKOFF_MAX);
+                            Subscription::Lost
+                        }
+                    },
+                    Some(current) => match current.next().await {
                         Some(message) => {
-                            let payload = message.get_payload_bytes().to_vec();
-                            return Some((payload, (subscriber, channel, live, backoff)));
+                            Subscription::Message(message.get_payload_bytes().to_vec())
                         }
-                        None => live = None,
-                    }
-                    tracing::warn!(?backoff, "Redis subscription connection lost, resubscribing");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(BACKOFF_MAX);
-                }
+                        None => {
+                            live = None;
+                            tracing::warn!(
+                                ?backoff,
+                                "Redis subscription connection lost, resubscribing"
+                            );
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(BACKOFF_MAX);
+                            Subscription::Lost
+                        }
+                    },
+                };
+                Some((event, (subscriber, channel, live, backoff)))
             },
         )
         .boxed()

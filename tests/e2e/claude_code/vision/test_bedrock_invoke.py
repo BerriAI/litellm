@@ -37,9 +37,9 @@ from claude_code.cli_driver import (
 
 
 BEDROCK_INVOKE_MODELS = [
-    "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-5-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-haiku-5-5-bedrock-invoke",
+    "claude-sonnet-5-5-bedrock-invoke",
+    "claude-opus-5-5-bedrock-invoke",
 ]
 
 # Minimal 1x1 red PNG, base64-encoded. We embed it directly as the

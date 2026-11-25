@@ -273,7 +273,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers = super().validate_environment(
             headers=headers,
             model=model,
@@ -287,7 +287,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
-    def _transform_tools_to_anthropic(self, tools: list[dict]) -> list[dict]:
+    def _transform_tools_to_anthropic(self, tools: list[dict]) -> list[dict[str, object]]:
         """
         Convert tools from OpenAI format to Anthropic format.
 

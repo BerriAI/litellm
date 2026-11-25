@@ -187,6 +187,35 @@ def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted()
     assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_redacts_a_chat_refusal(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": None, "refusal": SECRET}}]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"refusal": SECRET}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+
+    redacted: Final = perform_redaction({"litellm_params": _request_params({})}, result)
+
+    assert SECRET not in str(redacted), redacted
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_redacts_a_delta_refusal(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(refusal=SECRET))]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)

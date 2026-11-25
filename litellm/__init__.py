@@ -155,6 +155,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "compression_interception",
     "newrelic",
     "signoz",
+    "mixpanel",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -715,6 +716,7 @@ kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared mo
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
+huawei_maas_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set[str] = set()
 vispark_models: Final[Set[str]] = set()
@@ -1022,6 +1024,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
+        elif value.get("litellm_provider") == "huawei_maas":
+            huawei_maas_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1213,6 +1217,7 @@ model_list = list(
     | streamlake_models
     | resetdata_models
     | wally_models
+    | huawei_maas_models
     | zerogpu_models
     | v0_models
     | vispark_models
@@ -1351,6 +1356,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,
         "wally": wally_models,
+        "huawei_maas": huawei_maas_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,

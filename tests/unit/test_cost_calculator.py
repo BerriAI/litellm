@@ -16,7 +16,7 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
-from litellm.constants import REALTIME_METERED_USAGE_KEY
+from litellm.constants import REALTIME_METERED_USAGE_KEY, REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.integrations.custom_logger import CustomLogger
@@ -2142,6 +2142,62 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
         usage.input_tokens * row["input_cost_per_token"] + usage.output_tokens * row["output_cost_per_image_token"]
     )
     assert cost == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "call_type", "token_priced"),
+    [
+        ("gpt-image-2.6-sunburst", "openai", "aimage_generation", True),
+        ("gpt-image-2.6-sunburst", "openai", "aimage_edit", True),
+        ("gemini-3.1-flash-lite-image", "vertex_ai", "aimage_generation", True),
+        ("gemini-3.1-flash-lite-image", "gemini", "aimage_edit", True),
+        ("dall-e-3", "azure", "aimage_generation", False),
+    ],
+)
+def test_image_cost_records_the_input_and_output_costs(
+    model: str, provider: str, call_type: Literal["aimage_generation", "aimage_edit"], token_priced: bool
+) -> None:
+    usage: Final = (
+        ImageUsage(
+            input_tokens=12,
+            input_tokens_details=ImageUsageInputTokensDetails(text_tokens=12, image_tokens=0),
+            output_tokens=345,
+            total_tokens=357,
+        )
+        if token_priced
+        else None
+    )
+    response: Final = ImageResponse(created=1000, data=[ImageObject(b64_json="aW1hZ2U=")], usage=usage)
+    logger: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="image-cost-test",
+        function_id="image-cost-test",
+    )
+    if token_priced:
+        prices: Final = model_cost[model if provider == "openai" else f"{provider}/{model}"]
+        expected_input, expected_output = 12 * prices["input_cost_per_token"], 345 * prices["output_cost_per_image_token"]
+    else:
+        flat_prices: Final = model_cost[f"{provider}/standard/1024-x-1024/{model}"]
+        expected_input, expected_output = 0.0, 1024 * 1024 * flat_prices["input_cost_per_pixel"]
+
+    cost: Final = completion_cost(
+        model=model,
+        custom_llm_provider=provider,
+        completion_response=response,
+        call_type=call_type,
+        litellm_logging_obj=logger,
+    )
+
+    assert cost == pytest.approx(expected_input + expected_output)
+    breakdown: Final = logger.cost_breakdown
+    assert breakdown is not None
+    assert breakdown.get("total_cost") == cost
+    assert breakdown.get("input_cost") == pytest.approx(expected_input)
+    assert breakdown.get("output_cost") == pytest.approx(expected_output)
 
 
 def test_completion_cost_image_generation_ignores_deployment_model_info_without_custom_pricing(
@@ -11431,6 +11487,48 @@ def _live_logging_object(
     return cast(Logging, SimpleNamespace(model_call_details=model_call_details))
 
 
+_SCRIBE_CLIP_SECONDS: Final = (60.0, 30.0)
+_SCRIBE_KEYTERMS_ADDON: Final = "elevenlabs/scribe_v2_realtime/keyterms"
+
+
+def _scribe_session_cost(addon_models: tuple[str, ...]) -> float:
+    return handle_realtime_stream_cost_calculation(
+        results=_live_session_results(
+            {
+                "type": "session.created",
+                "session": {
+                    "type": "transcription",
+                    "audio": {"input": {"transcription": {"model": "scribe_v2_realtime"}}},
+                },
+            },
+            *(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": {"type": "duration", "seconds": seconds},
+                }
+                for seconds in _SCRIBE_CLIP_SECONDS
+            ),
+        ),
+        combined_usage_object=Usage(),
+        custom_llm_provider="elevenlabs",
+        litellm_model_name="scribe_v2_realtime",
+        litellm_logging_obj=cast(
+            Logging, SimpleNamespace(model_call_details={REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY: addon_models})
+        ),
+    )
+
+
+def test_realtime_transcription_addons_bill_their_rate_on_every_transcribed_second(_local_model_cost_map: None) -> None:
+    addon_rate: Final = litellm.get_model_info(_SCRIBE_KEYTERMS_ADDON)["input_cost_per_second"] or 0.0
+    base_cost: Final = _scribe_session_cost(())
+
+    assert addon_rate > 0
+    assert base_cost > 0
+    assert _scribe_session_cost((_SCRIBE_KEYTERMS_ADDON,)) - base_cost == pytest.approx(
+        sum(_SCRIBE_CLIP_SECONDS) * addon_rate
+    )
+
+
 def test_realtime_keeps_first_reported_session_model_for_pricing(_local_model_cost_map: None) -> None:
     first_model: Final = "gpt-realtime-2"
     later_model: Final = "gpt-realtime-mini"
@@ -12920,6 +13018,88 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx((1000 * 2e-06 + 1000 * 4e-06) * multiplier)
+
+
+_FOUNDRY_RESPONSES_API_BASE: Final = "https://myproject.services.ai.azure.com"
+
+
+def _bridged_foundry_response_cost(base_model: str) -> float:
+    with respx.mock(assert_all_called=True) as foundry:
+        foundry.post(f"{_FOUNDRY_RESPONSES_API_BASE}/openai/v1/responses").respond(
+            json={
+                "id": "resp_foundry",
+                "object": "response",
+                "created_at": 1789852145,
+                "status": "completed",
+                "model": "qa-prod-reasoner",
+                "output": [
+                    {
+                        "id": "fc_1",
+                        "type": "function_call",
+                        "status": "completed",
+                        "arguments": '{"city":"Paris"}',
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                    }
+                ],
+                "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+            }
+        )
+        response: Final = litellm.completion(
+            model="azure_ai/qa-prod-reasoner",
+            messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            reasoning_effort="high",
+            api_base=_FOUNDRY_RESPONSES_API_BASE,
+            api_key="fake-foundry-key",
+            model_info={"base_model": base_model},
+        )
+    response_cost: Final = response._hidden_params["response_cost"]
+    assert isinstance(response_cost, float)
+    return response_cost
+
+
+def test_a_nested_base_model_prices_a_bridged_foundry_request_like_the_plain_form(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    nested_cost: Final = _bridged_foundry_response_cost("azure_ai/openai/gpt-5.6-terra")
+
+    assert nested_cost > 0
+    assert nested_cost == pytest.approx(_bridged_foundry_response_cost("azure_ai/gpt-5.6-terra"))
+
+
+def test_a_nested_base_model_with_its_own_cost_map_row_keeps_that_rows_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    input_rate: Final = 1e-06
+    output_rate: Final = 2e-06
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/openai/lit-nested-row",
+        {
+            "litellm_provider": "azure_ai",
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit-nested-row",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-06, "output_cost_per_token": 7e-06},
+    )
+    publish(litellm.model_cost)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(
+            model="qa-prod-reasoner", usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        ),
+        model="azure_ai/qa-prod-reasoner",
+        custom_llm_provider="azure_ai",
+        base_model="azure_ai/openai/lit-nested-row",
+    )
+
+    assert cost == pytest.approx(1000 * input_rate + 500 * output_rate)
 
 
 @pytest.mark.parametrize(

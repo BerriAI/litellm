@@ -31,6 +31,7 @@ from litellm.integrations.custom_logger_v2.rust import (
 )
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.total_deadline import total_timeout_held
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
 from litellm.proxy.hooks.batch_enqueued_tokens import (
@@ -123,6 +124,14 @@ class PreCallAuthScope:
 def _member(source: object, name: str) -> object:
     value: Final[object] = getattr(source, name, None)
     return value
+
+
+def _socket_turn_owner(request: object) -> Mapping[str, str]:
+    owners: Final = (
+        ("agent_id", _member(request, "resolved_agent_id")),
+        ("session_id", _member(request, "session_id")),
+    )
+    return MappingProxyType({name: str(value) for name, value in owners if value})
 
 
 def _rate_limited(wire: WireAbort) -> Exception:
@@ -340,6 +349,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                     ctx,
                     {
                         "combined_is_usage": isinstance(data.get("combined_usage_object"), Usage),
+                        "provider_billed": is_answer_without_an_image(_member(view, Field.error.value)),
                         "token_rate_limit_type": _general_setting("token_rate_limit_type", "total"),
                     },
                 )
@@ -452,6 +462,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
             )
         finally:
             self._stash_descriptors(stash, state, ceiling)
+            stash.socket_turn_owner = _socket_turn_owner(_member(view, Field.limiter_request.value))
             mirror_rate_limit_response(self.bridge, state)
 
     async def _hosted(
@@ -536,23 +547,32 @@ class _PreCallHost:
     def write_output_cap(self, request: Mapping[str, object]) -> bool:
         return _write_output_cap(self.data, self.call_type, _HOST_INT.validate_python(request["cap"]))
 
-    async def media_estimate(self, request: Mapping[str, object]) -> list[int]:
+    async def media_estimate(self, request: Mapping[str, object]) -> list[int | bool]:
         """The input and output estimate of a request whose media (images, audio, video, files) only Python's
-        estimator prices, or that holds a value Rust cannot read. Text, chat and Responses requests the native
-        estimator reads never come here."""
+        estimator prices, or that holds a value Rust cannot read, and whether it counted embedding media no
+        deployment prices as text. Text, chat and Responses requests the native estimator reads never come here."""
         from litellm.litellm_core_utils.token_counter import offload_token_count
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import estimate_input_and_output_tokens
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            RememberedTokenEstimate,
+            estimate_tokens_and_unpriced_media,
+            get_request_stash,
+        )
 
-        estimated: Final = await offload_token_count(estimate_input_and_output_tokens)(
+        include_media: Final = request["include_media"] is True
+        estimate: Final = await offload_token_count(estimate_tokens_and_unpriced_media)(
             data=self.data,
             min_configured_tpm_limit=_HOST_OPTIONAL_INT.validate_python(request["min_configured_tpm_limit"]),
             call_type=self.call_type,
             configured_output_tokens=_HOST_OPTIONAL_INT.validate_python(request["configured_output_tokens"]),
-            include_media=request["include_media"] is True,
+            include_media=include_media,
             team_id=self.team_id,
             media_model_resolver=self.limiter.media_model_resolver,
         )
-        return list(estimated)
+        stash: Final = get_request_stash()
+        model: Final = self.data.get("model")
+        if stash is not None and include_media:
+            stash.token_estimate = RememberedTokenEstimate(model if isinstance(model, str) else None, estimate)
+        return [estimate.input_tokens, estimate.output_tokens, estimate.unpriced_media]
 
     def precise_input_tokens(self, request: Mapping[str, object]) -> Awaitable[int]:
         from litellm.litellm_core_utils.token_counter import offload_token_count
@@ -607,6 +627,8 @@ def _metadata_member(metadata: object, name: str) -> object:
 
 
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    from litellm.proxy.auth.auth_utils import team_models_counting_cached_tokens
+
     if auth is None:
         return MappingProxyType({})
     budgets: Final = _entries(_member(auth, "model_max_budget"))
@@ -619,6 +641,7 @@ def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
         else None,
         "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
         "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(_member(auth, "team_metadata")),
         "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
         "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
         "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),

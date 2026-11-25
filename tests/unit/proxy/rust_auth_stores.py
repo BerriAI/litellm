@@ -7,7 +7,7 @@ another field of ``RustAuthStores``.
 """
 
 import json
-from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
@@ -32,6 +32,7 @@ from litellm.rust_bridge._native import (
     RustBudgetRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
+    RustKeyOwnersRepository,
     RustKeyRepository,
     RustModelAccessGroupRepository,
     RustObjectPermissionRepository,
@@ -155,6 +156,9 @@ class FakeAuditLogStore:
 
     rows: list[Mapping[str, object]] = field(default_factory=list)
     error: Exception | None = None
+    next_errors: list[Exception] = field(default_factory=list)
+    attempts: int = 0
+    during_attempt: Callable[[], Awaitable[None]] | None = None
 
     @staticmethod
     def _prisma_table() -> object | None:
@@ -163,9 +167,17 @@ class FakeAuditLogStore:
         client: Final = proxy_server.prisma_client
         return None if client is None else client.db.litellm_auditlog
 
-    async def insert(self, row: AuditLogRow) -> None:
+    async def _fail_if_scripted(self) -> None:
+        self.attempts += 1
+        if self.during_attempt is not None:
+            await self.during_attempt()
+        if self.next_errors:
+            raise self.next_errors.pop(0)
         if self.error is not None:
             raise self.error
+
+    async def insert(self, row: AuditLogRow) -> None:
+        await self._fail_if_scripted()
         data: Final = audit_log_data(row)
         self.rows.append(data)
         table: Final = self._prisma_table()
@@ -173,8 +185,7 @@ class FakeAuditLogStore:
             await table.create(data=data)
 
     async def insert_many(self, rows: Sequence[AuditLogRow]) -> None:
-        if self.error is not None:
-            raise self.error
+        await self._fail_if_scripted()
         data: Final = tuple(audit_log_data(row) for row in rows)
         self.rows.extend(data)
         table: Final = self._prisma_table()
@@ -706,8 +717,35 @@ class FakeSpendLogStore:
 
 
 @dataclass
+class FakeKeyOwnersStore:
+    """The auth prefetch's one-statement read: answers ``rows`` (a missing key reads as no row) and logs the ids
+    each call asked for, in ``(user, team, membership user, organization, project)`` order."""
+
+    rows: Mapping[str, object] = field(default_factory=dict)
+    lookups: list[tuple[str | None, ...]] = field(default_factory=list)
+
+    async def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> str:
+        self.lookups.append((user_id, team_id, membership_user_id, organization_id, project_id))
+        return json.dumps(
+            {
+                kind: self.rows.get(kind)
+                for kind in ("user_row", "team_row", "membership_row", "organization_row", "project_row")
+            }
+        )
+
+
+@dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
+    key_owners: FakeKeyOwnersStore = field(default_factory=FakeKeyOwnersStore)
     jwt_key_mapping: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
     agent_identity: FakeAgentIdentityStore = field(default_factory=FakeAgentIdentityStore)
     audit_log: FakeAuditLogStore = field(default_factory=FakeAuditLogStore)
@@ -727,6 +765,7 @@ class RustAuthStores:
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
             RustKeyRepository: FakeKeyReader(self.key),
+            RustKeyOwnersRepository: self.key_owners,
             RustJwtKeyMappingRepository: self.jwt_key_mapping,
             RustAgentIdentityRepository: self.agent_identity,
             RustAuditLogRepository: self.audit_log,

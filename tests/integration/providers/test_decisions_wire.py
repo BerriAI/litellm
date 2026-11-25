@@ -263,40 +263,19 @@ def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, 
     return _calls_to(_observed_requests(gateway), handle)
 
 
-def _sdk_inference_call(
-    gateway: Gateway,
-    handle: ScenarioHandle,
-    provider: _Provider,
-    *,
-    metadata_authorization: str | None = None,
-) -> dict[str, JsonValue]:
+def _inference_call(gateway: Gateway, handle: ScenarioHandle, provider: _Provider) -> dict[str, JsonValue]:
     observed: Final = _upstream_calls(gateway, handle)
     inference_path: Final = f"/{handle.scenario_id}/v1/systemone"
     (call,) = tuple(request for request in observed if request["path"] == inference_path)
-    environment_metadata: Final = {
+    metadata_calls: Final = tuple(request for request in observed if request["path"] != inference_path)
+    model_info_lookup: Final = {
         "path": f"/{handle.scenario_id}/api/show",
-        "authorization": metadata_authorization,
+        "authorization": call["authorization"],
         "body": {"name": provider.body_model},
         "method": "POST",
         "api_key": "",
     }
-    metadata_calls: Final = tuple(
-        request
-        for request in observed
-        if request["path"] != inference_path and (metadata_authorization is None or request != environment_metadata)
-    )
-    assert metadata_calls in (
-        (),
-        (
-            {
-                "path": f"{inference_path}/api/show",
-                "authorization": "",
-                "body": {"name": provider.body_model},
-                "method": "POST",
-                "api_key": "",
-            },
-        ),
-    ), observed
+    assert all(request == model_info_lookup for request in metadata_calls), observed
     return call
 
 
@@ -496,7 +475,7 @@ async def test_local_systemone_sdk_preserves_native_wire(
             )
         )
         assert response.model_dump(mode="json") == _answer_body(provider)
-        call: Final = _sdk_inference_call(gateway, handle, provider)
+        call: Final = _inference_call(gateway, handle, provider)
         assert (call["path"], call["authorization"], call["body"]) == (
             f"/{handle.scenario_id}/v1/systemone",
             "",
@@ -531,7 +510,7 @@ async def test_local_decisions_sdk_translates_openai_format(
             "answers": list(_LOCAL_OPENAI_ANSWERS),
             "usage": dict(_LOCAL_OPENAI_USAGE),
         }
-        call: Final = _sdk_inference_call(gateway, handle, provider)
+        call: Final = _inference_call(gateway, handle, provider)
         assert (call["path"], call["authorization"], call["body"]) == (
             f"/{handle.scenario_id}/v1/systemone",
             "",
@@ -574,24 +553,13 @@ def test_ollama_decisions_sdk_respects_environment_and_explicit_auth(
             api_key=api_key,
         )
         assert response.model_dump(mode="json") == _answer_body(provider)
-        call: Final = _sdk_inference_call(
-            gateway, handle, provider, metadata_authorization=authorization if environment_base else None
-        )
+        call: Final = _inference_call(gateway, handle, provider)
         assert (call["path"], call["authorization"], call["body"]) == (
             f"/{handle.scenario_id}/v1/systemone",
             authorization,
             {"model": provider.body_model, "state": _STATE, "questions": _QUESTIONS},
         )
-        unused_calls: Final = _upstream_calls(gateway, unused)
-        assert tuple(
-            request
-            for request in unused_calls
-            if not (
-                request["method"] == "POST"
-                and request["path"] == f"/{unused.scenario_id}/api/show"
-                and request["body"] == {"name": provider.body_model}
-            )
-        ) == (), unused_calls
+        assert _upstream_calls(gateway, unused) == []
 
 
 def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:

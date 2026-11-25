@@ -5,7 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
+litellm-call-scope.workspace = true
 litellm-secret-value.workspace = true
 litellm-cache-response.workspace = true
 axum = { workspace = true, features = ["json", "multipart"] }
@@ -39,8 +43,11 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
-tower-http = { version = "0.6.11", features = ["set-header"] }
+tower-http = { version = "0.6.11", features = ["request-id", "set-header"] }
+regex.workspace = true
 tracing.workspace = true
+uuid.workspace = true
+veil.workspace = true
 
 [dev-dependencies]
 litellm-redis-client.workspace = true

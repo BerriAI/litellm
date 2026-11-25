@@ -10,7 +10,7 @@ import itertools
 import json
 import os
 import re
-from collections.abc import AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias
@@ -371,7 +371,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         Returns concatenated text for scanning.
         """
         try:
-            text_parts: Final = []
+            text_parts: Final[list[str]] = []
 
             if hasattr(response, "choices") and response.choices:
                 for choice in response.choices:
@@ -659,7 +659,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return None
 
     @staticmethod
-    def _mask_content_list(content_list: list, masked_text: str) -> list:
+    def _mask_content_list(content_list: Sequence[object], masked_text: str) -> list:
         """Replace text parts in a content list, preserving non-text parts (images, etc.)."""
         new_content: Final = []
         for part in content_list:
@@ -671,7 +671,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     @staticmethod
     def _apply_mcp_masking(
-        request_data: dict,
+        request_data: dict[str, object],
         original_args: object,
         masked_text: str,
         *,
@@ -1018,7 +1018,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         parts.append(text)
         return "".join(parts)
 
-    async def _scan_raw_streaming_text(self, text: str, request_data: dict, start_time: datetime) -> None:
+    async def _scan_raw_streaming_text(self, text: str, request_data: dict[str, object], start_time: datetime) -> None:
         """Scan text from non-ModelResponse streaming chunks. Raises HTTPException(400) on block.
 
         Note: response masking is not supported on raw streaming paths
@@ -1376,7 +1376,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     async def _scan_and_process_streaming_response(
         self,
         assembled_model_response: ModelResponse,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: datetime,
     ) -> tuple[bool, ModelResponse, Mapping[str, object]]:
         """
@@ -1442,7 +1442,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
         request_data: dict[str, object],
-    ):
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and scan the assembled response.
         """
@@ -1562,11 +1562,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     async def _scan_tool_calls_for_guardrail(
         self,
-        tool_calls: list,
+        tool_calls: Sequence[ToolCallLike],
         is_response: bool,
         metadata: Mapping[str, object],
         call_id: object,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: datetime,
     ) -> None:
         """Scan tool calls with allow/block/mask treatment (in-place modification).
