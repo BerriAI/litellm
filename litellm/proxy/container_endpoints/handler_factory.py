@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
 from pydantic import TypeAdapter
 
+from litellm.llms.custom_httpx.container_handler import EndpointsConfig
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -28,13 +29,14 @@ from litellm.proxy.container_endpoints.ownership import (
 )
 
 _UPLOADED_FILE_FIELD: Final = TypeAdapter(object)
+_ENDPOINTS_CONFIG: Final = TypeAdapter(EndpointsConfig)
 
 
-def _load_endpoints_config() -> dict:
+def _load_endpoints_config() -> EndpointsConfig:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
-        return json.load(f)
+        return _ENDPOINTS_CONFIG.validate_python(json.load(f))
 
 
 def get_all_route_types() -> list[str]:
@@ -57,7 +59,7 @@ def _get_container_provider_config(custom_llm_provider: str):
 
 
 def _create_handler_for_path_params(
-    path_params: list[str],
+    path_params: Sequence[str],
     route_type: str,
     returns_binary: bool = False,
     is_multipart: bool = False,
@@ -460,7 +462,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
 
     for endpoint_config in config["endpoints"]:
         path = endpoint_config["path"]
-        method = endpoint_config["method"].lower()
+        method = endpoint_config["method"].upper()
         path_params = endpoint_config.get("path_params", [])
         route_type = endpoint_config["async_name"]
         returns_binary = endpoint_config.get("returns_binary", False)
@@ -475,34 +477,35 @@ def register_container_file_endpoints(router: APIRouter) -> None:
             query_param_names=endpoint_config.get("query_params", ()),
         )
 
-        # Register routes
-        route_method = getattr(router, method)
-
         # For binary endpoints, don't use ORJSONResponse
         if returns_binary:
             # Register both /v1/... and /... paths without JSON response class
-            route_method(
+            router.api_route(
                 f"/v1{path}",
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 tags=["containers"],
             )(handler)
 
-            route_method(
+            router.api_route(
                 path,
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 tags=["containers"],
             )(handler)
         else:
             # Register both /v1/... and /... paths with JSON response
-            route_method(
+            router.api_route(
                 f"/v1{path}",
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 response_class=ORJSONResponse,
                 tags=["containers"],
             )(handler)
 
-            route_method(
+            router.api_route(
                 path,
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 response_class=ORJSONResponse,
                 tags=["containers"],

@@ -809,7 +809,10 @@ def test_provider_error_on_a_marked_request_reaches_the_caller(gateway: Gateway,
         model: Final = _anthropic_deployment(scenario, wire)
         answer: Final = _send(gateway, _marked_system(model, marker))
         labels: Final = anthropic_labels(_only_request(wire))
-        assert answer.status == 500, answer.text
+        assert answer.status == 503, answer.text
+        error: Final = object_value(_JSON_OBJECT.validate_json(answer.text)["error"])
+        assert error["type"] == "service_unavailable_error", answer.text
+        assert error["code"] == "server_is_overloaded", answer.text
         assert "overloaded_error" in answer.text, answer.text
         assert labels == [SYSTEM_LABEL]
         spend.landed(model, answer.call_id, None, status="failure")

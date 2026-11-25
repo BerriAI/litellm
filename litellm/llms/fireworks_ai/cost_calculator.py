@@ -38,11 +38,10 @@ def get_base_model_for_pricing(model_name: str) -> str:
         elif total_billion <= FIREWORKS_AI_176_B_MOE:
             return "fireworks-ai-56b-to-176b"
 
-    # Check for standard models in the form <number>b
-    re_params_match: Final = re.search(r"(\d+)b", model_name)
+    # Check for standard models in the form <number>b, where Fireworks writes 1.5b as 1p5b
+    re_params_match: Final = re.search(r"(\d+(?:p\d+)?)b", model_name)
     if re_params_match is not None:
-        params_match: Final = str(re_params_match.group(1))
-        params_billion: Final = float(params_match)
+        params_billion: Final = float(re_params_match.group(1).replace("p", "."))
 
         # Determine the category based on the number of parameters
         if params_billion <= FIREWORKS_AI_4_B:

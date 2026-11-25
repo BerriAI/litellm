@@ -20,21 +20,18 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
+from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import json_contains, require_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import publish_model_rows_written
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-    model_access_group_registry_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 
@@ -47,8 +44,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.model_access_group_budget_repository import ModelAccessGroupBudgetRepository
 from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.table_repositories import ModelAccessGroupBudgetRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AccessGroupBudget,
     AccessGroupBudgetRequest,
@@ -102,6 +100,14 @@ class _ModelAccessGroupBudgetUpsert(TypedDict):
 def _http_error(status_code: int, message: str) -> HTTPException:
     detail: Final[_ErrorDetail] = {"error": message}
     return HTTPException(status_code=status_code, detail=detail)
+
+
+class _AppendableAccessGroups(Protocol):
+    def append(self, value: str, /) -> None: ...
+
+
+class _RemovableAccessGroups(Protocol):
+    def remove(self, value: str, /) -> None: ...
 
 
 class _DeploymentRow(Protocol):
@@ -259,12 +265,12 @@ async def _evict_model_access_group_cache_keys(access_group: str, auth_cache: Us
     unenforced until the TTL expires: auth gates the feature on a cached registry of the groups
     that have a budget row, read cache-first with no freshness check.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
 
     await evict_and_broadcast(
-        cache_keys=(model_access_group_cache_key(access_group), model_access_group_registry_cache_key()),
+        cache_keys=(AuthObject.model_access_group(access_group).key, AuthObject.model_access_group_registry().key),
         user_api_key_cache=auth_cache,
     )
 
@@ -376,7 +382,7 @@ async def _missing_models_after_read_through(
     return tuple(still_missing)
 
 
-def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
+def add_access_group_to_deployment(model_info: dict[str, object], access_group: str) -> tuple[dict[str, object], bool]:
     """
     Add an access group to a deployment's model_info.
 
@@ -385,16 +391,16 @@ def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str
         access_group: The access group name to add
 
     Returns:
-        Tuple[Dict[str, Any], bool]: (updated_model_info, was_modified)
+        tuple[dict[str, object], bool]: (updated_model_info, was_modified)
     """
     access_groups: Final = model_info.get("access_groups", [])
 
     # Check if access group already exists
-    if access_group in access_groups:
+    if json_contains(access_groups, access_group):
         return model_info, False
 
     # Add the access group
-    access_groups.append(access_group)
+    require_attributes(access_groups, _AppendableAccessGroups, "append").append(access_group)
     model_info["access_groups"] = access_groups
 
     return model_info, True
@@ -729,7 +735,9 @@ async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) ->
     return deployment.model_info
 
 
-def remove_access_group_from_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
+def remove_access_group_from_deployment(
+    model_info: dict[str, object], access_group: str
+) -> tuple[dict[str, object], bool]:
     """
     Remove an access group from a deployment's model_info.
 
@@ -738,16 +746,16 @@ def remove_access_group_from_deployment(model_info: dict[str, Any], access_group
         access_group: The access group name to remove
 
     Returns:
-        Tuple[Dict[str, Any], bool]: (updated_model_info, was_modified)
+        tuple[dict[str, object], bool]: (updated_model_info, was_modified)
     """
     access_groups: Final = model_info.get("access_groups", [])
 
     # Check if access group exists
-    if access_group not in access_groups:
+    if not json_contains(access_groups, access_group):
         return model_info, False
 
     # Remove the access group
-    access_groups.remove(access_group)
+    require_attributes(access_groups, _RemovableAccessGroups, "remove").remove(access_group)
     model_info["access_groups"] = access_groups
 
     return model_info, True

@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from typing_extensions import (
     ReadOnly,
@@ -24,8 +24,11 @@ from typing_extensions import (
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
     from botocore.model import ServiceModel, Shape
+    from botocore.parsers import EventStreamJSONParser
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
+
+    from .base_aws_llm import BaseAWSLLM
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -33,9 +36,17 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import lax_bool
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    int_of,
+    lax_bool,
+    require_attributes,
+    require_get,
+)
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
-from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_property_count,
+)
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -49,10 +60,12 @@ from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
+    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
 
 BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
@@ -67,6 +80,12 @@ _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
+BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES: Final = (
+    "/openai/v1/chat/completions",
+    "/v1/chat/completions",
+    "/chat/completions",
+)
+BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES: Final = ("/openai/v1/responses", "/v1/responses", "/responses")
 BedrockRoute = Literal[
     "converse",
     "invoke",
@@ -79,6 +98,18 @@ BedrockRoute = Literal[
     "mantle",
     "chat_completions",
 ]
+
+
+def strip_bedrock_runtime_route_suffix(url: str, suffixes: Sequence[str]) -> str:
+    trimmed: Final = url.rstrip("/")
+    return next((trimmed[: -len(suffix)] for suffix in suffixes if trimmed.endswith(suffix)), trimmed)
+
+
+def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
+    tier_header: Final = BEDROCK_SERVICE_TIER_HEADER.lower()
+    return next(
+        (value for name, value in (response_headers or {}).items() if name.lower() == tier_header and value), None
+    )
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -133,7 +164,7 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS
 def merge_bedrock_aws_request_params(
     litellm_params: Mapping[str, object],
     optional_params: Mapping[str, object],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Merge deployment and request parameters without allowing auth escalation.
 
     Deployment configuration is authoritative for AWS authentication. When a
@@ -292,6 +323,22 @@ def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "be
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
 
 
+def _bedrock_native_output_enabled(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    deployment_info: Final = model_info or {}
+    deployment_flag: Final = deployment_info.get("supports_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return deployment_info.get("supports_bedrock_native_structured_output") is not False and (
+        bedrock_model_always_takes_native_output(model, custom_llm_provider)
+    )
+
+
+def bedrock_model_always_takes_native_output(model: str, custom_llm_provider: str = "bedrock") -> bool:
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+
+
 _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
@@ -312,15 +359,15 @@ def _bedrock_native_output_opt_in(
 def bedrock_supports_native_structured_output(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return _bedrock_native_output_enabled(model, custom_llm_provider, model_info) or _bedrock_native_output_opt_in(
+        model, custom_llm_provider, model_info
+    )
 
 
-def _bedrock_map_native_output_flag(model: str) -> object:
+def _bedrock_map_flag(model: str, key: str) -> bool | None:
     routed: Final = strip_bedrock_routing_prefix(model)
     flags: Final = (
-        (entry or {}).get("supports_bedrock_native_structured_output")
+        (entry or {}).get(key)
         for entry in (
             _model_cost_entry(f"bedrock/{routed}"),
             _model_cost_entry(routed),
@@ -334,7 +381,7 @@ def _bedrock_native_output_opted_out(model: str, model_info: Mapping[str, object
     deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
     if isinstance(deployment_flag, bool):
         return not deployment_flag
-    return _bedrock_map_native_output_flag(model) is False
+    return _bedrock_map_flag(model, "supports_bedrock_native_structured_output") is False
 
 
 def _bedrock_native_output_replaces_unforceable_tool(model: str, model_info: Mapping[str, object] | None) -> bool:
@@ -349,34 +396,36 @@ def bedrock_chat_opts_into_native_structured_output(
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+    return _bedrock_native_output_enabled(model, custom_llm_provider, model_info) or (
         thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
     )
 
 
 def bedrock_chat_uses_native_structured_output(
     model: str,
+    *,
+    will_think: bool,
     thinking_requested: bool,
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    return bedrock_chat_opts_into_native_structured_output(
-        model, thinking_requested, custom_llm_provider, model_info
-    ) or (not thinking_requested and _bedrock_native_output_replaces_unforceable_tool(model, model_info))
+    return bedrock_chat_opts_into_native_structured_output(model, will_think, custom_llm_provider, model_info) or (
+        not thinking_requested and _bedrock_native_output_replaces_unforceable_tool(model, model_info)
+    )
 
 
 def bedrock_native_output_is_deployment_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return not _bedrock_native_output_enabled(model, custom_llm_provider, model_info) and _bedrock_native_output_opt_in(
+        model, custom_llm_provider, model_info
+    )
 
 
 def bedrock_native_output_is_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) and (
+    return not _bedrock_native_output_enabled(model, custom_llm_provider, model_info) and (
         _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
         or _bedrock_native_output_replaces_unforceable_tool(model, model_info)
     )
@@ -385,7 +434,21 @@ def bedrock_native_output_is_opt_in(
 def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return {
         **litellm_params,
-        "model_info": {**deployment_model_info(litellm_params), "supports_bedrock_native_structured_output": False},
+        "model_info": {
+            **deployment_model_info(litellm_params),
+            "supports_bedrock_native_structured_output": False,
+        },
+    }
+
+
+def for_bedrock_json_tool_retry(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    opt_in_disabled: Final = without_bedrock_native_output_opt_in(litellm_params)
+    return {
+        **opt_in_disabled,
+        "model_info": {
+            **deployment_model_info(opt_in_disabled),
+            "supports_native_structured_output": False,
+        },
     }
 
 
@@ -393,6 +456,7 @@ _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs 
 _BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
     _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
     "compilation exceeded limits: Schema is too complex",
+    "The compiled grammar is too large",
     "output_config.format.schema:",
 )
 
@@ -412,6 +476,18 @@ def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
         "Bedrock rejected native structured output for model=%s, so litellm sent the request again without it.%s",
         model,
         opt_out_advice,
+    )
+
+
+def is_bedrock_stream_permission_denial(status_code: int, error_text: str) -> bool:
+    return status_code == 403 and "bedrock:InvokeModelWithResponseStream" in error_text
+
+
+def warn_bedrock_native_output_stream_denied(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock denied bedrock:InvokeModelWithResponseStream for model=%s, so litellm sent the structured output "
+        "request again as a buffered stream. Allow that action to stream it.",
+        model,
     )
 
 
@@ -473,8 +549,27 @@ def requests_output_config_format(optional_params: Mapping[str, object]) -> bool
 
 
 def requests_native_output(anthropic_optional_params: Mapping[str, object]) -> bool:
-    return isinstance(anthropic_optional_params.get("output_format"), Mapping) or requests_output_config_format(
-        anthropic_optional_params
+    output_config: Final = json_object_or_none(anthropic_optional_params.get("outputConfig"))
+    return (
+        isinstance(anthropic_optional_params.get("output_format"), Mapping)
+        or requests_output_config_format(anthropic_optional_params)
+        or (
+            anthropic_optional_params.get("json_mode") is True
+            and output_config is not None
+            and isinstance(output_config.get("textFormat"), Mapping)
+        )
+    )
+
+
+def bedrock_native_output_retry_requested(
+    model: str,
+    optional_params: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return requests_native_output(optional_params) and (
+        bedrock_native_output_is_opt_in(model, custom_llm_provider, model_info)
+        or _bedrock_native_output_enabled(model, custom_llm_provider, model_info)
     )
 
 
@@ -494,6 +589,22 @@ def json_object_or_none(value: object) -> Mapping[str, object] | None:
 
 
 BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def _response_format_json_schema(response_format: object) -> Mapping[str, object] | None:
+    json_schema: Final = json_object_or_none((json_object_or_none(response_format) or {}).get("json_schema"))
+    return json_object_or_none((json_schema or {}).get("schema"))
+
+
+def bedrock_batch_record_takes_native_output(
+    model: str, response_format: object, model_info: Mapping[str, object] | None = None
+) -> bool:
+    schema: Final = _response_format_json_schema(response_format)
+    return _bedrock_native_output_enabled(model, "bedrock", model_info) and (
+        schema is None
+        or schema_property_count(schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+        or not _bedrock_model_supports(model, "supports_bedrock_native_structured_output_by_default")
+    )
 
 
 def bedrock_cleaned_output_schema(
@@ -516,7 +627,7 @@ def bedrock_native_output_schema(
     model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
-    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+    if _bedrock_native_output_enabled(model, custom_llm_provider, model_info):
         return schema if native_schema is None else native_schema
     if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
         return native_schema
@@ -656,7 +767,7 @@ def _normalize_custom_field_on_tool(tool: object) -> None:
         tool["defer_loading"] = deferred  # rebind-ok: a fallback reuses the caller's tool, as on main
 
 
-def normalize_custom_field_on_tools(request_body: dict) -> None:
+def normalize_custom_field_on_tools(request_body: Mapping[str, object]) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
     ``custom.defer_loading`` onto the top-level ``defer_loading`` flag that
@@ -688,7 +799,11 @@ def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> S
     return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
-def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+def _schema_node(value: object) -> dict[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def normalize_json_schema_custom_types_to_object(schema: object) -> None:
     """
     In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
 
@@ -700,35 +815,22 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
-        node = stack.pop()
-        if not isinstance(node, dict):
+        node = _schema_node(stack.pop())
+        if node is None or id(node) in seen:
             continue
-        node_id = id(node)
-        if node_id in seen:
-            continue
-        seen.add(node_id)
+        seen.add(id(node))
         if node.get("type") == "custom":
             node["type"] = "object"
-        items = node.get("items")
-        if isinstance(items, dict):
-            stack.append(items)
-        addl = node.get("additionalProperties")
-        if isinstance(addl, dict):
-            stack.append(addl)
-        props = node.get("properties")
-        if isinstance(props, dict):
-            for sub in props.values():
-                if isinstance(sub, dict):
-                    stack.append(sub)
+        stack.extend((node.get("items"), node.get("additionalProperties")))
+        for container in ("properties", "$defs"):
+            stack.extend((_schema_node(node.get(container)) or {}).values())
         for combiner in ("allOf", "anyOf", "oneOf"):
-            arr = node.get(combiner)
-            if isinstance(arr, list):
-                for sub in arr:
-                    if isinstance(sub, dict):
-                        stack.append(sub)
+            branches = node.get(combiner)
+            if isinstance(branches, list):
+                stack.extend(branches)
 
 
-def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
+def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: Mapping[str, object]) -> None:
     """
     Bedrock Invoke (Anthropic Messages) validates ``input_schema`` as JSON Schema.
     Anthropic's API allows ``type: \"custom\"`` for Claude Code custom tools; Bedrock
@@ -751,19 +853,21 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
             normalize_json_schema_custom_types_to_object(input_schema)
 
 
-def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
+def ensure_bedrock_anthropic_messages_tool_names(request_body: Mapping[str, object]) -> None:
     """
-    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Bedrock Invoke (Anthropic Messages) requires each custom tool to include ``name``.
     Some clients send only ``input_schema``; Bedrock then errors with
     ``tools.0.custom.name: Field required``.
 
-    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` on a custom tool whose name
+    is missing or blank. Typed tools pass through as sent, since a toolset entry refuses
+    any name and a dated tool accepts only its fixed one.
     """
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for i, tool in enumerate(tools):
-        if not isinstance(tool, dict):
+    for i, tool in enumerate(_TOOL_ITEMS_ADAPTER.validate_python(tools)):
+        if not _is_str_keyed_dict(tool) or tool.get("type") not in (None, "custom"):
             continue
         name = tool.get("name")
         if name is None or (isinstance(name, str) and not name.strip()):
@@ -774,13 +878,13 @@ class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         """
         Mapping of common auth params across bedrock/vertex/azure/watsonx
         """
         return {"region_name": "aws_region_name"}
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
         for param, value in non_default_params.items():
             if param in mapped_params:
@@ -845,10 +949,19 @@ class AmazonBedrockGlobalConfig:
         ]
 
 
-def add_custom_header(headers):
+class _HeaderSink(Protocol):
+    def add_header(self, _name: str, _value: object, /) -> object: ...
+
+
+class _RequestWithHeaders(Protocol):
+    @property
+    def headers(self) -> _HeaderSink: ...
+
+
+def add_custom_header(headers: Mapping[str, object]):
     """Closure to capture the headers and add them."""
 
-    def callback(request, **kwargs):
+    def callback(request: _RequestWithHeaders, **kwargs: object):
         """Actual callback function that Boto3 will call."""
         for header_name, header_value in headers.items():
             request.headers.add_header(header_name, header_value)
@@ -871,7 +984,7 @@ def _get_bedrock_client_ssl_verify() -> bool | str:
 
 
 def init_bedrock_client(
-    region_name=None,
+    region_name: object = None,
     aws_access_key_id: str | None = None,
     aws_secret_access_key: str | None = None,
     aws_region_name: str | None = None,
@@ -880,7 +993,7 @@ def init_bedrock_client(
     aws_profile_name: str | None = None,
     aws_role_name: str | None = None,
     aws_web_identity_token: str | None = None,
-    extra_headers: dict | None = None,
+    extra_headers: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
@@ -1043,7 +1156,7 @@ def init_bedrock_client(
 
 
 class ModelResponseIterator:
-    def __init__(self, model_response):
+    def __init__(self, model_response: object):
         self.model_response = model_response
         self.is_done = False
 
@@ -1101,7 +1214,7 @@ _get_all_bedrock_regions = get_all_bedrock_regions
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
     """Abbreviations of regions AWS Bedrock supports for cross region inference."""
-    return ["global", "us", "eu", "apac", "jp", "au", "us-gov"]
+    return ["global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"]
 
 
 def extract_model_name_from_bedrock_arn(model: str) -> str:
@@ -1491,6 +1604,19 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_model_name_without_provider(model: str) -> str:
+    """The model id without Bedrock's routing and region prefixes and without its provider namespace.
+
+    A Bedrock foundation model id is ``<provider>.<model>`` with a one-word provider (``anthropic.``,
+    ``deepseek.``, ``moonshotai.``), so a base model whose first dot-separated part is one word drops it:
+    ``bedrock/us.openai.gpt-6.1-sol`` and ``us-east-1/openai.gpt-6.1-sol`` are ``gpt-6.1-sol``,
+    ``us.deepseek.r1-v1:0`` is ``r1-v1:0``. Any other base model, such as ``gpt-5.5`` or an imported model's
+    ARN id, is returned as is."""
+    base: Final = get_bedrock_base_model(model)
+    provider, separator, name = base.partition(".")
+    return name if separator and provider.isalnum() else base
+
+
 def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
     """
     Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
@@ -1500,13 +1626,45 @@ def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | Non
     its own. An ARN that hides its model, like an application inference profile, falls back to the
     deployment's ``base_model`` and counts as non-Claude without one.
     """
+    return _is_claude(_converse_target_model(model, base_model))
+
+
+def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None) -> bool:
+    if base_model is None and "." not in get_bedrock_base_model(model):
+        return False
+    return not _is_claude_behind_any_region_prefix(_converse_target_model(model, base_model))
+
+
+def bedrock_converse_rejects_assistant_prefill(model: str, base_model: str | None) -> bool:
+    from litellm.utils import is_explicitly_disabled_factory
+
+    return is_explicitly_disabled_factory(
+        _converse_target_model(model, base_model), "bedrock", "supports_assistant_prefill"
+    )
+
+
+def _converse_target_model(model: str, base_model: str | None) -> str:
     if base_model is None or "." in get_bedrock_base_model(model):
-        return _is_claude(model)
-    return _is_claude(base_model)
+        return model
+    return base_model
 
 
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
+def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
+    if model is None:
+        return False
+    listed: Final = (
+        _bedrock_map_flag(model, "supports_tool_schema_defs"),
+        _bedrock_map_flag(get_bedrock_base_model(model), "supports_tool_schema_defs"),
+    )
+    return next((flag for flag in listed if flag is not None), _is_claude_behind_any_region_prefix(model))
+
+
+def _is_claude_behind_any_region_prefix(model: str) -> bool:
+    return _is_claude(model) or get_bedrock_base_model(model).partition(".")[2].startswith("anthropic.")
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
@@ -1527,7 +1685,7 @@ def bedrock_model_accepts_cache_points(
     models without prompt caching support ("You invoked an unsupported model or your
     request did not allow prompt caching"), so a model whose cost-map entry does not declare
     ``supports_prompt_caching`` must not receive them. An explicit
-    ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
+    ``supports_bedrock_converse_cache_point`` on the entry wins over that flag: a model can price
     cached tokens through implicit caching yet reject the marker on Converse ("This model
     doesn't support the cachePoint field", Kimi K3). The router registers a deployment's
     ``model_info`` under ``bedrock/<model>`` as configured, route prefix included, while the
@@ -1538,7 +1696,7 @@ def bedrock_model_accepts_cache_points(
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
     it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
     model as configured when ``model`` is its ``base_model``: its own declaration wins.
-    A routed call passes its deployment's ``model_info``, whose breakpoint flag wins outright and
+    A routed call passes its deployment's ``model_info``, whose cache point flag wins outright and
     whose ``supports_prompt_caching`` wins over the catalog's for a known model. Other flags come
     from the catalog as loaded, since the registered keys are shared by every deployment of the
     same model string and carry whichever sibling registered last.
@@ -1569,7 +1727,7 @@ def bedrock_model_known_to_accept_cache_points(
     model: str, deployment_model: str | None = None, model_info: Mapping[str, object] | None = None
 ) -> bool:
     """Like ``bedrock_model_accepts_cache_points``, but only for the Claude and Nova families Bedrock documents
-    as taking cache checkpoints, unless the entry sets ``supports_prompt_cache_breakpoint``: an OpenAI
+    as taking cache checkpoints, unless the entry sets ``supports_bedrock_converse_cache_point``: an OpenAI
     ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
     Bedrock caching, and other families price implicit cache reads yet may reject the cachePoint field."""
     deployment_declared: Final = (
@@ -1597,19 +1755,41 @@ def _documents_cache_checkpoints(model: str) -> bool:
     return _is_claude(model) or get_bedrock_base_model(model).startswith("amazon.nova")
 
 
+_CACHE_POINT_FLAG: Final = "supports_bedrock_converse_cache_point"
+_LEGACY_BREAKPOINT_FLAG: Final = "supports_prompt_cache_breakpoint"
+
+
 def _explicit_cache_point_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:
-    deployment_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
-    if deployment_flag is not None:
-        return deployment_flag is True
+    entries: Final = _cache_point_flag_entries(model, model_info)
+    declared: Final = next(
+        (entry.get(_CACHE_POINT_FLAG) is True for entry in entries if entry.get(_CACHE_POINT_FLAG) is not None),
+        None,
+    )
+    if any(
+        entry.get(_LEGACY_BREAKPOINT_FLAG) is not None and entry.get(_CACHE_POINT_FLAG) is None for entry in entries
+    ):
+        _warn_legacy_cache_point_flag(model)
+    return declared
+
+
+def _cache_point_flag_entries(model: str, model_info: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
     catalog_entry: Final = _catalog_entry_reader(model_info)
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
-    return next(
-        (
-            entry.get("supports_prompt_cache_breakpoint") is True
-            for key in (*registered_keys, model, get_bedrock_base_model(model))
-            if (entry := catalog_entry(key)) is not None and entry.get("supports_prompt_cache_breakpoint") is not None
-        ),
-        None,
+    catalog_entries: Final = tuple(
+        catalog_entry(key) for key in (*registered_keys, model, get_bedrock_base_model(model))
+    )
+    return tuple(entry for entry in (model_info, *catalog_entries) if entry is not None)
+
+
+@functools.lru_cache(maxsize=256)
+def _warn_legacy_cache_point_flag(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock model %s sets supports_prompt_cache_breakpoint, which no longer controls Converse cachePoint "
+        "blocks and only selects the OpenAI prompt_cache_breakpoint format. Set "
+        "supports_bedrock_converse_cache_point to true or false to choose whether cachePoint blocks are sent. "
+        "Without it, a model in the cost map gets them when it supports prompt caching, and a model the cost map "
+        "does not list, such as an application inference profile ARN, gets them.",
+        model,
     )
 
 
@@ -1646,6 +1826,15 @@ def bedrock_supports_tool_search(model: str) -> bool:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
+
+
+def bedrock_supports_per_turn_control(model: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    deployment_flag: Final = (model_info or {}).get("supports_per_turn_control")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return AnthropicModelInfo.supports_model_capability(model, "supports_per_turn_control", "bedrock")
 
 
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
@@ -1725,13 +1914,18 @@ def _bedrock_model_id_without_region(model: str) -> str:
     return regional_id if separator and region in get_all_bedrock_regions() else routed_id
 
 
-def bedrock_model_is_unknown(model: str) -> bool:
+def bedrock_model_is_in_catalog(model: str) -> bool:
     model_id: Final = _bedrock_model_id_without_region(model)
-    if "/" in model_id:
-        return False
     base: Final = get_bedrock_base_model(model_id)
     regional_ids: Final = (f"{region}.{base}" for region in get_bedrock_cross_region_inference_regions())
-    if any(_cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
+    return any(
+        _cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)
+    )
+
+
+def bedrock_model_is_unknown(model: str) -> bool:
+    model_id: Final = _bedrock_model_id_without_region(model)
+    if "/" in model_id or bedrock_model_is_in_catalog(model_id):
         return False
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
@@ -1842,9 +2036,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 
-    def __init__(self, client: HTTPHandler | None = None) -> None:
+    def __init__(self, client: HTTPHandler | None = None, endpoint_failures: InMemoryCache | None = None) -> None:
         super().__init__()
         self._client: Final = client
+        self._endpoint_failures: Final = endpoint_failures
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
@@ -1862,14 +2057,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
@@ -1878,10 +2073,17 @@ class BedrockModelInfo(BaseLLMModelInfo):
     def discover_models(
         self, litellm_params: Mapping[str, object] | None = None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        from litellm.llms.bedrock.model_listing import BedrockModelLister
+        from litellm.llms.bedrock.model_listing import CONTROL_PLANE_ENDPOINT_FAILURES, BedrockModelLister
 
         client: Final = self._client if self._client is not None else litellm.module_level_client
-        return sorted(BedrockModelLister(deployment=litellm_params or {}, client=client).invocable_model_ids())
+        endpoint_failures: Final = (
+            self._endpoint_failures if self._endpoint_failures is not None else CONTROL_PLANE_ENDPOINT_FAILURES
+        )
+        return sorted(
+            BedrockModelLister(
+                deployment=litellm_params or {}, client=client, endpoint_failures=endpoint_failures
+            ).invocable_model_ids()
+        )
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
     #     """
@@ -2031,7 +2233,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(passed_params: dict, optional_params: dict) -> dict:
+    def map_claude_platform_auth_params(passed_params: Mapping[str, object], optional_params: dict) -> dict:
         """
         Map Claude Platform route auth params that are not OpenAI request params.
         """
@@ -2235,9 +2437,9 @@ def get_bedrock_chat_config(model: str):
 _BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _load_bedrock_response_stream_shape():
+def _load_bedrock_response_stream_shape(service_name: str = "bedrock-runtime"):
     """
-    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+    Load the ResponseStream shape from botocore's bundled schema for ``service_name``.
 
     Returns ``None`` if botocore is unavailable or the service model cannot be
     loaded.
@@ -2248,13 +2450,14 @@ def _load_bedrock_response_stream_shape():
 
         loader: Final = Loader()
         service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
-            loader.load_service_model("bedrock-runtime", "service-2")
+            loader.load_service_model(service_name, "service-2")
         )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not load bedrock-runtime response stream shape "
-            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            "litellm: could not load %s response stream shape, "
+            "so its event-stream decoding will be unavailable. Error: %s",
+            service_name,
             e,
         )
         return None
@@ -2271,17 +2474,18 @@ def get_bedrock_response_stream_shape():
     return _load_bedrock_response_stream_shape()
 
 
+@functools.lru_cache(maxsize=1)
+def get_bedrock_agent_response_stream_shape() -> Shape | None:
+    return _load_bedrock_response_stream_shape("bedrock-agent-runtime")
+
+
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
-class _ModeledErrorMetadata(TypedDict, total=False):
-    httpStatusCode: ReadOnly[int]
-
-
 def _modeled_error_status(member: Shape) -> int | None:
-    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    error: Final = require_get(_JSON_VALUE.validate_python((member.metadata or {}).get("error", {})))
     status: Final = error.get("httpStatusCode")
-    return None if status is None else int(status)
+    return None if status is None else int_of(status)
 
 
 def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:
@@ -2398,15 +2602,16 @@ class BedrockEventStreamDecoderBase:
                 ),
             )
         response_dict: Final = event.to_response_dict()
-        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final = parse_bedrock_event_stream(self.parser, response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
-        if "chunk" in parsed_response:
-            chunk = parsed_response.get("chunk")
-            if not chunk:
+        parsed_fields: Final = decoded_json_object(parsed_response)
+        if "chunk" in parsed_fields:
+            event_chunk: Final = parsed_fields.get("chunk")
+            if not event_chunk:
                 return None
-            return chunk.get("bytes").decode()
+            return bedrock_event_chunk_text(event_chunk)
         else:
             chunk = response_dict.get("body")
             if not chunk:
@@ -2423,7 +2628,21 @@ def _decoded_json_value(raw: str) -> object:
     return _JSON_VALUE.validate_python(json.loads(raw))
 
 
-def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
+class _DecodablePayload(Protocol):
+    def decode(self) -> str: ...
+
+
+def parse_bedrock_event_stream(
+    parser: EventStreamJSONParser, response_dict: Mapping[str, object], response_stream_shape: Shape
+) -> object:
+    return _JSON_VALUE.validate_python(parser.parse(response_dict, response_stream_shape))
+
+
+def bedrock_event_chunk_text(chunk: object) -> str:
+    return require_attributes(decoded_json_object(chunk).get("bytes"), _DecodablePayload, "decode").decode()
+
+
+def get_anthropic_beta_from_headers(headers: Mapping[str, object]) -> list[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
     Supports both JSON array format and comma-separated values from user headers.
@@ -2507,11 +2726,8 @@ class CommonBatchFilesUtils:
     Provides shared functionality to reduce code duplication between batches and files.
     """
 
-    def __init__(self):
-        # Import here to avoid circular imports
-        from .base_aws_llm import BaseAWSLLM
-
-        self._base_aws = BaseAWSLLM()
+    def __init__(self, aws: BaseAWSLLM) -> None:
+        self._base_aws = aws
 
     def get_bedrock_model_id_from_litellm_model(self, model: str) -> str:
         """
@@ -2527,7 +2743,7 @@ class CommonBatchFilesUtils:
             return model[8:]  # Remove "bedrock/" prefix
         return model
 
-    def parse_s3_uri(self, s3_uri: str) -> tuple:
+    def parse_s3_uri(self, s3_uri: str) -> tuple[str, str]:
         """
         Parse S3 URI into bucket and key components.
 
@@ -2585,7 +2801,7 @@ class CommonBatchFilesUtils:
     def sign_aws_request(
         self,
         service_name: str,
-        data: str | dict | BedrockCreateBatchRequest,
+        data: str | dict[str, object] | BedrockCreateBatchRequest,
         endpoint_url: str,
         optional_params: dict,
         method: str = "POST",
@@ -2609,7 +2825,9 @@ class CommonBatchFilesUtils:
 
         aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
-            AwsAuthParams.model_validate(optional_params), aws_region_name
+            AwsAuthParams.model_validate(optional_params),
+            aws_region_name,
+            _JSON_OBJECT.validate_python(optional_params),
         )
 
         # Prepare the request data
@@ -2662,11 +2880,11 @@ class CommonBatchFilesUtils:
 
     def get_s3_bucket_and_key_from_config(
         self,
-        litellm_params: dict,
-        optional_params: dict,
+        litellm_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         bucket_env_var: str = "AWS_S3_BUCKET_NAME",
         key_prefix: str = "litellm",
-    ) -> tuple:
+    ) -> tuple[object, str]:
         """
         Get S3 bucket and generate a unique key from configuration.
 
@@ -2702,3 +2920,13 @@ class CommonBatchFilesUtils:
         Get Bedrock-specific error class.
         """
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
+
+def bedrock_model_encrypts_agent_messages(model: str) -> bool:
+    """Only OpenAI's GPT models on Bedrock lock Codex worker messages.
+
+    Open-weight models (gpt-oss, Gemma, Grok) never lock them, so Codex puts plain text in the locked
+    slot, which Bedrock rejects with ``invalid_encrypted_content`` unless it is rewritten to text first.
+    """
+    name: Final = f".{model.rsplit('/', 1)[-1]}"
+    return ".openai.gpt-" in name and ".openai.gpt-oss" not in name

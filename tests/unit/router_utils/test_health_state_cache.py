@@ -6,19 +6,24 @@ import time
 
 import pytest
 
-from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.redis.stores.deployment_health import DeploymentHealthStates, DeploymentHealthStore
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.rust_bridge._native import NativeDeploymentHealth, NativeRedisClient
 
 
 @pytest.fixture
-def cache():
-    return DualCache()
+def handle() -> NativeDeploymentHealth:
+    return NativeDeploymentHealth(None)
 
 
 @pytest.fixture
-def health_cache(cache):
-    return DeploymentHealthCache(cache=cache, staleness_threshold=60.0)
+def store(handle: NativeDeploymentHealth) -> DeploymentHealthStore:
+    return DeploymentHealthStore(handle)
+
+
+@pytest.fixture
+def health_cache(store):
+    return DeploymentHealthCache(store=store, staleness_threshold=60.0)
 
 
 def test_set_and_get_unhealthy_ids(health_cache):
@@ -101,15 +106,19 @@ def test_mixed_stale_and_fresh(health_cache):
     assert result == {"deploy-2"}
 
 
-def test_malformed_state_entries_are_skipped(health_cache):
-    """Non-dict entries in the cache should be skipped safely."""
+def test_malformed_state_entries_are_skipped(
+    health_cache: DeploymentHealthCache, handle: NativeDeploymentHealth
+) -> None:
+    """Records another writer left that are no dict are dropped alone when the store reads them."""
     now = time.time()
-    states = {
-        "deploy-1": {"is_healthy": False, "timestamp": now, "reason": "bad"},
-        "deploy-2": "not_a_dict",  # malformed
-        "deploy-3": None,  # malformed
-    }
-    health_cache.set_deployment_health_states(states)
+    handle.set_sync(
+        {
+            "deploy-1": {"is_healthy": False, "timestamp": now, "reason": "bad"},
+            "deploy-2": "not_a_dict",
+            "deploy-3": None,
+        },
+        90.0,
+    )
     result = health_cache.get_unhealthy_deployment_ids()
     assert result == {"deploy-1"}
 
@@ -120,13 +129,11 @@ def test_set_merges_states_from_scoped_writers(health_cache):
     health_cache.set_deployment_health_states(
         {"listed-bad": {"is_healthy": False, "timestamp": now, "reason": "check_failed"}}
     )
-    health_cache.set_deployment_health_states(
-        {"other-ok": {"is_healthy": True, "timestamp": now, "reason": ""}}
-    )
+    health_cache.set_deployment_health_states({"other-ok": {"is_healthy": True, "timestamp": now, "reason": ""}})
     assert health_cache.get_unhealthy_deployment_ids() == {"listed-bad"}
 
 
-def test_set_prunes_expired_entries(health_cache, cache):
+def test_set_prunes_expired_entries(health_cache, store):
     """Entries older than 1.5x the staleness threshold are dropped on write."""
     expired_time = time.time() - 100  # threshold 60s, prune horizon 90s
     health_cache.set_deployment_health_states(
@@ -136,34 +143,55 @@ def test_set_prunes_expired_entries(health_cache, cache):
     health_cache.set_deployment_health_states(
         {"fresh": {"is_healthy": False, "timestamp": now, "reason": "check_failed"}}
     )
-    stored = cache.get_cache(key=DeploymentHealthCache.CACHE_KEY)
+    stored = store.get_sync()
     assert set(stored.keys()) == {"fresh"}
 
 
-class _SharedRedisFake:
-    """Shared get/set key-value store standing in for the Redis layer of a DualCache."""
+class _SharedRedis:
+    """The Redis entry every pod shares; a failed read reads as a miss, as the store's does."""
 
     def __init__(self):
-        self.store = {}
+        self.states: DeploymentHealthStates | None = None
         self.fail_get = False
-        self.breaker_open = False
 
-    def get_cache(self, key, parent_otel_span=None, **kwargs):
-        if self.breaker_open:
-            raise RedisCircuitBreakerOpenError("Redis circuit breaker is open - skipping get_cache")
-        if self.fail_get:
-            return None  # RedisCache.get_cache swallows connection errors and returns None
-        return self.store.get(key)
 
-    def set_cache(self, key, value, **kwargs):
-        self.store[key] = value
+class _PodHandle:
+    """One pod's ``DeploymentHealthHandle``: its own memory in front of the shared Redis entry."""
+
+    def __init__(self, redis: _SharedRedis):
+        self._redis = redis
+        self._memory: DeploymentHealthStates | None = None
+
+    @property
+    def has_redis(self) -> bool:
+        return True
+
+    def attach(self, client: NativeRedisClient) -> bool:
+        return False
+
+    async def get(self) -> DeploymentHealthStates | None:
+        return self.get_sync()
+
+    def get_sync(self) -> DeploymentHealthStates | None:
+        return self._memory if self._memory is not None else self.get_shared_sync()
+
+    def get_shared_sync(self) -> DeploymentHealthStates | None:
+        return None if self._redis.fail_get else self._redis.states
+
+    def set_sync(self, states: DeploymentHealthStates, ttl_seconds: float) -> None:
+        self._memory = states
+        self._redis.states = states
+
+
+def _pod(redis: _SharedRedis) -> DeploymentHealthCache:
+    return DeploymentHealthCache(store=DeploymentHealthStore(_PodHandle(redis)), staleness_threshold=60.0)
 
 
 def test_scoped_writers_on_shared_redis_preserve_each_other():
     """Pods with different allowlists share one Redis entry; each merge must keep the peer's scope."""
-    redis_fake = _SharedRedisFake()
-    pod_a = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
-    pod_b = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    redis_fake = _SharedRedis()
+    pod_a = _pod(redis_fake)
+    pod_b = _pod(redis_fake)
     pod_a.set_deployment_health_states(
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
@@ -173,15 +201,15 @@ def test_scoped_writers_on_shared_redis_preserve_each_other():
     pod_a.set_deployment_health_states(
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
-    assert set(redis_fake.store[DeploymentHealthCache.CACHE_KEY]) == {"prod-bad", "internal-bad"}
+    assert set(redis_fake.states or {}) == {"prod-bad", "internal-bad"}
     assert pod_a.get_unhealthy_deployment_ids() == {"prod-bad", "internal-bad"}
 
 
 def test_failed_redis_read_falls_back_to_local_copy():
     """A swallowed Redis GET error must not make a writer erase peer scopes it already saw."""
-    redis_fake = _SharedRedisFake()
-    pod_a = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
-    pod_b = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    redis_fake = _SharedRedis()
+    pod_a = _pod(redis_fake)
+    pod_b = _pod(redis_fake)
     pod_a.set_deployment_health_states(
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
@@ -195,27 +223,35 @@ def test_failed_redis_read_falls_back_to_local_copy():
     pod_a.set_deployment_health_states(
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
-    assert set(redis_fake.store[DeploymentHealthCache.CACHE_KEY]) == {"prod-bad", "internal-bad"}
+    assert set(redis_fake.states or {}) == {"prod-bad", "internal-bad"}
 
 
-def test_open_circuit_breaker_read_still_merges_into_local_copy(caplog):
-    """A read refused by the open breaker is a miss, so the merge and local write still happen quietly."""
-    redis_fake = _SharedRedisFake()
-    pod_a = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
-    pod_b = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
-    pod_a.set_deployment_health_states(
-        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
-    )
-    pod_b.set_deployment_health_states(
-        {"internal-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "timeout"}}
-    )
-    pod_a.set_deployment_health_states(
-        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
-    )
-    redis_fake.breaker_open = True
-    with caplog.at_level("ERROR"):
-        pod_a.set_deployment_health_states(
-            {"prod-new-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
-        )
-    assert caplog.records == []
-    assert pod_a.get_unhealthy_deployment_ids() == {"prod-bad", "internal-bad", "prod-new-bad"}
+class _UnreachableHealthHandle:
+    has_redis: bool = True
+
+    def attach(self, client: NativeRedisClient) -> bool:
+        return True
+
+    async def get(self) -> DeploymentHealthStates | None:
+        raise ConnectionError("redis down")
+
+    def get_sync(self) -> DeploymentHealthStates | None:
+        raise ConnectionError("redis down")
+
+    def get_shared_sync(self) -> DeploymentHealthStates | None:
+        raise ConnectionError("redis down")
+
+    def set_sync(self, states: DeploymentHealthStates, ttl_seconds: float) -> None:
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_store_reads_as_no_health_state_and_drops_writes():
+    cache = DeploymentHealthCache(store=DeploymentHealthStore(_UnreachableHealthHandle()), staleness_threshold=60.0)
+
+    cache.set_deployment_health_states({"deploy-1": {"is_healthy": False, "timestamp": time.time(), "reason": "x"}})
+
+    assert cache.get_states() is None
+    assert await cache.async_get_states() is None
+    assert cache.get_unhealthy_deployment_ids() == set()
+    assert await cache.async_get_unhealthy_deployment_ids() == set()

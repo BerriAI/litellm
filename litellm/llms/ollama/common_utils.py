@@ -1,6 +1,7 @@
 import base64
 import io
-from typing import Final, overload
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final, Protocol, overload
 
 import httpx
 from openai.types.chat import ChatCompletionChunk
@@ -8,6 +9,8 @@ from pydantic import BaseModel, TypeAdapter
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -17,6 +20,14 @@ _PROVIDER_FIELDS: Final = TypeAdapter(dict[str, object])
 _THINK_ON_EFFORTS: Final = frozenset({"low", "medium", "high"})
 _THINK_OFF_REASON: Final = "Ollama takes think only as on or off, and litellm maps this level to off."
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _JsonLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+class _JsonItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
 
 
 class OllamaResponseIdNormalizer:
@@ -105,7 +116,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
     """
 
     @staticmethod
-    def get_api_key(api_key=None) -> str | None:
+    def get_api_key(api_key: str | None = None) -> str | None:
         """Get API key from environment variables or litellm configuration"""
         import os
 
@@ -137,12 +148,13 @@ class OllamaModelInfo(BaseLLMModelInfo):
             "/api/embeddings",
             "/api/show",
             "/api/tags",
+            "/v1/systemone",
         ):
             if api_base.endswith(suffix):
                 return api_base[: -len(suffix)]
         return api_base
 
-    def get_models(self, api_key=None, api_base: str | None = None) -> list[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         List all models available on the Ollama server via /api/tags endpoint.
         """
@@ -206,15 +218,15 @@ class OllamaModelInfo(BaseLLMModelInfo):
         return any(name.lower() in model_cost_keys for name in potential_model_names)
 
     @staticmethod
-    def _supports_function_calling(ollama_model_info: dict) -> bool:
-        _template: Final[str] = str(ollama_model_info.get("template", "") or "")
+    def _supports_function_calling(ollama_model_info: object) -> bool:
+        _template: Final[str] = str(require_attributes(ollama_model_info, _JsonLookup, "get").get("template", "") or "")
         return "tools" in _template.lower()
 
     @staticmethod
-    def _get_max_tokens(ollama_model_info: dict) -> int | None:
-        _model_info: Final[dict] = ollama_model_info.get("model_info", {})
+    def _get_max_tokens(ollama_model_info: object) -> object:
+        _model_info: Final = require_attributes(ollama_model_info, _JsonLookup, "get").get("model_info", {})
 
-        for key, value in _model_info.items():
+        for key, value in require_attributes(_model_info, _JsonItems, "items").items():
             if "context_length" in key:
                 return value
         return None
@@ -225,6 +237,15 @@ class OllamaModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, object]:
+        looked_up: Final = self._look_up_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
+        return dict(looked_up.value if isinstance(looked_up, FailedLookup) else looked_up)
+
+    def _look_up_runtime_model_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
@@ -242,18 +263,20 @@ class OllamaModelInfo(BaseLLMModelInfo):
             response.raise_for_status()
         except Exception:
             verbose_logger.debug("OllamaError: Could not get model info.")
-            return {
-                "key": model,
-                "litellm_provider": "ollama",
-                "mode": "chat",
-                "input_cost_per_token": 0.0,
-                "output_cost_per_token": 0.0,
-                "max_tokens": None,
-                "max_input_tokens": None,
-                "max_output_tokens": None,
-            }
+            return FailedLookup(
+                {
+                    "key": model,
+                    "litellm_provider": "ollama",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "max_tokens": None,
+                    "max_input_tokens": None,
+                    "max_output_tokens": None,
+                }
+            )
 
-        model_info: Final = response.json()
+        model_info: Final = _DECODED_JSON.validate_python(response.json())
         max_tokens: Final = self._get_max_tokens(model_info)
 
         return {
@@ -278,16 +301,26 @@ class OllamaModelInfo(BaseLLMModelInfo):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
 
+    def look_up_model_info(
+        self,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]] | None:
+        if self._is_static_ollama_model(model):
+            return None
+        return self._look_up_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
-        api_key=None,
-        api_base=None,
-    ) -> dict:
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict[str, object]:
         """
         No-op environment validation for Ollama.
         """

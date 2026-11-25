@@ -232,3 +232,32 @@ def _sdk_rebuilt_content(block: Mapping[str, object]) -> list[dict[str, object]]
 @pytest.mark.parametrize("block", _REPLAYED_BLOCKS, ids=lambda block: str(block["type"]))
 def test_anthropic_sdk_rebuilds_every_block_field_from_the_stream(block: Mapping[str, object]):
     assert _sdk_rebuilt_content(block) == [block]
+
+
+@pytest.mark.parametrize(
+    "unsigned_block",
+    [
+        {"type": "thinking", "thinking": "Let me think.", "signature": ""},
+        {"type": "thinking", "thinking": "Let me think.", "signature": None},
+        {"type": "thinking", "thinking": "Let me think."},
+    ],
+    ids=["empty", "null", "missing"],
+)
+def test_unsigned_thinking_block_closes_with_an_empty_signature_delta(unsigned_block: Mapping[str, object]):
+    response: Final = {
+        "id": "msg_unsigned",
+        "content": [unsigned_block, {"type": "text", "text": "Hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    thinking_events: Final = tuple(
+        (event_type, payload.get("delta", payload.get("content_block")))
+        for event_type, payload in _decoded_events(FakeAnthropicMessagesStreamIterator(response=response))
+        if payload.get("index") == 0
+    )
+    assert thinking_events == (
+        ("content_block_start", {"type": "thinking", "thinking": "", "signature": ""}),
+        ("content_block_delta", {"type": "thinking_delta", "thinking": "Let me think."}),
+        ("content_block_delta", {"type": "signature_delta", "signature": ""}),
+        ("content_block_stop", None),
+    )

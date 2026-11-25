@@ -28,6 +28,7 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 from ..utils import OVHCloudException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -44,11 +45,11 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
@@ -60,14 +61,16 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
         return join_api_base(base_url, "audio/transcriptions")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
             status_code=status_code,
@@ -79,8 +82,8 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -100,8 +103,8 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request into OpenAI-compatible form-data.
@@ -113,7 +116,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         processed_audio: Final = process_audio_file(audio_file)
 
         # Base form fields: model + OpenAI-compatible optional params
-        form_fields: Final[dict] = {
+        form_fields: Final[dict[str, object]] = {
             "model": model,
         }
 
@@ -141,10 +144,10 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transform OVHCloud audio transcription response to OpenAI-compatible TranscriptionResponse.
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise OVHCloudException(
-                message=raw_response.text,
+                message="Received non-JSON response from OVHCloud audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -160,8 +163,5 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         duration: Final = (
             payload["seconds"] if "seconds" in payload and payload["seconds"] is not None else payload.get("duration")
         )
-        if duration is not None:
-            response_json["duration"] = duration
-
-        response.hidden_params = response_json
+        response.hidden_params = dict(payload) if duration is None else {**payload, "duration": duration}
         return response

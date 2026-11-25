@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceQueryHelp",
+  "type": "object",
+  "properties": {
+    "dialect": {
+      "type": "string"
+    },
+    "access": {
+      "type": "string"
+    },
+    "response": {
+      "type": "string"
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceQueryTable"
+      }
+    },
+    "normalized_fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceQueryNormalizedField"
+      }
+    },
+    "metadata": {
+      "$ref": "#/$defs/TraceQueryMetadata"
+    },
+    "attributes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceQueryAttributes"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceQueryRelationship"
+      }
+    },
+    "examples": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceQueryExample"
+      }
+    },
+    "gotchas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "guide": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "dialect",
+    "access",
+    "response",
+    "tables",
+    "normalized_fields",
+    "metadata",
+    "attributes",
+    "relationships",
+    "examples",
+    "gotchas",
+    "guide"
+  ],
+  "$defs": {
+    "TraceQueryTable": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/TraceTableName"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceQueryColumn"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "columns"
+      ]
+    },
+    "TraceTableName": {
+      "type": "string",
+      "enum": [
+        "otel_traces",
+        "otel_logs",
+        "agent_traces_by_key",
+        "spend_logs",
+        "lens_task_profiles"
+      ]
+    },
+    "TraceQueryColumn": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TraceQueryNormalizedField": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/TraceTableName"
+        },
+        "name": {
+          "type": "string"
+        },
+        "column": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "meaning": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "name",
+        "column",
+        "type",
+        "meaning"
+      ]
+    },
+    "TraceQueryMetadata": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/TraceTableName"
+        },
+        "column": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceQueryMetadataField"
+          }
+        },
+        "sampled_rows": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "invalid_json_rows": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "sample_sql": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "column",
+        "fields",
+        "sampled_rows",
+        "invalid_json_rows",
+        "truncated",
+        "sample_sql",
+        "scope"
+      ]
+    },
+    "TraceQueryMetadataField": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPart"
+          }
+        },
+        "types": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/MetadataValueType"
+          }
+        },
+        "expression": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "types",
+        "expression"
+      ]
+    },
+    "PathPart": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      ]
+    },
+    "MetadataValueType": {
+      "type": "string",
+      "enum": [
+        "array",
+        "boolean",
+        "integer",
+        "null",
+        "number",
+        "object",
+        "string"
+      ]
+    },
+    "TraceQueryAttributes": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/TraceTableName"
+        },
+        "column": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceQueryAttributeField"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "discovery_sql": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "column",
+        "fields",
+        "truncated",
+        "discovery_sql",
+        "scope"
+      ]
+    },
+    "TraceQueryAttributeField": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/MapValueType"
+        },
+        "expression": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "type",
+        "expression"
+      ]
+    },
+    "MapValueType": {
+      "type": "string",
+      "enum": [
+        "String"
+      ]
+    },
+    "TraceQueryRelationship": {
+      "type": "object",
+      "properties": {
+        "left": {
+          "type": "string"
+        },
+        "right": {
+          "type": "string"
+        },
+        "additional_predicates": {
+          "type": "string"
+        },
+        "meaning": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right",
+        "additional_predicates",
+        "meaning"
+      ]
+    },
+    "TraceQueryExample": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sql": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sql"
+      ]
+    }
+  }
+}
