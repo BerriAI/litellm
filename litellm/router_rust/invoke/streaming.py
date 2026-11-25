@@ -1000,10 +1000,28 @@ def _chat_wrapper_init(
 
 
 class _AsyncChatStream(FallbackAwareStreamWrapper):
-    def __init__(self, generator: AsyncGenerator[object, None], model_response: CustomStreamWrapper) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
+    def __init__(  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
+        self,
+        generator: AsyncGenerator[object, None],
+        model_response: CustomStreamWrapper,
+        close_attempt: Callable[[], Awaitable[None]],
+    ) -> None:
         _chat_wrapper_init(self, generator, model_response)
         self._source_stream = model_response
         self._async_generator: Final = generator
+        self._close_attempt: Final = close_attempt
+
+    def arm_disconnect_drain(self) -> None:
+        super().arm_disconnect_drain()
+        self._source_stream.arm_disconnect_drain()
+
+    def disconnect_drain_target(self) -> CustomStreamWrapper | None:
+        return None if self.fallback_headers_adopted else self._source_stream.disconnect_drain_target()
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        with anyio.CancelScope(shield=True):
+            await self._close_attempt()
 
     def __aiter__(self) -> "_AsyncChatStream":  # pyright: ignore[reportIncompatibleMethodOverride]  # iterates the generator
         return self
@@ -1054,6 +1072,10 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
             await model_response.aclose()
         except BaseException as e:  # noqa: BLE001  # closing is best-effort
             verbose_router_logger.debug("stream_with_fallbacks: error closing model_response: %s", e)
+
+    async def close_attempt() -> None:
+        await close_model_response()
+        slot.close()
 
     async def stream_with_fallbacks() -> AsyncGenerator[object, None]:
         fallback_response: object = None  # rebind-ok: tracked for cleanup
@@ -1119,9 +1141,14 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
                 verbose_router_logger.error("Fallback also failed: %s", fallback_error)
                 _raise_fallback_failure(fallback_error)
         finally:
+            # An attempt the proxy can still drain after a client disconnect stays open.
+            # The wrapper's aclose closes it once the drain is done.
+            keeps_attempt_open: Final = (
+                fallback_response is None and model_response.disconnect_drain_target() is not None
+            )
             with anyio.CancelScope(shield=True):
-                await close_model_response()
-                slot.close()
+                if not keeps_attempt_open:
+                    await close_attempt()
                 if fallback_response is not None and hasattr(fallback_response, "aclose"):
                     try:
                         await fallback_response.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
@@ -1130,7 +1157,7 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
                             "stream_with_fallbacks: error closing fallback_response: %s", close_error
                         )
 
-    wrapped_response: Final = _AsyncChatStream(stream_with_fallbacks(), model_response)
+    wrapped_response: Final = _AsyncChatStream(stream_with_fallbacks(), model_response, close_attempt)
     # weak, so the generator closing over it does not keep the wrapper alive
     wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
     return wrapped_response
