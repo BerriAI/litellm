@@ -74,11 +74,13 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
+    denied: true
 
   - name: no credential
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
+    denied: true
 
   - name: proxy param
     headers: {authorization: Bearer gateway-key}
@@ -140,6 +142,7 @@ requests:
     body: {model: deepseek, max_tokens: 16, messages: [], user: end-user}
     expect: python
     reason: credential
+    denied: true
 
   - name: the body outranks the model
     headers: {authorization: Bearer gateway-key}

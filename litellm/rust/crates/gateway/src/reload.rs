@@ -777,7 +777,7 @@ mod tests {
             .admitted(request)
             .await
             .err()
-            .map(|(_, why)| why.into())
+            .map(|(_, reason)| reason.why.into())
     }
 
     /// The api key the router calls the stored model `name` with.

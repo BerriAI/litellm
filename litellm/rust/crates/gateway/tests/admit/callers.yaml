@@ -26,6 +26,7 @@ requests:
     expect: python
     reason: credential
     over: invalid_token
+    denied: true
 
   - name: a JWT
     headers: {authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln}
@@ -33,6 +34,7 @@ requests:
     expect: python
     reason: credential
     over: invalid_token
+    denied: true
 
   - name: the master key as api-key
     headers: {api-key: gateway-key}
@@ -44,6 +46,7 @@ requests:
     expect: python
     reason: credential
     over: invalid_token
+    denied: true
 
   - name: another key as x-api-key
     headers: {x-api-key: sk-virtual}
@@ -51,3 +54,4 @@ requests:
     expect: python
     reason: credential
     over: invalid_api_key
+    denied: true

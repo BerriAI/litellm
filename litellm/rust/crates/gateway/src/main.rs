@@ -16,8 +16,8 @@ use axum::{
 use litellm_config::{Config, Environment};
 use litellm_env::Lookup;
 use litellm_gateway::{
-    Admit, AppState, Live, Loaded, Poller, Refused, Resources, Served, Source, StoredConfig,
-    middleware::InFlight,
+    Admit, AppState, Live, Loaded, Poller, Refusal, Refused, Resources, Served, Source,
+    StoredConfig, middleware::InFlight,
 };
 use litellm_tracing::{KeyLength, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use serde_json::json;
@@ -131,7 +131,8 @@ async fn standalone(
 }
 
 /// The native app with nothing behind it. `admit` sees every request first, as it does in front
-/// of Python, and a request it refuses is answered 501 with why, since nothing else can serve it.
+/// of Python. A request it refuses as unsupported is answered 501 with why, since nothing else can
+/// serve it, and one it refuses as denied is the native app's to refuse.
 fn alone(
     live: Arc<Live>,
 ) -> impl Service<Request, Response = Response, Error = Infallible, Future: Send + 'static>
@@ -148,7 +149,10 @@ async fn admitted_or_not_served(
 ) -> Response {
     match live.admitted(request).await {
         Ok(request) => native.run(request).await,
-        Err((_, why)) => not_served(why),
+        Err((request, reason)) => match reason.refusal {
+            Refusal::Denied => native.run(*request).await,
+            Refusal::Unsupported => not_served(reason.why),
+        },
     }
 }
 
@@ -274,7 +278,14 @@ async fn in_front_of_python(
     let ran = litellm_gateway_forward::run(
         forward,
         live.clone().native(),
-        move |request| admitting.clone().admitted(request),
+        move |request| {
+            let live = admitting.clone();
+            async move {
+                live.admitted(request)
+                    .await
+                    .map_err(|(request, reason)| (request, reason.why))
+            }
+        },
         async move {
             tokio::select! { () = shutdown_signal() => (), () = stdin_closed => () }
         },
@@ -481,7 +492,7 @@ mod tests {
             .admitted(request)
             .await
             .err()
-            .map(|(_, why)| why.into())
+            .map(|(_, reason)| reason.why.into())
     }
 
     /// Why `live` leaves a master key caller's `/v1/messages` request for `model` to Python.
@@ -496,7 +507,7 @@ mod tests {
             .admitted(request)
             .await
             .err()
-            .map(|(_, why)| why.into())
+            .map(|(_, reason)| reason.why.into())
     }
 
     /// What the gateway in front of Python serves from the config file holding `yaml`.
@@ -655,6 +666,102 @@ mod tests {
             .and_then(|body| body["error"]["code"].as_str().map(str::to_owned));
         assert_eq!((status, code.as_deref()), expected);
         state.close().await;
+    }
+
+    /// A config file with nothing stored in a database beside it.
+    fn unstored(config: Config) -> Loaded {
+        Loaded {
+            config,
+            stored: StoredConfig::Unused,
+            source: None,
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn standalone_leaves_a_denied_request_to_the_native_app_to_refuse() {
+        litellm_gateway::install_crypto_provider();
+        let config = Config::from_yaml(
+            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n",
+        )
+        .unwrap();
+        let environment = Environment::default();
+        let NativeState {
+            config,
+            state,
+            admit,
+            ..
+        } = native_state(Some(unstored(config)), &environment)
+            .await
+            .unwrap();
+        let live = Arc::new(Live::new(served(
+            state.clone(),
+            admit,
+            &config,
+            &environment,
+            &InFlight::new(),
+        )));
+        let app = alone(live);
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer not-the-key")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"model":"claude","max_tokens":8,"messages":[]}"#,
+            ))
+            .unwrap();
+
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        state.close().await;
+    }
+
+    /// `admit` refuses the key and the native app is built to take it, as a key store that
+    /// changed between the two would leave them.
+    #[rstest]
+    #[tokio::test]
+    async fn standalone_keeps_a_key_refusal_the_native_app_would_no_longer_make() {
+        litellm_gateway::install_crypto_provider();
+        let holding = |master_key: &str| {
+            Config::from_yaml(&format!(
+                "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n      api_base: http://127.0.0.1:9\ngeneral_settings:\n  master_key: {master_key}\n"
+            ))
+            .unwrap()
+        };
+        let environment = Environment::default();
+        let NativeState {
+            state: refusing,
+            admit,
+            ..
+        } = native_state(Some(unstored(holding("gateway-key"))), &environment)
+            .await
+            .unwrap();
+        let NativeState {
+            config,
+            state: taking,
+            ..
+        } = native_state(Some(unstored(holding("rotated-key"))), &environment)
+            .await
+            .unwrap();
+        let native = native(taking.clone(), &config, &environment, &InFlight::new());
+        let app = alone(Arc::new(Live::new(Served::new(
+            taking.clone(),
+            admit,
+            native,
+        ))));
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer rotated-key")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"model":"claude","max_tokens":8,"messages":[]}"#,
+            ))
+            .unwrap();
+
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        refusing.close().await;
+        taking.close().await;
     }
 
     #[rstest]
