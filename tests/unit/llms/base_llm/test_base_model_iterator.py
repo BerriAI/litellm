@@ -9,8 +9,10 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 from pydantic import BaseModel
 
+import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.types.utils import GenericStreamingChunk
@@ -325,3 +327,64 @@ def test_chunk_with_unreadable_choices_reaches_the_provider_parser(choices: obje
     assert chunks == [
         GenericStreamingChunk(text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
     ]
+
+
+_USAGE_STREAM_HEADER: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m"}
+_USAGE_STREAM_EVENTS: Final = (
+    {**_USAGE_STREAM_HEADER, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+    {**_USAGE_STREAM_HEADER, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    {
+        **_USAGE_STREAM_HEADER,
+        "choices": [],
+        "usage": {"prompt_tokens": 74, "completion_tokens": 52, "total_tokens": 126},
+    },
+)
+
+
+async def _stream_chunks(sync_mode: bool) -> list[object]:
+    messages: Final = [{"role": "user", "content": "Reply with the single word: ok"}]
+    if sync_mode:
+        return list(
+            litellm.completion(
+                model="hosted_vllm/m",
+                api_base="http://upstream.test/v1",
+                api_key="sk-test",
+                messages=messages,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        )
+    stream: Final = await litellm.acompletion(
+        model="hosted_vllm/m",
+        api_base="http://upstream.test/v1",
+        api_key="sk-test",
+        messages=messages,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    return [chunk async for chunk in stream]
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "fields",
+    ["id: {n}\nevent: message\n", "retry: 1000\n", ": ping\n", "x-trace: {n}\n", "data: \n\n"],
+    ids=["id-and-event", "retry", "comment", "unknown-field", "empty-data"],
+)
+@pytest.mark.asyncio
+async def test_stream_usage_survives_sse_lines_that_carry_no_data(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool, fields: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    stream_body: Final = "".join(
+        f"{fields.format(n=n)}data: {json.dumps(event)}\n\n" for n, event in enumerate(_USAGE_STREAM_EVENTS, 1)
+    ).encode()
+    respx_mock.post("http://upstream.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+
+    chunks: Final = await _stream_chunks(sync_mode)
+
+    usages: Final = [usage for chunk in chunks if (usage := getattr(chunk, "usage", None))]
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(74, 52)]

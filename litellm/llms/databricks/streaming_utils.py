@@ -4,6 +4,7 @@ from typing import Final
 import litellm
 from litellm import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import raise_on_upstream_abort
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -148,6 +149,8 @@ class ModelResponseIterator:
 
 
 def _sse_data(raw_chunk: str) -> str:
+    if not is_sse_payload_line(raw_chunk):
+        return ""
     return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
 
 

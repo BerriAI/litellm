@@ -652,6 +652,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (  # noqa: F401, RUF1
     _OPTIONAL_PromptInjectionDetection,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF100  # legacy module exports
+    HealthProbeFailureBiller,
     ProxyDBLogger,
     _ProxyDBLogger,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     run_spend_event,
@@ -3074,6 +3075,7 @@ def cost_tracking():
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(HealthProbeFailureBiller())
         litellm.logging_callback_manager.add_litellm_callback(ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_async_success_callback(ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
@@ -3370,7 +3372,7 @@ async def increment_spend_counters(
     user_id: str | None,
     response_cost: float | None,
     org_id: str | None = None,
-    budget_reservation: dict | None = None,
+    budget_reservation: dict[str, object] | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,

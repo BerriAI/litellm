@@ -5304,6 +5304,54 @@ class TestStreamCloseOnDisconnect:
         assert closed.is_set()
 
 
+@pytest.mark.parametrize(
+    ("request_fields", "expected_cost_header"),
+    (
+        ({"call_type": "aimage_generation"}, "0"),
+        (
+            {
+                "call_type": "aimage_generation",
+                "response_cost": 0.25,
+                "combined_usage_object": litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            },
+            "0.25",
+        ),
+        (
+            {
+                "call_type": "aimage_edit",
+                "response_cost": 0.25,
+                "combined_usage_object": litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            },
+            "0.25",
+        ),
+        (
+            {
+                "call_type": "acompletion",
+                "response_cost": 0.25,
+                "combined_usage_object": litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            },
+            "0",
+        ),
+    ),
+    ids=("unbilled_image", "billed_image", "billed_edit", "billed_chat_timeout"),
+)
+async def test_failed_request_reports_its_billed_cost_in_the_cost_header(request_fields, expected_cost_header):
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as raised:
+        await ProxyBaseLLMRequestProcessing(data=dict(request_fields))._handle_llm_api_exception(
+            e=ValueError("upstream failure"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert raised.value.headers["x-litellm-response-cost"] == expected_cost_header
+
+
 class TestHandleLLMApiExceptionRetryAfter:
     """RouterRateLimitError cooldown_time must surface as a retry-after header."""
 
