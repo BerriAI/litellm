@@ -369,10 +369,33 @@ describe("browsers without AbortSignal static helpers", () => {
   });
 });
 
-it.each([null, "cookie-v1", "bearer-v2"])(
-  "offers standalone Lens when the UI lacks the supported bearer capability (%s)",
+it("keeps an older Lens UI embedded with its existing cookie auth and never sends it a bearer", async () => {
+  network.mockResolvedValueOnce(new Response("<html></html>")).mockResolvedValueOnce(connection());
+  render();
+
+  const iframe = await screen.findByTitle<HTMLIFrameElement>("Lens");
+  expect(iframe).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
+  expect(iframe).not.toHaveAttribute("data-lens-auth");
+  expect(screen.queryByRole("link", { name: "Open Lens" })).not.toBeInTheDocument();
+  const child = iframe.contentWindow!;
+  const postMessage = vi.spyOn(child, "postMessage").mockImplementation(() => {});
+  act(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: child,
+        origin: window.location.origin,
+        data: { channel: "litellm-lens:v1", type: "auth-ready" },
+      }),
+    );
+  });
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(network).toHaveBeenCalledTimes(2);
+});
+
+it.each(["cookie-v1", "bearer-v2"])(
+  "offers standalone Lens when the UI advertises an unknown auth capability (%s)",
   async (capability) => {
-    const headers = capability ? { "X-Lens-UI-Auth": capability } : undefined;
+    const headers = { "X-Lens-UI-Auth": capability };
     network.mockResolvedValueOnce(new Response("<html></html>", { headers })).mockResolvedValueOnce(connection());
     render();
 

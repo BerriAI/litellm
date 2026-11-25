@@ -3,7 +3,8 @@ import { backgroundFetchClient } from "./api";
 export const LENS_UI_AUTH = "bearer-v1";
 export type LensCredentials = { accessToken: string; headerName: string };
 export type LensWorkspaceAvailability =
-  | { state: "served" | "unconfigured" | "unavailable" }
+  | { state: "served"; auth: "bearer" | "cookie" }
+  | { state: "unconfigured" | "unavailable" }
   | { state: "unsupported"; browserUrl: string };
 
 export const lensWorkspaceAvailability = async (
@@ -26,7 +27,8 @@ export const lensWorkspaceAvailability = async (
     const sameOrigin =
       lensUrl.origin === window.location.origin &&
       new URL(response.url || lensUrl.href).origin === window.location.origin;
-    const supported = response.ok && sameOrigin && response.headers.get("X-Lens-UI-Auth") === LENS_UI_AUTH;
+    const capability = response.headers.get("X-Lens-UI-Auth");
+    const supportedAuth = capability === null || capability === LENS_UI_AUTH;
     const { data: connection } = await backgroundFetchClient.GET("/lens/service", {
       signal,
       credentials: "include",
@@ -34,7 +36,10 @@ export const lensWorkspaceAvailability = async (
     });
     if (connection?.configured === false) return { state: "unconfigured" };
     if (connection?.connected !== true) return { state: "unavailable" };
-    return supported ? { state: "served" } : { state: "unsupported", browserUrl: connection.browser_url ?? "" };
+    if (response.ok && sameOrigin && supportedAuth) {
+      return { state: "served", auth: capability === LENS_UI_AUTH ? "bearer" : "cookie" };
+    }
+    return { state: "unsupported", browserUrl: connection.browser_url ?? "" };
   } catch {
     return { state: "unavailable" };
   } finally {

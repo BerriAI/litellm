@@ -21,7 +21,7 @@ type Workspace = { state: "checking" } | LensWorkspaceAvailability;
 const gatewayUrl = (path: string): string =>
   `${resolveApiBase({ explicitBase: getProxyBaseUrl(), serverRootPath })}${path}`;
 
-function LensFrame({ source, accessToken, headerName }: LensCredentials & { source: string }) {
+function LensFrame({ source, credentials }: { source: string; credentials: LensCredentials | null }) {
   const { t } = useTranslation();
   const { resolvedTheme } = useTheme();
   const iframe = useRef<HTMLIFrameElement>(null);
@@ -41,7 +41,9 @@ function LensFrame({ source, accessToken, headerName }: LensCredentials & { sour
     const parsed = lensFrameMessage.safeParse(event.data);
     if (!parsed.success) return;
     if (parsed.data.type === "auth-ready") {
-      child.postMessage({ channel: LENS_FRAME_CHANNEL, command: { type: "auth", accessToken, headerName } }, origin);
+      if (credentials) {
+        child.postMessage({ channel: LENS_FRAME_CHANNEL, command: { type: "auth", ...credentials } }, origin);
+      }
     } else if (parsed.data.type === "ready") {
       setNavigation(null);
       sendTheme();
@@ -69,7 +71,7 @@ function LensFrame({ source, accessToken, headerName }: LensCredentials & { sour
       ref={iframe}
       title={t("lensWorkspace.frameTitle")}
       src={source}
-      data-lens-auth={LENS_UI_AUTH}
+      data-lens-auth={credentials ? LENS_UI_AUTH : undefined}
       className="h-full w-full flex-1 border-0"
     />
   );
@@ -113,7 +115,7 @@ function LensConnection({ accessToken, headerName }: LensCredentials) {
       </p>
     );
   if (workspace.state === "served")
-    return <LensFrame source={source} accessToken={accessToken} headerName={headerName} />;
+    return <LensFrame source={source} credentials={workspace.auth === "bearer" ? { accessToken, headerName } : null} />;
   if (workspace.state === "unconfigured") return <LensIntroduction onRetry={retry} />;
   return (
     <div className="flex min-h-96 flex-1 items-center justify-center px-6 py-16 sm:px-10">
