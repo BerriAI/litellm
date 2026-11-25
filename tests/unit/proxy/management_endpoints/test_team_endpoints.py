@@ -43,6 +43,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import RoutedModels, routed_models_of
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
@@ -19820,13 +19821,11 @@ _DB_OUTAGE_503_BODY: Final = {
 }
 
 
-def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
-    prisma_client = MagicMock()
+def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, UserApiKeyCache]:
+    prisma_client: Final = MagicMock()
+    prisma_client.read_db = prisma_client.writer_db
     stores.user.error = error
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
-    return prisma_client, cache
+    return prisma_client, UserApiKeyCache()
 
 
 def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:

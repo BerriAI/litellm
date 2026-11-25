@@ -145,7 +145,7 @@ async def _fill_from_redis(
         return
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
-            ttl = cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
+            ttl: Final = cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
             if entry is user_entry and generation is not None:
                 _ = cache.store.set_local_if_current(generation, entry.cache_key, value, ttl)
             else:
