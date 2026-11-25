@@ -393,19 +393,25 @@ async fn every_billed_refusal_of_a_fallback_chain_counts_toward_project_itpm_und
     let state = LimiterState::default();
     assert_eq!(limiter.pre_call(&state, admitted, None).await, None);
 
-    for prompt_tokens in [777, 900] {
-        limiter
-            .log_failure(
-                Some(&state),
-                false,
-                billed_refusal(prompt_tokens),
-                &Resolved::default(),
-                TokenRateLimitType::Output,
-                None,
-            )
-            .await;
-    }
+    let resolved = Resolved::default();
+    let refuse = |prompt_tokens| {
+        limiter.log_failure(
+            Some(&state),
+            false,
+            billed_refusal(prompt_tokens),
+            &resolved,
+            TokenRateLimitType::Output,
+            None,
+        )
+    };
 
+    refuse(777).await;
+    assert_eq!(
+        count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Float(777.0)))
+    );
+
+    refuse(900).await;
     assert_eq!(
         count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
         Some(Local::Number(Number::Float(777.0 + 900.0)))
