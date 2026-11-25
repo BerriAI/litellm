@@ -84,39 +84,44 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
             EndpointType.GEMINI if custom_llm_provider == litellm.LlmProviders.GEMINI.value else EndpointType.VERTEX_AI
         )
         self._hidden_params: dict[str, object] = hidden_params or {}
-        self._stream_logged = False
+        self._stream_logging_task: asyncio.Task[object] | None = None
 
-    async def log_collected_stream(self) -> bool:
-        """Dispatch success logging for the chunks collected so far, at most once per stream.
-        Returns whether a success event was dispatched for this stream."""
+    def _start_stream_logging(self) -> asyncio.Task[object]:
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
 
-        if not self._stream_logged and self.collected_chunks:
-            self._stream_logged = True
-            await PassThroughStreamingHandler.route_streaming_logging_to_handler(
-                litellm_logging_obj=self.litellm_logging_obj,
-                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-                url_route="/v1/generateContent",
-                request_body=self.request_body or {},
-                endpoint_type=self.endpoint_type,
-                start_time=self.start_time,
-                raw_bytes=tuple(self.collected_chunks),
-                end_time=datetime.now(),
-                model=self.model,
+        if self._stream_logging_task is None:
+            self._stream_logging_task = spawn_logging_task(
+                asyncio.get_running_loop(),
+                PassThroughStreamingHandler.route_streaming_logging_to_handler(
+                    litellm_logging_obj=self.litellm_logging_obj,
+                    passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+                    url_route="/v1/generateContent",
+                    request_body=self.request_body or {},
+                    endpoint_type=self.endpoint_type,
+                    start_time=self.start_time,
+                    raw_bytes=tuple(self.collected_chunks),
+                    end_time=datetime.now(),
+                    model=self.model,
+                ),
+                task_name="Google GenAI stream success log",
             )
+        return self._stream_logging_task
+
+    async def log_collected_stream(self) -> bool:
+        """Finish success logging for the chunks collected so far, which runs at most once per stream.
+        Returns whether a success event was dispatched for this stream."""
+        if self._stream_logging_task is None and not self.collected_chunks:
+            return False
+        _ = await asyncio.shield(self._start_stream_logging())
         return self.litellm_logging_obj.model_call_details.get("has_dispatched_final_stream_success") is True
 
     async def _handle_async_streaming_logging(
         self,
     ):
         """Handle the logging after all chunks have been collected."""
-        spawn_logging_task(
-            asyncio.get_running_loop(),
-            self.log_collected_stream(),
-            task_name="Google GenAI stream success log",
-        )
+        _ = self._start_stream_logging()
 
 
 class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
