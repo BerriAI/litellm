@@ -3313,7 +3313,8 @@ class PrometheusLogger(CustomLogger):
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
                 custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
-                    request_data.get("standard_logging_object"), is_answer_without_an_image(original_exception)
+                    request_data.get("standard_logging_object"),
+                    is_answer_without_an_image(original_exception) and not _opted_out_of_logging(request_data),
                 ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
@@ -3344,7 +3345,7 @@ class PrometheusLogger(CustomLogger):
         logged: Final = _logged_fields(request_data.get("standard_logging_object"))
         if logged.get("status") == "success":
             return
-        if request_data.get("no-log") is True and not litellm.global_disable_no_log_param:
+        if _opted_out_of_logging(request_data):
             return
         if request_data.get("call_type") not in IMAGE_CALL_TYPES or not isinstance(usage, litellm.Usage):
             return
@@ -5512,6 +5513,10 @@ def get_custom_labels_from_metadata(metadata: Mapping[str, object]) -> dict[str,
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def _opted_out_of_logging(request_data: Mapping[str, object]) -> bool:
+    return request_data.get("no-log") is True and not litellm.global_disable_no_log_param
 
 
 def _custom_labels_of_an_answer_without_an_image(

@@ -973,30 +973,44 @@ async def test_refused_image_prompt_keeps_the_custom_metadata_labels_of_its_requ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("global_disable_no_log_param", "expected_spend", "expected_tokens"),
-    ((False, [], []), (True, [0.25], [8.0])),
+    ("global_disable_no_log_param", "expected_spend", "expected_tokens", "exports_requester_label"),
+    ((False, [], [], False), (True, [0.25], [8.0], True)),
 )
 async def test_failure_hook_counts_no_spend_for_a_no_log_image_failure(
     monkeypatch: pytest.MonkeyPatch,
     global_disable_no_log_param: bool,
     expected_spend: list[float],
     expected_tokens: list[float],
+    exports_requester_label: bool,
 ) -> None:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth
 
     monkeypatch.setattr(litellm, "global_disable_no_log_param", global_disable_no_log_param)
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["metadata.rig_label"])
     _clear_prometheus_registry()
     try:
         await PrometheusLogger().async_post_call_failure_hook(
             request_data=_billed_image_failure(
-                {"model": "gemini/image-model", "custom_llm_provider": "gemini"}, **{"no-log": True}
+                {
+                    "model": "gemini/image-model",
+                    "custom_llm_provider": "gemini",
+                    "metadata": {"requester_metadata": {"rig_label": "alpha"}},
+                },
+                **{"no-log": True},
             ),
             original_exception=_image_refusal(),
             user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
         )
         assert [sample.value for sample in _collected_samples("litellm_spend_metric_total")] == expected_spend
         assert [sample.value for sample in _collected_samples("litellm_total_tokens_metric_total")] == expected_tokens
+        proxy_request_samples: Final = (
+            *_collected_samples("litellm_proxy_failed_requests_metric_total"),
+            *_collected_samples("litellm_proxy_total_requests_metric_total"),
+        )
+        labels: Final = {sample.labels.get("metadata_rig_label") for sample in proxy_request_samples}
+        assert proxy_request_samples
+        assert ("alpha" in labels) is exports_requester_label
     finally:
         _clear_prometheus_registry()
 
