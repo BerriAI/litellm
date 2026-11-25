@@ -465,23 +465,19 @@ mod tests {
     )]
     // No messages, no prompt: nothing to reserve.
     #[case::chat_empty(json!({"messages": []}), "acompletion", None, None, (0, 0))]
-    // 12 characters of messages plus 40 of system: 52 // 4 = 13 input.
     #[case::messages_system(
         json!({"system": "x".repeat(40), "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
         "anthropic_messages", None, None, (13, 50)
     )]
-    // Only the text of each system block counts: (12 + 40 + 8) // 4 = 15 input.
     #[case::messages_system_blocks(
         json!({"system": [{"type": "text", "text": "x".repeat(40), "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": "abcdefgh"}],
                "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
         "anthropic_messages", None, None, (15, 50)
     )]
-    // A chat request has no top-level system member, so a stray one is not counted.
     #[case::chat_ignores_system(
         json!({"system": "x".repeat(40), "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
         "acompletion", None, None, (3, 50)
     )]
-    // 40 characters of input plus 80 of instructions: 120 // 4 = 30 input.
     #[case::responses_instructions(
         json!({"instructions": "y".repeat(80), "input": "x".repeat(40), "max_output_tokens": 50}),
         "aresponses", None, None, (30, 50)
