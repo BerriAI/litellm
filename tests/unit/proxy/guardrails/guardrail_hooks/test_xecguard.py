@@ -8,6 +8,7 @@ suite lives in ``test_xecguard_live.py``.
 
 import json
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -1722,9 +1723,9 @@ class TestXecGuardLoggingHook:
 
     @pytest.mark.asyncio
     async def test_async_logging_hook_scans_responses_input_text_parts(
-        self, httpx_transport, xecguard_guardrail
-    ):
-        responses_turn = [
+        self, httpx_transport: None, xecguard_guardrail: XecGuardGuardrail
+    ) -> None:
+        responses_turn: Final = [
             {"role": "system", "content": "You are a weather assistant"},
             {
                 "type": "message",
@@ -1743,7 +1744,7 @@ class TestXecGuardLoggingHook:
             },
         ]
         with respx.mock:
-            scan = respx.post("https://api.test.xecguard.local/xecguard/v1/scan").mock(
+            scan: Final = respx.post("https://api.test.xecguard.local/xecguard/v1/scan").mock(
                 return_value=httpx.Response(
                     200, json={"decision": "SAFE", "trace_id": "lg-6"}
                 )

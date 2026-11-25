@@ -16,7 +16,6 @@ Covers:
 from importlib import import_module
 import asyncio
 import copy
-from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -703,45 +702,65 @@ _TOOL_TURN_INPUT_WITH_INJECTED_MARKER: Final = [
 ]
 
 
-def _patch_native_responses_request() -> AbstractContextManager[MagicMock | AsyncMock]:
-    return patch.object(
-        import_module("litellm.responses.main").base_llm_http_handler,
-        "response_api_handler",
-        return_value=MagicMock(),
+_OPENAI_RESPONSE: Final = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1767225600,
+    "status": "completed",
+    "model": "gpt-4o",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Bogota is 14C", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
+}
+
+
+def _mock_openai_responses(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_OPENAI_RESPONSE)
     )
 
 
 @pytest.mark.asyncio
-async def test_async_cache_control_injection_logs_role_less_input_items() -> None:
+async def test_async_cache_control_injection_logs_role_less_input_items(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = _mock_openai_responses(respx_mock)
     logging_obj: Final = _real_logging_obj()
 
-    with _patch_native_responses_request() as native_request:
-        await litellm.aresponses(
-            input=copy.deepcopy(_TOOL_TURN_INPUT),
-            model="gpt-4o",
-            api_key="sk-test",
-            cache_control_injection_points=[{"location": "message", "role": "system"}],
-            litellm_logging_obj=logging_obj,
-        )
+    await litellm.aresponses(
+        input=copy.deepcopy(_TOOL_TURN_INPUT),
+        model="gpt-4o",
+        api_key="sk-test",
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
 
-    assert native_request.call_count == 1
+    assert responses_route.call_count == 1
     assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
     assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
 
 
-def test_sync_cache_control_injection_logs_role_less_input_items() -> None:
+def test_sync_cache_control_injection_logs_role_less_input_items(respx_mock: respx.MockRouter) -> None:
+    responses_route: Final = _mock_openai_responses(respx_mock)
     logging_obj: Final = _real_logging_obj()
 
-    with _patch_native_responses_request() as native_request:
-        litellm.responses(
-            input=copy.deepcopy(_TOOL_TURN_INPUT),
-            model="gpt-4o",
-            api_key="sk-test",
-            cache_control_injection_points=[{"location": "message", "role": "system"}],
-            litellm_logging_obj=logging_obj,
-        )
+    litellm.responses(
+        input=copy.deepcopy(_TOOL_TURN_INPUT),
+        model="gpt-4o",
+        api_key="sk-test",
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
 
-    assert native_request.call_count == 1
+    assert responses_route.call_count == 1
     assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
     assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
 
@@ -771,19 +790,19 @@ async def test_async_vector_store_context_logs_role_less_input_items(
             },
         )
     )
+    responses_route: Final = _mock_openai_responses(respx_mock)
     logging_obj: Final = _real_logging_obj()
 
-    with _patch_native_responses_request() as native_request:
-        await litellm.aresponses(
-            input=copy.deepcopy(_TOOL_TURN_INPUT),
-            model="gpt-4o",
-            api_key="sk-test",
-            vector_store_ids=["vs_weather"],
-            litellm_logging_obj=logging_obj,
-        )
+    await litellm.aresponses(
+        input=copy.deepcopy(_TOOL_TURN_INPUT),
+        model="gpt-4o",
+        api_key="sk-test",
+        vector_store_ids=["vs_weather"],
+        litellm_logging_obj=logging_obj,
+    )
 
     assert search_route.call_count == 1
-    assert native_request.call_count == 1
+    assert responses_route.call_count == 1
     assert logging_obj.model_call_details["messages"] == [
         _TOOL_TURN_INPUT[0],
         {"role": "user", "content": "Context:\n\nBogota averages 14C\n\n"},
