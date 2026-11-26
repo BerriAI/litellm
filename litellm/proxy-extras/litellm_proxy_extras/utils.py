@@ -50,7 +50,7 @@ class LensCheckConnect(Protocol):
 def str_to_bool(value: str | None) -> bool:
     if value is None:
         return False
-    return value.lower() in ("true", "1", "t", "y", "yes")
+    return value.lower() in ("true", "1", "t", "y", "yes", "on")
 
 
 def _get_prisma_env() -> dict:

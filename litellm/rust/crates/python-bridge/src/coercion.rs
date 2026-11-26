@@ -343,15 +343,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case("None", None)]
-    #[case("' True '", Some(true))]
-    #[case("' fAlSe '", Some(false))]
-    #[case("'yes'", Some(true))]
-    #[case("'1'", Some(true))]
-    #[case("' OFF '", Some(false))]
-    #[case("'0'", Some(false))]
-    #[case("'t'", None)]
-    #[case("'unknown'", None)]
+    #[case::none("None", None)]
+    #[case::padded_true("' True '", Some(true))]
+    #[case::mixed_case_false("' fAlSe '", Some(false))]
+    #[case::yes("'yes'", Some(true))]
+    #[case::one("'1'", Some(true))]
+    #[case::padded_off("' OFF '", Some(false))]
+    #[case::zero("'0'", Some(false))]
+    #[case::single_letter("'t'", None)]
+    #[case::unknown_word("'unknown'", None)]
     fn string_boolean_tokens_remain_separate_from_truthiness(
         #[case] source: &str,
         #[case] expected: Option<bool>,

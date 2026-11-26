@@ -2010,11 +2010,15 @@ def test_mask_output_header_true_redacts_the_completion():
     [
         (False, False),
         (True, True),
-        # An unrecognised string keeps its truthiness, so existing behaviour is unchanged
         ("yes", True),
+        ("1", True),
+        ("no", False),
+        ("0", False),
+        ("off", False),
+        ("maybe", True),
     ],
 )
-def test_mask_input_from_the_request_body_is_unchanged(mask_input, expect_redacted):
+def test_mask_input_from_the_request_body_reads_on_and_off_words(mask_input, expect_redacted):
     rig = _steering_logger()
 
     _, generation_params, _ = _emit(rig, metadata={"mask_input": mask_input})

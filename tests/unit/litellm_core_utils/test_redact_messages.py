@@ -717,6 +717,27 @@ class TestShouldRedactMessageLogging:
         )
         assert should_redact_message_logging(details) is False
 
+    @pytest.mark.parametrize(
+        ("enable_headers", "dynamic_value", "expected"),
+        [
+            ({"x-litellm-enable-message-redaction": "true"}, "0", False),
+            ({"x-litellm-enable-message-redaction": "true"}, "no", False),
+            ({"x-litellm-enable-message-redaction": "true"}, " OFF ", False),
+            ({}, "1", True),
+            ({}, "yes", True),
+            ({}, "on", True),
+            ({"x-litellm-enable-message-redaction": "true"}, "maybe", True),
+            ({}, "maybe", False),
+        ],
+    )
+    def test_dynamic_param_on_off_words_override_the_enable_header(self, enable_headers, dynamic_value, expected):
+        details = _make_model_call_details(
+            metadata_headers=enable_headers,
+            litellm_metadata=None,
+            standard_callback_dynamic_params={"turn_off_message_logging": dynamic_value},
+        )
+        assert should_redact_message_logging(details) is expected
+
     # ---- non-dict metadata safety ----
 
     def test_both_metadata_fields_none(self):

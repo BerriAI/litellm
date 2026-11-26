@@ -24,8 +24,8 @@ TERRAFORM_MODULES: Final = {
 IMAGE_ENTRYPOINT_PATH: Final = "/app/docker-entrypoint.sh"
 STUBBED_EXECUTABLES: Final = ("ddtrace-run", "uvicorn", "python", "litellm", "nginx")
 
-TRUTHY_USE_DDTRACE: Final = ("true", "True", "TRUE", "tRuE")
-FALSY_USE_DDTRACE: Final = (None, "", "false", "False", "1", "yes", "on", "truex")
+TRUTHY_USE_DDTRACE: Final = ("true", "True", "TRUE", "tRuE", "1", "yes", "YES", "on", "On")
+FALSY_USE_DDTRACE: Final = (None, "", "false", "False", "0", "no", "off", "truex")
 
 PYTHONPATH_SENTINEL: Final = "/lit-entrypoint-sentinel:/app"
 

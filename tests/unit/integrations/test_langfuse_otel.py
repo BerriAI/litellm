@@ -1232,6 +1232,8 @@ class TestDerivedTraceFields:
                 frozenset({"langfuse.trace.input", "langfuse.trace.output"}),
             ),
             ({"mask_input": "false", "mask_output": "False"}, frozenset()),
+            ({"mask_input": "yes", "mask_output": "1"}, frozenset({"langfuse.trace.input", "langfuse.trace.output"})),
+            ({"mask_input": "no", "mask_output": "0"}, frozenset()),
             ({"mask_input": False, "mask_output": None}, frozenset()),
         ],
     )
