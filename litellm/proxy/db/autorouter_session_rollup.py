@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
 from litellm.proxy.db.db_span import db_span
@@ -220,6 +221,12 @@ def _turn_time_utc(start_time_iso: str) -> datetime | None:
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _mapping_or_none(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
 def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
     """The TTL this turn's cache write used, or None when nothing was written.
 
@@ -230,9 +237,9 @@ def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
 
     if not usage_object:
         return None
-    details: Final = usage_object.get("prompt_tokens_details")
-    creation: Final = details.get("cache_creation_token_details") if isinstance(details, Mapping) else None
-    if isinstance(creation, Mapping):
+    details: Final = _mapping_or_none(usage_object.get("prompt_tokens_details"))
+    creation: Final = _mapping_or_none(details.get("cache_creation_token_details")) if details is not None else None
+    if creation is not None:
         if creation.get("ephemeral_1h_input_tokens"):
             return CACHE_TTL_1H_SECONDS
         if creation.get("ephemeral_5m_input_tokens"):
@@ -494,7 +501,7 @@ _SESSION_TABLE_BY_STATEMENT: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
+def _as_sql_param(value: object) -> object:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, datetime):
@@ -502,8 +509,8 @@ def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | 
     return value
 
 
-def _upsert_params(transaction: AutoRouterTurnTransaction) -> tuple[str | float | None, ...]:
-    return tuple(_as_sql_param(getattr(transaction, name)) for name in _UPSERT_PARAM_FIELDS)
+def _upsert_params(transaction: AutoRouterTurnTransaction) -> tuple[object, ...]:
+    return tuple(_as_sql_param(attribute_or_none(transaction, name)) for name in _UPSERT_PARAM_FIELDS)
 
 
 async def write_autorouter_turn(

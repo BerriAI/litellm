@@ -1,4 +1,6 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { Page } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import i18n from "@/i18n/i18n";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
 import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
@@ -37,7 +39,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Copy, Inbox, Search as SearchIcon, X } from "lucide-react";
+import { Copy, Inbox, LayoutGrid, Search as SearchIcon, X } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -344,15 +346,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     setIsMakeMcpPublicModalVisible(true);
   };
 
-  const handleOk = () => {
-    setIsModalVisible(false);
-    setSelectedModel(null);
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
-  };
-
   const handleCancel = () => {
     setIsModalVisible(false);
     setSelectedModel(null);
@@ -461,276 +454,291 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return <PublicModelHub accessToken={accessToken} />;
   }
 
+  const HubPage = isChat ? "div" : Page;
+  const HubContent = isChat ? React.Fragment : "div";
+
   return (
-    <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : "mx-4"}>
+    <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : undefined}>
       {publicPage == false ? (
-        <div className={isChat ? "chat-model-hub-content" : "w-full m-2 mt-2 p-8"}>
-          {/* Header with Title, Description and URL */}
-          {!isChat && (
-            <div className="flex justify-between items-center mb-6">
-              <div className="flex flex-col items-start">
-                <h2 className="text-center text-xl font-semibold">{term(t("aiHub.modelHubTable.title"))}</h2>
-                {isAdminRole(userRole || "") ? (
-                  <p className="text-sm text-muted-foreground">{t("aiHub.modelHubTable.adminDescription")}</p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">{t("aiHub.modelHubTable.userDescription")}</p>
-                )}
-              </div>
-              <div className="flex items-center space-x-4">
-                <p>{t("aiHub.modelHubTable.hubUrlLabel")}</p>
-                <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                  <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
-                  <button
-                    onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
-                    className="p-1 hover:bg-accent rounded-sm transition-colors"
-                    title={t("aiHub.modelHubTable.copyUrl")}
-                  >
-                    <Copy size={16} className="text-muted-foreground" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Useful Links Management Section for Admins */}
-          {canModify && (
-            <div className="mt-8 mb-2">
-              <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
-            </div>
-          )}
-
-          {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
-          <Tabs defaultValue="models">
+        <HubPage className={isChat ? "chat-model-hub-content" : undefined}>
+          <HubContent>
             {!isChat && (
-              <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-                <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
-                  {t("aiHub.modelHubTable.tabs.models")}
-                </TabsTrigger>
-                <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
-                  {t("aiHub.modelHubTable.tabs.agents")}
-                </TabsTrigger>
-                <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
-                  {t("aiHub.modelHubTable.tabs.mcp")}
-                </TabsTrigger>
-                <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
-                  {t("aiHub.modelHubTable.tabs.skills")}
-                </TabsTrigger>
-              </TabsList>
+              <PageHeader
+                className="mb-6"
+                aside={
+                  <div className="flex min-w-0 items-center gap-4">
+                    <p>{t("aiHub.modelHubTable.hubUrlLabel")}</p>
+                    <div className="flex min-w-0 items-center bg-border px-2 py-1 rounded-sm">
+                      <p className="mr-2 break-all">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
+                      <button
+                        onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
+                        className="shrink-0 p-1 hover:bg-accent rounded-sm transition-colors"
+                        title={t("aiHub.modelHubTable.copyUrl")}
+                      >
+                        <Copy size={16} className="text-muted-foreground" />
+                      </button>
+                    </div>
+                  </div>
+                }
+              >
+                <PageHeaderTitle>
+                  <LayoutGrid />
+                  {term(t("aiHub.modelHubTable.title"))}
+                </PageHeaderTitle>
+                {isAdminRole(userRole || "") ? (
+                  <PageHeaderDescription>{t("aiHub.modelHubTable.adminDescription")}</PageHeaderDescription>
+                ) : (
+                  <PageHeaderDescription>{t("aiHub.modelHubTable.userDescription")}</PageHeaderDescription>
+                )}
+              </PageHeader>
             )}
 
-            <div>
-              {/* Model Hub Tab */}
-              <TabsContent value="models" keepMounted>
-                {/* Model Filters and Table */}
-                <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
-                  {isChat && (
-                    <div className="chat-model-section-heading">
-                      <h2>{t("aiHub.modelHubTable.models.chatTitle")}</h2>
-                      <span
-                        className="chat-model-section-count"
-                        aria-label={t("aiHub.modelHubTable.models.chatCount", { shown: filteredData.length })}
-                      >
-                        {filteredData.length}
-                      </span>
+            {/* Useful Links Management Section for Admins */}
+            {canModify && (
+              <div className="mt-8 mb-2">
+                <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
+              </div>
+            )}
+
+            {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
+            <Tabs defaultValue="models">
+              {!isChat && (
+                <div className="mb-4 border-b">
+                  <div className="-mb-1.5 overflow-x-auto pb-1.5">
+                    <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
+                      <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.models")}
+                      </TabsTrigger>
+                      <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.agents")}
+                      </TabsTrigger>
+                      <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.mcp")}
+                      </TabsTrigger>
+                      <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.skills")}
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                {/* Model Hub Tab */}
+                <TabsContent value="models" keepMounted>
+                  {/* Model Filters and Table */}
+                  <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
+                    {isChat && (
+                      <div className="chat-model-section-heading">
+                        <h2>{t("aiHub.modelHubTable.models.chatTitle")}</h2>
+                        <span
+                          className="chat-model-section-count"
+                          aria-label={t("aiHub.modelHubTable.models.chatCount", { shown: filteredData.length })}
+                        >
+                          {filteredData.length}
+                        </span>
+                      </div>
+                    )}
+                    {/* Header with Make Public Button */}
+                    {publicPage == false && canModify && (
+                      <div className="flex justify-end mb-4">
+                        <Button onClick={() => handleMakePublicPage()}>
+                          {t("aiHub.modelHubTable.models.makePublic")}
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Filters */}
+                    <ModelFilters
+                      variant={variant}
+                      modelHubData={modelHubData || []}
+                      className={isChat ? "chat-model-hub-filters" : undefined}
+                      showFiltersCard={!isChat}
+                      onFilteredDataChange={handleFilteredDataChange}
+                      extraModes={isDashboardCatalog ? [DECISIONS_MODE] : []}
+                      onModeChange={setSelectedMode}
+                      selectedProvider={isChat ? selectedProvider : undefined}
+                      onProviderChange={isChat ? setSelectedProvider : undefined}
+                    />
+
+                    {/* Model Table */}
+                    <DataTable
+                      data={filteredData}
+                      paginationMode="client"
+                      columns={modelColumns}
+                      getRowId={(model, index) => model.model_group || String(index)}
+                      sortingMode="client"
+                      sorting={modelSorting}
+                      onSortingChange={setModelSorting}
+                      isLoading={loading}
+                      loadingMessage={t("aiHub.modelHubTable.models.loading")}
+                      noDataMessage={
+                        <HubEmptyState
+                          {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)}
+                        />
+                      }
+                      size="compact"
+                    />
+                  </Card>
+
+                  {!isChat && (
+                    <div className="mt-4 text-center space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        {t("aiHub.modelHubTable.models.showing", {
+                          shown: filteredData.length,
+                          total: modelHubData?.length || 0,
+                        })}
+                      </p>
                     </div>
                   )}
-                  {/* Header with Make Public Button */}
-                  {publicPage == false && canModify && (
-                    <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakePublicPage()}>
-                        {t("aiHub.modelHubTable.models.makePublic")}
-                      </Button>
+
+                  {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
+                </TabsContent>
+
+                {/* Agent Hub Tab */}
+                <TabsContent value="agents" keepMounted>
+                  <Card className="px-6">
+                    {/* Header with Make Public Button */}
+                    {publicPage == false && canModify && (
+                      <div className="flex justify-end mb-4">
+                        <Button onClick={() => handleMakeAgentPublicPage()}>
+                          {t("aiHub.modelHubTable.agents.makePublic")}
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="mb-4">
+                      <p className="text-sm font-medium mb-2">{t("aiHub.modelHubTable.agents.searchLabel")}</p>
+                      <InputGroup className="max-w-sm">
+                        <InputGroupAddon>
+                          <SearchIcon className="size-4 text-muted-foreground" />
+                        </InputGroupAddon>
+                        <InputGroupInput
+                          placeholder={t("aiHub.modelHubTable.agents.searchPlaceholder")}
+                          value={agentSearchTerm}
+                          onChange={(e) => setAgentSearchTerm(e.target.value)}
+                        />
+                        {agentSearchTerm && (
+                          <InputGroupAddon align="inline-end">
+                            <InputGroupButton
+                              size="icon-xs"
+                              aria-label={t("aiHub.modelHubTable.agents.clearSearch")}
+                              onClick={() => setAgentSearchTerm("")}
+                            >
+                              <X />
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        )}
+                      </InputGroup>
                     </div>
-                  )}
 
-                  {/* Filters */}
-                  <ModelFilters
-                    variant={variant}
-                    modelHubData={modelHubData || []}
-                    className={isChat ? "chat-model-hub-filters" : undefined}
-                    showFiltersCard={!isChat}
-                    onFilteredDataChange={handleFilteredDataChange}
-                    extraModes={isDashboardCatalog ? [DECISIONS_MODE] : []}
-                    onModeChange={setSelectedMode}
-                    selectedProvider={isChat ? selectedProvider : undefined}
-                    onProviderChange={isChat ? setSelectedProvider : undefined}
-                  />
+                    {/* Agent Table */}
+                    <DataTable
+                      data={filteredAgentData}
+                      paginationMode="client"
+                      columns={agentColumns}
+                      getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
+                      sortingMode="client"
+                      sorting={agentSorting}
+                      onSortingChange={setAgentSorting}
+                      isLoading={agentLoading}
+                      loadingMessage={t("aiHub.modelHubTable.agents.loading")}
+                      noDataMessage={
+                        <HubEmptyState
+                          title={
+                            agentHubData?.length
+                              ? t("aiHub.modelHubTable.agents.noMatchTitle")
+                              : t("aiHub.modelHubTable.agents.noneTitle")
+                          }
+                          body={
+                            agentHubData?.length
+                              ? t("aiHub.modelHubTable.agents.noMatchBody")
+                              : t("aiHub.modelHubTable.agents.noneBody")
+                          }
+                        />
+                      }
+                      size="compact"
+                    />
+                  </Card>
 
-                  {/* Model Table */}
-                  <DataTable
-                    data={filteredData}
-                    paginationMode="client"
-                    columns={modelColumns}
-                    getRowId={(model, index) => model.model_group || String(index)}
-                    sortingMode="client"
-                    sorting={modelSorting}
-                    onSortingChange={setModelSorting}
-                    isLoading={loading}
-                    loadingMessage={t("aiHub.modelHubTable.models.loading")}
-                    noDataMessage={
-                      <HubEmptyState {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)} />
-                    }
-                    size="compact"
-                  />
-                </Card>
-
-                {!isChat && (
                   <div className="mt-4 text-center space-y-2">
                     <p className="text-sm text-muted-foreground">
-                      {t("aiHub.modelHubTable.models.showing", {
-                        shown: filteredData.length,
-                        total: modelHubData?.length || 0,
+                      {t("aiHub.modelHubTable.agents.showing", {
+                        shown: filteredAgentData.length,
+                        total: agentHubData?.length || 0,
                       })}
                     </p>
                   </div>
-                )}
+                </TabsContent>
 
-                {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
-              </TabsContent>
+                {/* MCP Hub Tab */}
+                <TabsContent value="mcp" keepMounted>
+                  <Card className="px-6">
+                    {/* Header with Make Public Button */}
+                    {publicPage == false && canModify && (
+                      <div className="flex justify-end mb-4">
+                        <Button
+                          onClick={() => handleMakeMcpPublicPage()}
+                          disabled={isMCPHubVisibilityDisabled(mcpLoading, mcpHubData)}
+                        >
+                          {t("aiHub.modelHubTable.mcp.manageVisibility")}
+                        </Button>
+                      </div>
+                    )}
 
-              {/* Agent Hub Tab */}
-              <TabsContent value="agents" keepMounted>
-                <Card className="px-6">
-                  {/* Header with Make Public Button */}
+                    {/* MCP Server Table */}
+                    <DataTable
+                      data={mcpHubData || []}
+                      paginationMode="client"
+                      columns={mcpColumns}
+                      getRowId={(server, index) => server.server_id || String(index)}
+                      sortingMode="client"
+                      sorting={mcpSorting}
+                      onSortingChange={setMcpSorting}
+                      isLoading={mcpLoading}
+                      loadingMessage={t("aiHub.modelHubTable.mcp.loading")}
+                      noDataMessage={
+                        <HubEmptyState
+                          title={t("aiHub.modelHubTable.mcp.noneTitle")}
+                          body={t("aiHub.modelHubTable.mcp.noneBody")}
+                        />
+                      }
+                      size="compact"
+                    />
+                  </Card>
+
+                  <div className="mt-4 text-center space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      {t("aiHub.modelHubTable.mcp.showing", { count: mcpHubData?.length || 0 })}
+                    </p>
+                  </div>
+                </TabsContent>
+
+                {/* Skill Hub Tab */}
+                <TabsContent value="skills" keepMounted>
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeAgentPublicPage()}>
-                        {t("aiHub.modelHubTable.agents.makePublic")}
+                      <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
+                        {t("aiHub.modelHubTable.skills.makePublic")}
                       </Button>
                     </div>
                   )}
-
-                  <div className="mb-4">
-                    <p className="text-sm font-medium mb-2">{t("aiHub.modelHubTable.agents.searchLabel")}</p>
-                    <InputGroup className="max-w-sm">
-                      <InputGroupAddon>
-                        <SearchIcon className="size-4 text-muted-foreground" />
-                      </InputGroupAddon>
-                      <InputGroupInput
-                        placeholder={t("aiHub.modelHubTable.agents.searchPlaceholder")}
-                        value={agentSearchTerm}
-                        onChange={(e) => setAgentSearchTerm(e.target.value)}
-                      />
-                      {agentSearchTerm && (
-                        <InputGroupAddon align="inline-end">
-                          <InputGroupButton
-                            size="icon-xs"
-                            aria-label={t("aiHub.modelHubTable.agents.clearSearch")}
-                            onClick={() => setAgentSearchTerm("")}
-                          >
-                            <X />
-                          </InputGroupButton>
-                        </InputGroupAddon>
-                      )}
-                    </InputGroup>
-                  </div>
-
-                  {/* Agent Table */}
-                  <DataTable
-                    data={filteredAgentData}
-                    paginationMode="client"
-                    columns={agentColumns}
-                    getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
-                    sortingMode="client"
-                    sorting={agentSorting}
-                    onSortingChange={setAgentSorting}
-                    isLoading={agentLoading}
-                    loadingMessage={t("aiHub.modelHubTable.agents.loading")}
-                    noDataMessage={
-                      <HubEmptyState
-                        title={
-                          agentHubData?.length
-                            ? t("aiHub.modelHubTable.agents.noMatchTitle")
-                            : t("aiHub.modelHubTable.agents.noneTitle")
-                        }
-                        body={
-                          agentHubData?.length
-                            ? t("aiHub.modelHubTable.agents.noMatchBody")
-                            : t("aiHub.modelHubTable.agents.noneBody")
-                        }
-                      />
-                    }
-                    size="compact"
+                  <SkillHubDashboard
+                    skills={skillHubData}
+                    isLoading={skillLoading}
+                    isAdmin={canModify}
+                    accessToken={accessToken}
+                    publicPage={publicPage}
+                    onPublishSuccess={async () => {
+                      const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
+                      setSkillHubData(response.plugins);
+                    }}
                   />
-                </Card>
-
-                <div className="mt-4 text-center space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    {t("aiHub.modelHubTable.agents.showing", {
-                      shown: filteredAgentData.length,
-                      total: agentHubData?.length || 0,
-                    })}
-                  </p>
-                </div>
-              </TabsContent>
-
-              {/* MCP Hub Tab */}
-              <TabsContent value="mcp" keepMounted>
-                <Card className="px-6">
-                  {/* Header with Make Public Button */}
-                  {publicPage == false && canModify && (
-                    <div className="flex justify-end mb-4">
-                      <Button
-                        onClick={() => handleMakeMcpPublicPage()}
-                        disabled={isMCPHubVisibilityDisabled(mcpLoading, mcpHubData)}
-                      >
-                        {t("aiHub.modelHubTable.mcp.manageVisibility")}
-                      </Button>
-                    </div>
-                  )}
-
-                  {/* MCP Server Table */}
-                  <DataTable
-                    data={mcpHubData || []}
-                    paginationMode="client"
-                    columns={mcpColumns}
-                    getRowId={(server, index) => server.server_id || String(index)}
-                    sortingMode="client"
-                    sorting={mcpSorting}
-                    onSortingChange={setMcpSorting}
-                    isLoading={mcpLoading}
-                    loadingMessage={t("aiHub.modelHubTable.mcp.loading")}
-                    noDataMessage={
-                      <HubEmptyState
-                        title={t("aiHub.modelHubTable.mcp.noneTitle")}
-                        body={t("aiHub.modelHubTable.mcp.noneBody")}
-                      />
-                    }
-                    size="compact"
-                  />
-                </Card>
-
-                <div className="mt-4 text-center space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    {t("aiHub.modelHubTable.mcp.showing", { count: mcpHubData?.length || 0 })}
-                  </p>
-                </div>
-              </TabsContent>
-
-              {/* Skill Hub Tab */}
-              <TabsContent value="skills" keepMounted>
-                {publicPage == false && canModify && (
-                  <div className="flex justify-end mb-4">
-                    <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
-                      {t("aiHub.modelHubTable.skills.makePublic")}
-                    </Button>
-                  </div>
-                )}
-                <SkillHubDashboard
-                  skills={skillHubData}
-                  isLoading={skillLoading}
-                  isAdmin={canModify}
-                  accessToken={accessToken}
-                  publicPage={publicPage}
-                  onPublishSuccess={async () => {
-                    const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
-                    setSkillHubData(response.plugins);
-                  }}
-                />
-              </TabsContent>
-            </div>
-          </Tabs>
-        </div>
+                </TabsContent>
+              </div>
+            </Tabs>
+          </HubContent>
+        </HubPage>
       ) : (
         <Card className="mx-auto max-w-xl mt-10 px-6">
           <p className="text-xl text-center mb-2 text-foreground">{t("aiHub.modelHubTable.publicNotEnabled.title")}</p>

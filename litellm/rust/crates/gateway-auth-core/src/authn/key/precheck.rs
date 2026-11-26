@@ -1,6 +1,6 @@
 use crate::{KeyDenial, KeyHash, MasterKey, Token, host::Rows, routes::table::USER_AUTH};
 
-use super::{Credential, KeySettings, Keyed, Verified};
+use super::{KeySettings, KeySource, Keyed, Verified};
 
 /// What the request alone decides, before any host call.
 pub(crate) enum Prechecked<'a, R: Rows> {
@@ -35,23 +35,23 @@ impl<R: Rows> Named<'_, R> {
 
 pub(crate) fn precheck<'a, R: Rows>(
     route: &str,
-    credential: Credential<'a, R::Key>,
+    credential: KeySource<'a, R::Key>,
     settings: &'a KeySettings,
 ) -> Result<Prechecked<'a, R>, KeyDenial> {
     let Some(master_key) = settings.master_key.as_ref() else {
         let token = match credential {
-            Credential::Presented(token) => token.cloned(),
-            Credential::Resolved { key, .. } => key.record.token.as_ref().map(Token::from_stored),
+            KeySource::Presented(token) => token.cloned(),
+            KeySource::Resolved { key, .. } => key.record.token.as_ref().map(Token::from_stored),
         };
         return Ok(Prechecked::Decided(Verified::NoMasterKey { token }));
     };
     let named = match credential {
-        Credential::Presented(None) => return Err(KeyDenial::MissingKey),
-        Credential::Presented(Some(token)) if token.is_empty() => {
+        KeySource::Presented(None) => return Err(KeyDenial::MissingKey),
+        KeySource::Presented(Some(token)) if token.is_empty() => {
             return Err(KeyDenial::MalformedKey);
         }
-        Credential::Presented(Some(token)) => Named::Presented { token, master_key },
-        Credential::Resolved { key, end_user_id } => match key.record.token.clone() {
+        KeySource::Presented(Some(token)) => Named::Presented { token, master_key },
+        KeySource::Resolved { key, end_user_id } => match key.record.token.clone() {
             None => return Err(KeyDenial::MissingKey),
             Some(hash) if hash.as_str().is_empty() => return Err(KeyDenial::MalformedKey),
             Some(hash) => Named::Resolved {

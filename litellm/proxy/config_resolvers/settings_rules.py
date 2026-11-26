@@ -40,6 +40,8 @@ class Resolved:
     source: FieldSource
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _UI_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",

@@ -15,6 +15,7 @@ REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "x
 REASONING_EFFORT_STRENGTH_RANK: Final = MappingProxyType(
     {effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)}
 )
+DEFAULT_REASONING_EFFORT: Final = "default"
 
 
 def nearest_declared_reasoning_effort(

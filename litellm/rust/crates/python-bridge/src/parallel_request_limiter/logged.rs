@@ -21,8 +21,9 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 /// The standard logging metadata members a settlement reads.
-const METADATA_MEMBERS: [&str; 13] = [
+const METADATA_MEMBERS: [&str; 14] = [
     "user_api_key_app_id",
+    "user_api_key_app_group_id",
     "user_api_key_hash",
     "user_api_key_user_id",
     "user_api_key_team_id",
@@ -320,6 +321,7 @@ pub(super) fn logged_call<'py>(
         metadata,
         response: logged_object(&classes, response.cloned(), Some(kwargs))?,
         combined: logged_object(&classes, member(kwargs, "combined_usage_object"), None)?,
+        provider_billed: false,
         ended_before_slot_reuse: false,
     })
 }

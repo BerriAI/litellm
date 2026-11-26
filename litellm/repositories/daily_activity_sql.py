@@ -119,7 +119,12 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             else ()
         ),
     )
-    app_conditions: Final = (*conditions, *((f'"app_id" = ${app_index}',) if scope.app_id is not None else ()))
+    group_index: Final = app_index + int(scope.app_id is not None)
+    app_conditions: Final = (
+        *conditions,
+        *((f'"app_id" = ${app_index}',) if scope.app_id is not None else ()),
+        *((f'"app_group_id" = ${group_index}',) if scope.app_group_id is not None else ()),
+    )
     params: Final = (
         adjusted_start,
         adjusted_end,
@@ -129,6 +134,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.api_keys),) if scope.api_keys else ()),
         *((list(scope.team_ids),) if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None else ()),
         *((scope.app_id,) if scope.app_id is not None else ()),
+        *((scope.app_group_id,) if scope.app_group_id is not None else ()),
     )
     return " AND ".join(app_conditions), params
 

@@ -23,6 +23,13 @@ pyo3::create_exception!(
     "The provider call was already issued and the provider answered with a failure. Args are (status, body); the headers attribute holds the provider's (name, value) response headers."
 );
 
+pyo3::create_exception!(
+    _native,
+    RustDocumentFetchError,
+    PyValueError,
+    "The OCR route could not reach the caller's document, so the provider was never called."
+);
+
 const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
 /// The rejection is a parameter the model does not support, which Python raises as
 /// `UnsupportedParamsError`.
@@ -50,6 +57,9 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
 /// Python's provider config raises the refusal as litellm's `BadRequestError`.
 const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
+/// Python refuses the request before it resolves the provider, so its error names the model and
+/// provider the caller sent.
+const MESSAGES_UNRESOLVED_REJECTION: &str = "messages_unresolved_rejection";
 /// Why the STS call made for the credentials failed, as `(kind, operation, code, message)`.
 const MESSAGES_STS_FAILURE: &str = "messages_sts_failure";
 /// The `scheme://host:port` of a provider the call could not connect to.
@@ -322,6 +332,15 @@ pub(crate) fn route_failure(
                 )
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if matches!(
+                detail,
+                Some(
+                    litellm_llms::ErrorDetail::EmptiedMessages
+                        | litellm_llms::ErrorDetail::NonStringText { .. }
+                )
+            ) {
+                value.setattr(MESSAGES_UNRESOLVED_REJECTION, true)?;
             }
             if let Some(litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
                 model,
@@ -620,6 +639,43 @@ mod tests {
         });
     }
 
+    #[rstest::rstest]
+    #[case::emptied_messages(litellm_llms::ErrorDetail::EmptiedMessages, true)]
+    #[case::non_string_text(
+        litellm_llms::ErrorDetail::NonStringText {
+            path: "messages.0.content.1.text".into(),
+        },
+        true
+    )]
+    #[case::other_request_error(
+        litellm_llms::ErrorDetail::Expected {
+            subject: "messages",
+            expected: "non-empty",
+        },
+        false
+    )]
+    fn only_a_rejection_python_raises_before_resolving_the_provider_is_unresolved(
+        #[case] detail: litellm_llms::ErrorDetail,
+        #[case] unresolved: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(
+                py,
+                Error::invalid_request(detail),
+                RequestMarker::Messages,
+                Ok,
+            )
+            .unwrap();
+            let marked = native
+                .value(py)
+                .getattr_opt(MESSAGES_UNRESOLVED_REJECTION)
+                .unwrap()
+                .is_some_and(|value| value.extract::<bool>().unwrap());
+            assert_eq!(marked, unresolved);
+        });
+    }
+
     fn web_identity_failure(failure: litellm_auth_aws::Error) -> litellm_auth_aws::Error {
         litellm_auth_aws::Error::Credentials {
             flow: litellm_auth_aws::CredentialFlow::WebIdentity,
@@ -878,7 +934,7 @@ mod tests {
             value: "5".into(),
             hint: String::new(),
         }),
-        Some("claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`.")
+        Some("claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config.")
     )]
     #[case::missing_field(
         litellm_llms::Error::MissingField("max_tokens").into(),

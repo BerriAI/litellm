@@ -9,7 +9,6 @@ from fastapi import HTTPException
 from opentelemetry.trace import Status, StatusCode
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -33,7 +32,7 @@ def _real_user_api_key_dict(parent_span):
 
 
 def _proxy_logging():
-    return ProxyLogging(user_api_key_cache=UserApiKeyCache(DualCache()))
+    return ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
 
 def _drive_unified_failure(

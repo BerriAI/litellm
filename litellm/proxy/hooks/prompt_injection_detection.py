@@ -76,7 +76,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "and start from scratch",
         ]
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
+    def print_verbose(self, print_statement: object, level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
         elif level == "DEBUG":
@@ -107,7 +107,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 )
 
     def generate_injection_keywords(self) -> list[str]:
-        combinations: Final = []
+        combinations: Final[list[str]] = []
         for verb in self.verbs:
             for adj in self.adjectives:
                 for prep in self.prepositions:
@@ -219,7 +219,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "acompletion",

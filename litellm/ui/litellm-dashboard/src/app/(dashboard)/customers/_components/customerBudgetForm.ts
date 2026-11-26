@@ -1,4 +1,5 @@
 import type { components } from "@/lib/http/schema";
+import { isValidBudgetDuration, normalizeBudgetDuration } from "@/utils/budgetUtils";
 
 export type Budget = components["schemas"]["Budget"];
 const budgetKeys = [
@@ -32,6 +33,17 @@ export interface BudgetEditorFields extends BudgetFields {
   budgetWindows: { budget: BudgetWindow; maxBudget: string }[];
 }
 
+export const BUDGET_EDITOR_FIELDS = [
+  "budgetEnabled",
+  "maxBudget",
+  "softBudget",
+  "budgetDuration",
+  "tpm",
+  "rpm",
+  "allowedModels",
+  "budgetWindows",
+] as const satisfies readonly (keyof BudgetEditorFields)[];
+
 const asText = (value: number | null | undefined): string => (value == null ? "" : String(value));
 
 export const budgetFields = (budget: Budget | null | undefined): BudgetFields => ({
@@ -52,7 +64,13 @@ const numericLimit = (raw: string, integer = false): number | null | undefined =
   return number;
 };
 
-export const parseBudget = (fields: BudgetFields): Budget | null => {
+const validPrimaryPeriod = (fields: BudgetFields, original?: Budget | null): boolean => {
+  const period = fields.budgetDuration.trim();
+  return !period || period === original?.budget_duration?.trim() || isValidBudgetDuration(period);
+};
+
+export const parseBudget = (fields: BudgetFields, original?: Budget | null): Budget | null => {
+  if (!validPrimaryPeriod(fields, original)) return null;
   const max = numericLimit(fields.maxBudget);
   const soft = numericLimit(fields.softBudget);
   const tpm = numericLimit(fields.tpm, true);
@@ -80,15 +98,36 @@ export const budgetEditorFields = (budget?: Budget | null): BudgetEditorFields =
 
 export const budgetEditorValue = (fields: BudgetEditorFields, original?: Budget | null) => {
   if (!fields.budgetEnabled) return { ok: true, value: null } as const;
-  const parsed = parseBudget(fields);
+  if (
+    !validPrimaryPeriod(fields, original) ||
+    fields.budgetWindows.some(({ budget }) => !isValidBudgetDuration(budget.budget_duration))
+  ) {
+    return { ok: false, error: "customerPortal.budgetEditor.invalidPeriod" } as const;
+  }
+  const parsed = parseBudget(fields, original);
   if (!parsed) return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
   const windows: BudgetWindow[] = [];
   for (const window of fields.budgetWindows) {
-    const parsedWindow = parseBudget({ ...fields, maxBudget: window.maxBudget });
-    if (parsedWindow?.max_budget == null)
-      return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
-    windows.push({ ...window.budget, max_budget: parsedWindow.max_budget });
+    const maxBudget = numericLimit(window.maxBudget);
+    if (maxBudget == null) return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
+    windows.push({ ...window.budget, max_budget: maxBudget });
   }
+  const periods = [
+    ...(parsed.max_budget == null ? [] : [fields.budgetDuration]),
+    ...windows.map((window) => window.budget_duration),
+  ].map(normalizeBudgetDuration);
+  const originalPeriods = [
+    ...(original?.max_budget == null ? [] : [original.budget_duration ?? ""]),
+    ...(original?.budget_limits ?? []).map((window) => window.budget_duration),
+  ].map(normalizeBudgetDuration);
+  if (
+    periods.some(
+      (period) =>
+        periods.filter((value) => value === period).length >
+        Math.max(1, originalPeriods.filter((value) => value === period).length),
+    )
+  )
+    return { ok: false, error: "customerPortal.budgetEditor.duplicatePeriod" } as const;
   return {
     ok: true,
     value: { ...budgetSettings(original), ...parsed, budget_limits: windows.length ? windows : null },
@@ -100,42 +139,6 @@ export const compactBudgetEditorFields = (budget?: Budget | null): BudgetEditorF
   budgetDuration: budget == null ? "1mo" : budget.budget_duration ?? "",
 });
 
-type BudgetPeriod = "1mo" | "12mo";
-
-export const budgetPeriodAmount = (fields: BudgetEditorFields, duration: BudgetPeriod): string => {
-  const scalar = fields.budgetDuration === duration ? fields.maxBudget : "";
-  const amounts = [
-    scalar,
-    ...fields.budgetWindows
-      .filter((window) => window.budget.budget_duration === duration)
-      .map((window) => window.maxBudget),
-  ].filter((amount) => amount.trim() !== "");
-  return amounts.reduce(
-    (smallest, amount) => (smallest === "" || Number(amount) < Number(smallest) ? amount : smallest),
-    "",
-  );
-};
-
-export const updateBudgetPeriod = (
-  fields: BudgetEditorFields,
-  duration: BudgetPeriod,
-  amount: string,
-): BudgetEditorFields => {
-  const scalarPeriod = fields.budgetDuration === duration;
-  const hasWindow = fields.budgetWindows.some((window) => window.budget.budget_duration === duration);
-  const updatedWindows = fields.budgetWindows.map((window) =>
-    window.budget.budget_duration === duration ? { ...window, maxBudget: amount } : window,
-  );
-  return {
-    ...fields,
-    ...(scalarPeriod ? { maxBudget: amount } : {}),
-    budgetWindows:
-      scalarPeriod || hasWindow || !amount.trim()
-        ? updatedWindows
-        : [...updatedWindows, { budget: { budget_duration: duration, max_budget: 0 }, maxBudget: amount }],
-  };
-};
-
 export const compactBudgetEditorValue = (fields: BudgetEditorFields, original?: Budget | null) =>
   budgetEditorValue(
     { ...fields, budgetWindows: fields.budgetWindows.filter((window) => window.maxBudget.trim() !== "") },
@@ -143,9 +146,9 @@ export const compactBudgetEditorValue = (fields: BudgetEditorFields, original?: 
   );
 
 export const permanentBudgetEditorValue = (fields: BudgetEditorFields, original?: Budget | null) => {
-  const parsed = compactBudgetEditorValue(fields);
+  const parsed = compactBudgetEditorValue(fields, original);
   if (!parsed.ok || parsed.value === null) return parsed;
-  const initial = compactBudgetEditorValue({ ...compactBudgetEditorFields(original), budgetEnabled: true });
+  const initial = compactBudgetEditorValue({ ...compactBudgetEditorFields(original), budgetEnabled: true }, original);
   if (!initial.ok || !initial.value) return parsed;
   return { ok: true, value: budgetChanges(parsed.value, initial.value) } as const;
 };
@@ -162,6 +165,65 @@ export function budgetChanges(value: Budget, initial?: Budget | null): Budget {
     ...(changed.max_budget != null ? { budget_duration: value.budget_duration } : {}),
   };
 }
+
+export const budgetPolicyChanges = (policy: Budget | null | undefined, original: Budget | null | undefined): Budget =>
+  budgetChanges(
+    {
+      model_tpm_limit: policy?.model_tpm_limit ?? null,
+      model_rpm_limit: policy?.model_rpm_limit ?? null,
+      cap_policy: policy?.cap_policy ?? null,
+    },
+    original,
+  );
+
+interface BudgetSelectionOwner {
+  budget_id?: string | null;
+  budget?: Budget | null;
+}
+
+type BudgetPreset = Budget & { budget_id: string };
+
+export const budgetSelectionFields = (
+  entity: BudgetSelectionOwner | undefined,
+  presets: readonly BudgetPreset[],
+  defaultBudgetId?: string | null,
+) => {
+  const selectedId = entity ? entity.budget_id : defaultBudgetId;
+  const customSource = entity?.budget ? "custom" : "inherit";
+  return {
+    budget: budgetEditorFields(entity?.budget),
+    policy: entity?.budget,
+    budgetSource: presets.some((preset) => preset.budget_id === selectedId) ? `profile:${selectedId}` : customSource,
+  };
+};
+
+type BudgetSelectionFields = ReturnType<typeof budgetSelectionFields>;
+
+export const budgetSelectionValue = (fields: BudgetSelectionFields, original?: Budget | null) => {
+  if (fields.budgetSource !== "custom") {
+    return {
+      ok: true,
+      value: { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null },
+    } as const;
+  }
+  const parsed = permanentBudgetEditorValue(fields.budget, original);
+  if (!parsed.ok) return parsed;
+  return { ok: true, value: { budget: { ...parsed.value, ...budgetPolicyChanges(fields.policy, original) } } } as const;
+};
+
+export const changeBudgetSelection = (
+  fields: BudgetSelectionFields,
+  source: string,
+  presets: readonly BudgetPreset[],
+): BudgetSelectionFields => {
+  const selected =
+    source === "custom" ? presets.find((preset) => `profile:${preset.budget_id}` === fields.budgetSource) : null;
+  return {
+    budgetSource: source,
+    budget: { ...(selected ? budgetEditorFields(selected) : fields.budget), budgetEnabled: source === "custom" },
+    policy: selected ?? fields.policy,
+  };
+};
 
 interface BudgetAssignment {
   budget?: Budget | null;

@@ -1,5 +1,6 @@
 #### Search Endpoints #####
 
+from collections.abc import Mapping
 from typing import Final
 
 import orjson
@@ -263,7 +264,7 @@ async def list_search_tools(
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        search_tools_list: Final = []
+        search_tools_list: Final[list[Mapping[str, object]]] = []
 
         if llm_router is not None and llm_router.settings().is_set("search_tools"):
             for tool in llm_router.settings().search_tools:

@@ -95,13 +95,13 @@ describe("UISettings", () => {
     const mutate = vi.fn();
     mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
     render(<UISettings />);
-    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Last 7 days");
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Month to date");
     await chooseSelectOption(
       userEvent.setup(),
       screen.getByRole("combobox", { name: "Default Usage time range" }),
-      "Month to date",
+      "Last 7 days",
     );
-    expect(mutate).toHaveBeenCalledWith({ usage_default_time_range: "month_to_date" }, expect.any(Object));
+    expect(mutate).toHaveBeenCalledWith({ usage_default_time_range: "last_7_days" }, expect.any(Object));
   });
 
   it("shows configuration-owned defaults without offering an ineffective override", () => {
