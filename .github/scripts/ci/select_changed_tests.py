@@ -5,8 +5,9 @@ Reads the changed paths on stdin. A changed `tests/unit/**/test_*.py` file is se
 and so is every `tests/unit/<dir>/test_<module>.py` or `test_<module>_*.py` mirroring a
 changed `litellm/<dir>/<module>.py`. Any change inside a package whose tests do not mirror
 its layout, migration SQL included, selects that package's whole test directory, and a cost
-map change selects the cost map tests, both listed in `UNMIRRORED_TESTS`. Files the unit-core
-shards already run are left out,
+map change selects the cost map tests, both listed in `UNMIRRORED_TESTS`. A cost map change
+also selects every `tests/unit/test_*.py` file that names a cost map file, since those assert
+on catalog rows. Files the unit-core shards already run are left out,
 as are files whose full-matrix shard needs settings this lane does not have: serial
 execution or another Python version.
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import re
 import sys
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path, PurePosixPath
@@ -25,10 +27,16 @@ import yaml
 UNIT_ROOT: Final = PurePosixPath("tests/unit")
 SOURCE_ROOT: Final = PurePosixPath("litellm")
 COST_MAP_TESTS: Final = f"{UNIT_ROOT}/test_model_prices_and_context_window.py"
+COST_MAP_FILES: Final = frozenset(
+    (
+        PurePosixPath("model_prices_and_context_window.json"),
+        PurePosixPath("litellm/model_prices_and_context_window_backup.json"),
+    )
+)
+COST_MAP_REFERENCE: Final = re.compile("|".join(re.escape(path.name) for path in sorted(COST_MAP_FILES)))
 UNMIRRORED_TESTS: Final = (
     (PurePosixPath("litellm/proxy-extras"), f"{UNIT_ROOT}/litellm_proxy_extras/test_*.py"),
-    (PurePosixPath("model_prices_and_context_window.json"), COST_MAP_TESTS),
-    (PurePosixPath("litellm/model_prices_and_context_window_backup.json"), COST_MAP_TESTS),
+    *((path, COST_MAP_TESTS) for path in sorted(COST_MAP_FILES)),
 )
 
 
@@ -78,6 +86,14 @@ def _unmirrored_tests(path: PurePosixPath, root: Path) -> Iterator[PurePosixPath
             yield from (PurePosixPath(match.relative_to(root).as_posix()) for match in root.glob(pattern))
 
 
+def _cost_map_readers(paths: tuple[PurePosixPath, ...], root: Path) -> Iterator[PurePosixPath]:
+    if COST_MAP_FILES.isdisjoint(paths):
+        return
+    for match in root.glob(f"{UNIT_ROOT}/test_*.py"):
+        if COST_MAP_REFERENCE.search(match.read_text(encoding="utf-8", errors="ignore")):
+            yield PurePosixPath(match.relative_to(root).as_posix())
+
+
 def _excluded(path: PurePosixPath, excluded: tuple[PurePosixPath, ...]) -> bool:
     return any(path == entry or path.is_relative_to(entry) for entry in excluded)
 
@@ -87,7 +103,8 @@ def select(changed: Iterable[str], excluded: tuple[PurePosixPath, ...], root: Pa
     direct: Final = (path for path in paths if _is_unit_test(path))
     mirrored: Final = itertools.chain.from_iterable(_mirrors(path, root) for path in paths)
     unmirrored: Final = itertools.chain.from_iterable(_unmirrored_tests(path, root) for path in paths)
-    candidates: Final = frozenset(itertools.chain(direct, mirrored, unmirrored))
+    cost_map_readers: Final = _cost_map_readers(paths, root)
+    candidates: Final = frozenset(itertools.chain(direct, mirrored, unmirrored, cost_map_readers))
     return tuple(
         sorted(path.as_posix() for path in candidates if (root / path).is_file() and not _excluded(path, excluded))
     )

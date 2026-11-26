@@ -191,29 +191,54 @@ def test_a_change_outside_proxy_extras_selects_no_proxy_extras_test(tmp_path):
 @pytest.mark.parametrize(
     "changed", ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json")
 )
-def test_a_cost_map_change_selects_the_cost_map_tests_only(tmp_path, changed):
+def test_a_cost_map_change_selects_the_cost_map_tests_and_every_root_test_naming_a_cost_map_file(tmp_path, changed):
     root: Final = _tree(
         tmp_path,
         "tests/unit/test_model_prices_and_context_window.py",
+        "tests/unit/test_reads_main_model_metadata.py",
+        "tests/unit/test_reads_backup_model_metadata.py",
         "tests/unit/test_utils.py",
+        "tests/unit/helpers.py",
+        "tests/unit/llms/test_nested_reader.py",
         "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py",
     )
-    assert _select(root, changed) == ("tests/unit/test_model_prices_and_context_window.py",)
+    main_reader: Final = 'json.loads(Path("model_prices_and_context_window.json").read_text())'
+    backup_reader: Final = 'open("litellm/model_prices_and_context_window_backup.json")'
+    (root / "tests/unit/test_reads_main_model_metadata.py").write_text(main_reader, encoding="utf-8")
+    (root / "tests/unit/test_reads_backup_model_metadata.py").write_text(backup_reader, encoding="utf-8")
+    (root / "tests/unit/helpers.py").write_text(main_reader, encoding="utf-8")
+    (root / "tests/unit/llms/test_nested_reader.py").write_text(main_reader, encoding="utf-8")
+    assert _select(root, changed) == (
+        "tests/unit/test_model_prices_and_context_window.py",
+        "tests/unit/test_reads_backup_model_metadata.py",
+        "tests/unit/test_reads_main_model_metadata.py",
+    )
+
+
+def test_a_change_outside_the_cost_map_selects_no_root_test_naming_a_cost_map_file(tmp_path):
+    root: Final = _tree(tmp_path, "tests/unit/test_reads_main_model_metadata.py", "tests/unit/proxy/test_utils.py")
+    (root / "tests/unit/test_reads_main_model_metadata.py").write_text(
+        'open("model_prices_and_context_window.json")', encoding="utf-8"
+    )
+    assert _select(root, "litellm/proxy/utils.py", "litellm/cost.json") == ("tests/unit/proxy/test_utils.py",)
 
 
 def test_a_file_named_like_the_cost_map_elsewhere_selects_no_cost_map_test(tmp_path):
     root: Final = _tree(tmp_path, "tests/unit/test_model_prices_and_context_window.py")
-    assert _select(root, "litellm/model_prices_and_context_window.json", "docs/model_prices_and_context_window.json") == ()
+    assert (
+        _select(root, "litellm/model_prices_and_context_window.json", "docs/model_prices_and_context_window.json") == ()
+    )
 
 
 @pytest.mark.parametrize(
     "changed", ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json")
 )
-def test_the_real_unit_workflow_lets_a_cost_map_change_run_the_cost_map_tests(changed):
+def test_the_real_unit_workflow_lets_a_cost_map_change_run_the_cost_map_and_model_metadata_tests(changed):
     workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text(encoding="utf-8"))
-    assert selector.select((changed,), selector.exclusions(workflow, "3.12"), _REPO_ROOT) == (
-        "tests/unit/test_model_prices_and_context_window.py",
-    )
+    selected: Final = selector.select((changed,), selector.exclusions(workflow, "3.12"), _REPO_ROOT)
+    assert "tests/unit/test_model_prices_and_context_window.py" in selected
+    assert "tests/unit/test_together_ai_model_metadata.py" in selected
+    assert all(Path(path).parent.as_posix() == "tests/unit" for path in selected)
 
 
 def test_the_real_unit_workflow_lets_a_migration_change_run_the_migration_ddl_tests():
