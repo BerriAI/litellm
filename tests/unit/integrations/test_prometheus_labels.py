@@ -2184,12 +2184,11 @@ async def test_router_streaming_attempt_counter_records_mid_stream_error_once() 
 
     try:
         wrapped: Final = await open_attempt_stream(attempt, _PassthroughStream())
-        received: Final[list[object]] = []  # mutable-ok: collects yielded chunks before error
+        assert isinstance(wrapped, CustomStreamWrapper)
+        assert isinstance(await wrapped.__anext__(), ModelResponseStream)
         with pytest.raises(RuntimeError, match="upstream stream reset"):
-            async for chunk in wrapped:  # pyright: ignore[reportGeneralTypeIssues]  # FallbackAwareStreamWrapper is async-iterable
-                received.append(chunk)
-        await wrapped.aclose()  # pyright: ignore[reportAttributeAccessIssue]  # closing after failure must not double-count
-        assert len(received) == 1
+            await wrapped.__anext__()
+        await wrapped.aclose()
         assert (
             REGISTRY.get_sample_value(
                 metric,
