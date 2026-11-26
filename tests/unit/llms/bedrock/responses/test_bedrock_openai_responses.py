@@ -6,6 +6,7 @@ falls back to the Chat Completions bridge and rides Converse.
 
 import json
 import logging
+from collections.abc import Mapping
 from importlib.resources import files
 from typing import Final
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import (
     BedrockOpenAIResponsesConfig,
@@ -623,3 +625,63 @@ class TestRemoteImageInlining:
         )
         assert [i.get("type") or i.get("role") for i in body["input"]] == ["message", "user"]
         assert body["input"][1]["content"] == [{"type": "input_image", "image_url": self._INLINED}]
+
+
+_NO_SAMPLING_MODEL: Final = "us.example.no-sampling-model"
+_NO_SAMPLING_SHAPES: Final = (
+    pytest.param(_NO_SAMPLING_MODEL, _NO_SAMPLING_MODEL, id="row-for-the-same-profile"),
+    pytest.param("global.example.no-sampling-model", _NO_SAMPLING_MODEL, id="row-for-another-region-profile"),
+    pytest.param(_NO_SAMPLING_MODEL, f"chat_completions/{_NO_SAMPLING_MODEL}", id="chat-completions-route"),
+)
+
+
+def _converse_row(flags: Mapping[str, bool]) -> dict[str, object]:
+    return {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        **flags,
+    }
+
+
+@pytest.mark.parametrize(("row_key", "model"), _NO_SAMPLING_SHAPES)
+def test_sampling_flagged_row_drops_temperature_and_top_p_and_keeps_the_rest(
+    row_key: str, model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(model_cost_table.published(), row_key, _converse_row({"supports_sampling_params": False}))
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params={"temperature": 0.2, "top_p": 0.5, "max_output_tokens": 64},
+        model=model,
+        drop_params=True,
+    )
+    assert params == {"max_output_tokens": 64}
+
+
+@pytest.mark.parametrize("param", ["temperature", "top_p"])
+def test_sampling_flagged_row_refuses_each_sampling_param_without_drop_params(
+    param: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        model_cost_table.published(), _NO_SAMPLING_MODEL, _converse_row({"supports_sampling_params": False})
+    )
+    with pytest.raises(
+        litellm.UnsupportedParamsError, match=f"doesn't support {param}: its model map entry sets `supports_sampling_params"
+    ):
+        _cfg().map_openai_params(
+            response_api_optional_params={"temperature": 0.5} if param == "temperature" else {"top_p": 0.5},
+            model=_NO_SAMPLING_MODEL,
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("flags", [{}, {"supports_sampling_params": True}], ids=["no-flag", "flag-true"])
+def test_row_that_does_not_refuse_sampling_forwards_both_params(
+    flags: Mapping[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(model_cost_table.published(), _NO_SAMPLING_MODEL, _converse_row(flags))
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params={"temperature": 0.2, "top_p": 0.5},
+        model=_NO_SAMPLING_MODEL,
+        drop_params=False,
+    )
+    assert params == {"temperature": 0.2, "top_p": 0.5}

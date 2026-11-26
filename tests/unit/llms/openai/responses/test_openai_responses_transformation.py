@@ -5587,7 +5587,7 @@ def test_a_row_without_the_sampling_flag_forwards_temperature_and_top_p(
         ),
         pytest.param(
             PerplexityResponsesConfig,
-            "perplexity/sampling-test-model",
+            "sampling-test-model",
             {"litellm_provider": "perplexity", "mode": "responses", **_NO_SAMPLING},
             id="provider-that-does-not-read-the-flag",
         ),
