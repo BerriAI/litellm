@@ -1792,3 +1792,37 @@ async def test_openrouter_signature_bundled_with_another_payload_keeps_that_payl
     assert "".join(_text_deltas(events)) == "The answer is 391."
     assert [event["delta"]["stop_reason"] for event in events if event.get("type") == "message_delta"] == ["end_turn"]
     _assert_deltas_match_their_block_type(events)
+
+
+_OPENROUTER_SIGNATURE_BESIDE_ANOTHER_CHOICE_LINES: Final = (
+    _openrouter_reasoning_text_line("anthropic-claude-v1"),
+    "data: "
+    + json.dumps(
+        {
+            "id": "gen-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-haiku-4.5",
+            "choices": [
+                {"index": 0, "delta": {"content": "", "reasoning_details": [_OPENROUTER_SIGNATURE_DETAIL]}},
+                {"index": 1, "delta": {"content": "The other answer."}},
+            ],
+        }
+    ),
+    _openrouter_sse_line({"content": ""}, finish_reason="stop"),
+    "data: [DONE]",
+)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_openrouter_signature_only_first_choice_keeps_the_other_choice_text(is_async: bool):
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_openrouter_chat_stream(_OPENROUTER_SIGNATURE_BESIDE_ANOTHER_CHOICE_LINES, is_async),
+        model="openrouter/anthropic/claude-haiku-4.5",
+    )
+
+    events: Final = await _drain_async(wrapper) if is_async else _drain_sync(wrapper)
+
+    assert "".join(_text_deltas(events)) == "The other answer."
+    _assert_deltas_match_their_block_type(events)
