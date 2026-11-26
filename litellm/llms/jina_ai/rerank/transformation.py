@@ -146,12 +146,12 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         if api_key is None:
             raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
         return {

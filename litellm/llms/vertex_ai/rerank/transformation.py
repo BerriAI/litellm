@@ -85,12 +85,12 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, str | None]:
+    ) -> dict[str, object]:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
@@ -106,7 +106,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             custom_llm_provider="vertex_ai",
         )
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "X-Goog-User-Project": project_id,
