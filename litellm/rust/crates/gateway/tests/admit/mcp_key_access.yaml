@@ -1,0 +1,29 @@
+# require_key_mcp_access_defined only decides which MCP servers a key reaches, and Python answers
+# every request that reaches one, so the setting sends nothing else there.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    require_key_mcp_access_defined: true
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: hosted mcp tool
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], tools: [{type: mcp, server_url: litellm_proxy/mcp/github}]}
+    expect: python
+    reason: body
+
+  - name: mcp route
+    path: /mcp
+    headers: {authorization: Bearer gateway-key}
+    expect: python
+    reason: route

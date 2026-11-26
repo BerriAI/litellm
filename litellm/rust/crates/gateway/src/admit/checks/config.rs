@@ -20,7 +20,12 @@ const STORE_MODEL_IN_DB: &str = "store_model_in_db";
 /// The `LiteLLM_UISettings` row, named when it could not be read.
 const UI_SETTINGS: &str = "ui_settings";
 /// The `general_settings` keys the config types do not name that the native app honors.
-const HONORED_GENERAL_SETTINGS: [&str; 2] = ["supported_db_objects", "encryption_algorithm"];
+/// `require_key_mcp_access_defined` only shapes which MCP servers a key reaches, which `admit` never admits.
+const HONORED_GENERAL_SETTINGS: [&str; 3] = [
+    "supported_db_objects",
+    "encryption_algorithm",
+    "require_key_mcp_access_defined",
+];
 
 /// The `litellm_settings` keys a variable can fill, as `Config::with_environment` layers them.
 /// `reasoning_auto_summary` and `request_timeout` read their variables as Python does, so neither

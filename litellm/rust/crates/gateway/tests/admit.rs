@@ -180,6 +180,7 @@ impl Sent {
 #[case::fallback_shapes("fallback_shapes")]
 #[case::drop_params_set("drop_params_set")]
 #[case::database("database")]
+#[case::mcp_key_access("mcp_key_access")]
 #[case::store_model_in_db("store_model_in_db")]
 #[case::store_model_in_db_unread("store_model_in_db_unread")]
 #[case::ui_settings_unread("ui_settings_unread")]

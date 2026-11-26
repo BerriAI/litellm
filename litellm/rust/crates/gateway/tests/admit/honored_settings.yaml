@@ -38,6 +38,7 @@ config:
     enable_jwt_auth: true
     store_model_in_db: false
     supported_db_objects: [models]
+    require_key_mcp_access_defined: false
     token_rate_limit_type: output
   environment_variables:
     SOME_KEY: value
