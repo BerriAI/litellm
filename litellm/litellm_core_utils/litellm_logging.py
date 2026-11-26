@@ -4817,7 +4817,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.shadow_eval_request_snapshot = None
             content_before_hook: Final = logged_content_fingerprint(before, prepared.result)
-            hooked_details, hooked_result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # logging_hook is typed with a bare dict
+            hooked_details, hooked_result = callback.logging_hook(
                 kwargs=before,
                 result=prepared.result,
                 call_type=self.call_type,
@@ -4826,7 +4826,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 logs_without_prompt_fields_once_masked(
                     self.logging_only_guardrail_masked,
                     content_before_hook,
-                    hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                    hooked_details,
                     hooked_result,
                 )
             )
@@ -5483,7 +5483,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 self.shadow_eval_request_snapshot = None
                 content_before_hook: Final = logged_content_fingerprint(self.model_call_details, prepared.result)
-                hooked_details, hooked_result = await callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # async_logging_hook is typed with a bare dict
+                hooked_details, hooked_result = await callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType]  # async_logging_hook is typed with a bare dict
                     kwargs=self.model_call_details,
                     result=prepared.result,
                     call_type=self.call_type,
@@ -5492,7 +5492,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     logs_without_prompt_fields_once_masked(
                         self.logging_only_guardrail_masked,
                         content_before_hook,
-                        hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook is typed with a bare dict
+                        hooked_details,
                         hooked_result,
                     )
                 )
