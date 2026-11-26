@@ -3757,6 +3757,8 @@ async def _execute_mcp_server_tool_call(
         scope_response: Final = get_scope_response()
         if scope_response is not None:
             scope_response.deny(e)
+            if e.status_code == 401:
+                scope_response.deny_reauth()
         # The request-owned response adapter relays managed scope challenges before
         # Streamable HTTP headers commit. Other auth failures retain the existing
         # explicit tool error, including failures after streaming has begun.

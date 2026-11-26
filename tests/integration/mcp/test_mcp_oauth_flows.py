@@ -2754,7 +2754,7 @@ def test_expired_access_with_dead_refresh_grant_is_revoked_and_challenges_for_re
             "  store_model_in_db: true\n"
         )
         with owned_proxy(gateway, tmp_path, {}, config=config, remove_environment=("REDIS_HOST", "REDIS_PORT")) as cold:
-            outcome: Final = McpCaller(cold, key, "server_mcp", alias).list_tools()
+            outcome: Final = McpCaller(cold, key, "server_mcp", alias).call(f"{alias}-add", ADD)
         assert outcome.status == 401, outcome.raw
         assert _user_credential_row_count(user_id, identity) == 1
         assert tool_calls(peer.drain()) == ()
