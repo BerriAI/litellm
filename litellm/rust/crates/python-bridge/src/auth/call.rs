@@ -14,7 +14,7 @@ use litellm_gateway_auth_core::{
             ManagedAgent, ModelAccess, Org, Provisioning, RegisteredAgent, Team, TeamRead, User,
             UserRead,
         },
-        key::{KeyContext, KeyIdentity, Owner, TeamGrant},
+        key::{KeyContext, KeyIdentity, Owner},
     },
     plan::Plan,
     routes::passthrough::{ForwardedRoutes, PassthroughGrants},
@@ -176,6 +176,10 @@ fn rows(py: Python<'_>, row: Option<&PyRow>) -> Option<Py<PyAny>> {
     row.map(|row| row.object(py))
 }
 
+fn stored(py: Python<'_>, named: Option<&core::Named<PyRow>>) -> Option<Py<PyAny>> {
+    rows(py, named.and_then(core::Named::stored))
+}
+
 /// `facts.TeamFacts`
 #[derive(FromPyObject)]
 pub(crate) struct TeamFacts {
@@ -189,6 +193,8 @@ pub(crate) struct TeamFacts {
     denied_passthrough_routes: Option<RouteList>,
     #[pyo3(attribute)]
     members: Vec<String>,
+    #[pyo3(attribute)]
+    roster: Option<Py<PyAny>>,
 }
 
 fn team(facts: TeamFacts, row: Py<PyAny>) -> Team<PyRow> {
@@ -200,7 +206,7 @@ fn team(facts: TeamFacts, row: Py<PyAny>) -> Team<PyRow> {
             denied: facts.denied_passthrough_routes,
         },
         members: facts.members,
-        row: PyRow::new(row),
+        row: PyRow::team(row, facts.roster),
     }
 }
 
@@ -371,6 +377,11 @@ pub(crate) enum AuthStep {
     GrantingTeam {
         team_id: String,
     },
+    BindTeamMember {
+        team: Py<PyAny>,
+        roster: Py<PyAny>,
+        user_id: String,
+    },
     LoadTeamMembership {
         user_id: String,
         team_id: String,
@@ -481,7 +492,7 @@ pub(crate) enum AuthStep {
 enum Ended {
     Outcome(Outcome<PyRows>),
     Verified(Result<jwt::Claims, Error>),
-    Authorized(Result<JwtIdentity<PyRows>, Error>),
+    Authorized(Result<Box<JwtIdentity<PyRows>>, Error>),
     Resolved(Result<ClaimIdentity<PyRow>, Error>),
     Mapped(Result<JwtMapping<PyRow>, Error>),
 }
@@ -587,13 +598,14 @@ impl KeyContextView {
 
 impl KeyContextView {
     fn new(py: Python<'_>, context: &KeyContext<PyRows>) -> PyResult<Py<Self>> {
-        let team = match &context.team {
-            TeamGrant::NoTeam => TeamGrantView::NoTeam(),
-            TeamGrant::Loaded(team) => TeamGrantView::Loaded {
+        let affiliation = &context.affiliation;
+        let team = match affiliation.holder.team() {
+            Some(core::Team::Unstored(_)) | None => TeamGrantView::NoTeam(),
+            Some(core::Team::Row(team)) => TeamGrantView::Loaded {
                 team: row(py, team),
             },
-            TeamGrant::KeyCopy(permission) => TeamGrantView::KeyCopy {
-                object_permission: rows(py, permission.as_ref()),
+            Some(core::Team::KeyCopy(copy)) => TeamGrantView::KeyCopy {
+                object_permission: rows(py, copy.object_permission.as_ref()),
             },
         };
         Py::new(
@@ -601,9 +613,9 @@ impl KeyContextView {
             Self {
                 key: row(py, &context.key),
                 end_user: row(py, &context.end_user),
-                owner: rows(py, context.owner.as_ref()),
+                owner: stored(py, affiliation.holder.user()),
                 team: team.into_pyobject(py)?.into_any().unbind(),
-                project: rows(py, context.project.as_ref()),
+                project: stored(py, affiliation.project.as_ref()),
             },
         )
     }
@@ -692,11 +704,14 @@ impl IdentityView {
             end_user_id: jwt.end_user_id.clone(),
             agent_id: jwt.agent_id.clone(),
             managed_agent: jwt.managed_agent.as_ref().map(|agent| row(py, &agent.row)),
-            user: rows(py, jwt.rows.user.as_ref()),
-            team: rows(py, jwt.rows.team.as_ref()),
-            membership: rows(py, jwt.rows.membership.as_ref()),
-            org: rows(py, jwt.rows.org.as_ref()),
-            end_user: rows(py, jwt.rows.end_user.as_ref()),
+            user: stored(py, jwt.affiliation.holder.user()),
+            team: match jwt.affiliation.holder.team() {
+                Some(core::Team::Row(team)) => Some(row(py, team)),
+                Some(core::Team::Unstored(_) | core::Team::KeyCopy(_)) | None => None,
+            },
+            membership: rows(py, jwt.affiliation.holder.membership()),
+            org: stored(py, jwt.affiliation.org.as_ref()),
+            end_user: rows(py, jwt.end_user.as_ref()),
         })
     }
 
@@ -1097,6 +1112,16 @@ impl AuthStep {
             Ask::GrantingTeam { team_id, .. } => Self::GrantingTeam {
                 team_id: team_id.clone(),
             },
+            Ask::BindTeamMember {
+                team,
+                roster,
+                user_id,
+                ..
+            } => Self::BindTeamMember {
+                team: team.object(py),
+                roster: roster.clone_ref(py),
+                user_id: user_id.clone(),
+            },
             Ask::LoadTeamMembership {
                 user_id, team_id, ..
             } => Self::LoadTeamMembership {
@@ -1368,7 +1393,9 @@ impl AuthCall {
         let provisioning = provisioning.then(|| Provisioning::from(&settings.jwt));
         call(move |host| async move {
             ended(
-                core::authorize_jwt(&host, &request.request(), &settings, provisioning).await,
+                core::authorize_jwt(&host, &request.request(), &settings, provisioning)
+                    .await
+                    .map(Box::new),
                 Ended::Authorized,
             )
         })
@@ -1614,7 +1641,9 @@ impl AuthCall {
     fn team(&self, read: TeamAnswer, row: Option<Py<PyAny>>) -> PyResult<()> {
         let read = team_read(read, row)?;
         self.stepper.answer("a team", |ask| match ask {
-            Ask::Team { reply, .. } | Ask::GrantingTeam { reply, .. } => {
+            Ask::Team { reply, .. }
+            | Ask::GrantingTeam { reply, .. }
+            | Ask::BindTeamMember { reply, .. } => {
                 reply.send(read);
                 Ok(())
             }

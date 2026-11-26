@@ -15,7 +15,7 @@ class LobDetector(RegexBasedDetector):
         return "Lob Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Lob API Key
             re.compile(

@@ -19,7 +19,7 @@ from pydantic import TypeAdapter, ValidationError
 PACKAGE = Path(__file__).resolve().parents[4]
 
 
-def helpers(module, *names):
+def helpers(module, *names: str):
     tree = ast.parse((PACKAGE / module).read_text())
     functions = [
         node

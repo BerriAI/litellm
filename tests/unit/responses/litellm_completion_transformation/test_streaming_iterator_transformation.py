@@ -371,6 +371,66 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         )
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_finished_anthropic_search_sharing_a_chunk_with_its_call_opens_after_the_text(sync_mode: bool) -> None:
+    call_id: Final = "srvtoolu_01Search"
+    result: Final = {
+        "type": "web_search_tool_result",
+        "tool_use_id": call_id,
+        "content": [{"type": "web_search_result", "url": "https://example.com/one"}],
+    }
+    chunk: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-fable-5-1",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason="stop",
+                delta=Delta(
+                    role="assistant",
+                    content="answer",
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "web_search", "arguments": '{"query":"one"}'},
+                        }
+                    ],
+                    provider_specific_fields={
+                        "web_search_results": [result],
+                        "web_search_calls": [build_web_search_call(call_id, {"query": "one"}, result)],
+                    },
+                ),
+            )
+        ],
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-fable-5-1",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper((chunk,)),
+        request_input="search",
+        responses_api_request={"tools": [{"type": "web_search"}]},
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+
+    search_added_at: Final = tuple(
+        position
+        for position, event in enumerate(events)
+        if event["type"] == "response.output_item.added" and event["item"]["type"] == "web_search_call"
+    )
+    assert len(search_added_at) == 1
+    assert "response.output_text.delta" in [event["type"] for event in events[: search_added_at[0]]]
+
+
 _STREAMED_WEB_FETCH_CALL: Final[tuple[dict[str, object], ...]] = (
     {
         "type": "message_start",

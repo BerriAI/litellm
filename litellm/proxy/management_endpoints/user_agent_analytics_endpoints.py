@@ -269,7 +269,7 @@ async def get_daily_active_users(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -366,7 +366,7 @@ async def get_weekly_active_users(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -487,7 +487,7 @@ async def get_monthly_active_users(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -598,7 +598,7 @@ async def get_tag_summary(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")

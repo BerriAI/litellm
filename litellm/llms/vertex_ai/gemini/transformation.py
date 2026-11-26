@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_blank_content
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     GeminiMediaSource,
@@ -70,6 +71,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
+    GeminiFileInspectionMetadata,
     GenerationConfig,
     PartType,
     RequestBody,
@@ -83,6 +85,7 @@ from litellm.types.utils import LlmProviders
 from ..common_utils import (
     check_text_in_content,
     gemini_fetches_url_itself,
+    gemini_media_capability,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
@@ -178,6 +181,18 @@ def _get_highest_media_resolution(current: str | None, new_detail: str | None) -
     return current
 
 
+def gemini_part_media_resolution(
+    model: str | None, detail: str | None, *, custom_llm_provider: str | None = None
+) -> Mapping[str, str] | None:
+    if (
+        model is None
+        or detail is None
+        or not gemini_media_capability(model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider)
+    ):
+        return None
+    return _convert_detail_to_media_resolution_enum(detail)
+
+
 def _extract_max_media_resolution_from_messages(
     messages: list[AllMessageValues],
 ) -> str | None:
@@ -212,6 +227,7 @@ def _apply_gemini_metadata(
     model: str | None,
     media_resolution_enum: dict[str, str] | None,
     video_metadata: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
 ) -> PartType:
     """
     Apply media_resolution and video_metadata parameters to a Gemini part.
@@ -222,11 +238,11 @@ def _apply_gemini_metadata(
     if model is None:
         return part
 
-    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-
     part_dict: Final = dict(part)
 
-    if media_resolution_enum is not None and VertexGeminiConfig.is_gemini_3_or_newer(model):
+    if media_resolution_enum is not None and gemini_media_capability(
+        model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -314,7 +330,7 @@ def _message_fields(raw: object) -> Mapping[object, object] | None:
     return dumped if isinstance(dumped, dict) else None
 
 
-def _openai_messages_may_need_sync_media_fetch(
+def openai_messages_may_need_sync_media_fetch(
     messages: Sequence[object],
     custom_llm_provider: str = "vertex_ai",
     model: str | None = None,
@@ -323,7 +339,7 @@ def _openai_messages_may_need_sync_media_fetch(
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     nested_inline_only: Final = custom_llm_provider == "gemini" and (
-        model is None or VertexGeminiConfig.supports_multimodal_function_responses(model)
+        model is None or VertexGeminiConfig.supports_multimodal_function_responses(model, custom_llm_provider)
     )
     for raw in messages:
         if (msg := _message_fields(raw)) is None:
@@ -357,7 +373,7 @@ def _openai_messages_may_need_sync_media_fetch(
     return False
 
 
-_openai_messages_may_need_sync_gcs_metadata_fetch: Final = _openai_messages_may_need_sync_media_fetch
+_openai_messages_may_need_sync_gcs_metadata_fetch: Final = openai_messages_may_need_sync_media_fetch
 
 
 def _get_gcs_object_content_type(
@@ -518,6 +534,8 @@ def process_gemini_media(
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
     max_download_bytes: int | None = None,
+    *,
+    custom_llm_provider: str | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -593,7 +611,7 @@ def process_gemini_media(
                 )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif gemini_fetches_url_itself(image_url):
             # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
             # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
@@ -605,16 +623,16 @@ def process_gemini_media(
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif "https://" in image_url and (image_type := format or get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image: Final = convert_to_anthropic_image_obj(image_url, format=format, max_bytes=max_download_bytes)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
@@ -628,8 +646,10 @@ def encode_gemini_media_source(
     model: str | None,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    custom_llm_provider: str | None = None,
 ) -> PartType:
-    return process_gemini_media(
+    part: Final = process_gemini_media(
         image_url=source.url,
         format=source.format,
         model=model,
@@ -637,8 +657,10 @@ def encode_gemini_media_source(
         vertex_credentials=vertex_credentials,
         media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
         video_metadata=source.video_metadata,
+        custom_llm_provider=custom_llm_provider,
         max_download_bytes=source.max_download_bytes,
     )
+    return {**part, **encode_gemini_file_inspection_metadata(source.document_metadata, source.spreadsheet_metadata)}
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -650,6 +672,40 @@ def snake_to_camel(snake_str: str) -> str:
 _snake_to_camel = snake_to_camel
 
 
+def encode_gemini_file_inspection_metadata(
+    document_metadata: Mapping[str, object] | None,
+    spreadsheet_metadata: Mapping[str, object] | None,
+    media_resolution: Mapping[str, str] | None = None,
+) -> GeminiFileInspectionMetadata:
+    return gemini_file_inspection_metadata(
+        {snake_to_camel(key): value for key, value in document_metadata.items()}
+        if document_metadata is not None
+        else None,
+        {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()}
+        if spreadsheet_metadata is not None
+        else None,
+        media_resolution,
+    )
+
+
+def gemini_file_inspection_metadata(
+    document_metadata: Mapping[str, object] | None,
+    spreadsheet_metadata: Mapping[str, object] | None,
+    media_resolution: Mapping[str, str] | None = None,
+) -> GeminiFileInspectionMetadata:
+    document: Final = (
+        GeminiFileInspectionMetadata(document_metadata=document_metadata)
+        if document_metadata is not None
+        else GeminiFileInspectionMetadata()
+    )
+    selection: Final[GeminiFileInspectionMetadata] = (
+        {**document, "spreadsheet_metadata": spreadsheet_metadata} if spreadsheet_metadata is not None else document
+    )
+    if media_resolution is None:
+        return selection
+    return {**selection, "media_resolution": media_resolution}
+
+
 def camel_to_snake(camel_str: str) -> str:
     """Convert camelCase to snake_case"""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
@@ -658,7 +714,7 @@ def camel_to_snake(camel_str: str) -> str:
 _camel_to_snake = camel_to_snake
 
 
-def _get_equivalent_key(key: str, available_keys: set) -> str | None:
+def _get_equivalent_key(key: str, available_keys: Collection[object]) -> str | None:
     """
     Get the equivalent key from available keys, checking both camelCase and snake_case variants
     """
@@ -888,11 +944,13 @@ def _signed_assistant_images(
 def _assistant_image_part(
     source: GeminiMediaSource,
     thought_signature: str | None,
-    model: str | None,
+    target: _TargetModel,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
 ) -> PartType:
-    part: Final = encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+    part: Final = encode_gemini_media_source(
+        source, target.model, vertex_project, vertex_credentials, custom_llm_provider=target.custom_llm_provider
+    )
     return part if thought_signature is None else {**part, "thoughtSignature": thought_signature}
 
 
@@ -930,7 +988,7 @@ def _signed_text_and_image_parts(
         else tuple((source, None) for source, _ in sourced_images)
     )
     image_parts: Final = tuple(
-        _assistant_image_part(source, signature, target.model, vertex_project, vertex_credentials)
+        _assistant_image_part(source, signature, target, vertex_project, vertex_credentials)
         for source, signature in signed_images
     )
     if not isinstance(content, str):
@@ -1007,7 +1065,9 @@ def _gemini_history_media_part(
             raise Exception("Unknown file type. Please pass in a file_id or file_data")
         return None
     try:
-        part: Final = encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+        part: Final = encode_gemini_media_source(
+            source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
+        )
     except litellm.ImageFetchError:
         if content.get("type") != "video_url":
             raise
@@ -1033,11 +1093,27 @@ def _gemini_history_media_part(
     return checked_gemini_video_part(content, part, model=model, custom_llm_provider=provider, drop_params=drop_params)
 
 
+def _is_blank_user_message(message: AllMessageValues) -> bool:
+    fields: Final = as_str_mapping(message)
+    return fields is not None and is_blank_content(fields.get("content"))
+
+
+def _gemini_blank_last_user_turn(
+    last_user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
+) -> ContentType | None:
+    if not last_user_span or not all(map(_is_blank_user_message, last_user_span)):
+        return None
+    if contents and contents[-1].get("role") == "user":
+        return None
+    return ContentType(role="user", parts=[PartType(text=" ")])
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
     litellm_params: dict | None = None,
     custom_llm_provider: str | None = None,
+    ends_request: bool = True,
 ) -> list[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -1052,7 +1128,7 @@ def gemini_convert_messages_with_history(
     last_message_with_tool_calls = None
 
     msg_i = 0
-    tool_call_responses = []
+    tool_call_responses: list[PartType] = []
     vertex_credentials = None
     request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
     drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
@@ -1065,7 +1141,7 @@ def gemini_convert_messages_with_history(
 
     forward_function_call_id: Final = VertexGeminiConfig.forward_gemini_function_call_id(model or "")
     supports_multimodal_function_responses: Final = model is None or (
-        VertexGeminiConfig.supports_multimodal_function_responses(model)
+        VertexGeminiConfig.supports_multimodal_function_responses(model, custom_llm_provider)
     )
 
     try:
@@ -1102,7 +1178,13 @@ def gemini_convert_messages_with_history(
 
                 msg_i += 1
 
-            if user_content:
+            if (
+                ends_request
+                and msg_i == len(messages)
+                and (blank_user_turn := _gemini_blank_last_user_turn(messages[init_msg_i:], contents)) is not None
+            ):
+                contents.append(blank_user_turn)
+            elif user_content:
                 """
                 check that user_content has 'text' parameter.
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -1282,7 +1364,7 @@ def gemini_convert_messages_with_history(
 _gemini_convert_messages_with_history = gemini_convert_messages_with_history
 
 # Keys that LiteLLM consumes internally and must never be forwarded to the
-_LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset] = frozenset({"cache", "tags"})
+_LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset[str]] = frozenset({"cache", "tags"})
 
 
 def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
@@ -1307,15 +1389,73 @@ class _CallerToolConfig(TypedDict, total=False):
 _CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
 
 
-def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: str) -> Tools:
+def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
+    return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
+def _caller_tool_config(extra_body: object) -> JsonValue | None:
     extra_body_fields: Final = as_str_mapping(extra_body)
     if extra_body_fields is None:
-        return tools
+        return None
     try:
         caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
     except ValidationError:
-        return tools
-    tool_config: Final = caller.get("toolConfig", caller.get("tool_config"))
+        return None
+    return caller.get("toolConfig", caller.get("tool_config"))
+
+
+_TOOL_FIELD_KEYS: Final = frozenset(
+    ("tools", "tool_choice", "include_server_side_tool_invocations", "includeServerSideToolInvocations")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolFields:
+    tools: Tools | None
+    tool_config: ToolConfig | None
+
+
+def _settled_tool_fields(optional_params: Mapping[str, object]) -> _ToolFields:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    drops_search_next_to_functions: Final = optional_params.get(
+        "includeServerSideToolInvocations"
+    ) is False or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(
+        _caller_tool_config(optional_params.get("extra_body"))
+    )
+    tools: Final = cast(Tools | None, optional_params.get("tools"))  # cast-ok: map_openai_params built these tools
+    tool_choice: Final = cast(ToolConfig | None, optional_params.get("tool_choice"))  # cast-ok: mapped params
+    flags_server_side_tools: Final = (
+        optional_params.get("include_server_side_tool_invocations") is True and not drops_search_next_to_functions
+    )
+    return _ToolFields(
+        tools=(
+            _without_search_tools_next_to_functions(tools)
+            if drops_search_next_to_functions and tools is not None
+            else tools
+        ),
+        tool_config=(
+            ToolConfig({**(tool_choice or ToolConfig()), "includeServerSideToolInvocations": True})
+            if flags_server_side_tools
+            else tool_choice
+        ),
+    )
+
+
+def _with_settled_tool_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _settled_tool_fields(optional_params)
+    rest: Final = {k: v for k, v in optional_params.items() if k not in _TOOL_FIELD_KEYS}
+    return {
+        **rest,
+        **({} if fields.tools is None else {"tools": fields.tools}),
+        **({} if fields.tool_config is None else {"tool_choice": fields.tool_config}),
+    }
+
+
+def _tools_fit_for_caller_tool_config(tools: Tools, tool_config: JsonValue | None, model: str) -> Tools:
     if tool_config is None:
         return tools
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -1386,7 +1526,7 @@ def transform_request_body(
     model: str,
     optional_params: dict,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     cached_content: str | None,
 ) -> RequestBody:
     """
@@ -1422,7 +1562,9 @@ def transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+    tool_fields: Final = _settled_tool_fields(tool_settings)
+    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys and k not in _TOOL_FIELD_KEYS}
 
     try:
         if custom_llm_provider == "gemini":
@@ -1433,9 +1575,6 @@ def transform_request_body(
             content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = optional_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1453,6 +1592,9 @@ def transform_request_body(
                 param="top_k",
                 drop_params=drops_unsupported_params(request_params.get("drop_params")),
             )
+        caller_tool_config: Final = _caller_tool_config(
+            cast(Mapping[str, object], optional_params).get("extra_body")  # cast-ok: untyped shared signature
+        )
         config_keys: Final = set(config_fields) - {"top_k"} if drops_top_k else set(config_fields)
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, config_keys)}
 
@@ -1461,7 +1603,9 @@ def transform_request_body(
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
         # as a fallback, since some 2.x versions may not support per-part media_resolution.
         # Gemini 1.x does not support mediaResolution at all.
-        if "gemini-2" in model:
+        if "gemini-2" in model and not gemini_media_capability(
+            model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider
+        ):
             max_media_resolution: Final = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
                 media_resolution_value: Final = _convert_detail_to_media_resolution_enum(max_media_resolution)
@@ -1475,16 +1619,10 @@ def transform_request_body(
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
-            if tools is not None:
-                built_tools: Final = cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
-                caller_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
-                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_params.get("extra_body"), model)
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations:
-                if "toolConfig" not in data:
-                    data["toolConfig"] = {}
-                data["toolConfig"]["includeServerSideToolInvocations"] = True
+            if tool_fields.tools is not None:
+                data["tools"] = _tools_fit_for_caller_tool_config(tool_fields.tools, caller_tool_config, model)
+            if tool_fields.tool_config is not None:
+                data["toolConfig"] = tool_fields.tool_config
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
@@ -1524,11 +1662,11 @@ def sync_transform_request_body(
     model: str,
     client: HTTPHandler | None,
     timeout: float | httpx.Timeout | None,
-    extra_headers: dict | None,
-    optional_params: dict,
+    extra_headers: Mapping[str, str] | None,
+    optional_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
@@ -1539,20 +1677,22 @@ def sync_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1560,6 +1700,7 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
         drop_params=drops_unsupported_params(request_settings.get("drop_params")),
+        litellm_params=request_settings,
     )
 
     return _with_default_output_budget(
@@ -1662,11 +1803,11 @@ async def async_transform_request_body(
     model: str,
     client: AsyncHTTPHandler | None,
     timeout: float | httpx.Timeout | None,
-    extra_headers: dict | None,
-    optional_params: dict,
+    extra_headers: Mapping[str, str] | None,
+    optional_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
@@ -1677,20 +1818,22 @@ async def async_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1698,6 +1841,7 @@ async def async_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
         drop_params=drops_unsupported_params(request_settings.get("drop_params")),
+        litellm_params=request_settings,
     )
 
     inlined_messages: Final = await async_inline_remote_media(
@@ -1715,7 +1859,7 @@ async def async_transform_request_body(
     )
     request_body: Final[RequestBody] = (
         await asyncify(transform)()
-        if _openai_messages_may_need_sync_media_fetch(inlined_messages, custom_llm_provider, model)
+        if openai_messages_may_need_sync_media_fetch(inlined_messages, custom_llm_provider, model)
         else transform()
     )
     return _with_default_output_budget(

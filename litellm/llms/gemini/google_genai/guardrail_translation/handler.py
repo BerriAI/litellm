@@ -1,31 +1,43 @@
 """
 Google GenAI generateContent handler for Unified Guardrails.
 
-Extracts text from generateContent requests (systemInstruction.parts[].text
-and contents[].parts[].text) and responses (candidates[].content.parts[].text),
-applies the guardrail, and
-writes the guardrailed text back in place. Requests and responses may be
-dicts (wire format) or google-genai SDK objects; streaming chunks may
-additionally be raw SSE frames, which are scanned for detection (a blocking
-guardrail raises) without rewriting the frames.
+Scans what the provider or the client reads: system instructions, text and code
+parts, tool results, and functionCall parts, which go to the guardrail as tool
+calls the way chat sends its tool calls, whether parts arrive as a list or as one
+object. Structured values are scanned as one JSON text with numbers quoted so a
+mask can replace them, and a changed value is decoded back in place with the
+numbers the guardrail left alone keeping their type. A request rewrite that
+cannot be written back faithfully is rejected (a 500, as on chat) instead of
+being sent unrewritten. Requests and responses may be dicts or google-genai SDK
+objects, and raw SSE stream frames are scanned for detection without rewriting.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+import re
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from difflib import SequenceMatcher
+from itertools import chain, filterfalse, groupby, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_tool_message_for_guardrail,
+    stream_item_field,
+    tool_calls_in_guardrail_scope,
+    unappliable_request_rewrite,
+)
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines, split_sse_lines_keepends
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -36,69 +48,507 @@ if TYPE_CHECKING:
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
+_SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
+_MAX_ALIGNED_ITEM_PAIRS: Final = 250_000
+_JSON_SCALAR: Final = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
+_JSON_STRING_ESCAPE: Final = re.compile(r'\\(["\\]|[bfnrt]|u[0-9a-fA-F]{4})')
+_CONTROL_CHARACTER_ESCAPES: Final = MappingProxyType({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"})
+_PARTIAL_ARG_VALUE_FIELDS: Final = (
+    ("stringValue", "string_value"),
+    ("numberValue", "number_value"),
+    ("boolValue", "bool_value"),
+    ("nullValue", "null_value"),
+)
+_PARTIAL_ARG_VALUE_NAMES: Final = tuple(chain.from_iterable(_PARTIAL_ARG_VALUE_FIELDS))
+
+
+@dataclass(frozen=True, slots=True)
+class _PartField:
+    keys: tuple[str, str]
+    name: str
+    is_json: bool
+
+
+_CODE_PART_FIELD: Final = _PartField(keys=("executableCode", "executable_code"), name="code", is_json=False)
+_TOOL_CALL_PART_FIELD: Final = _PartField(keys=("toolCall", "tool_call"), name="args", is_json=True)
+_TOOL_RESULT_PART_FIELDS: Final = (
+    _PartField(keys=("codeExecutionResult", "code_execution_result"), name="output", is_json=False),
+    _PartField(keys=("functionResponse", "function_response"), name="response", is_json=True),
+    _PartField(keys=("toolResponse", "tool_response"), name="response", is_json=True),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _PartScope:
+    tool_calls: bool
+    tool_results: bool
+
+
+_FULL_PART_SCOPE: Final = _PartScope(tool_calls=True, tool_results=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _TextSlot:
+    container: object
+    key: str | int
+    text: str
+    json_value: object = None
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    fields: Final = as_str_mapping(value)
+    return fields if isinstance(fields, dict) else None
+
+
+def _as_list_or_tuple(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
 
 
 def _field(container: object, name: str) -> object | None:
-    if isinstance(container, dict):
-        return container.get(name)
-    return getattr(container, name, None)
+    fields: Final = _json_object(container)
+    return fields.get(name) if fields is not None else getattr(container, name, None)
 
 
-def _part_text(part: object) -> str | None:
-    text: Final = _field(part, "text")
-    if isinstance(text, str) and text:
-        return text
-    return None
+def _present_fields(container: object, names: Sequence[str]) -> tuple[object, ...]:
+    return tuple(value for name in names if (value := _field(container, name)) is not None)
 
 
-def _write_part_text(part: object, text: str) -> None:
-    if isinstance(part, dict):
-        part["text"] = text  # rebind-ok: guardrail write-back rewrites the caller's part in place by handler contract
-        return
-    setattr(part, "text", text)  # noqa: B010  # SDK parts are typed as object here; direct assignment cannot type-check
+def _write_field(container: object, key: str | int, value: object) -> None:
+    match container:
+        case dict():
+            container[key] = value  # rebind-ok: guardrail write-back edits the caller's request in place
+        case list():
+            if isinstance(key, int):
+                container[key] = value  # rebind-ok: guardrail write-back edits the caller's request in place
+        case _:
+            if isinstance(key, str):
+                setattr(container, key, value)
 
 
-def _content_text_parts(content: object) -> tuple[object, ...]:
-    parts: Final = _field(content, "parts")
-    if not isinstance(parts, (list, tuple)):
-        return ()
-    return tuple(part for part in parts if _part_text(part) is not None)
+def _is_writable(container: object, key: str | int) -> bool:
+    match container:
+        case dict():
+            return True
+        case list():
+            return isinstance(key, int)
+        case _:
+            return isinstance(key, str)
 
 
-def _system_instruction(data: Mapping[str, object]) -> object | None:
-    return next(
-        (
-            value
-            for container in (data, data.get("config"))
-            if container is not None
-            for key in ("systemInstruction", "system_instruction")
-            for value in (_field(container, key),)
-            if value is not None
-        ),
-        None,
+def _repeated_field(value: object) -> Sequence[object]:
+    fields: Final = _json_object(value)
+    if fields is not None:
+        return (fields,)
+    return _as_list_or_tuple(value) or ()
+
+
+def _string_slot(container: object, key: str | int, value: object) -> tuple[_TextSlot, ...]:
+    return (_TextSlot(container=container, key=key, text=value),) if isinstance(value, str) and value else ()
+
+
+def _json_text(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _raw_control_character(escape: re.Match[str]) -> str:
+    code: Final = escape.group(1)
+    if code in ('"', "\\"):
+        return escape.group(0)
+    return _CONTROL_CHARACTER_ESCAPES.get(code) or chr(int(code[1:], 16))
+
+
+def _scan_scalar(scalar: re.Match[str]) -> str:
+    text: Final = scalar.group(0)
+    if not text.startswith('"'):
+        return f'"{text}"'
+    return _JSON_STRING_ESCAPE.sub(_raw_control_character, text)
+
+
+def _json_scan_text(value: object) -> str:
+    return _JSON_SCALAR.sub(_scan_scalar, _json_text(value))
+
+
+def _with_original_numbers(original: object, guardrailed: object, depth: int) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return original if _json_scan_text(original) == _json_scan_text(guardrailed) else guardrailed
+    if isinstance(original, (int, float)) and not isinstance(original, bool):
+        return original if guardrailed == _json_text(original) else guardrailed
+    original_fields: Final = _json_object(original)
+    guardrailed_fields: Final = _json_object(guardrailed)
+    if original_fields is not None and guardrailed_fields is not None:
+        return {
+            key: _with_original_numbers(original_fields.get(key), value, depth + 1)
+            for key, value in guardrailed_fields.items()
+        }
+    original_items: Final = _as_list_or_tuple(original)
+    guardrailed_items: Final = _as_list_or_tuple(guardrailed)
+    if original_items is None or guardrailed_items is None:
+        return guardrailed
+    if len(original_items) != len(guardrailed_items):
+        return _with_kept_originals(original_items, guardrailed_items, depth)
+    return [
+        _with_original_numbers(item, value, depth + 1)
+        for item, value in zip(original_items, guardrailed_items, strict=True)
+    ]
+
+
+def _json_shape(value: object) -> frozenset[str] | str:
+    fields: Final = _json_object(value)
+    if fields is not None:
+        return frozenset(fields)
+    return "array" if _as_list_or_tuple(value) is not None else "scalar"
+
+
+def _common_prefix_length(left: Sequence[Hashable], right: Sequence[Hashable]) -> int:
+    return next((index for index, (a, b) in enumerate(zip(left, right)) if a != b), min(len(left), len(right)))
+
+
+def _bounded_opcodes(
+    original_keys: Sequence[Hashable], guardrailed_keys: Sequence[Hashable]
+) -> Iterable[tuple[str, int, int, int, int]]:
+    if len(original_keys) * len(guardrailed_keys) > _MAX_ALIGNED_ITEM_PAIRS:
+        return (("replace", 0, len(original_keys), 0, len(guardrailed_keys)),)
+    return SequenceMatcher(None, original_keys, guardrailed_keys, autojunk=False).get_opcodes()
+
+
+def _aligned_blocks(
+    original_items: Sequence[object], guardrailed_items: Sequence[object], key: Callable[[object], Hashable]
+) -> Iterable[tuple[str, Sequence[object], Sequence[object]]]:
+    original_keys: Final = tuple(map(key, original_items))
+    guardrailed_keys: Final = tuple(map(key, guardrailed_items))
+    head: Final = _common_prefix_length(original_keys, guardrailed_keys)
+    tail: Final = _common_prefix_length(original_keys[head:][::-1], guardrailed_keys[head:][::-1])
+    original_end: Final = len(original_items) - tail
+    guardrailed_end: Final = len(guardrailed_items) - tail
+    middle: Final = (
+        (tag, original_items[head + i1 : head + i2], guardrailed_items[head + j1 : head + j2])
+        for tag, i1, i2, j1, j2 in _bounded_opcodes(
+            original_keys[head:original_end], guardrailed_keys[head:guardrailed_end]
+        )
+    )
+    return chain(
+        (("equal", original_items[:head], guardrailed_items[:head]),),
+        middle,
+        (("equal", original_items[original_end:], guardrailed_items[guardrailed_end:]),),
     )
 
 
-def _request_text_parts(data: Mapping[str, object]) -> tuple[object, ...]:
-    contents: Final = data.get("contents")
-    content_list: Final = (
-        (contents,) if isinstance(contents, dict) else tuple(contents) if isinstance(contents, list) else ()
-    )
+def _with_paired_numbers(originals: Sequence[object], guardrailed: Sequence[object], depth: int) -> Iterable[object]:
     return (
-        *_content_text_parts(_system_instruction(data)),
-        *(part for content in content_list for part in _content_text_parts(content)),
+        _with_original_numbers(original, value, depth + 1)
+        for original, value in zip(originals, guardrailed, strict=True)
     )
 
 
-def _response_text_parts(response: object) -> tuple[object, ...]:
-    candidates: Final = _field(response, "candidates")
-    if not isinstance(candidates, (list, tuple)):
+def _with_shape_matched_originals(
+    original_items: Sequence[object], guardrailed_items: Sequence[object], depth: int
+) -> Iterable[object]:
+    return chain.from_iterable(
+        _with_paired_numbers(originals, guardrailed, depth) if tag == "equal" else guardrailed
+        for tag, originals, guardrailed in _aligned_blocks(original_items, guardrailed_items, _json_shape)
+    )
+
+
+def _kept_block(tag: str, originals: Sequence[object], guardrailed: Sequence[object], depth: int) -> Iterable[object]:
+    if tag == "equal":
+        return originals
+    if tag == "replace":
+        return _with_shape_matched_originals(originals, guardrailed, depth)
+    return guardrailed
+
+
+def _with_kept_originals(
+    original_items: Sequence[object], guardrailed_items: Sequence[object], depth: int
+) -> Sequence[object]:
+    return list(
+        chain.from_iterable(
+            _kept_block(tag, originals, guardrailed, depth)
+            for tag, originals, guardrailed in _aligned_blocks(original_items, guardrailed_items, _json_scan_text)
+        )
+    )
+
+
+def _json_slot(container: object, key: str | int, value: object) -> tuple[_TextSlot, ...]:
+    if not value:
         return ()
-    return tuple(part for candidate in candidates for part in _content_text_parts(_field(candidate, "content")))
+    return (_TextSlot(container=container, key=key, text=_json_scan_text(value), json_value=value),)
 
 
-def _part_texts(text_parts: Sequence[object]) -> tuple[str, ...]:
-    return tuple(text for part in text_parts for text in (_part_text(part),) if text is not None)
+def _part_field_slots(part: object, part_field: _PartField) -> tuple[_TextSlot, ...]:
+    slot: Final = _json_slot if part_field.is_json else _string_slot
+    return tuple(
+        chain.from_iterable(
+            slot(container, part_field.name, _field(container, part_field.name))
+            for container in _present_fields(part, part_field.keys)
+        )
+    )
+
+
+def _part_text_slots(parts: Sequence[object], index: int) -> tuple[_TextSlot, ...]:
+    part: Final = parts[index]
+    return (
+        _string_slot(parts, index, part) if isinstance(part, str) else _string_slot(part, "text", _field(part, "text"))
+    )
+
+
+def _scoped_part_fields(scope: _PartScope) -> tuple[_PartField, ...]:
+    return (
+        _CODE_PART_FIELD,
+        *((_TOOL_CALL_PART_FIELD,) if scope.tool_calls else ()),
+        *(_TOOL_RESULT_PART_FIELDS if scope.tool_results else ()),
+    )
+
+
+def _part_slots(parts: Sequence[object], index: int, scope: _PartScope) -> tuple[_TextSlot, ...]:
+    text_slots: Final = _part_text_slots(parts, index)
+    field_slots: Final = chain.from_iterable(
+        _part_field_slots(parts[index], part_field) for part_field in _scoped_part_fields(scope)
+    )
+    return (*text_slots, *field_slots)
+
+
+def _content_part_slots(content: object, scope: _PartScope) -> tuple[_TextSlot, ...]:
+    parts: Final = _repeated_field(_field(content, "parts"))
+    return tuple(chain.from_iterable(_part_slots(parts, index, scope) for index in range(len(parts))))
+
+
+def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
+    system_instructions: Final = chain.from_iterable(
+        _present_fields(container, _SYSTEM_INSTRUCTION_KEYS) for container in (data, data.get("config"))
+    )
+    return (*system_instructions, *_repeated_field(data.get("contents")))
+
+
+def _request_part_scope(guardrail: "CustomGuardrail") -> _PartScope:
+    return _PartScope(
+        tool_calls=tool_calls_in_guardrail_scope(guardrail),
+        tool_results=not effective_skip_tool_message_for_guardrail(guardrail),
+    )
+
+
+def _request_text_slots(data: Mapping[str, object], scope: _PartScope) -> tuple[_TextSlot, ...]:
+    return tuple(chain.from_iterable(_content_part_slots(content, scope) for content in _request_contents(data)))
+
+
+def _candidate_contents(response: object) -> tuple[object, ...]:
+    candidates: Final = _as_list_or_tuple(_field(response, "candidates"))
+    if candidates is None:
+        return ()
+    return tuple(_field(candidate, "content") for candidate in candidates)
+
+
+def _is_text_part_slot(slot: _TextSlot) -> bool:
+    return slot.key == "text" or isinstance(slot.key, int)
+
+
+def _response_part_slots(response: object) -> tuple[_TextSlot, ...]:
+    slots: Final = tuple(
+        chain.from_iterable(_content_part_slots(content, _FULL_PART_SCOPE) for content in _candidate_contents(response))
+    )
+    return (*filterfalse(_is_text_part_slot, slots), *filter(_is_text_part_slot, slots))
+
+
+def _reply_write_back_slots(
+    text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None
+) -> Sequence[_TextSlot]:
+    if guardrailed_texts is None or len(guardrailed_texts) >= len(text_slots):
+        return text_slots
+    return (*filter(_is_text_part_slot, text_slots), *filterfalse(_is_text_part_slot, text_slots))
+
+
+def _slot_texts(text_slots: Sequence[_TextSlot]) -> tuple[str, ...]:
+    return tuple(slot.text for slot in text_slots)
+
+
+def _camel_or_snake(container: object, camel_case: str, snake_case: str) -> object | None:
+    camel_value: Final = _field(container, camel_case)
+    return camel_value if camel_value is not None else _field(container, snake_case)
+
+
+def _function_call_in_part(part: object) -> object | None:
+    return _camel_or_snake(part, "functionCall", "function_call")
+
+
+def _content_function_calls(content: object) -> tuple[object, ...]:
+    calls: Final = (_function_call_in_part(part) for part in _repeated_field(_field(content, "parts")))
+    return tuple(call for call in calls if call is not None)
+
+
+def _request_function_calls(data: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(
+        chain.from_iterable(_content_function_calls(content) for content in _repeated_field(data.get("contents")))
+    )
+
+
+def _function_calls_in_response(response: object) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(_content_function_calls(content) for content in _candidate_contents(response)))
+
+
+def _continues(function_call: object) -> bool:
+    return _camel_or_snake(function_call, "willContinue", "will_continue") is True
+
+
+def _starts_function_call(function_call: object) -> bool:
+    return bool(_field(function_call, "name")) or bool(as_str_mapping(_field(function_call, "args")))
+
+
+def _function_call_groups(function_calls: Sequence[object]) -> tuple[tuple[object, ...], ...]:
+    starts: Final = tuple(
+        index
+        for index in range(len(function_calls))
+        if index == 0 or not _continues(function_calls[index - 1]) or _starts_function_call(function_calls[index])
+    )
+    return tuple(tuple(function_calls[start:end]) for start, end in pairwise((*starts, len(function_calls))))
+
+
+def _partial_args(function_call: object) -> Sequence[object]:
+    return as_object_list(_camel_or_snake(function_call, "partialArgs", "partial_args")) or ()
+
+
+def _partial_arg_path(partial_arg: object) -> str:
+    path: Final = _camel_or_snake(partial_arg, "jsonPath", "json_path")
+    return path if isinstance(path, str) else ""
+
+
+def _partial_arg_text(partial_arg: object) -> str:
+    values: Final = (_camel_or_snake(partial_arg, camel, snake) for camel, snake in _PARTIAL_ARG_VALUE_FIELDS)
+    value: Final = next((value for value in values if value is not None), None)
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _partial_args_by_path(group: Sequence[object]) -> Mapping[str, tuple[object, ...]]:
+    partial_args: Final = tuple(chain.from_iterable(_partial_args(function_call) for function_call in group))
+    paths: Final = tuple(_partial_arg_path(partial_arg) for partial_arg in partial_args)
+    rank: Final = {path: position for position, path in enumerate(dict.fromkeys(paths))}
+    order: Final = tuple(sorted(range(len(paths)), key=lambda index: rank[paths[index]]))
+    return {
+        path: tuple(partial_args[index] for index in indices)
+        for path, indices in groupby(order, key=lambda index: paths[index])
+    }
+
+
+def _partial_text(partial_args: Iterable[object]) -> str:
+    return "".join(_partial_arg_text(partial_arg) for partial_arg in partial_args)
+
+
+def _partial_values_by_path(group: Sequence[object]) -> Mapping[str, str]:
+    return {path: _partial_text(partial_args) for path, partial_args in _partial_args_by_path(group).items()}
+
+
+def _group_field(group: Sequence[object], name: str) -> str | None:
+    values: Final = (_field(function_call, name) for function_call in group)
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
+def _group_arguments(group: Sequence[object]) -> Mapping[str, object]:
+    args: Final = (as_str_mapping(_field(function_call, "args")) or {} for function_call in group)
+    return {**dict(chain.from_iterable(mapping.items() for mapping in args)), **_partial_values_by_path(group)}
+
+
+def _group_arguments_text(group: Sequence[object]) -> str:
+    return json.dumps(_group_arguments(group), ensure_ascii=False, default=str)
+
+
+def _tool_call(group: Sequence[object], index: int) -> ChatCompletionToolCallChunk:
+    return ChatCompletionToolCallChunk(
+        id=_group_field(group, "id"),
+        type="function",
+        function={"name": _group_field(group, "name"), "arguments": _group_arguments_text(group)},
+        index=index,
+    )
+
+
+def _tool_calls_payload(groups: Sequence[Sequence[object]]) -> tuple[ChatCompletionToolCallChunk, ...]:
+    return tuple(_tool_call(group, index) for index, group in enumerate(groups))
+
+
+def _set_field(container: object, name: str, value: object) -> None:
+    if isinstance(container, dict):
+        container[name] = value  # rebind-ok: guardrail write-back rewrites the caller's part in place
+        return
+    setattr(container, name, value)
+
+
+def _clear_field(container: object, name: str) -> None:
+    if isinstance(container, dict) and name in container:
+        del container[name]  # rebind-ok: guardrail write-back rewrites the caller's part in place
+    elif getattr(container, name, None) is not None:
+        setattr(container, name, None)
+
+
+def _string_value_field(partial_arg: object) -> str:
+    snake_case: Final = _field(partial_arg, "json_path") is not None or _field(partial_arg, "string_value") is not None
+    return "string_value" if snake_case else "stringValue"
+
+
+def _write_partial_text(partial_arg: object, text: str) -> None:
+    string_field: Final = _string_value_field(partial_arg)
+    for name in _PARTIAL_ARG_VALUE_NAMES:
+        _clear_field(partial_arg, name)
+    _set_field(partial_arg, string_field, text)
+
+
+def _write_partial_path(
+    partial_args: Sequence[object], returned: object, sent_text: str, guardrail_name: str | None
+) -> None:
+    if not isinstance(returned, str):
+        raise unappliable_request_rewrite(guardrail_name)
+    if returned == sent_text:
+        return
+    for index, partial_arg in enumerate(partial_args):
+        _write_partial_text(partial_arg, returned if index == 0 else "")
+
+
+def _write_group_args(group: Sequence[object], args: Mapping[str, object], guardrail_name: str | None) -> None:
+    partial_args_by_path: Final = _partial_args_by_path(group)
+    head_args: Final = {key: value for key, value in args.items() if key not in partial_args_by_path}
+    if head_args != (as_str_mapping(_field(group[0], "args")) or {}):
+        _set_field(group[0], "args", head_args)
+    for path, partial_args in partial_args_by_path.items():
+        _write_partial_path(partial_args, args.get(path), _partial_text(partial_args), guardrail_name)
+
+
+def _returned_function_field(returned_tool_call: object, name: str) -> object:
+    return stream_item_field(stream_item_field(returned_tool_call, "function"), name)
+
+
+def _write_group_name(group: Sequence[object], returned_tool_call: object) -> None:
+    name: Final = _returned_function_field(returned_tool_call, "name")
+    if not isinstance(name, str) or not name or name == _group_field(group, "name"):
+        return
+    holder: Final = next((function_call for function_call in group if _field(function_call, "name")), group[0])
+    _set_field(holder, "name", name)
+
+
+def _guardrailed_args(returned_tool_call: object, guardrail_name: str | None) -> Mapping[str, object]:
+    arguments: Final = _returned_function_field(returned_tool_call, "arguments")
+    parsed: Final = _parse_json_dict_or_none(arguments) if isinstance(arguments, str) else None
+    if parsed is None:
+        raise unappliable_request_rewrite(guardrail_name)
+    return parsed
+
+
+def _returned_tool_calls(
+    groups: Sequence[Sequence[object]], guardrailed_inputs: GenericGuardrailAPIInputs
+) -> Sequence[object] | None:
+    return as_object_list(stream_item_field(guardrailed_inputs, "tool_calls")) if groups else None
+
+
+def _text_count_differs(text_slots: Sequence[_TextSlot], returned_texts: Sequence[str] | None) -> bool:
+    return bool(text_slots and returned_texts and len(returned_texts) != len(text_slots))
+
+
+def _write_back_function_calls(
+    groups: Sequence[Sequence[object]], returned_tool_calls: Sequence[object] | None, guardrail_name: str | None
+) -> None:
+    if not returned_tool_calls:
+        return
+    if len(returned_tool_calls) != len(groups):
+        raise unappliable_request_rewrite(guardrail_name)
+    for group, returned in zip(groups, returned_tool_calls, strict=True):
+        if _returned_function_field(returned, "arguments") != _group_arguments_text(group):
+            _write_group_args(group, _guardrailed_args(returned, guardrail_name), guardrail_name)
+        _write_group_name(group, returned)
 
 
 def _texts_payload(
@@ -107,11 +557,33 @@ def _texts_payload(
     return list(texts)
 
 
-def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[str] | None) -> None:
-    if not guardrailed_texts or len(guardrailed_texts) != len(text_parts):
+def _written_value(slot: _TextSlot, text: str, guardrail_name: str | None) -> object:
+    if slot.json_value is None:
+        return text
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(text, strict=False))
+    except json.JSONDecodeError:
+        raise unappliable_request_rewrite(guardrail_name) from None
+    value: Final = _with_original_numbers(slot.json_value, decoded, depth=0)
+    if isinstance(slot.json_value, dict) and _json_object(value) is None:
+        raise unappliable_request_rewrite(guardrail_name)
+    return value
+
+
+def _write_back_texts(
+    text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None, guardrail_name: str | None
+) -> None:
+    if not guardrailed_texts:
         return
-    for part, text in zip(text_parts, guardrailed_texts):
-        _write_part_text(part, text)
+    writes: Final = tuple(
+        (slot, _written_value(slot, text, guardrail_name))
+        for slot, text in zip(text_slots, guardrailed_texts)
+        if text != slot.text
+    )
+    if not all(_is_writable(slot.container, slot.key) for slot, _ in writes):
+        raise unappliable_request_rewrite(guardrail_name)
+    for slot, value in writes:
+        _write_field(slot.container, slot.key, value)
 
 
 def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
@@ -122,17 +594,10 @@ def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
     return as_str_mapping(parsed)
 
 
-def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:
-    return tuple(
-        text
-        for line in split_sse_lines(sse_text)
-        if line.startswith("data:")
-        for payload in (line[len("data:") :].strip(),)
-        if payload and payload != "[DONE]"
-        for parsed in (_parse_json_dict_or_none(payload),)
-        if parsed is not None
-        for text in _part_texts(_response_text_parts(parsed))
-    )
+def _sse_payload_slots(sse_text: str) -> tuple[_TextSlot, ...]:
+    payloads: Final = (line[len("data:") :].strip() for line in split_sse_lines(sse_text) if line.startswith("data:"))
+    parsed: Final = (_parse_json_dict_or_none(payload) for payload in payloads if payload and payload != "[DONE]")
+    return tuple(chain.from_iterable(_response_part_slots(chunk) for chunk in parsed if chunk is not None))
 
 
 def _chunk_sse_text(chunk: object) -> str | None:
@@ -143,15 +608,45 @@ def _chunk_sse_text(chunk: object) -> str | None:
     return None
 
 
+def _joined_stream_text(text_slots: Sequence[_TextSlot]) -> str:
+    text_parts: Final = "".join(slot.text for slot in filter(_is_text_part_slot, text_slots))
+    other_fields: Final = tuple(slot.text for slot in filterfalse(_is_text_part_slot, text_slots))
+    return "\n".join(text for text in (text_parts, *other_fields) if text)
+
+
 def _accumulated_stream_text(responses_so_far: Sequence[object]) -> str:
-    object_texts: Final = tuple(
-        text
-        for chunk in responses_so_far
-        if _chunk_sse_text(chunk) is None
-        for text in _part_texts(_response_text_parts(chunk))
+    object_slots: Final = tuple(
+        chain.from_iterable(_response_part_slots(chunk) for chunk in responses_so_far if _chunk_sse_text(chunk) is None)
     )
-    sse_text: Final = "".join(sse for chunk in responses_so_far for sse in (_chunk_sse_text(chunk),) if sse is not None)
-    return "".join(object_texts) + "".join(_sse_payload_texts(sse_text))
+    return _joined_stream_text((*object_slots, *_sse_payload_slots(_joined_sse_text(responses_so_far))))
+
+
+def _joined_sse_text(responses_so_far: Sequence[object]) -> str:
+    sse_texts: Final = (_chunk_sse_text(chunk) for chunk in responses_so_far)
+    return "".join(sse for sse in sse_texts if sse is not None)
+
+
+def _sse_payload_function_calls(sse_text: str) -> tuple[object, ...]:
+    payloads: Final = (line[len("data:") :].strip() for line in split_sse_lines(sse_text) if line.startswith("data:"))
+    parsed: Final = (_parse_json_dict_or_none(payload) for payload in payloads if payload and payload != "[DONE]")
+    return tuple(chain.from_iterable(_function_calls_in_response(chunk) for chunk in parsed if chunk is not None))
+
+
+def _accumulated_stream_function_calls(responses_so_far: Sequence[object]) -> tuple[object, ...]:
+    object_calls: Final = tuple(
+        chain.from_iterable(
+            _function_calls_in_response(chunk) for chunk in responses_so_far if _chunk_sse_text(chunk) is None
+        )
+    )
+    return object_calls + _sse_payload_function_calls(_joined_sse_text(responses_so_far))
+
+
+def _guardrail_inputs(
+    texts: Sequence[str], tool_calls: Sequence[ChatCompletionToolCallChunk], model: object
+) -> GenericGuardrailAPIInputs:
+    model_fields: Final[GenericGuardrailAPIInputs] = {"model": model} if isinstance(model, str) else {}
+    tool_call_fields: Final[GenericGuardrailAPIInputs] = {"tool_calls": list(tool_calls)} if tool_calls else {}
+    return {"texts": _texts_payload(texts), **model_fields, **tool_call_fields}
 
 
 _SSE_FIELD_PREFIXES: Final = (":", "event:", "id:", "retry:")
@@ -448,27 +943,29 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,  # mutable-ok: base handler contract passes the proxy's request dict through to apply_guardrail
+        data: dict[str, object],  # mutable-ok: base handler contract passes the proxy's request dict to apply_guardrail
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> object:
-        text_parts: Final = _request_text_parts(data)
-        if not text_parts:
+        request: Final[Mapping[str, object]] = as_str_mapping(data) or _EMPTY_REQUEST_DATA
+        scope: Final = _request_part_scope(guardrail_to_apply)
+        text_slots: Final = _request_text_slots(request, scope)
+        call_groups: Final = _function_call_groups(_request_function_calls(request)) if scope.tool_calls else ()
+        if not text_slots and not call_groups:
             verbose_proxy_logger.debug("Google GenAI guardrail: no request text found, skipping")
             return data
-        model: Final = data.get("model")
-        inputs: Final = (
-            GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)), model=model)
-            if isinstance(model, str)
-            else GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)))
-        )
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=inputs,
+            inputs=_guardrail_inputs(_slot_texts(text_slots), _tool_calls_payload(call_groups), request.get("model")),
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
-        _write_back_texts(text_parts, guardrailed_inputs.get("texts"))
+        returned_texts: Final = guardrailed_inputs.get("texts")
+        returned_tool_calls: Final = _returned_tool_calls(call_groups, guardrailed_inputs)
+        if _text_count_differs(text_slots, returned_texts):
+            raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
+        _write_back_texts(text_slots, returned_texts, guardrail_to_apply.guardrail_name)
+        _write_back_function_calls(call_groups, returned_tool_calls, guardrail_to_apply.guardrail_name)
         return data
 
     async def process_output_response(
@@ -479,8 +976,9 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: Mapping[str, object] | None = None,
     ) -> object:
-        text_parts: Final = _response_text_parts(response)
-        if not text_parts:
+        text_slots: Final = _response_part_slots(response)
+        call_groups: Final = _function_call_groups(_function_calls_in_response(response))
+        if not text_slots and not call_groups:
             verbose_proxy_logger.debug("Google GenAI guardrail: no response text found, skipping")
             return response
         guardrail_request_data: Final = self._merged_request_data(
@@ -489,19 +987,21 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             context_key="response",
             context_value=response,
         )
-        model: Final = guardrail_request_data.get("model")
-        inputs: Final = (
-            GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)), model=model)
-            if isinstance(model, str)
-            else GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)))
-        )
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=inputs,
+            inputs=_guardrail_inputs(
+                _slot_texts(text_slots), _tool_calls_payload(call_groups), guardrail_request_data.get("model")
+            ),
             request_data=guardrail_request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
-        _write_back_texts(text_parts, guardrailed_inputs.get("texts"))
+        guardrailed_texts: Final = guardrailed_inputs.get("texts")
+        _write_back_texts(
+            _reply_write_back_slots(text_slots, guardrailed_texts), guardrailed_texts, guardrail_to_apply.guardrail_name
+        )
+        _write_back_function_calls(
+            call_groups, _returned_tool_calls(call_groups, guardrailed_inputs), guardrail_to_apply.guardrail_name
+        )
         return response
 
     async def process_output_streaming_response(
@@ -514,7 +1014,8 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         stream_transform_sink: StreamTransformSink | None = None,
     ) -> object:
         accumulated_text: Final = _accumulated_stream_text(responses_so_far)
-        if not accumulated_text:
+        call_groups: Final = _function_call_groups(_accumulated_stream_function_calls(responses_so_far))
+        if not accumulated_text and not call_groups:
             return responses_so_far
         guardrail_request_data: Final = self._merged_request_data(
             request_data=request_data,
@@ -523,7 +1024,9 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             context_value=responses_so_far,
         )
         _guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=GenericGuardrailAPIInputs(texts=_texts_payload((accumulated_text,))),
+            inputs=_guardrail_inputs(
+                (accumulated_text,) if accumulated_text else (), _tool_calls_payload(call_groups), None
+            ),
             request_data=guardrail_request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
@@ -545,7 +1048,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         context_key: str,
         context_value: object,
-    ) -> dict:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
+    ) -> dict[str, object]:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
         base: Final = request_data if request_data is not None else _EMPTY_REQUEST_DATA
         user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         context_pairs: Final = ((context_key, context_value),) if context_key not in base else ()

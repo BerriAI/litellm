@@ -3,7 +3,7 @@
 
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Final, cast
 
@@ -94,17 +94,17 @@ class S3Logger:
     # Class variables or attributes
     def __init__(
         self,
-        s3_bucket_name=None,
-        s3_path=None,
-        s3_region_name=None,
-        s3_api_version=None,
-        s3_use_ssl=True,
-        s3_verify=None,
-        s3_endpoint_url=None,
-        s3_aws_access_key_id=None,
-        s3_aws_secret_access_key=None,
-        s3_aws_session_token=None,
-        s3_config=None,
+        s3_bucket_name: object = None,
+        s3_path: object = None,
+        s3_region_name: object = None,
+        s3_api_version: object = None,
+        s3_use_ssl: object = True,
+        s3_verify: bool | str | None = None,
+        s3_endpoint_url: object = None,
+        s3_aws_access_key_id: object = None,
+        s3_aws_secret_access_key: object = None,
+        s3_aws_session_token: object = None,
+        s3_config: object = None,
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
         s3_log_prompts_only: bool | None = None,
@@ -164,10 +164,24 @@ class S3Logger:
             print_verbose(f"Got exception on init s3 client {e}")
             raise e
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def _async_log_event(
+        self,
+        kwargs,
+        response_obj: object,
+        start_time: datetime,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs,
+        response_obj: object,
+        start_time: datetime,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+    ):
         try:
             verbose_logger.debug("s3 Logging - Enters logging function for model %s", kwargs)
 

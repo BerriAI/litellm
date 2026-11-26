@@ -344,6 +344,10 @@ class BackgroundResponseSettlementRepository(
     table_name = "litellm_backgroundresponsesettlement"
 
 
+class BackgroundResponseCreatorRepository(PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseCreator"]):
+    table_name = "litellm_backgroundresponsecreator"
+
+
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
     table_name = "litellm_retiredagent"
 

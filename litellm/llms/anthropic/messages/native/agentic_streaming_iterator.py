@@ -176,12 +176,12 @@ def _handle_message_start(data: dict, response: dict) -> None:
                 response["usage"][key] = usage[key]
 
 
-def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> None:
+def _handle_content_block_start(data: dict, content_blocks: dict[int, dict[str, object]]) -> None:
     idx: Final = data.get("index", len(content_blocks))
     block: Final = data.get("content_block", {})
     block_type: Final = block.get("type", "text")
 
-    _BLOCK_TEMPLATES: Final[dict[str, dict]] = {
+    _BLOCK_TEMPLATES: Final[dict[str, dict[str, object]]] = {
         "text": {"type": "text", "text": ""},
         "thinking": {"type": "thinking", "thinking": "", "signature": ""},
         "redacted_thinking": {
@@ -273,12 +273,12 @@ class AgenticAnthropicStreamingIterator:
         completion_stream: AsyncIterator,
         http_handler: Any,
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         hold_back: bool = False,
         server_fulfilled_tool_names: frozenset[str] = frozenset(),
         ping_interval_seconds: float = HOLD_BACK_PING_INTERVAL_SECONDS,

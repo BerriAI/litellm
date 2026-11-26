@@ -47,7 +47,7 @@ impl CyberArkSecretManager {
         }
         let verify = ssl_verify_enabled(environment.get(CYBERARK_SSL_VERIFY).as_deref());
         if !verify {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
             );
         }

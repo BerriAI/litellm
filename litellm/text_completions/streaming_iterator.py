@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Protocol
 
 from litellm.constants import VLLM_CHOICE_FIELDS
@@ -14,10 +15,13 @@ def _text_choice(chat_choice: object) -> TextChoices:
     choice_fields: Final = decoded_json_object(
         {field: subscript(chat_choice, field) for field in VLLM_CHOICE_FIELDS if json_contains(chat_choice, field)}
     )
-    text_choices: Final = TextChoices(index=0, **choice_fields)
-    delta: Final = subscript(chat_choice, "delta")
+    delta: Final = require_attributes(subscript(chat_choice, "delta"), _SupportsGet, "get")
+    reasoning_details: Final = delta.get("reasoning_details")
+    text_choices: Final = TextChoices(
+        index=0, **choice_fields, **({"reasoning_details": reasoning_details} if reasoning_details else {})
+    )
     text_choices["text"] = subscript(delta, "content")
-    text_choices["reasoning_content"] = require_attributes(delta, _SupportsGet, "get").get("reasoning_content")
+    text_choices["reasoning_content"] = delta.get("reasoning_content")
     text_choices["index"] = subscript(chat_choice, "index")
     text_choices["finish_reason"] = subscript(chat_choice, "finish_reason")
     return text_choices
@@ -27,8 +31,8 @@ class TextCompletionStreamWrapper:
     def __init__(
         self,
         completion_stream,
-        model,
-        stream_options: dict | None = None,
+        model: object,
+        stream_options: Mapping[str, object] | None = None,
         custom_llm_provider: str | None = None,
         usage_injected_by_proxy: bool = False,
     ):

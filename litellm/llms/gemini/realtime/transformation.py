@@ -296,7 +296,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return usage_dict
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         return headers
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
@@ -386,6 +386,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._manual_activity_open = False
         activity_end: Final[BidiGenerateContentRealtimeInput] = {"activityEnd": {}}
         return (json.dumps({"realtimeInput": activity_end}),)
+
+    def client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        match client_event.get("type"):
+            case "conversation.item.create":
+                item: Final = as_str_mapping(client_event.get("item"))
+                return item is not None and item.get("type") != "function_call_output"
+            case "response.create" | "input_audio_buffer.commit" | "input_audio_buffer.end":
+                return self._manual_activity_open
+            case _:
+                return False
 
     def _handle_input_audio_buffer_commit_or_end(self, session_configuration_request: str | None) -> list[str]:
         """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
@@ -504,7 +514,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return BidiGenerateContentRealtimeInputConfig(automaticActivityDetection=transformed_audio_activity_config)
 
     @staticmethod
-    def _extract_turn_detection(session: dict[str, object]) -> dict | None:
+    def _extract_turn_detection(session: dict[str, object]) -> dict[str, object] | None:
         """Extract turn_detection from a session.update payload.
 
         Handles both the flat beta shape (``session.turn_detection``) and the
@@ -1231,7 +1241,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned_items.append(response_output_item_done)
         return returned_items
 
-    def _consume_usage_metadata_for_response_done(self, frame: dict[str, object]) -> dict | None:
+    def _consume_usage_metadata_for_response_done(self, frame: dict[str, object]) -> dict[str, object] | None:
         """Pop usageMetadata from the frame (authoritative) or drain the pending buffer.
 
         Uses pop so a frame with both ``toolCall`` and ``turnComplete`` can't

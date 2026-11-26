@@ -66,7 +66,9 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
-_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_THINKING_BLOCK: Final[TypeAdapter[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = TypeAdapter(
+    ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 _AnthropicStreamEvent: TypeAlias = dict[str, object] | MessageBlockDelta | ContentBlockDelta
@@ -102,6 +104,34 @@ def _optional_attr(obj: object, name: str) -> object:
 def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
     value: Final = getattr(obj, name, None)
     return value if value else ()
+
+
+def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
+    from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+    from litellm.llms.anthropic.messages.native.utils import refusal_reply_text
+
+    choice: Final = chunk.choices[0]
+    if choice.finish_reason is not None:
+        return False
+    delta: Final = choice.delta
+    if getattr(delta, "tool_calls", None):
+        return False
+    if getattr(delta, "content", None):
+        return False
+    if refusal_reply_text(delta):
+        return False
+    if getattr(delta, "reasoning_content", None):
+        return False
+    # thinking_blocks whose entries are all empty AND unsigned must not
+    # open a block: the emitted {"type": "thinking", "thinking": ""} gets
+    # replayed as history and Anthropic rejects it (LIT-6357). A signed
+    # entry opens the block so the client receives the replay signature.
+    if any(
+        isinstance(b, dict) and not is_empty_unsigned_thinking_block(b)
+        for b in attribute_items(delta, "thinking_blocks")
+    ):
+        return False
+    return True
 
 
 def _error_status_and_message(exc: Exception) -> tuple[int, str]:
@@ -528,7 +558,19 @@ class _CombinedChunkSplitter:
         unfinished.choices[0].finish_reason = None
         return unfinished
 
+    @staticmethod
+    def _carries_only_unrenderable_reasoning_details(chunk: "ModelResponseStream") -> bool:
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        return (
+            len(choices) == 1
+            and getattr(chunk, "usage", None) is None
+            and bool(_optional_attr_sequence(_optional_attr(choices[0], "delta"), "reasoning_details"))
+            and _is_blank_delta(chunk)
+        )
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        if self._carries_only_unrenderable_reasoning_details(chunk):
+            return ()
         split_chunks: Final = tuple(
             split_chunk
             for combined_chunk in self._split(self._without_sibling_finish(chunk))
@@ -713,7 +755,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Per-instance queue for buffering multiple chunks. Must be initialized
         # here (not at class level) so concurrent streams don't share the same
         # deque and corrupt each other's SSE event order.
-        self.chunk_queue: deque = deque()
+        self.chunk_queue: deque[_AnthropicStreamEvent] = deque()
         # Per-instance default content block. Must be initialized here (not at
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in
@@ -994,7 +1036,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 is_opening_first_block = self.sent_content_block_start is False
-                if is_opening_first_block and self._is_blank_delta(chunk):
+                if is_opening_first_block and _is_blank_delta(chunk):
                     continue
                 if is_opening_first_block:
                     self.sent_content_block_start = True
@@ -1229,7 +1271,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 is_opening_first_block = self.sent_content_block_start is False
-                if is_opening_first_block and self._is_blank_delta(chunk):
+                if is_opening_first_block and _is_blank_delta(chunk):
                     continue
                 if is_opening_first_block:
                     self.sent_content_block_start = True
@@ -1539,34 +1581,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if delta_type not in _STREAMING_DELTA_TYPES:
             return False
         return bool(delta.get(_delta_payload_field(delta_type)))
-
-    @staticmethod
-    def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
-        from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
-        from litellm.llms.anthropic.messages.native.utils import refusal_reply_text
-
-        choice: Final = chunk.choices[0]
-        if choice.finish_reason is not None:
-            return False
-        delta: Final = choice.delta
-        if getattr(delta, "tool_calls", None):
-            return False
-        if getattr(delta, "content", None):
-            return False
-        if refusal_reply_text(delta):
-            return False
-        if getattr(delta, "reasoning_content", None):
-            return False
-        # thinking_blocks whose entries are all empty AND unsigned must not
-        # open a block: the emitted {"type": "thinking", "thinking": ""} gets
-        # replayed as history and Anthropic rejects it (LIT-6357). A signed
-        # entry opens the block so the client receives the replay signature.
-        if any(
-            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b)
-            for b in attribute_items(delta, "thinking_blocks")
-        ):
-            return False
-        return True
 
     def _record_anthropic_stop_fields(self, delta: object) -> None:
         from litellm.llms.anthropic.messages.native.utils import (
