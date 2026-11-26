@@ -64,10 +64,3 @@ export function handleCodeInterpreterOutput(
     }
   }
 }
-
-/**
- * Check if code interpreter is being used based on event type.
- */
-export function isCodeInterpreterEvent(event: any): boolean {
-  return event.type === "response.output_item.done" && event.item?.type === "code_interpreter_call";
-}

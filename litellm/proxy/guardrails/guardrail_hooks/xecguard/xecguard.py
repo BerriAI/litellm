@@ -63,7 +63,7 @@ def _dict_fields(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
-def _sanitize_scan_result_for_logging(scan_result: Mapping[str, object]) -> dict:
+def _sanitize_scan_result_for_logging(scan_result: Mapping[str, object]) -> dict[str, object]:
     without_secrets: Final = {key: value for key, value in scan_result.items() if key != "secret_fields"}
     redacted: Final = redact_nested_match_and_regex_keys(without_secrets)
     masked: Final = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
@@ -163,7 +163,7 @@ class XecGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -214,7 +214,7 @@ class XecGuardGuardrail(CustomGuardrail):
         kwargs: dict,
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """Observe-only scan for logging_only mode.
 
         Never blocks, never raises - all errors are swallowed. Records a
@@ -290,10 +290,10 @@ class XecGuardGuardrail(CustomGuardrail):
 
     def logging_hook(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """Sync counterpart to ``async_logging_hook``.
 
         Runs the async version on an available loop, swallowing every

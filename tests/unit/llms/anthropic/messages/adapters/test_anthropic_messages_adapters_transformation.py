@@ -622,6 +622,41 @@ def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning
     assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_reply"),
+    [
+        ("converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", [{"text": "Seven."}]),
+        ("converse/us.amazon.nova-pro-v1:0", [{"text": "Gemini reasoning"}, {"text": "Seven."}]),
+    ],
+)
+@pytest.mark.parametrize("signature", ["", None])
+def test_converse_claude_never_reads_an_unsigned_thought_from_another_provider_as_its_own_reply(
+    model: str, expected_reply: list[dict[str, str]], signature: str | None
+):
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Gemini reasoning", "signature": signature},
+                    {"type": "text", "text": "Seven."},
+                ],
+            },
+            {"role": "user", "content": "Double it."},
+        ],
+        model=model,
+        extra_kwargs={"custom_llm_provider": "bedrock"},
+    )
+
+    converse_messages: Final = _bedrock_converse_messages_pt(
+        messages=completion_kwargs["messages"], model=model.removeprefix("converse/"), llm_provider="bedrock_converse"
+    )
+
+    assert converse_messages[1]["content"] == expected_reply
+
+
 def test_chatgpt_messages_keep_encrypted_reasoning_and_replay_it():
     """chatgpt /v1/messages ends in the Responses API, so the signed block has to survive into the next request."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -804,6 +839,69 @@ def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_response
 
     assistant: Final = openai_request["messages"][1]
     assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    ("deployment_model_info", "kept"),
+    [
+        pytest.param({"base_model": "azure_ai/gpt-5.6-terra"}, True, id="gpt_5_6_base_model_bridges_to_responses"),
+        pytest.param({"base_model": "azure_ai/gpt-5.5"}, False, id="gpt_5_5_base_model_stays_on_chat"),
+        pytest.param({}, False, id="no_base_model_stays_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_a_custom_foundry_name_base_model_routes_it_to_responses(
+    deployment_model_info: dict[str, object], kept: bool
+) -> None:
+    request: Final = AnthropicMessagesRequest(
+        **{**_replayed_reasoning_request([{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]),
+           "model": "azure_ai/qa-prod-reasoner", "thinking": {"type": "enabled", "budget_tokens": 2048}}
+    )
+    openai_request, _mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request,
+        custom_llm_provider="azure_ai",
+        api_base="https://myproject.services.ai.azure.com",
+        deployment_model_info=deployment_model_info,
+    )
+
+    assistant: Final = openai_request["messages"][1]
+    assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}},
+        {"base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/Phi-4"}, "base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}, "base_model": ""},
+    ],
+    ids=["model_info", "litellm_params", "litellm_params_over_model_info", "empty_litellm_params"],
+)
+def test_a_custom_foundry_name_keeps_replayed_reasoning_and_its_summary_wherever_its_base_model_is_set(
+    base_model_source: Mapping[str, object],
+) -> None:
+    from litellm.llms.anthropic.messages.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    tools: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
+    request: Final = _replayed_reasoning_request(tools)
+    completion_kwargs, _mapping = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=cast(list[dict[str, object]], request["messages"]),
+        model="azure_ai/qa-prod-reasoner",
+        thinking={"type": "enabled", "budget_tokens": 2048, "summary": "auto"},
+        tools=tools,
+        extra_kwargs={
+            "custom_llm_provider": "azure_ai",
+            "api_base": "https://myproject.services.ai.azure.com",
+            **base_model_source,
+        },
+    )
+
+    assistant: Final = cast(list[Mapping[str, object]], completion_kwargs["messages"])[1]
+    assert assistant.get("thinking_blocks")
+    assert cast(Mapping[str, object], completion_kwargs["reasoning_effort"]).get("summary") == "auto"
 
 
 @pytest.mark.parametrize(
@@ -5849,6 +5947,88 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
     ]
 
 
+def _user_text_beside(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_USER_TURN: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+
+def _sent_chat_messages(route: respx.Route) -> list[object]:
+    return json.loads(route.calls.last.request.read())["messages"]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_non_string_user_text_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, text: object, stream: bool
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            stream=stream,
+            messages=_user_text_beside({"type": "text", "text": text}),
+        )
+
+    assert rejected.value.status_code == 400
+    assert (
+        rejected.value.message == "litellm.BadRequestError: messages.0.content.1.text: Input should be a valid string"
+    )
+    assert route.call_count == 0
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_drop_params_drops_a_non_string_user_text(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, text: object, drop_params_source: str
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside({"type": "text", "text": text})) == sent_for(_CLEAN_USER_TURN)
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("text_block", [{"type": "text"}, {"type": "text", "text": " "}], ids=["missing", "blank"])
+def test_chat_bridge_sync_strips_a_missing_or_blank_user_text_without_drop_params(
+    respx_mock: respx.MockRouter, text_block: Mapping[str, object]
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside(text_block)) == sent_for(_CLEAN_USER_TURN)
+
+
 _GEMINI_MODEL: Final = "gemini/gemini-3.8-flash"
 _GEMINI_URL: Final = (
     r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
@@ -5904,6 +6084,24 @@ async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
         {"role": "model", "parts": [{"text": "Hello!"}]},
         {"role": "user", "parts": [{"text": " "}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("blank_text", ("", " "), ids=("empty", "blank"))
+async def test_a_request_with_only_blank_user_text_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, blank_text: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": [{"type": "text", "text": blank_text}]}],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 @pytest.mark.asyncio
@@ -6573,3 +6771,59 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+
+def _deferred_tool_request(model: str = "claude-sonnet-5-5") -> AnthropicMessagesRequest:
+    return AnthropicMessagesRequest(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+        tools=[
+            {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "mcp__weather__get_forecast",
+                "description": "Get a forecast",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "defer_loading": True,
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize("deployment_model_info", [None, {"deferred_tools": "drop"}, {"deferred_tools": "native"}])
+def test_chat_route_sends_deferred_tools_as_plain_functions_unless_passthrough(
+    deployment_model_info: Mapping[str, object] | None,
+):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info=deployment_model_info
+    )
+
+    tools: Final = openai_request["tools"]
+    assert [tool["function"]["name"] for tool in tools] == ["Read", "mcp__weather__get_forecast"]
+    assert not any("defer_loading" in tool for tool in tools)
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/1234567890", "1234567890"], ids=["prefixed", "bare"])
+def test_chat_route_passthrough_sends_plain_functions_to_a_vertex_psc_endpoint(model: str):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(model),
+        custom_llm_provider="vertex_ai",
+        api_base="https://psc-endpoint.example.internal",
+        deployment_model_info={"deferred_tools": "passthrough"},
+    )
+
+    assert not any("defer_loading" in tool for tool in openai_request["tools"])
+
+
+def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
+    )
+
+    tools: Final = openai_request["tools"]
+    assert {tool["function"]["name"]: tool.get("defer_loading") for tool in tools} == {
+        "Read": None,
+        "mcp__weather__get_forecast": True,
+    }
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)

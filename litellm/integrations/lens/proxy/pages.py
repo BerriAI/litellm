@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse, RedirectResponse
 
 from litellm.integrations.lens.proxy.adapter import (
@@ -32,6 +33,7 @@ from litellm.integrations.lens.proxy.buffering import (
     LensRoute,
     request_body,
 )
+from litellm.integrations.lens.proxy.model_gateway import GatewaySetupRequest, GatewayStatus, SetupFailure, setup
 from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -44,7 +46,7 @@ _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempot
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
 _PRIVATE: Final = MappingProxyType({"cache-control": "private, no-store"})
 _UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
-_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
+_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options", "x-lens-ui-auth"})
 _UI_FRAME: Final = "frame-ancestors 'self'"
 
 
@@ -281,6 +283,36 @@ async def lens_service(request: Request, log_team_lookup: LogTeamLookupDependenc
     return await service_connection(
         await delegated_identity(await page_auth(request), log_team_lookup), str(request.base_url)
     )
+
+
+@router.post("/admin/gateway/connect", response_model=GatewayStatus)
+async def connect_model_gateway(
+    request: Request, _body: GatewaySetupRequest, log_team_lookup: LogTeamLookupDependency
+) -> GatewayStatus:
+    """Connect this gateway's models to Lens using a dedicated virtual key.
+
+    Requires a proxy administrator. Existing Lens model settings are preserved.
+    """
+    from litellm.proxy.mcp_server.oauth_utils import configured_proxy_base_url  # noqa: PLC0415  # proxy startup cycle
+
+    auth: Final = await page_auth(request)
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(403, SetupFailure.FORBIDDEN.value)
+    connection: Final = Connection.from_env()
+    if connection is None:
+        raise HTTPException(503, SetupFailure.UNAVAILABLE.value)
+    try:
+        gateway_url: Final = AnyHttpUrl(configured_proxy_base_url() or "")
+    except ValueError:
+        raise HTTPException(503, SetupFailure.GATEWAY_URL.value) from None
+    if gateway_url.username is not None or gateway_url.password is not None:
+        raise HTTPException(503, SetupFailure.GATEWAY_URL.value)
+    result: Final = await setup(
+        connection, await delegated_identity(auth, log_team_lookup), str(gateway_url).rstrip("/"), auth
+    )
+    if isinstance(result, SetupFailure):
+        raise HTTPException(503, result.value)
+    return result
 
 
 def admin_page(path: str) -> bool:

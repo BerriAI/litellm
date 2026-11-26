@@ -31,6 +31,7 @@ from litellm.types.utils import CallTypes, LLMResponseTypes, Usage
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
     Span = _Span
@@ -44,13 +45,21 @@ def _precise_minute(now: datetime) -> str:
     return now.strftime("%Y-%m-%d-%H-%M")
 
 
+SLOT_RELEASED_BEFORE_LOGGING: Final = "parallel_request_slot_released_before_logging"
+
+
 def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -> int:
     response_usage: Final = (
         getattr(response_obj, "usage", None)
         if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse))
         else socket_session_usage(kwargs, response_obj)
     )
-    return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
+    usage: Final = (
+        kwargs.get("combined_usage_object")
+        if response_usage is None and kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
+        else response_usage
+    )
+    return usage.total_tokens if isinstance(usage, Usage) else 0
 
 
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
@@ -64,18 +73,23 @@ def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:
     """A websocket turn callback releases nothing; the socket's slot is released once at disconnect.
-    A background usage settlement releases nothing either, since its request released its slot when it returned."""
+    A background usage settlement releases nothing either, since its request released its slot when it returned.
+    A row whose slot was released before it logged releases nothing again."""
     if (
         kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES
         or _is_websocket_passthrough_row(kwargs)
-        or kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True
+        or _released_by_its_request(kwargs)
     ):
         return 0
     return 1
 
 
+def _released_by_its_request(kwargs: Mapping[str, object]) -> bool:
+    return kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True or kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
+
+
 def _request_count_for_an_uncounted_minute(kwargs: Mapping[str, object]) -> int:
-    return 0 if kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True else 1
+    return 0 if _released_by_its_request(kwargs) else 1
 
 
 class CacheObject(TypedDict):
@@ -803,7 +817,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": _request_count_for_an_uncounted_minute(
+                        kwargs  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+                    ),
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -852,11 +868,24 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             end_time=now,
         )
 
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        now: Final = self._clock()
+        details: Final[Mapping[str, object]] = logging_obj.model_call_details
+        await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
+            kwargs={"litellm_params": details.get("litellm_params"), "user": details.get("user")},
+            response_obj=None,
+            start_time=now,
+            end_time=now,
+        )
+        released: Final = {SLOT_RELEASED_BEFORE_LOGGING: True}
+        logging_obj.model_call_details |= released  # rebind-ok: the row's details reach its later success callback
+
     async def get_internal_user_object(
         self,
         user_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> dict | None:
+    ) -> Mapping[str, object] | None:
         """
         Helper to get the 'Internal User Object'
 
@@ -888,7 +917,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> None:
         """
         Retrieve the key's remaining rate limits.

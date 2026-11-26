@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import (
     BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    inherits_parent_session,
     settles_background_response,
 )
 from litellm.litellm_core_utils.litellm_logging import (
@@ -279,6 +280,7 @@ def _get_spend_logs_metadata(  # pyright: ignore[reportUnusedFunction]  # shared
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
     subscription_usage: ClaudeSubscriptionUsage | None = None,
+    no_log: bool = False,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
     is_silent_experiment: bool = False,
     route_call_type: str | None = None,
@@ -383,10 +385,14 @@ def _get_spend_logs_metadata(  # pyright: ignore[reportUnusedFunction]  # shared
     clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
+        vector_store_request_metadata,
+        metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
+        no_log=no_log,
     )
     clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(
-        guardrail_information, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
+        guardrail_information,
+        metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
+        no_log=no_log,
     )
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -639,7 +645,7 @@ def _snapshotless_cost_breakdown(  # pyright: ignore[reportUnusedFunction]  # sh
 
 
 def get_logging_payload(
-    kwargs: dict | None,
+    kwargs: dict[str, object] | None,
     response_obj: object,
     start_time: datetime,
     end_time: datetime,
@@ -692,16 +698,20 @@ def _get_session_id_for_spend_log(  # pyright: ignore[reportUnusedFunction]  # s
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the conversation id the caller sent (also one an x-litellm-trace-id header
-    displaced from the request's session), then trace ids.
+    """Resolve the session id for the spend log row: `omit` honors metadata.session_id, else the parent session a proxy
+    sub-call inherited, never a trace id; batch sessions outrank everything,
+    then the conversation id the caller sent (also one an x-litellm-trace-id header displaced from the request's
+    session), then trace ids.
 
     A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
     it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole.
     """
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
-        return str(session_id) if session_id else None
+        if session_id:
+            return str(session_id)
+        params: Final = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+        return _caller_session_for_spend_log(kwargs, metadata=None) if inherits_parent_session(params) else None
 
     from litellm._uuid import uuid
 
@@ -1166,6 +1176,7 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
 def _sanitize_guardrail_information_for_spend_logs(
     guardrail_information: list[StandardLoggingGuardrailInformation] | None,
     metadata: Mapping[str, object] | None = None,
+    no_log: bool = False,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
     When ``store_prompts_in_spend_logs`` is False, blank prompt-carrying fields
@@ -1186,7 +1197,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or stores_full_prompts_in_spend_logs(metadata):
+    if guardrail_information is None or (not no_log and stores_full_prompts_in_spend_logs(metadata)):
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1252,6 +1263,7 @@ def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
     metadata: Mapping[str, object] | None = None,
+    no_log: bool = False,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1280,7 +1292,7 @@ def sanitize_error_information_for_spend_logs(
     )
     sanitized = cast(dict, {**persisted})
 
-    if not stores_full_prompts_in_spend_logs(metadata):
+    if no_log or not stores_full_prompts_in_spend_logs(metadata):
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -1373,11 +1385,12 @@ def _error_information_without_ip_addresses(error_information: Mapping[object, o
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
     metadata: Mapping[str, object] | None = None,
+    no_log: bool = False,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if stores_full_prompts_in_spend_logs(metadata):
+    if not no_log and stores_full_prompts_in_spend_logs(metadata):
         return vector_store_request_metadata
 
     if vector_store_request_metadata is None:
@@ -1411,8 +1424,15 @@ def _disables_prompt_storage(tenant_metadata: object) -> bool:
     return value is False or (isinstance(value, str) and str_to_bool(value) is False)
 
 
+def is_no_log_call(kwargs: Mapping[str, object]) -> bool:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    return (
+        litellm_params is not None and litellm_params.get("no-log") is True and not litellm.global_disable_no_log_param
+    )
+
+
 def should_store_prompts_for_call(kwargs: Mapping[str, object]) -> bool:
-    return should_store_prompts_and_responses_in_spend_logs(
+    return not is_no_log_call(kwargs) and should_store_prompts_and_responses_in_spend_logs(
         _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)))
     )
 

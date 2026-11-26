@@ -1,7 +1,7 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, TypeAlias, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -34,17 +34,26 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     cache_control_as_prompt_cache_breakpoint,
+    default_ttl_prompt_cache_breakpoint_for,
     prompt_cache_breakpoint_for_wire,
+    responses_prompt_cache_breakpoint_for,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
+    is_openai_chat_latest_model,
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
+)
+from litellm.llms.openai.responses.instruction_items import (
+    SystemItemPlacement,
+    has_instruction_items,
+    system_first_input_and_params,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
@@ -63,6 +72,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
+from litellm.utils import declares_system_first
 
 from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -80,6 +90,25 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _decoded_error_body(
+    error_message: str,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    try:
+        return _ERROR_BODY.validate_json(error_message)
+    except ValidationError:
+        return None
+
+
+def _nested_error_object(
+    decoded: Mapping[str, object] | None,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    nested: Final = decoded.get("error") if decoded is not None else None
+    return _ERROR_BODY.validate_python(nested) if isinstance(nested, dict) else None
+
+
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
@@ -94,6 +123,7 @@ _COMPACT_TRACKING_PARAMS: Final = frozenset({"metadata", "user"})
 _COMPACT_REJECTED_PARAMS: Final = frozenset(
     {
         "background",
+        "background_options",
         "context_management",
         "max_output_tokens",
         "max_tool_calls",
@@ -189,20 +219,25 @@ def _provider_name(provider: LlmProviders | str) -> str:
     return provider.value if isinstance(provider, LlmProviders) else provider
 
 
-def _item_with_prompt_cache_breakpoints(item: object) -> object:
+_BreakpointFor: TypeAlias = Callable[[object], PromptCacheBreakpoint]
+
+
+def _item_with_prompt_cache_breakpoints(item: object, breakpoint_for: _BreakpointFor) -> object:
     """Marks on assistant output and on tools are left for the strip that follows: OpenAI writes no cache there."""
     try:
         fields: Final = _INPUT_ITEM.validate_python(item)
     except ValidationError:
         return item
     if fields.get("type") == "function_call_output":
-        return _with_prompt_cache_breakpoints_under(fields, "output")
+        return _with_prompt_cache_breakpoints_under(fields, "output", breakpoint_for)
     if fields.get("type", "message") == "message" and fields.get("role") in _ROLES_READING_PROMPT_CACHE_BREAKPOINTS:
-        return _with_prompt_cache_breakpoints_under(fields, "content")
+        return _with_prompt_cache_breakpoints_under(fields, "content", breakpoint_for)
     return item
 
 
-def _with_prompt_cache_breakpoints_under(item: Mapping[str, object], key: str) -> Mapping[str, object]:
+def _with_prompt_cache_breakpoints_under(
+    item: Mapping[str, object], key: str, breakpoint_for: _BreakpointFor
+) -> Mapping[str, object]:
     value: Final = item.get(key)
     item_mark: Final = item.get("cache_control")
     unmarked_item: Final = {name: field for name, field in item.items() if name != "cache_control"}
@@ -210,23 +245,28 @@ def _with_prompt_cache_breakpoints_under(item: Mapping[str, object], key: str) -
         if item_mark is None:
             return item
         text_part: Final[Mapping[str, object]] = {"type": "input_text", "text": value}
-        return {**unmarked_item, key: [with_prompt_cache_breakpoint(text_part, PromptCacheBreakpoint(mode="explicit"))]}
+        return {
+            **unmarked_item,
+            key: [with_prompt_cache_breakpoint(text_part, breakpoint_for(item_mark))],
+        }
     try:
         parts: Final = _CONTENT_PARTS.validate_python(value)
     except ValidationError:
         return item
-    swapped_parts: Final = tuple(_part_with_prompt_cache_breakpoint(part) for part in parts)
-    return {**unmarked_item, key: list(_with_breakpoint_on_last_reading_part(swapped_parts, item_mark))}
+    swapped_parts: Final = tuple(_part_with_prompt_cache_breakpoint(part, breakpoint_for) for part in parts)
+    return {**unmarked_item, key: list(_with_breakpoint_on_last_reading_part(swapped_parts, item_mark, breakpoint_for))}
 
 
-def _part_with_prompt_cache_breakpoint(part: Mapping[str, object]) -> Mapping[str, object]:
+def _part_with_prompt_cache_breakpoint(
+    part: Mapping[str, object], breakpoint_for: _BreakpointFor
+) -> Mapping[str, object]:
     if part.get("type") not in _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS:
         return part
-    return cache_control_as_prompt_cache_breakpoint(part)
+    return cache_control_as_prompt_cache_breakpoint(part, breakpoint_for)
 
 
 def _with_breakpoint_on_last_reading_part(
-    parts: Sequence[Mapping[str, object]], item_mark: object
+    parts: Sequence[Mapping[str, object]], item_mark: object, breakpoint_for: _BreakpointFor
 ) -> Sequence[Mapping[str, object]]:
     if item_mark is None:
         return parts
@@ -236,7 +276,7 @@ def _with_breakpoint_on_last_reading_part(
     if not reading_indexes:
         return parts
     last: Final = reading_indexes[-1]
-    marked_last: Final = with_prompt_cache_breakpoint(parts[last], PromptCacheBreakpoint(mode="explicit"))
+    marked_last: Final = with_prompt_cache_breakpoint(parts[last], breakpoint_for(item_mark))
     return (*parts[:last], marked_last, *parts[last + 1 :])
 
 
@@ -371,6 +411,8 @@ def list_input_items_query_params(
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
+    error_exception_class: ClassVar[type[BaseLLMException]] = BaseLLMException
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
@@ -411,7 +453,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         The same row the chat gate reads, so a level the row refuses is refused on both wires
         and a new model needs its row, not code. This surface stays opt-out for every level,
         xhigh included, since it never refused a level the row omits; max is the exception, a
-        level the row cannot gate because the same model takes it here and refuses it on chat.
+        level no flag can gate because the same model takes it here and refuses it on chat, so only
+        a row that lists its reasoning_effort_levels refuses it.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
         from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
@@ -433,7 +476,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
-    def _supports_reasoning_param(model: str) -> bool:
+    def supports_reasoning_param(model: str) -> bool:
         from litellm.utils import get_model_info_helper
 
         try:
@@ -543,7 +586,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if (
             self.custom_llm_provider == LlmProviders.OPENAI
             and self._requests_reasoning_effort(params.get("reasoning"))
-            and not self._supports_reasoning_param(model=model)
+            and not self.supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
                 dropped_reasoning: Final = params.pop("reasoning", None)
@@ -560,7 +603,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
 
         lookup_name: Final = self._model_map_lookup_name(model)
-        if self._is_gpt_5_model(model=lookup_name):
+        if self._is_gpt_5_model(model=lookup_name) or (
+            self.custom_llm_provider == LlmProviders.OPENAI and is_openai_chat_latest_model(lookup_name)
+        ):
             reasoning: Final = params.get("reasoning") or {}
             requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
             if (
@@ -646,26 +691,61 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params
         )
+        placement: Final = self._system_item_placement(model, input, request_params, litellm_params)
+        placed: Final = (
+            None
+            if placement is None
+            else system_first_input_and_params(self._validate_input_param(input), request_params, placement)
+        )
+        placed_input: Final = input if placed is None else placed[0]
+        placed_params: Final = request_params if placed is None else placed[1]
         replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
             model=model,
-            input=input,
+            input=placed_input,
             tools=response_api_optional_request_params.get("tools"),
             litellm_params=litellm_params,
             prompt_cache_options=request_params.get("prompt_cache_options"),
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
+        tools_override: Final[Mapping[str, object]] = {} if sanitized_tools is None else {"tools": sanitized_tools}
         final_request_params: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
             dict[str, object],
             {
                 "model": model,
                 "input": replay_safe_input,
-                **response_api_optional_request_params,
+                **placed_params,
+                **tools_override,
                 **self._prompt_cache_options_with_original_comparison_id(request_params),
             },
         )
 
         return final_request_params
+
+    def _system_item_placement(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> SystemItemPlacement | None:
+        continues_conversation: Final = request_params.get("previous_response_id") is not None
+        sets_instructions: Final = bool(request_params.get("instructions"))
+        places_system_items_first: Final = (
+            self.custom_llm_provider is LlmProviders.OPENAI
+            and not self._targets_openai_api(litellm_params)
+            and has_instruction_items(
+                self._validate_input_param(input), 0 if continues_conversation or sets_instructions else 1
+            )
+            and declares_system_first(model, LlmProviders.OPENAI.value, deployment_model_info(litellm_params))
+        )
+        if not places_system_items_first:
+            return None
+        if continues_conversation:
+            return "every_item_in_place"
+        if sets_instructions:
+            return "leading_block_into_instructions"
+        return "leading_block_into_system_item"
 
     def transform_extra_body(
         self,
@@ -739,7 +819,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _replayable_input(
         self, input: str | ResponseInputParam, reads_breakpoints: bool, maps_anthropic_tool_search: bool
     ) -> str | ResponseInputParam:
-        marked_input: Final = self._input_with_prompt_cache_breakpoints(input) if reads_breakpoints else input
+        marked_input: Final = (
+            self._input_with_prompt_cache_breakpoints(input, self._cache_control_breakpoint_for())
+            if reads_breakpoints
+            else input
+        )
         if not maps_anthropic_tool_search:
             return marked_input
         return input_without_unanswered_anthropic_tool_search_calls(marked_input)
@@ -811,11 +895,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             model_info=deployment_model_info(litellm_params),
         )
 
+    def _cache_control_breakpoint_for(self) -> _BreakpointFor:
+        if self.custom_llm_provider == LlmProviders.OPENAI:
+            return responses_prompt_cache_breakpoint_for
+        return default_ttl_prompt_cache_breakpoint_for
+
     @staticmethod
-    def _input_with_prompt_cache_breakpoints(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _input_with_prompt_cache_breakpoints(
+        input: str | ResponseInputParam, breakpoint_for: _BreakpointFor
+    ) -> str | ResponseInputParam:
         if not isinstance(input, list):
             return input
-        marked_items: Final = [_item_with_prompt_cache_breakpoints(item) for item in input]
+        marked_items: Final = [_item_with_prompt_cache_breakpoints(item, breakpoint_for) for item in input]
         return cast("ResponseInputParam", marked_items)  # cast-ok: items keep their shape, marks renamed in place
 
     def _tools_with_object_parameters(
@@ -1109,7 +1200,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for OpenAI responses API
@@ -1404,6 +1495,24 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         return response
 
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+    ) -> BaseLLMException:
+        decoded: Final = _decoded_error_body(error_message)
+        nested: Final = _nested_error_object(decoded)
+        exception_class: Final = (
+            RelayOnlyBodyLLMException if decoded is not None and nested is None else self.error_exception_class
+        )
+        raise exception_class(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+            body=decoded if nested is None else nested,
+        )
+
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########
     #########################################################
@@ -1425,7 +1534,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response_api_optional_request_params: dict,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict[str, object]]:
         """
         Transform the compact response API request into a URL and data

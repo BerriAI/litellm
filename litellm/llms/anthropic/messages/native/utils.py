@@ -14,6 +14,13 @@ from litellm.llms.anthropic.common_utils import (
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_system_texts,
+    drop_non_string_texts,
+    reject_emptied_messages,
+    reject_non_string_system_text,
+    reject_non_string_user_text,
+)
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
@@ -260,6 +267,32 @@ def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, obje
     )
 
 
+def native_messages_to_send(
+    messages: Sequence[object], drop_params: object
+) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]
+    return list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
+
+
+def cleaned_native_messages(
+    messages: Sequence[object], drop_params: object, *, model: str, custom_llm_provider: str | None
+) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
+    reject_non_string_user_text(messages, drop_params, model, custom_llm_provider)
+    cleaned: Final = native_messages_to_send(messages, drop_params)
+    reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
+    return cleaned
+
+
+def cleaned_native_system(
+    system: str | list[dict[str, JsonValue]] | None,  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    drop_params: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+) -> str | list[dict[str, JsonValue]] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    reject_non_string_system_text(system, drop_params, model, custom_llm_provider)
+    return drop_non_string_system_texts(system, drop_params)
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -273,7 +306,20 @@ def prepare_native_messages(
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
     from litellm.responses.bridge_check import needs_empty_user_turn_back
 
-    normalized: Final = messages if presanitized else normalize_native_messages(messages)
+    normalized: Final = (
+        messages
+        if presanitized
+        else cleaned_native_messages(
+            messages, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
+    )
+    cleaned_system: Final = (
+        system
+        if presanitized
+        else cleaned_native_system(
+            system, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
+    )
     restored: Final = (
         [*normalized, {"role": "user", "content": ""}]
         if needs_empty_user_turn_back(
@@ -289,7 +335,7 @@ def prepare_native_messages(
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(
             restored,
-            system,
+            cleaned_system,
             kwargs,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -427,10 +473,10 @@ class AnthropicMessagesRequestUtils:
 
 def mock_response(
     model: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
-    **kwargs,
+    **kwargs: object,
 ) -> AnthropicMessagesResponse:
     """
     Mock response for Anthropic messages

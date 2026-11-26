@@ -46,6 +46,7 @@ from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSe
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials
+    from types_boto3_sts.type_defs import AssumeRoleResponseTypeDef
 else:
     Credentials = Any
     AWSPreparedRequest = Any
@@ -1131,7 +1132,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
-    ) -> dict:
+    ) -> "AssumeRoleResponseTypeDef":
         """Handle cross-account role assumption for IRSA."""
         ensure_optional_import("boto3")
         import boto3
@@ -1197,7 +1198,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
-    ) -> dict:
+    ) -> "AssumeRoleResponseTypeDef":
         """Handle same-account role assumption for IRSA."""
         ensure_optional_import("boto3")
         import boto3
@@ -1225,7 +1226,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             **_assume_role_params(aws_role_name, aws_session_name, aws_external_id, aws_session_tags)
         )
 
-    def _extract_credentials_and_ttl(self, sts_response: dict) -> tuple[Credentials, int | None]:
+    def _extract_credentials_and_ttl(self, sts_response: "AssumeRoleResponseTypeDef") -> tuple[Credentials, int | None]:
         """Extract credentials and TTL from STS response.
 
         The TTL carries the same safety margin as the non-IRSA assume path, so a cached entry is
@@ -1521,28 +1522,16 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_region_name: str,
         endpoint_type: Literal["runtime", "agent", "agentcore"] | None = "runtime",
     ) -> tuple[str, str]:
-        env_aws_bedrock_runtime_endpoint: Final = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if api_base is not None:
-            endpoint_url = api_base
-        elif aws_bedrock_runtime_endpoint is not None and isinstance(aws_bedrock_runtime_endpoint, str):
-            endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(env_aws_bedrock_runtime_endpoint, str):
-            endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            endpoint_url = self._select_default_endpoint_url(
-                endpoint_type=endpoint_type,
-                aws_region_name=aws_region_name,
-            )
-
-        # Determine proxy_endpoint_url
-        if aws_bedrock_runtime_endpoint is not None and isinstance(aws_bedrock_runtime_endpoint, str):
-            proxy_endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(env_aws_bedrock_runtime_endpoint, str):
-            proxy_endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            proxy_endpoint_url = endpoint_url
-
-        return endpoint_url, proxy_endpoint_url
+        configured_endpoint: Final = (
+            aws_bedrock_runtime_endpoint if isinstance(aws_bedrock_runtime_endpoint, str) else None
+        )
+        runtime_endpoint: Final = configured_endpoint or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        endpoint_url: Final = (
+            api_base
+            or runtime_endpoint
+            or self._select_default_endpoint_url(endpoint_type=endpoint_type, aws_region_name=aws_region_name)
+        )
+        return endpoint_url, runtime_endpoint or endpoint_url
 
     def _select_default_endpoint_url(
         self,
@@ -1721,7 +1710,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws-external-anthropic",
         ],
         headers: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         model: str | None = None,

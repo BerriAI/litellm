@@ -10,7 +10,7 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 
 class OpenAILikeError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str | bytes):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://www.litellm.ai")
@@ -19,7 +19,7 @@ class OpenAILikeError(Exception):
 
 
 class OpenAILikeBase:
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         pass
 
     def _validate_environment(
@@ -27,9 +27,9 @@ class OpenAILikeBase:
         api_key: str | None,
         api_base: str | None,
         endpoint_type: Literal["chat_completions", "embeddings"],
-        headers: dict | None,
+        headers: dict[str, str] | None,
         custom_endpoint: bool | None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         if api_key is None and headers is None:
             raise OpenAILikeError(
                 status_code=400,

@@ -27,6 +27,7 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
@@ -319,6 +320,64 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
 
     assert json.loads(payload["metadata"])[KUBERNETES_POD_ROUTING_KEY] == expected
     assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
+
+
+@pytest.mark.parametrize("no_log", [True, False])
+def test_get_logging_payload_stores_request_and_response_only_without_no_log(
+    monkeypatch: pytest.MonkeyPatch, no_log: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "use_spend_logs_ledger": False}
+    )
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    body: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "stored prompt"}]}
+    logger: Final = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=now,
+        litellm_call_id="no-log",
+        function_id="no-log",
+    )
+    logger.update_environment_variables(optional_params={}, custom_llm_provider="openai", litellm_params={})
+    response: Final = litellm.ModelResponse(id="chatcmpl-stored-answer", model="gpt-4o-mini")
+    standard: Final = get_standard_logging_object_payload(
+        kwargs=logger.model_call_details,
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logger,
+        status="success",
+    )
+    payload: Final = get_logging_payload(
+        kwargs={
+            **logger.model_call_details,
+            "litellm_params": {"metadata": {}, "proxy_server_request": {"body": body}, "no-log": no_log},
+            "standard_logging_object": {
+                **standard,
+                "guardrail_information": [{"guardrail_name": "pii", "guardrail_response": "stored prompt"}],
+            },
+            "response_cost": 0.5,
+        },
+        response_obj=response,
+        start_time=now,
+        end_time=now,
+    )
+
+    assert payload["spend"] == 0.5
+    stored_request: Final = json.loads(payload["proxy_server_request"])
+    stored_response: Final = json.loads(payload["response"])
+    assert (stored_request, stored_response.get("id")) == (({}, None) if no_log else (body, "chatcmpl-stored-answer"))
+    stored_metadata: Final = json.loads(payload["metadata"])
+    assert ("stored prompt" in json.dumps(stored_metadata["guardrail_information"])) is not no_log, stored_metadata
+    error: Final = sanitize_error_information_for_spend_logs(
+        {"error_message": "bad request, 'messages': [{'content': 'stored prompt'}]"}, no_log=no_log
+    )
+    assert error is not None
+    assert ("stored prompt" in error["error_message"]) is not no_log, error
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
@@ -660,7 +719,11 @@ _TRACE_ONLY_STANDARD_LOGGING: Final = cast(
 def _trace_only_session_id(omit_when_missing: bool) -> str | None:
     """get_litellm_params copies metadata.trace_id into litellm_session_id, so every field echoes the trace id."""
     return _get_session_id_for_spend_log(
-        kwargs={"litellm_trace_id": "trace-abc", "litellm_session_id": "trace-abc"},
+        kwargs={
+            "litellm_trace_id": "trace-abc",
+            "litellm_session_id": "trace-abc",
+            "litellm_params": {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc"}},
+        },
         metadata={"trace_id": "trace-abc"},
         standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
         omit_when_missing=omit_when_missing,
@@ -686,6 +749,26 @@ def test_omit_records_metadata_session_id():
         omit_when_missing=True,
     )
     assert session_id == "chain-1"
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "expected"),
+    [
+        ({SESSION_ID_INHERITED_METADATA_KEY: True}, "parent-session"),
+        ({}, None),
+    ],
+    ids=["proxy-sub-call", "caller-request"],
+)
+def test_omit_records_a_sent_session_only_for_a_sub_call_inheriting_it(
+    request_metadata: dict[str, object], expected: str | None
+):
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_params": {"litellm_session_id": "parent-session", "metadata": request_metadata}},
+        metadata={},
+        standard_logging_payload=None,
+        omit_when_missing=True,
+    )
+    assert session_id == expected
 
 
 def test_legacy_policy_keeps_trace_id_fallback():
@@ -5235,7 +5318,11 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def _fallback_after_a_failed_follow_up(cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})):
+def _fallback_after_a_failed_follow_up(
+    cache_hit: bool,
+    request_params: Mapping[str, object] = MappingProxyType({}),
+    served_cost: float | None = 0.1,
+):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -5257,7 +5344,7 @@ def _fallback_after_a_failed_follow_up(cache_hit: bool, request_params: Mapping[
         optional_params=dict(request_params),
     )
     fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
-    set_hidden_param(fallback, "response_cost", 0.1)
+    set_hidden_param(fallback, "response_cost", served_cost)
     logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
     logger.carry_failed_attempt_usage()
     logger.model_call_details["cache_hit"] = cache_hit
@@ -5275,6 +5362,17 @@ def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, 
     )
 
     assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
+def test_success_row_keeps_a_failed_attempts_charge_when_the_served_answer_has_no_price():
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(False, served_cost=None)
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(0.4)
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
 
 
