@@ -91,6 +91,40 @@ describe("Settings", () => {
     expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("saves a cleared Slack webhook alongside the inherited default and selected alerts", async () => {
+    const fallback = "https://example.invalid/default";
+    const custom = "https://example.invalid/exceptions";
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [],
+      available_callbacks: {},
+      alerts: [
+        {
+          name: "slack",
+          variables: { SLACK_WEBHOOK_URL: fallback },
+          alerts_to_webhook: { llm_exceptions: custom },
+          active_alerts: ["llm_exceptions"],
+        },
+      ],
+    });
+    renderWithProviders(<Settings {...defaultProps} />, { searchParams: { tab: "alerting-types" } });
+
+    const exceptions = await screen.findByDisplayValue(custom);
+    fireEvent.input(exceptions, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(defaultProps.accessToken, {
+        general_settings: {
+          alert_to_webhook_url: expect.objectContaining({
+            llm_exceptions: "",
+            llm_too_slow: fallback,
+          }),
+          alert_types: ["llm_exceptions"],
+        },
+      }),
+    );
+  });
+
   it("opens callback creation from inside the Logging Callbacks tab only", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Settings {...defaultProps} />);
