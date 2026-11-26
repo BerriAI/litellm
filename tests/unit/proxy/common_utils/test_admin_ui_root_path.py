@@ -162,8 +162,6 @@ def test_empty_or_slash_root_path_serves_source_without_writing(tmp_path: Path, 
     assert not (source / RENDERED_UI_DIRNAME).exists()
 
 
-
-
 def test_rendered_directory_serves_extensionless_routes(tmp_path: Path):
     source: Final = _build_source(tmp_path)
     directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
@@ -188,7 +186,6 @@ def test_changed_source_file_renders_into_a_new_directory(tmp_path: Path):
     assert before != after
     assert 'z="/a/new"' in (after / "_next" / "static" / "chunks" / "app.js").read_text()
     assert 'z="/a/new"' not in (before / "_next" / "static" / "chunks" / "app.js").read_text()
-
 
 
 def test_restructure_leaves_in_source_render_untouched(tmp_path: Path):
@@ -296,3 +293,18 @@ def test_group_or_world_writable_render_root_is_refused(tmp_path: Path):
 
     assert isinstance(result, RenderUnavailable)
     assert list(output_root.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="permission bits are not enforced on Windows")
+def test_rendered_ui_is_not_group_or_world_writable_under_a_permissive_umask(tmp_path: Path):
+    previous_umask: Final = os.umask(0o002)
+    try:
+        source: Final = _build_source(tmp_path)
+        rendered: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
+    finally:
+        os.umask(previous_umask)
+
+    paths: Final = (rendered, *rendered.rglob("*"))
+    assert len(paths) > 5
+    assert [path for path in paths if path.stat().st_mode & 0o022] == []
+    assert [path for path in paths if path.stat().st_mode & 0o444 != 0o444] == []

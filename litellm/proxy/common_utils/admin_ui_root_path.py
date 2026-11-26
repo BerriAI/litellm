@@ -119,6 +119,20 @@ def _write_rendered_tree(source: Path, destination: Path, server_root_path: str)
         _copy_rendered_file(source / relative, destination / relative, server_root_path)
 
 
+def _lock_down_permissions(root: Path) -> None:
+    for directory, subdirectories, filenames in os.walk(root):
+        for name in subdirectories:
+            (Path(directory) / name).chmod(0o755)
+        for name in filenames:
+            _chmod_regular_file(Path(directory) / name)
+    root.chmod(0o755)
+
+
+def _chmod_regular_file(path: Path) -> None:
+    if path.is_file() and not path.is_symlink():
+        path.chmod(0o644)
+
+
 def _render_into_source(source: Path, server_root_path: str, key: str) -> UIRenderResult:
     output_root: Final = source / RENDERED_UI_DIRNAME
     target: Final = output_root / key
@@ -136,9 +150,9 @@ def _render_into_source(source: Path, server_root_path: str, key: str) -> UIRend
         return RenderUnavailable((f"{output_root}: {error}",))
 
     try:
-        staging.chmod(0o755)
         _write_rendered_tree(source, staging, server_root_path)
         restructure_ui_html_files(staging)
+        _lock_down_permissions(staging)
         os.rename(staging, target)
     except OSError as error:
         if _is_trusted_dir(target):
