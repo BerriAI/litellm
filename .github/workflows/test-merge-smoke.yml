@@ -17,7 +17,7 @@ concurrency:
 jobs:
   rust-bridge:
     name: smoke-rust-bridge
-    runs-on: ubuntu-latest-16-cores
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
       contents: read
@@ -64,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.10", "3.13"]' || '["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]') }}
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
@@ -82,6 +82,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
@@ -153,7 +154,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.13"]' || '["3.12", "3.13"]') }}
+        python-version: ["3.12", "3.13"]
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
@@ -171,6 +172,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
