@@ -207,7 +207,7 @@ def _user_api_key_auth_of(value: object) -> "UserAPIKeyAuth | None":
 def _prompt_version_of(value: object) -> int | None:
     if isinstance(value, int):
         return value
-    return int(value) if isinstance(value, str) and value.isdigit() else None
+    return int(value) if isinstance(value, str) and value.isdecimal() else None
 
 
 def _has_file_search_tool(tools: Iterable[Mapping[str, object]] | None) -> bool:

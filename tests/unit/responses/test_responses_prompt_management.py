@@ -671,7 +671,10 @@ def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_hands_the_prompt_hook_no_label_or_version_of_the_wrong_type() -> None:
+@pytest.mark.parametrize("prompt_version", ["latest", "\u00b2"])
+async def test_aresponses_hands_the_prompt_hook_no_label_or_version_of_the_wrong_type(
+    prompt_version: str,
+) -> None:
     logging_obj: Final = _make_logging_obj(merged_model="openai/gpt-4o", merged_messages=[])
 
     patches: Final = _patch_responses_dispatch()
@@ -681,7 +684,7 @@ async def test_aresponses_hands_the_prompt_hook_no_label_or_version_of_the_wrong
             model="gpt-4o",
             prompt_id="wrong-typed",
             prompt_label=123,
-            prompt_version="latest",
+            prompt_version=prompt_version,
             litellm_logging_obj=logging_obj,
         )
 
