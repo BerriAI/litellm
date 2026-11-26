@@ -192,6 +192,42 @@ def _result_content(
     return _image_content(byte_content, metadata)
 
 
+def _filename_from_uri(uri: str) -> str:
+    if uri.startswith("s3://"):
+        bucket, _, key = uri.removeprefix("s3://").partition("/")
+        return key.split("/")[-1] or bucket or uri
+    try:
+        parsed_uri: Final = urlparse(uri)
+    except ValueError:
+        return uri
+    return parsed_uri.path.split("/")[-1] or parsed_uri.netloc or uri
+
+
+def _names_only_a_host(uri: str) -> bool:
+    try:
+        return not urlparse(uri).path.strip("/")
+    except ValueError:
+        return False
+
+
+def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | None:
+    custom_document_id: Final = (location.get("customDocumentLocation") or {}).get("id")
+    if custom_document_id:
+        return custom_document_id, custom_document_id
+    location_uris: Final = (
+        (location.get("s3Location") or {}).get("uri"),
+        (location.get("webLocation") or {}).get("url"),
+        (location.get("confluenceLocation") or {}).get("url"),
+        (location.get("salesforceLocation") or {}).get("url"),
+        (location.get("sharePointLocation") or {}).get("url"),
+        (location.get("googleDriveLocation") or {}).get("url"),
+        (location.get("oneDriveLocation") or {}).get("url"),
+        (location.get("kendraDocumentLocation") or {}).get("uri"),
+    )
+    document_uri: Final = next((uri for uri in location_uris if uri and not _names_only_a_host(uri)), None)
+    return (document_uri, _filename_from_uri(document_uri)) if document_uri else None
+
+
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     """Vector store configuration for AWS Bedrock Knowledge Bases."""
 
@@ -430,40 +466,18 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             api_key=api_key,
         )
 
-    def _get_source_uri(self, metadata: Mapping[str, object], location: BedrockKBLocation | None) -> str:
+    def _get_source_document(
+        self, metadata: Mapping[str, object], location: BedrockKBLocation | None
+    ) -> tuple[str, str]:
         metadata_uri: Final = metadata.get("x-amz-bedrock-kb-source-uri")
         if isinstance(metadata_uri, str) and metadata_uri:
-            return metadata_uri
-        if not location:
-            return ""
-        location_uris: Final = (
-            (location.get("s3Location") or {}).get("uri"),
-            (location.get("webLocation") or {}).get("url"),
-            (location.get("confluenceLocation") or {}).get("url"),
-            (location.get("salesforceLocation") or {}).get("url"),
-            (location.get("sharePointLocation") or {}).get("url"),
-            (location.get("googleDriveLocation") or {}).get("url"),
-            (location.get("oneDriveLocation") or {}).get("url"),
-            (location.get("kendraDocumentLocation") or {}).get("uri"),
-            (location.get("customDocumentLocation") or {}).get("id"),
-        )
-        return next((uri for uri in location_uris if uri), "")
-
-    def _get_file_id(self, source_uri: str, metadata: Mapping[str, object]) -> str:
-        if source_uri:
-            return source_uri
+            return metadata_uri, _filename_from_uri(metadata_uri)
+        location_document: Final = _document_from_location(location) if location else None
+        if location_document:
+            return location_document
         chunk_id: Final = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown")
-        return f"bedrock-kb-{chunk_id}"
-
-    def _get_filename(self, source_uri: str, metadata: Mapping[str, object]) -> str:
-        if source_uri:
-            try:
-                parsed_uri: Final = urlparse(source_uri)
-            except ValueError:
-                return source_uri
-            return parsed_uri.path.split("/")[-1] or parsed_uri.netloc or source_uri
         data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown")
-        return f"bedrock-kb-document-{data_source_id}"
+        return f"bedrock-kb-{chunk_id}", f"bedrock-kb-document-{data_source_id}"
 
     def _get_attributes_from_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
         """
@@ -487,9 +501,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 if result_content is None:
                     continue
 
-                source_uri = self._get_source_uri(metadata, item.get("location"))
-                file_id = self._get_file_id(source_uri, metadata)
-                filename = self._get_filename(source_uri, metadata)
+                file_id, filename = self._get_source_document(metadata, item.get("location"))
                 attributes = self._get_attributes_from_metadata(metadata)
 
                 results.append(
