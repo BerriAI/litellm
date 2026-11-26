@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
+    fill_empty_content_on_reasoning_only_assistant_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
@@ -385,7 +386,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
-        hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
+        filled_messages: Final = fill_empty_content_on_reasoning_only_assistant_messages(stripped_messages)
+        hoisted_messages: Final = hoist_images_from_tool_messages(filled_messages)
 
         async def _async_transform():
             for message in hoisted_messages:

@@ -2411,3 +2411,93 @@ def test_mid_stream_error_chunk_keeps_the_provider_fields_and_the_logged_code() 
     assert mapped.value.param == "temperature"
     assert relayed_provider_specific_fields(mapped.value) == {"detail": "kept"}
     assert mapped.value.code is None
+
+
+_REPLAYED_REASONING: Final = "The user asks a simple sum."
+_REPLAY_QUESTION: Final = {"role": "user", "content": "What is 2+2?"}
+_REPLAY_FOLLOW_UP: Final = {"role": "user", "content": "Answer in one word."}
+
+
+def _local_chat_completion() -> Response:
+    return Response(
+        200,
+        json={
+            "id": "chatcmpl-local",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "qwen3",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Four"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        },
+    )
+
+
+def _assistant_message_sent_for(respx_mock: respx.MockRouter, assistant_message: dict[str, object]) -> object:
+    route: Final = respx_mock.post("http://llama.invalid/v1/chat/completions").mock(
+        return_value=_local_chat_completion()
+    )
+    litellm.completion(
+        model="openai/qwen3",
+        api_base="http://llama.invalid/v1",
+        api_key="none",
+        messages=[_REPLAY_QUESTION, assistant_message, _REPLAY_FOLLOW_UP],
+    )
+    return json.loads(route.calls[0].request.content)["messages"][1]
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("assistant_message", "reasoning_field"),
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "reasoning_content": _REPLAYED_REASONING},
+            "reasoning_content",
+            id="null-content",
+        ),
+        pytest.param(
+            {"role": "assistant", "reasoning_content": _REPLAYED_REASONING}, "reasoning_content", id="no-content"
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "thinking_blocks": [{"type": "thinking", "thinking": _REPLAYED_REASONING, "signature": "sig-one"}],
+            },
+            "thinking_blocks",
+            id="thinking-blocks",
+        ),
+    ],
+)
+def test_a_reasoning_only_assistant_turn_reaches_the_server_with_empty_content(
+    respx_mock: respx.MockRouter, assistant_message: dict[str, object], reasoning_field: str
+) -> None:
+    sent: Final = _assistant_message_sent_for(respx_mock, assistant_message)
+
+    assert isinstance(sent, dict)
+    assert sent["content"] == ""
+    assert sent[reasoning_field] == assistant_message[reasoning_field]
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "reasoning_content": _REPLAYED_REASONING,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2, "b": 2}'}}
+                ],
+            },
+            id="tool-call",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": "4", "reasoning_content": _REPLAYED_REASONING}, id="answer-text"
+        ),
+    ],
+)
+def test_an_assistant_turn_with_an_answer_or_tool_call_reaches_the_server_as_sent(
+    respx_mock: respx.MockRouter, assistant_message: dict[str, object]
+) -> None:
+    assert _assistant_message_sent_for(respx_mock, assistant_message) == assistant_message

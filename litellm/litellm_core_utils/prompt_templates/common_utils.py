@@ -3186,6 +3186,33 @@ def drop_tool_reference_parts_from_tool_messages(
     return [_drop_tool_reference_parts(message) for message in messages]
 
 
+def _is_reasoning_only_assistant_message(message: Mapping[str, object]) -> bool:
+    if message.get("role") != "assistant" or message.get("content") is not None:
+        return False
+    if message.get("tool_calls") or message.get("function_call"):
+        return False
+    return bool(message.get("reasoning_content") or message.get("thinking_blocks"))
+
+
+def fill_empty_content_on_reasoning_only_assistant_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    """
+    Give an assistant message that carries only reasoning an empty text ``content``.
+
+    The OpenAI chat spec requires ``content`` unless the message has tool calls, and strict
+    OpenAI-compatible servers such as llama.cpp reject one without it (#54504).
+    """
+    if not any(_is_reasoning_only_assistant_message(message) for message in messages):
+        return messages
+    return [
+        cast(AllMessageValues, {**message, "content": ""})  # cast-ok: dict spread keeps the reasoning fields
+        if _is_reasoning_only_assistant_message(message)
+        else message
+        for message in messages
+    ]
+
+
 INSTRUCTION_MESSAGE_ROLES: Final = frozenset({"system", "developer"})
 
 
