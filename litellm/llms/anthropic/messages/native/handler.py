@@ -67,8 +67,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
-from litellm.utils import ProviderConfigManager, client
+from litellm.types.utils import CallTypes, LlmProvidersSet
+from litellm.utils import client
 
 from ..adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
@@ -101,6 +101,7 @@ from .utils import (
     message_thread_unsupported_body,
     mock_response,
     prepare_native_messages,
+    provider_messages_config,
 )
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
@@ -349,24 +350,10 @@ def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
     return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
 
 
-def _provider_messages_config(
-    model: str, custom_llm_provider: str | None, api_base: str | None
-) -> BaseAnthropicMessagesConfig | None:
-    provider_config: Final = (
-        ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]
-        else None
-    )
-    return provider_config if provider_config is not None and provider_config.serves_api_base(model, api_base) else None
-
-
 def _native_messages_config(
     model: str, custom_llm_provider: str | None, model_info: object, api_base: str | None
 ) -> BaseAnthropicMessagesConfig | None:
-    native_config: Final = _provider_messages_config(model, custom_llm_provider, api_base)
+    native_config: Final = provider_messages_config(model, custom_llm_provider, api_base)
     if native_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
         return native_config
     from litellm.llms.openai_like.messages.transformation import (

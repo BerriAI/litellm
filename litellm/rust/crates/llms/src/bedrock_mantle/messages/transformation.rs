@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize, de::IgnoredAny};
 use serde_json::{Map, Value};
 use url::Url;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     Error, ErrorDetail, MantleRegionCheck,
     anthropic::messages::transformation::{
@@ -798,7 +799,7 @@ impl MessagesDialect for BedrockMantleMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn clamp_requested_effort(
