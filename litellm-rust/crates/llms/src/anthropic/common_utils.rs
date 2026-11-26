@@ -354,6 +354,45 @@ pub fn sanitize_tool_use_ids(messages: Vec<Message>) -> Vec<Message> {
         .collect()
 }
 
+const TOOL_USE_ID_PATTERN_ERRORS: [&str; 2] = [
+    "tool_use.id: String should match pattern",
+    "tool_result.tool_use_id: String should match pattern",
+];
+
+pub fn is_anthropic_tool_use_id_pattern_error(error_text: &str) -> bool {
+    TOOL_USE_ID_PATTERN_ERRORS
+        .iter()
+        .any(|pattern_error| error_text.contains(pattern_error))
+}
+
+pub fn messages_with_renamed_tool_use_ids(request_body: &Value) -> Option<Vec<Value>> {
+    let messages = request_body.get("messages")?.as_array()?;
+    let renamed: Vec<Value> = messages
+        .iter()
+        .cloned()
+        .map(with_renamed_raw_tool_use_ids)
+        .collect();
+    (renamed != *messages).then_some(renamed)
+}
+
+fn with_renamed_raw_tool_use_ids(mut message: Value) -> Value {
+    if let Some(Value::Array(blocks)) = message.get_mut("content") {
+        blocks.iter_mut().for_each(rename_raw_tool_use_id);
+    }
+    message
+}
+
+fn rename_raw_tool_use_id(block: &mut Value) {
+    let field = match block.get("type").and_then(Value::as_str) {
+        Some("tool_use" | "server_tool_use") => "id",
+        Some("tool_result") => "tool_use_id",
+        _ => return,
+    };
+    if let Some(renamed) = normalized_if_changed(block.get(field).and_then(Value::as_str)) {
+        block[field] = Value::String(renamed);
+    }
+}
+
 pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
@@ -950,6 +989,69 @@ mod tests {
     #[case::string_content(json!([{"role": "user", "content": "functions.Bash:0"}]))]
     fn sanitize_tool_use_ids_leaves_untouched(#[case] input: Value) {
         assert_eq!(apply(sanitize_tool_use_ids, input.clone()), input);
+    }
+
+    #[rstest]
+    #[case::tool_use_id(
+        "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        true
+    )]
+    #[case::tool_result_tool_use_id(
+        "messages.2.content.0.tool_result.tool_use_id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        true
+    )]
+    #[case::tool_name(
+        "tools.0.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'",
+        false
+    )]
+    #[case::missing_tool_use_id("messages.1.content.0.tool_use.id: Field required", false)]
+    fn tool_use_id_pattern_errors_are_recognized(#[case] error_text: &str, #[case] expected: bool) {
+        assert_eq!(is_anthropic_tool_use_id_pattern_error(error_text), expected);
+    }
+
+    #[rstest]
+    fn messages_with_renamed_tool_use_ids_renames_only_tool_ids() {
+        let body = json!({"model": "m", "messages": [
+            {"role": "user", "content": "functions.Bash:0"},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "functions.Bash:0"},
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "cache_control": {"type": "ephemeral"}},
+                {"type": "server_tool_use", "id": "srv.1", "name": "web_search", "input": {}},
+                {"type": "future_tool_use", "id": "future.1"}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "id": "a.b", "tool_use_id": "functions.Bash:0", "content": "ok"},
+                {"type": "tool_result", "tool_use_id": 7}
+            ]}
+        ]});
+
+        assert_eq!(
+            messages_with_renamed_tool_use_ids(&body),
+            Some(vec![
+                json!({"role": "user", "content": "functions.Bash:0"}),
+                json!({"role": "assistant", "content": [
+                    {"type": "text", "text": "functions.Bash:0"},
+                    {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}, "cache_control": {"type": "ephemeral"}},
+                    {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {}},
+                    {"type": "future_tool_use", "id": "future.1"}
+                ]}),
+                json!({"role": "user", "content": [
+                    {"type": "tool_result", "id": "a.b", "tool_use_id": "functions_Bash_0", "content": "ok"},
+                    {"type": "tool_result", "tool_use_id": 7}
+                ]}),
+            ])
+        );
+    }
+
+    #[rstest]
+    #[case::valid_ids(json!({"messages": [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok"}]}
+    ]}))]
+    #[case::no_messages(json!({"model": "m"}))]
+    #[case::messages_not_a_list(json!({"messages": "functions.Bash:0"}))]
+    fn messages_with_renamed_tool_use_ids_is_none_when_no_id_changes(#[case] body: Value) {
+        assert_eq!(messages_with_renamed_tool_use_ids(&body), None);
     }
 
     #[rstest]

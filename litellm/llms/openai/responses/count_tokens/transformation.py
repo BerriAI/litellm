@@ -313,11 +313,12 @@ class OpenAICountTokensConfig:
         output_format: JsonValue = None,
         *,
         preserve_system_instructions: bool = True,
+        rewrites_tool_use_ids: bool = True,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
         anthropic_request: Final = AnthropicMessagesRequest(
             model=model,
-            messages=normalize_native_messages(messages),
+            messages=normalize_native_messages(messages, rewrites_tool_use_ids=rewrites_tool_use_ids),
             system=system if isinstance(system, (str, list)) else None,
             tools=[dict(tool) for tool in tools] if tools else None,
             output_format=_anthropic_output_schema(output_format),

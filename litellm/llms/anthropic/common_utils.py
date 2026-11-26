@@ -1890,6 +1890,24 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
+_ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR: Final = re.compile(
+    r"(?:tool_use\.id|tool_result\.tool_use_id): String should match pattern"
+)
+
+
+def is_anthropic_tool_use_id_pattern_error(error_text: str) -> bool:
+    """messages.N.content.M.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"""
+    return _ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR.search(error_text) is not None
+
+
+def messages_with_renamed_tool_use_ids(messages: object) -> Sequence[object] | None:
+    listed: Final = as_object_list(messages)
+    if listed is None:
+        return None
+    renamed: Final = sanitize_tool_use_ids_in_anthropic_messages(listed)
+    return None if renamed == listed else renamed
+
+
 _ADAPTIVE_THINKING_KEYS: Final = (
     AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
 ) - {"budget_tokens"}
@@ -2067,6 +2085,13 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     if isinstance(msgs, list):
         data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
     data.pop("thinking", None)
+
+
+def strips_thinking_from_anthropic_messages_request(request_body: Mapping[object, object]) -> bool:
+    messages: Final = as_object_list(request_body.get("messages"))
+    return "thinking" in request_body or (
+        messages is not None and strip_thinking_blocks_from_anthropic_messages(messages) != messages
+    )
 
 
 _DROP_ANTHROPIC_MESSAGE: Final = object()

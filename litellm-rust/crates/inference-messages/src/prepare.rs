@@ -882,7 +882,7 @@ mod tests {
         KIMI_HOST,
         KEPT
     )]
-    #[case::claude_model_on_a_custom_host(("claude-sonnet-5-5", Some("anthropic")), KIMI_HOST, REWRITTEN)]
+    #[case::claude_named_model_on_a_custom_host(("claude-sonnet-5-5", Some("anthropic")), KIMI_HOST, KEPT)]
     #[case::non_claude_model_on_the_default_host(
         KIMI_ON_ANTHROPIC,
         ANTHROPIC_BY_DEFAULT,

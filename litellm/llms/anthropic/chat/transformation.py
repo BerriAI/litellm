@@ -2521,9 +2521,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+        from litellm.llms.anthropic.pass_through.messages.utils import renames_tool_use_ids_up_front
 
-        drop_params: Final = drops_unsupported_params(
-            _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params")
+        call_params: Final = _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params)
+        drop_params: Final = drops_unsupported_params(call_params.get("drop_params"))
+        api_base: Final = call_params.get("api_base")
+        rewrites_tool_use_ids: Final = renames_tool_use_ids_up_front(
+            model, self._resolved_provider, api_base if isinstance(api_base, str) else None
         )
 
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
@@ -2610,6 +2614,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     model=model,
                     messages=list(turns),
                     llm_provider=self._resolved_provider,
+                    rewrites_tool_use_ids=rewrites_tool_use_ids,
                 ),
                 conversation,
                 messages,

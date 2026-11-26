@@ -97,6 +97,15 @@ pub trait BaseMessagesConfig: Sync {
     fn wire_body(&self, body: Value) -> Value {
         body
     }
+
+    fn retry_after_http_error(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+    ) -> Option<Value> {
+        None
+    }
 }
 
 #[cfg(test)]
