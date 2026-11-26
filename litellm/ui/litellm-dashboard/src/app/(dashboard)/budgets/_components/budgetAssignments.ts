@@ -21,6 +21,12 @@ export type BudgetAssignment =
 const PATTERN_FIELD = "request_pattern_tag_mappings";
 export const budgetTagName = (budgetId: string) => `budget:${budgetId}`;
 
+export const samePatternRule = (left: PatternMapping, right: PatternMapping): boolean => {
+  const sameTarget = left.source === right.source && left.field === right.field;
+  const sameMatch = left.pattern === right.pattern && left.tag === right.tag;
+  return sameTarget && sameMatch;
+};
+
 const configSchema = z.array(
   z.object({ field_name: z.string(), field_value: z.unknown(), editable: z.boolean().default(true) }),
 );
@@ -86,6 +92,6 @@ export async function assignBudget(
   if (!existingTag) {
     await client.post<unknown>("/tag/new", { accessToken, body: { name: tag, budget_id: budget.budget_id } });
   }
-  if (settings.rules.some((existing) => JSON.stringify(existing) === JSON.stringify(rule))) return;
+  if (settings.rules.some((existing) => samePatternRule(existing, rule))) return;
   await savePatternMappings(client, accessToken, [...settings.rules, rule]);
 }

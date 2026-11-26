@@ -17,6 +17,7 @@ import {
   assignBudget,
   budgetTagName,
   loadPatternMappings,
+  samePatternRule,
   savePatternMappings,
   type BudgetAssignment,
   type PatternMapping,
@@ -30,7 +31,7 @@ const TARGETS = [
   { value: "header", labelKey: "budgets.assignModal.targets.header" },
 ] as const;
 type Target = (typeof TARGETS)[number]["value"];
-const patternKeys = ["budget-pattern-assignments"];
+const patternKeys = ["budget-pattern-assignments"] as const;
 
 interface AssignBudgetModalProps {
   budget: budgetItem;
@@ -147,7 +148,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
       await savePatternMappings(
         apiClient,
         accessToken,
-        current.rules.filter((entry) => JSON.stringify(entry) !== JSON.stringify(rule)),
+        current.rules.filter((entry) => !samePatternRule(entry, rule)),
       );
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: patternKeys }),
@@ -178,7 +179,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
       kind: "pattern",
       source: target === "body" ? "body" : "header",
       field: target === "user-agent" ? "user-agent" : field.trim(),
-      pattern,
+      pattern: pattern.trim(),
     };
     assignment.mutate(patternAssignment);
   };
@@ -186,8 +187,10 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
   const unavailable = () => {
     if (target === "customer") return customers.isPending || customers.isError || !customer.trim();
     if (target === "team") return teams.isPending || teams.isError || !teamId;
-    const patternsUnavailable = patterns.isPending || patterns.isError;
-    return patternsUnavailable || !patternConfiguration.editable || budget.max_budget == null;
+    const patternsBlocked = patterns.isPending || patterns.isError || !patternConfiguration.editable;
+    const fieldMissing = target !== "user-agent" && !field.trim();
+    const patternMissing = !pattern.trim() || budget.max_budget == null;
+    return patternsBlocked || fieldMissing || patternMissing;
   };
 
   return (
@@ -272,7 +275,10 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
           <section aria-label={t("budgets.assignModal.patterns.assigned")} className="space-y-2 border-t pt-4">
             <h3 className="text-sm font-medium">{t("budgets.assignModal.patterns.assigned")}</h3>
             {assignedPatterns.map((rule) => (
-              <div key={JSON.stringify(rule)} className="flex items-center justify-between gap-3 text-sm">
+              <div
+                key={`${rule.source}\0${rule.field}\0${rule.pattern}\0${rule.tag}`}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
                 <span className="break-all">{t("budgets.assignModal.patterns.match", rule)}</span>
                 <Button
                   variant="ghost"

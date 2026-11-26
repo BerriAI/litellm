@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeGuard
 from urllib.parse import unquote_plus
 
 from fastapi import status
@@ -10,7 +10,6 @@ from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.context import Context
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.request_tag_mappings import RequestPatternTagMapping, RequestTagMapping
@@ -19,16 +18,30 @@ REQUEST_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestTagMapping, ...])
 REQUEST_PATTERN_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestPatternTagMapping, ...])
 
 
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+    return isinstance(value, Mapping)
+
+
+def _dotted_string(current: object, parts: tuple[str, ...]) -> str | None:
+    if not parts:
+        return current if isinstance(current, str) else None
+    if not _is_object_mapping(current):
+        return None
+    return _dotted_string(current.get(parts[0]), parts[1:])
+
+
+def _body_string(body: Mapping[str, object], field: str) -> str | None:
+    return _dotted_string(body, tuple(field.split(".")))
+
+
 def resolve_pattern_tag_mappings(
     headers: Mapping[str, str], body: Mapping[str, object], rules: Sequence[RequestPatternTagMapping]
 ) -> tuple[tuple[str, bool], ...]:
     normalized_headers: Final = MappingProxyType({key.lower(): value for key, value in headers.items()})
 
     def matches(rule: RequestPatternTagMapping) -> bool:
-        value: Final[object] = (
-            normalized_headers.get(rule.field.lower())
-            if rule.source == "header"
-            else get_nested_value({"request": body}, f"request.{rule.field}")
+        value: Final = (
+            normalized_headers.get(rule.field.lower()) if rule.source == "header" else _body_string(body, rule.field)
         )
         return isinstance(value, str) and fnmatchcase(value, rule.pattern)
 

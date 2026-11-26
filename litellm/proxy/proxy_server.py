@@ -7171,6 +7171,7 @@ class ProxyConfig:
                         "claude_code_marketplace_auth_required",
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
+                        "request_pattern_tag_mappings",
                         "access_group_rules",
                         "customer_org_alias_header",
                         "customer_member_id_header",
@@ -8421,16 +8422,26 @@ class ProxyConfig:
             await effect(db_values)
 
     async def _apply_request_tag_mappings_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
-        if "request_tag_mappings" not in db_values:
+        if "request_tag_mappings" in db_values:
+            mappings: Final = self.settings.get("request_tag_mappings")
+            try:
+                ConfigGeneralSettings.model_validate(MappingProxyType({"request_tag_mappings": mappings}))
+            except ValidationError as mapping_error:
+                self.settings.pop("request_tag_mappings", None)
+                verbose_proxy_logger.error(
+                    "Ignoring invalid general_settings.request_tag_mappings from the DB, so no baggage maps to tags: %s",
+                    mapping_error,
+                )
+        if "request_pattern_tag_mappings" not in db_values:
             return
-        mappings: Final = self.settings.get("request_tag_mappings")
+        patterns: Final = self.settings.get("request_pattern_tag_mappings")
         try:
-            ConfigGeneralSettings.model_validate(MappingProxyType({"request_tag_mappings": mappings}))
-        except ValidationError as error:
-            self.settings.pop("request_tag_mappings", None)
+            ConfigGeneralSettings.model_validate(MappingProxyType({"request_pattern_tag_mappings": patterns}))
+        except ValidationError as pattern_error:
+            self.settings.pop("request_pattern_tag_mappings", None)
             verbose_proxy_logger.error(
-                "Ignoring invalid general_settings.request_tag_mappings from the DB, so no baggage maps to tags: %s",
-                error,
+                "Ignoring invalid general_settings.request_pattern_tag_mappings from the DB, so no pattern maps to a tag: %s",
+                pattern_error,
             )
 
     async def _apply_alerting_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:

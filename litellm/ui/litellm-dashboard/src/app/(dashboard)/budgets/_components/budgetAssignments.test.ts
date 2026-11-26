@@ -125,6 +125,18 @@ describe("budget assignment", () => {
     ]);
   });
 
+  it("does not append a pattern that is already assigned to this budget", async () => {
+    const rule: PatternMapping = {
+      source: "header",
+      field: "user-agent",
+      pattern: "claude-code/*",
+      tag: "budget:qa-budget",
+    };
+    const api = server([rule], true, [{ name: rule.tag, litellm_budget_table: { budget_id: budget.budget_id } }]);
+    await assignBudget(api.client, "qa-token", budget, agentAssignment);
+    expect(api.writes()).toEqual([]);
+  });
+
   it("does not overwrite file-managed rules or create an unused tag", async () => {
     const api = server([], false);
     await expect(assignBudget(api.client, "qa-token", budget, agentAssignment)).rejects.toThrow("configuration file");

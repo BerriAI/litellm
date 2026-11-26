@@ -831,12 +831,12 @@ async def _unbudgeted_mapped_tag(
     from litellm.proxy.auth.auth_checks import read_tag_objects_batch
 
     if prisma_client is None:
-        return _tag_budgets_unavailable("Baggage tag mappings require a database to check budgeted tags")
+        return _tag_budgets_unavailable("Request tag mappings require a database to check budgeted tags")
     tag_objects: Final = await read_tag_objects_batch(
         tag_names=budgeted_tags, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
     )
     if isinstance(tag_objects, Exception):
-        return _tag_budgets_unavailable("Baggage tag mappings could not read tag budgets from the database")
+        return _tag_budgets_unavailable("Request tag mappings could not read tag budgets from the database")
     return next((tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None)
 
 

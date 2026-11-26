@@ -8780,6 +8780,26 @@ async def test_update_general_settings_serves_an_invalid_db_request_tag_mappings
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_drops_an_invalid_pattern_tag_mapping_and_keeps_a_valid_one(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings)
+    invalid: Final = {"request_pattern_tag_mappings": [{"source": "header", "field": "user-agent"}]}
+    valid: Final = {
+        "request_pattern_tag_mappings": [
+            {"source": "header", "field": "user-agent", "pattern": "claude-code/*", "tag": "coding"}
+        ]
+    }
+
+    await proxy_config._update_general_settings(db_general_settings=invalid)
+    assert "request_pattern_tag_mappings" not in proxy_server_module.general_settings
+
+    await proxy_config._update_general_settings(db_general_settings=valid)
+    assert proxy_server_module.general_settings["request_pattern_tag_mappings"] == valid["request_pattern_tag_mappings"]
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(monkeypatch):
     """A DB value must not silently override an explicit YAML capacity on reload."""
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
