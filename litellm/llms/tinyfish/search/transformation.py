@@ -58,11 +58,11 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
