@@ -53032,7 +53032,7 @@
     },
     "together_ai/thinkingmachines/inkling": {
         "cache_read_input_token_cost": 1.7e-07,
-        "deprecation_date": "2026-11-06",
+        "deprecation_date": "2026-12-09",
         "deprecation_source": "https://docs.together.ai/docs/deprecations",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
@@ -53041,7 +53041,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.05e-06,
         "source": "https://api.together.ai/v1/models",
-        "successor_model": "together_ai/meta-models/Muse-Spark-Open-816B-A42B",
+        "successor_model": "together_ai/thinkingmachines/Inkling-2-Small",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -93846,6 +93846,15 @@
         "max_input_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.2505e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/tencent/hy4-flash": {
+        "cache_read_input_token_cost": 3e-09,
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.81e-07,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "gmi/tencent/hy4-preview": {
