@@ -52960,6 +52960,8 @@ export interface components {
             response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            /** @description Google systemInstruction, counted with contents */
+            systemInstruction?: components["schemas"]["JsonValue"];
             thinking?: components["schemas"]["JsonValue"];
             tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
