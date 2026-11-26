@@ -9,8 +9,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
-from litellm.rust_bridge import failures
-from litellm.rust_bridge._native import RustDocumentFetchError
+from litellm.rust_bridge import _native, failures
 from litellm.rust_bridge.failures import UpstreamFailure
 from litellm.rust_bridge.public_call import optional_str
 
@@ -36,7 +35,7 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
             model=str(request["model"]).removeprefix(f"{request_provider}/"),
             llm_provider=request_provider,
         )
-    if isinstance(error, RustDocumentFetchError):
+    if isinstance(error, _native.RustDocumentFetchError):
         fetch_error: Final = litellm.DocumentFetchError(
             message=str(error),
             model=str(request["model"]).removeprefix(f"{request_provider}/"),

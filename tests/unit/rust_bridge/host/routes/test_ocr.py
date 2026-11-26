@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge._native import RustDocumentFetchError
+from litellm.rust_bridge import _native
 from litellm.rust_bridge.host.routes.ocr import UpstreamFailure, map_failure
 from litellm.rust_bridge.host.routes.ocr import response as build_ocr_response
 from litellm.rust_bridge.public_call import NativeCall
@@ -90,7 +90,7 @@ def test_map_failure_reports_invalid_request_format_as_unsupported_params() -> N
 
 
 def test_map_failure_reports_an_unreachable_document_as_the_callers_bad_request() -> None:
-    error: Final = RustDocumentFetchError("media download failed: error sending request")
+    error: Final = _native.RustDocumentFetchError("media download failed: error sending request")
 
     public_error: Final = map_failure(error, REQUEST.resolved, "mistral")
 
