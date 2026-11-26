@@ -29,6 +29,7 @@ Each object has one entry here, in the same form, and a later object adds its ow
 ### Team
 
 - Query: `TeamDatabase::team`, the team's row with its model alias table (`find_with_model_aliases`), then the object permission it points at, two queries
+- Query by alias: `TeamDatabase::team_by_alias`, up to two rows with that alias (`find_up_to_two_by_alias`), then the object permission of the team it finds, read from the replica, as `get_team_object` reads it. Every row is shaped before they are counted, as `get_team_object_by_alias` validates both before it refuses a shared alias, so the read is `AliasMatch::Found`, `Absent` or `Ambiguous`. Python caches the team it finds under `AuthObject::TeamAlias` and `AuthObject::Team`, which the host does
 - Entry: `TeamEntry` under `AuthObject::Team`, the `LiteLLM_TeamTableCachedObj` dump
 - Nested: the roster, each entry as `Member` dumps it, the model alias table as `LiteLLM_ModelTable` dumps it, each `budget_limits` window as `BudgetLimit` dumps it, without the keys the model drops, and the object permission, as `get_team_object` nests it. The permission is read through the key's policy in `object_permission.rs`, so a row that cannot be read or that its model refuses leaves a replica read's team without it and fails a writer read
 - Not read: `last_refreshed_at`, which the host that caches the team stamps

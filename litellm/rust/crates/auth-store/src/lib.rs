@@ -11,4 +11,4 @@ mod team;
 
 pub use error::Error;
 pub use key::KeyDatabase;
-pub use team::TeamDatabase;
+pub use team::{AliasMatch, TeamDatabase};

@@ -52,6 +52,34 @@ impl TeamDatabase {
             ..team
         })
     }
+
+    /// The team named `alias` with the object permission it points at, read from a replica as
+    /// `get_team_object_by_alias` reads it. Every
+    /// row found is shaped before they are counted, since Python validates both rows before it
+    /// refuses an alias two teams share.
+    pub async fn team_by_alias(&self, alias: &str) -> Result<AliasMatch<TeamEntry>, Error> {
+        let entries = self
+            .teams
+            .find_up_to_two_by_alias(alias)
+            .await?
+            .into_iter()
+            .map(team_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(match <[TeamEntry; 1]>::try_from(entries) {
+            Ok([entry]) => AliasMatch::Found(self.nested(entry, Side::Read).await?),
+            Err(entries) if entries.is_empty() => AliasMatch::Absent,
+            Err(_) => AliasMatch::Ambiguous,
+        })
+    }
+}
+
+/// What a read by alias finds: the one row with that alias, none, or more than one, which
+/// Python refuses rather than pick one.
+#[derive(Debug, PartialEq)]
+pub enum AliasMatch<E> {
+    Found(E),
+    Absent,
+    Ambiguous,
 }
 
 /// The roster as the model reads it, each entry what `Member` dumps. The column's default is
