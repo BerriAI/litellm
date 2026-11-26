@@ -4,7 +4,7 @@ Helper util for handling anthropic-specific cost calculation
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, cast
 
 from pydantic import ValidationError
 
@@ -34,8 +34,12 @@ def is_unbilled_refusal(message: Mapping[str, object], output_tokens: int) -> bo
     if message.get("stop_reason") != "refusal" or output_tokens > 0:
         return False
     stop_details: Final = message.get("stop_details")
-    category: Final = stop_details.get("category") if isinstance(stop_details, Mapping) else None
-    return category not in _REFUSAL_CATEGORIES_BILLED_BEFORE_OUTPUT
+    if not isinstance(stop_details, Mapping):
+        return True
+    return not any(
+        key == "category" and value in _REFUSAL_CATEGORIES_BILLED_BEFORE_OUTPUT
+        for key, value in cast("Mapping[object, object]", stop_details).items()
+    )
 
 
 def cost_per_token(

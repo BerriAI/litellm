@@ -186,7 +186,6 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     CallTypes,
-    Choices,
     CostPerToken,
     EmbeddingResponse,
     ImageResponse,
@@ -2011,9 +2010,7 @@ def _stop_fields_of(completion_response: object) -> Mapping[str, object]:
     """The Anthropic ``stop_reason`` and ``stop_details`` of a response: a Messages body carries them itself, a chat
     completion on its first choice's ``provider_specific_fields``."""
     if isinstance(completion_response, ModelResponse):
-        message: Final = next(
-            (choice.message for choice in completion_response.choices if isinstance(choice, Choices)), None
-        )
+        message: Final = next((choice.message for choice in completion_response.choices), None)
         return as_str_mapping(attribute_or_none(message, "provider_specific_fields")) or _NO_HIDDEN_PARAMS
     return as_str_mapping(completion_response) or _NO_HIDDEN_PARAMS
 
@@ -3773,7 +3770,7 @@ def batch_cost_calculator(
                     **{key: value for key, value in deployment_info.items() if value is not None},
                 }
         except Exception:
-            pass
+            return 0.0
 
     if not model_info:
         return 0.0, 0.0
