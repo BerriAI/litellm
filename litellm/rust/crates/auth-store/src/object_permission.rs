@@ -1,15 +1,15 @@
 //! An object permission as the auth cache holds it, nested in the key that points at it.
 
-use litellm_redis_store::auth_cache::CachedObjectPermission;
+use litellm_redis_store::auth_cache::ObjectPermissionEntry;
 use litellm_repositories::ObjectPermission;
 
 use crate::{Error, column::nullable};
 
 /// What `LiteLLM_ObjectPermissionTable.model_dump(mode="json")` holds for `row`, or the column the
 /// model would refuse the row for. The table has no `apps` column, so the model's default stands.
-pub(crate) fn cached_object_permission(
+pub(crate) fn object_permission_entry(
     row: ObjectPermission,
-) -> Result<CachedObjectPermission, Error> {
+) -> Result<ObjectPermissionEntry, Error> {
     let ObjectPermission {
         object_permission_id,
         mcp_servers,
@@ -25,7 +25,7 @@ pub(crate) fn cached_object_permission(
         mcp_tool_search_enabled,
         skills,
     } = row;
-    Ok(CachedObjectPermission {
+    Ok(ObjectPermissionEntry {
         object_permission_id,
         mcp_servers: Some(mcp_servers),
         mcp_access_groups: Some(mcp_access_groups),

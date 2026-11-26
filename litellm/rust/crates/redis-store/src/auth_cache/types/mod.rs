@@ -8,8 +8,8 @@ mod settings;
 pub(super) use self::record::decode;
 pub use self::{
     bag::{Bag, Lists},
-    key::CachedKey,
-    member::{CachedMember, MemberRole},
-    object_permission::CachedObjectPermission,
+    key::KeyEntry,
+    member::{MemberEntry, MemberRole},
+    object_permission::ObjectPermissionEntry,
     settings::Settings,
 };
