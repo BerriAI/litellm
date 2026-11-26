@@ -376,9 +376,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         per_model_usage: Mapping[tuple[str, ...], Mapping[str, int]],
-        include_project_io_limits: bool = True,
+        *,
+        include_project_io_limits: bool,
     ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: callers extend these lists
-        """Build project ITPM/OTPM descriptors charged against each row's own model.
+        """Build key, team and project ITPM/OTPM descriptors charged against each row's own model.
 
         One descriptor pair per distinct project counter the JSONL's rows are
         charged to, incremented by the usage of every row charged to it -- never
@@ -386,6 +387,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         unlimited routing model, an unrelated model's rows can't inflate a
         different model's counter, and rows whose names share one counter add
         to it once, held to the lowest limit any of those names sets.
+        include_project_io_limits=False leaves project metadata unread.
         """
         scoped: Final = (
             user_api_key_dict

@@ -51,13 +51,22 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     ITPM_DESCRIPTOR_KEYS,
     OTPM_DESCRIPTOR_KEYS,
 )
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, valid_io_limit
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROJECT_OTPM_DESCRIPTOR_KEY as V3_PROJECT_OTPM_DESCRIPTOR_KEY,
+)
+from litellm.proxy.hooks.rate_limiter_utils import (
+    mapping_entries,
+    metadata_member,
+    resolve_llm_provider_for_rate_limit,
+    valid_io_limit,
+)
 from litellm.rust_bridge.execution import drive
 from litellm.types.integrations.custom_logger_v2 import Record
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, Usage
 
 _IO_KEYS: Final = ITPM_DESCRIPTOR_KEYS | OTPM_DESCRIPTOR_KEYS
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
+PROJECT_OTPM_DESCRIPTOR_KEY: Final = V3_PROJECT_OTPM_DESCRIPTOR_KEY
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 
 if TYPE_CHECKING:
@@ -305,8 +314,8 @@ def _raise_rejected(view: object, data: Mapping[str, object], auth: UserAPIKeyAu
                 _raise_as_python(_member(source, name))
     if "resolved_agent_id" in _rejected(_member(view, Field.limiter_request.value)):
         _raise_as_python(
-            _metadata_member(data.get("metadata"), "agent_id")
-            or _metadata_member(data.get("litellm_metadata"), "agent_id")
+            metadata_member(data.get("metadata"), "agent_id")
+            or metadata_member(data.get("litellm_metadata"), "agent_id")
         )
 
 
@@ -618,15 +627,6 @@ def _forced_grouping() -> object:
     return _scalar_setting(litellm.force_redis_hash_tag_grouping)
 
 
-def _entries(value: object) -> Mapping[object, object] | None:
-    return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # auth and request metadata are untyped
-
-
-def _metadata_member(metadata: object, name: str) -> object:
-    entries: Final = _entries(metadata)
-    return entries.get(name) if entries else None
-
-
 def _io_limit(source: str, model: object, value: object) -> int | None:
     limit: Final = valid_io_limit(value)
     if limit is None and value is not None:
@@ -635,8 +635,8 @@ def _io_limit(source: str, model: object, value: object) -> int | None:
 
 
 def _io_limits(auth: UserAPIKeyAuth, scope: str, name: str) -> Mapping[str, int | None] | None:
-    limits: Final = _metadata_member(_member(auth, scope), name)
-    entries: Final = _entries(limits)
+    limits: Final = metadata_member(_member(auth, scope), name)
+    entries: Final = mapping_entries(limits)
     if entries is None:
         if limits is not None:
             verbose_proxy_logger.warning("Ignoring %s.%s: expected a mapping of model group to integer", scope, name)
@@ -647,26 +647,26 @@ def _io_limits(auth: UserAPIKeyAuth, scope: str, name: str) -> Mapping[str, int 
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
     if auth is None:
         return MappingProxyType({})
-    budgets: Final = _entries(_member(auth, "model_max_budget"))
+    budgets: Final = mapping_entries(_member(auth, "model_max_budget"))
     return {
-        "key_model_rpm_limit": _metadata_member(_member(auth, "metadata"), "model_rpm_limit"),
-        "key_model_tpm_limit": _metadata_member(_member(auth, "metadata"), "model_tpm_limit"),
+        "key_model_rpm_limit": metadata_member(_member(auth, "metadata"), "model_rpm_limit"),
+        "key_model_tpm_limit": metadata_member(_member(auth, "metadata"), "model_tpm_limit"),
         "key_model_itpm_limit": _io_limits(auth, "metadata", "model_itpm_limit"),
         "key_model_otpm_limit": _io_limits(auth, "metadata", "model_otpm_limit"),
-        "key_tag_rpm_limit": _metadata_member(_member(auth, "metadata"), "tag_rpm_limit"),
-        "model_max_budget": {model: budget for model, budget in budgets.items() if _entries(budget) is not None}
+        "key_tag_rpm_limit": metadata_member(_member(auth, "metadata"), "tag_rpm_limit"),
+        "model_max_budget": {model: budget for model, budget in budgets.items() if mapping_entries(budget) is not None}
         if budgets
         else None,
-        "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
-        "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_rpm_limit": metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
+        "team_model_tpm_limit": metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
         "team_model_itpm_limit": _io_limits(auth, "team_metadata", "model_itpm_limit"),
         "team_model_otpm_limit": _io_limits(auth, "team_metadata", "model_otpm_limit"),
-        "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
-        "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
-        "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),
-        "project_model_tpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_tpm_limit"),
-        "project_model_itpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_itpm_limit"),
-        "project_model_otpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_otpm_limit"),
+        "organization_model_rpm_limit": metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
+        "organization_model_tpm_limit": metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
+        "project_model_rpm_limit": metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),
+        "project_model_tpm_limit": metadata_member(_member(auth, "project_metadata"), "model_tpm_limit"),
+        "project_model_itpm_limit": metadata_member(_member(auth, "project_metadata"), "model_itpm_limit"),
+        "project_model_otpm_limit": metadata_member(_member(auth, "project_metadata"), "model_otpm_limit"),
         "end_user_model_rpm_limit": _member(auth, "end_user_model_rpm_limit"),
         "end_user_model_tpm_limit": _member(auth, "end_user_model_tpm_limit"),
     }
@@ -722,8 +722,8 @@ async def _lookups(
             for agent_id in (
                 _member(identity, "agent_id"),
                 _member(identity, "invoked_agent_id"),
-                _metadata_member(data.get("metadata"), "agent_id"),
-                _metadata_member(data.get("litellm_metadata"), "agent_id"),
+                metadata_member(data.get("metadata"), "agent_id"),
+                metadata_member(data.get("litellm_metadata"), "agent_id"),
             )
             if isinstance(agent_id, str) and agent_id
         )

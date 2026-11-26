@@ -26,13 +26,18 @@ def valid_io_limit(value: object) -> int | None:
         return None
 
 
+def mapping_entries(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # auth and request metadata are untyped
+
+
+def metadata_member(metadata: object, name: str) -> object:
+    entries: Final = mapping_entries(metadata)
+    return entries.get(name) if entries else None
+
+
 def io_limit_values(metadata: object, name: str) -> tuple[int, ...]:
-    limits: Final[object] = metadata.get(name) if isinstance(metadata, dict) else None  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # auth metadata is untyped
-    return (
-        tuple(limit for limit in map(valid_io_limit, limits.values()) if limit is not None)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # auth metadata is untyped
-        if isinstance(limits, dict)
-        else ()
-    )
+    entries: Final = mapping_entries(metadata_member(metadata, name))
+    return tuple(limit for limit in map(valid_io_limit, entries.values()) if limit is not None) if entries else ()
 
 
 def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
