@@ -1399,10 +1399,16 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         pending: Final = self._pending_upstream_read or asyncio.ensure_future(anext(self.stream_iterator, None))
         self._pending_upstream_read = pending
         try:
-            return await asyncio.shield(pending)
-        finally:
-            if pending.done():
+            event: Final = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            if pending.cancelled():
                 self._pending_upstream_read = None
+            raise
+        except Exception:
+            self._pending_upstream_read = None
+            raise
+        self._pending_upstream_read = None
+        return event
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:

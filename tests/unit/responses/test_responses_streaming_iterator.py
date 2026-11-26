@@ -768,6 +768,37 @@ async def test_a_stream_cut_before_any_output_bills_the_usage_the_provider_repor
     assert iterator.partial_response_on_disconnect() is None, "a drained stream must not be billed a second time"
 
 
+@pytest.mark.parametrize("loop_turns_before_the_cancel", range(6))
+@pytest.mark.asyncio
+async def test_a_consumer_cancelled_just_as_the_terminal_event_arrives_still_bills_the_usage_the_provider_reports(
+    monkeypatch: pytest.MonkeyPatch, loop_turns_before_the_cancel: int
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+    assert (await iterator.__anext__()).type == "response.created"
+    upstream.released.set()
+    reading_the_terminal_event: Final = asyncio.ensure_future(iterator.__anext__())
+    for _ in range(loop_turns_before_the_cancel):
+        await asyncio.sleep(0)
+    reading_the_terminal_event.cancel()
+    await asyncio.gather(reading_the_terminal_event, return_exceptions=True)
+    await iterator.aclose()
+
+    await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    (success_payload,) = recorder.success_payloads
+    assert recorder.failure_payloads == ()
+    assert (
+        success_payload["prompt_tokens"],
+        success_payload["completion_tokens"],
+        success_payload["total_tokens"],
+    ) == (1200, 900, 2100), "an event the provider already sent must not be dropped by the cancel"
+
+
 @pytest.mark.parametrize("outlives_its_consumer", [True, False], ids=["told_to_close", "never_kept_open"])
 @pytest.mark.asyncio
 async def test_a_cut_stream_that_is_not_drained_closes_the_provider_connection_and_bills_no_success(
