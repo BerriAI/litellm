@@ -47,7 +47,7 @@ pub struct KeyRequest<'a> {
 
 /// What the key path authenticates.
 #[derive(Debug)]
-pub enum Credential<'a, K> {
+pub enum KeySource<'a, K> {
     /// The token the request presented, if it presented one.
     Presented(Option<&'a Token>),
     /// A key the caller already read, which a JWT mapped to that key authenticates as. The end user

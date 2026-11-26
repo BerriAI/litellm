@@ -29,7 +29,7 @@ import litellm
 from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching.caching import S3Cache, has_per_input_extra_body, kwargs_for_input, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
 )
+from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
@@ -107,9 +108,15 @@ class CachingHandlerResponse(LiteLLMBaseModel):
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
     embedding_uncached_input: SkipValidation[list[EmbeddingCacheInputElement]] | None = None
+    embedding_uncached_extra_body: SkipValidation[object] = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
+_CACHE_READS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _missed_input_indexes(cached_result: object) -> tuple[int, ...]:
+    return tuple(idx for idx, hit in enumerate(_CACHE_READS.validate_python(cached_result)) if hit is None)
 
 
 class _CacheCallKwargs(TypedDict, total=False, extra_items=object):
@@ -556,6 +563,11 @@ class LLMCachingHandler:
                     final_embedding_cached_response=final_embedding_cached_response,
                     embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
+                    embedding_uncached_extra_body=extra_body_for_inputs(
+                        kwargs.get("extra_body"), _missed_input_indexes(read.cached_result)
+                    )
+                    if has_per_input_extra_body(kwargs)
+                    else kwargs.get("extra_body"),
                 )
 
         verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -1150,7 +1162,7 @@ class LLMCachingHandler:
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
-                preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
+                preset_cache_key = litellm.cache.get_cache_key(**kwargs_for_input(new_kwargs, i, idx))
                 tasks.append(
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,

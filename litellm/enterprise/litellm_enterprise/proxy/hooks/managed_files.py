@@ -79,6 +79,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     sanitize_for_log,
 )
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, find_many_in
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
@@ -1299,27 +1300,55 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         batch's output/error files are first synced; ids with no row stay
         accessible so pass-through reads keep working.
         """
-        if self.prisma_client is None:
-            return
-        spellings: Final = list(provider_file_id_spellings(file_id))
-        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
-            where={
-                "OR": [
-                    {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
-                    {"flat_model_file_ids": {"hasSome": spellings}},
-                ]
-            }
+        if await self.provider_file_ids_denied_to((file_id,), user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+            )
+
+    async def provider_file_ids_denied_to(
+        self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Sequence[str]:
+        """The provider-format file ids, out of ``file_ids``, that another caller owns. Ids with no ownership row
+        are not denied, the same as ``enforce_provider_file_access``."""
+        if self.prisma_client is None or not file_ids:
+            return ()
+        spellings_by_id: Final = MappingProxyType(
+            {file_id: frozenset(provider_file_id_spellings(file_id)) for file_id in dict.fromkeys(file_ids)}
         )
-        for managed_file in managed_files:
+        spellings: Final = sorted(frozenset(chain.from_iterable(spellings_by_id.values())))
+        table: Final = _managed_file_table(self.prisma_client)
+        managed_files: Final = (
+            *await find_many_in(table, "unified_file_id", spellings),
+            *chain.from_iterable(
+                [
+                    await table.find_many(
+                        where={"flat_model_file_ids": {"hasSome": spellings[start : start + IN_LIST_CHUNK_SIZE]}}
+                    )
+                    for start in range(0, len(spellings), IN_LIST_CHUNK_SIZE)
+                ]
+            ),
+        )
+        denied_files: Final = tuple(
+            managed_file
+            for managed_file in managed_files
             if not can_access_resource(
                 user_api_key_dict=user_api_key_dict,
                 created_by=managed_file.created_by,
                 resource_team_id=managed_file.team_id,
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-                )
+            )
+        )
+        denied_spellings: Final = frozenset(
+            chain(
+                (managed_file.unified_file_id for managed_file in denied_files),
+                chain.from_iterable(managed_file.flat_model_file_ids for managed_file in denied_files),
+            )
+        )
+        return tuple(
+            file_id
+            for file_id, own_spellings in spellings_by_id.items()
+            if not own_spellings.isdisjoint(denied_spellings)
+        )
 
     async def store_batch_output_file_ownership(
         self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]

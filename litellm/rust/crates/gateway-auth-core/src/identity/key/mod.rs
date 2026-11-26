@@ -1,5 +1,5 @@
 use crate::{
-    AuthHost, KeyHash, Token,
+    Affiliation, AuthHost, Holder, KeyHash, Token,
     authn::key::Keyed,
     host::{EndUserRow, KeyRow, Rows},
     outcome::Refused,
@@ -16,23 +16,12 @@ pub struct Owner<U> {
     pub row: U,
 }
 
-/// The team values a virtual key carries into the request.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TeamGrant<R: Rows> {
-    NoTeam,
-    Loaded(R::Team),
-    /// The UI team, or a team `get_team_object` did not report: the key's own copy, with the
-    /// object permission it names.
-    KeyCopy(Option<R::ObjectPermission>),
-}
-
+/// A virtual key that passed its checks, with what it belongs to and the request's end user.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyContext<R: Rows> {
     pub key: R::Key,
+    pub affiliation: Affiliation<R>,
     pub end_user: R::EndUser,
-    pub owner: Option<R::User>,
-    pub team: TeamGrant<R>,
-    pub project: Option<R::Project>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,30 +57,28 @@ pub(crate) async fn principal<H: AuthHost>(
     let project = project::read(host, &key.record).await?;
     Ok(KeyPrincipal {
         key,
+        affiliation: Affiliation {
+            holder: Holder::new(owner, team.map(|team| (team, None))),
+            org: None,
+            project,
+        },
         end_user,
-        owner,
-        team,
-        project,
     })
 }
 
 /// A virtual key with everything read about who holds it, which admission checks next.
 pub(crate) struct KeyPrincipal<R: Rows> {
     pub(crate) key: Keyed<R::Key>,
+    pub(crate) affiliation: Affiliation<R>,
     pub(crate) end_user: R::EndUser,
-    pub(crate) owner: Option<R::User>,
-    pub(crate) team: TeamGrant<R>,
-    pub(crate) project: Option<R::Project>,
 }
 
 impl<R: Rows> From<KeyPrincipal<R>> for KeyContext<R> {
     fn from(principal: KeyPrincipal<R>) -> Self {
         Self {
             key: principal.key.row,
+            affiliation: principal.affiliation,
             end_user: principal.end_user,
-            owner: principal.owner,
-            team: principal.team,
-            project: principal.project,
         }
     }
 }

@@ -88,8 +88,7 @@ class GoogleAIStudioTokenCounter:
         cleaned_contents: Final = copy.deepcopy(contents)
 
         for content in cleaned_contents:
-            parts = content["parts"]
-            for part in iter_items(parts):
+            for part in iter_items(content.get("parts") or ()):
                 if json_contains(part, "functionResponse"):
                     function_response_data = _subscript(part, "functionResponse")
                     function_response_part = FunctionResponse(**_function_response_kwargs(function_response_data))
