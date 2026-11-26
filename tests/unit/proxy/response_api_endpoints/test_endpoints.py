@@ -3288,6 +3288,73 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ["blocked", "refused"])
+    async def test_frame_guard_redacts_a_blocked_or_refused_turn_s_stored_request_when_its_key_turns_off_message_logging(
+        self, outcome: str
+    ):
+        from datetime import datetime
+        from unittest.mock import create_autospec
+
+        from litellm.exceptions import RateLimitError
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+
+        socket_logging_obj = Logging(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=True,
+            call_type="_aresponses_websocket",
+            start_time=datetime.now(),
+            litellm_call_id="socket-call",
+            function_id="socket-call",
+            kwargs={"turn_off_message_logging": "true"},
+        )
+        blocked = ValueError("blocked")
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            if outcome == "blocked":
+                raise blocked
+            return data
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
+        guard = _responses_ws_frame_guard(
+            {
+                "model": "gpt-4o-mini",
+                "litellm_metadata": {},
+                "litellm_logging_obj": socket_logging_obj,
+                "turn_off_message_logging": "true",
+            },
+            UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses"),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+        frame = json.dumps({"type": "response.create", "input": "my secret prompt"})
+
+        with (
+            patch.object(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)]),
+            patch.object(litellm, "turn_off_message_logging", False),
+            patch(  # test-quality-ok: stored prompts are off by default and the stored request is under test
+                "litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}
+            ),
+        ):
+            if outcome == "blocked":
+                with pytest.raises(ValueError, match="blocked"):
+                    await guard(frame)
+            else:
+                await (await guard(frame)).bill_refusal(RateLimitError(message="over", llm_provider="", model=""))
+            await drain_logging_tasks(timeout=1)
+            spend_writer.update_database.assert_awaited_once()
+            row = _spend_log_row(spend_writer.update_database.await_args.kwargs)
+
+        assert "my secret prompt" not in row["proxy_server_request"]
+        assert json.loads(row["proxy_server_request"])["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "client_metadata",
         [
@@ -4549,12 +4616,14 @@ class TestResponsesWSFirstFrameModelAuth:
         assert _spend_log_row(close_writes[0])["spend"] == 0.0
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("message_logging_off", [False, True])
     @pytest.mark.parametrize("closed_by_the_failed_turn", [True, False])
     async def test_a_socket_a_provider_failed_turn_closes_stores_that_turn_s_request_on_its_failure_row(
-        self, closed_by_the_failed_turn: bool
+        self, closed_by_the_failed_turn: bool, message_logging_off: bool
     ):
         from unittest.mock import create_autospec
 
+        from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
@@ -4573,6 +4642,17 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.close = AsyncMock()
         connection_body = {"model": "gpt-4o-mini", "first_message": "alpha", "user": "end-user-1"}
         socket_opened_at = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        socket_logging_obj = Logging(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=True,
+            call_type="_aresponses_websocket",
+            start_time=socket_opened_at,
+            litellm_call_id="socket-call",
+            function_id="socket-call",
+            kwargs={"turn_off_message_logging": "true"} if message_logging_off else {},
+        )
+        socket_logging_obj.model_call_details["start_time"] = socket_opened_at
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=(
@@ -4580,7 +4660,7 @@ class TestResponsesWSFirstFrameModelAuth:
                     "model": "gpt-4o-mini",
                     "litellm_metadata": {},
                     "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": connection_body},
-                    "litellm_logging_obj": MagicMock(model_call_details={"start_time": socket_opened_at}),
+                    "litellm_logging_obj": socket_logging_obj,
                 },
                 MagicMock(),
             )
@@ -4625,6 +4705,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         with (
             patch.object(litellm, "callbacks", [spend_logger]),
+            patch.object(litellm, "turn_off_message_logging", False),
             patch.object(failure_hooks, "update_request_status", new=AsyncMock()),
             patch(  # test-quality-ok: stored prompts are off by default and the row's stored request is under test
                 "litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}
@@ -4654,9 +4735,17 @@ class TestResponsesWSFirstFrameModelAuth:
             row = _spend_log_row(write)
 
         assert write["completion_response"] is (turn_failure if closed_by_the_failed_turn else other_failure)
-        assert json.loads(row["proxy_server_request"]) == (
-            {"input": "beta", "user": "end-user-1"} if closed_by_the_failed_turn else {"user": "end-user-1"}
-        )
+        assert json.loads(row["proxy_server_request"]) == {
+            (True, False): {"input": "beta", "user": "end-user-1"},
+            (True, True): {
+                "input": "",
+                "messages": [{"role": "user", "content": "redacted-by-litellm"}],
+                "prompt": "",
+                "user": "end-user-1",
+            },
+            (False, False): {"user": "end-user-1"},
+            (False, True): {"user": "end-user-1"},
+        }[(closed_by_the_failed_turn, message_logging_off)]
         assert json.loads(row["metadata"]).get("guardrail_information") == (
             [record] if closed_by_the_failed_turn else None
         )

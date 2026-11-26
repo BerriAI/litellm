@@ -2558,6 +2558,20 @@ def _socket_trace_id(socket: Mapping[str, object]) -> Mapping[str, str]:
     )
 
 
+def _socket_message_logging(socket: Mapping[str, object]) -> Mapping[str, Mapping[str, object]]:
+    logging_obj: Final = socket.get("litellm_logging_obj")
+    turn_off: Final = (
+        logging_obj.standard_callback_dynamic_params.get("turn_off_message_logging")
+        if isinstance(logging_obj, LiteLLMLoggingObj)
+        else None
+    )
+    return (
+        MappingProxyType({})
+        if turn_off is None
+        else MappingProxyType({"standard_callback_dynamic_params": {"turn_off_message_logging": turn_off}})
+    )
+
+
 def _turn_failure_row(
     metadata_key: str,
     socket: Mapping[str, object],
@@ -2580,6 +2594,7 @@ def _turn_failure_row(
     return {
         **{key: turn[key] for key in _TURN_ROW_FIELDS if key in turn},
         **_socket_trace_id(socket),
+        **_socket_message_logging(socket),
         "metadata": {
             **(
                 {
@@ -2816,9 +2831,12 @@ class _FailedTurn:
     started_at: datetime | None
 
     def failure_hook_data(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
-        turn_data: Final = _with_guardrail_information(
-            _with_turn_request(request_data, self.request_body), self.guardrail_information
-        )
+        turn_data: Final = {
+            **_with_guardrail_information(
+                _with_turn_request(request_data, self.request_body), self.guardrail_information
+            ),
+            **_socket_message_logging(request_data),
+        }
         return turn_data if self.started_at is None else {**turn_data, "start_time": self.started_at}
 
 
