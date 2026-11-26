@@ -19,7 +19,7 @@ use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_config::Environment;
 use litellm_redaction::TokenRedactor;
 use litellm_redis_store::{Remote, spend_counters::SpendCounters};
-use litellm_repositories::{Database, KeyRepository, SpendLogRepository};
+use litellm_repositories::{Database, SpendLogRepository};
 use litellm_spend_log_writer::{
     LedgerStore, PgLedgerStore, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
@@ -27,7 +27,10 @@ use rand::Rng;
 use tokio::sync::Notify;
 
 use super::{Registered, parallel_request_limiter::REDIS_DEFAULT_TTL};
-use crate::{RedisClients, host::RustSpendLogHost};
+use crate::{
+    RedisClients,
+    host::{Rows, RustSpendLogHost},
+};
 
 /// `PROXY_BATCH_WRITE_AT` when unset.
 const BATCH_WRITE_AT: Duration = Duration::from_secs(10);
@@ -76,6 +79,8 @@ pub struct SpendLog {
     logs: Arc<SpendLogs>,
     callback: Arc<dyn ErasedCallback>,
     host: Arc<RustSpendLogHost>,
+    /// The spend counters the callback charges.
+    budgets: Arc<Budgets>,
 }
 
 impl SpendLog {
@@ -95,18 +100,26 @@ impl SpendLog {
             client,
             default_ttl: REDIS_DEFAULT_TTL,
         }));
+        let budgets = Arc::new(Budgets::new(Arc::new(counters)));
         let callback = SpendLogCallback::new(SpendLogParts {
             writer: logs.writer.clone(),
-            budgets: Arc::new(Budgets::new(Arc::new(counters))),
+            budgets: budgets.clone(),
             tokens: Arc::new(TokenRedactor::new(0, Vec::new())),
         });
         Self {
             logs,
             callback: Arc::new(callback),
-            host: Arc::new(RustSpendLogHost::new(Some(Arc::new(KeyRepository::new(
+            host: Arc::new(RustSpendLogHost::new(Some(Arc::new(Rows::new(
                 database.clone(),
             ))))),
+            budgets,
         }
+    }
+
+    /// The spend counters the callback charges, which a spend reset another pod announces is
+    /// applied to.
+    pub(crate) fn spend_counters(&self) -> &Arc<SpendCounters> {
+        self.budgets.store()
     }
 
     /// The callback as one config's callback stage runs it.

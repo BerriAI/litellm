@@ -442,7 +442,9 @@ mod tests {
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::Credential;
-    use litellm_redis_store::cache_invalidation::CacheInvalidation;
+    use litellm_redis_store::{
+        cache_invalidation::CacheInvalidation, spend_counters::SpendCounters,
+    };
     use litellm_redis_testing::{RedisServer, eventually};
     use litellm_repositories::Database;
     use rstest::rstest;
@@ -841,7 +843,12 @@ mod tests {
     async fn pod_for(config: &Config, held: &Held) -> Auth<NativeRows> {
         let resources = crate::Resources::build(config).unwrap();
         let clients = crate::redis::connect(config, &resources).await.unwrap();
-        let store = crate::state::auth_store(config, &clients, held.database());
+        let store = crate::state::auth_store(
+            config,
+            &clients,
+            held.database(),
+            Arc::new(SpendCounters::new(None)),
+        );
         auth(config, Some(Arc::new(store)))
     }
 

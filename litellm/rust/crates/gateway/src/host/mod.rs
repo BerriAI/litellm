@@ -18,7 +18,7 @@ pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
 pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
-pub use spend_log::RustSpendLogHost;
+pub use spend_log::{Rows, RustSpendLogHost};
 
 use std::{collections::BTreeSet, sync::Arc};
 
