@@ -7,7 +7,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, NoReturn, cast
+from typing import Final, Literal, NamedTuple, NoReturn, TypeVar, cast, overload
 
 import httpx
 from openai import APIError, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -707,6 +707,7 @@ def get_azure_ad_token(
     return azure_ad_token
 
 
+_AzureHeaders = TypeVar("_AzureHeaders", bound="dict[str, str] | dict[str, object]")  # rebind-ok: a TypeVar cannot be Final
 _AZURE_AUTH_HEADER_NAMES: Final = frozenset(("api-key", "authorization"))
 _REDACTED_AZURE_HEADER_VALUE: Final = "***REDACTED***"
 
@@ -1069,8 +1070,8 @@ class BaseAzureLLM(BaseOpenAILLM):
 
     @staticmethod
     def _base_validate_azure_environment(
-        headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, str]:
+        headers: _AzureHeaders, litellm_params: GenericLiteLLMParams | None
+    ) -> _AzureHeaders:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Check if api-key is already in headers; if so, use it
@@ -1097,12 +1098,28 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         return headers
 
+    @overload
     @classmethod
     def base_validate_azure_environment(
         cls,
         headers: dict[str, str],  # mutable-ok: mirrors override contract
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
+    ) -> dict[str, str]: ...  # mutable-ok: mirrors override contract
+
+    @overload
+    @classmethod
+    def base_validate_azure_environment(
+        cls,
+        headers: dict[str, object],  # mutable-ok: mirrors override contract
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict[str, object]: ...  # mutable-ok: mirrors override contract
+
+    @classmethod
+    def base_validate_azure_environment(
+        cls,
+        headers: _AzureHeaders,
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> _AzureHeaders:
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod
