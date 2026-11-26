@@ -39,3 +39,10 @@ def test_backup_matches_main(model):
     backup_cost = _load(BACKUP_PATH)
 
     assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"
+
+
+def test_glm_5_2_alias_reports_same_retirement(local_model_cost_map):
+    canonical, alias = GLM_5_2_MODELS
+    retirement = litellm.model_cost[canonical]["deprecation_date"]
+
+    assert litellm.model_cost[alias]["deprecation_date"] == retirement
