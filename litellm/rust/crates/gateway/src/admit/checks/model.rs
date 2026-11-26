@@ -20,7 +20,13 @@ use super::{
 /// The providers the Python proxy itself serves `/v1/messages` through the Rust route for, as
 /// `RULES` in `litellm/rust_bridge/catalog.py` lists them. Python answers any other provider
 /// through an adapter the gateway has not been compared with.
-const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProviders::AzureAi];
+const MESSAGES_PROVIDERS: [LlmProviders; 5] = [
+    LlmProviders::Anthropic,
+    LlmProviders::AzureAi,
+    LlmProviders::Bedrock,
+    LlmProviders::BedrockMantle,
+    LlmProviders::VertexAi,
+];
 
 /// The `litellm_params` beyond the typed ones that the router or the messages call reads as
 /// Python's does.

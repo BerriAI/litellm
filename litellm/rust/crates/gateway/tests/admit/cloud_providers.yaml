@@ -1,0 +1,178 @@
+# Claude on Vertex AI, Bedrock and Bedrock Mantle is served natively, signed or logged in from the
+# deployment's own aws_* and vertex_* params with no api_key. Every model Python translates for
+# these providers, and every group or fallback that can reach one, goes to Python.
+config:
+  model_list:
+    - model_name: vertex-claude
+      litellm_params:
+        model: vertex_ai/claude-opus-4-5
+        vertex_project: example-project
+        vertex_location: us-east5
+    - model_name: vertex-gemini
+      litellm_params:
+        model: vertex_ai/gemini-2.5-pro
+        vertex_project: example-project
+        vertex_location: us-central1
+    - model_name: bedrock-claude
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+        aws_region_name: us-west-2
+    - model_name: bedrock-claude-keyed
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+        aws_access_key_id: example-access-key
+        aws_secret_access_key: example-secret-key
+        aws_region_name: us-west-2
+    - model_name: bedrock-converse-claude
+      litellm_params:
+        model: bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0
+        aws_region_name: us-west-2
+    - model_name: bedrock-nova
+      litellm_params:
+        model: bedrock/amazon.nova-pro-v1:0
+        aws_region_name: us-east-1
+    - model_name: bedrock-mantle-route
+      litellm_params:
+        model: bedrock/mantle/anthropic.claude-opus-4-5
+        aws_region_name: us-east-1
+    - model_name: mantle-claude
+      litellm_params:
+        model: bedrock_mantle/anthropic.claude-opus-4-5
+        aws_region_name: us-east-1
+    - model_name: mantle-gpt
+      litellm_params:
+        model: bedrock_mantle/openai.gpt-oss-120b
+        aws_region_name: us-east-1
+    - model_name: cloud-mixed
+      litellm_params:
+        model: vertex_ai/claude-opus-4-5
+        vertex_project: example-project
+        vertex_location: us-east5
+    - model_name: cloud-mixed
+      litellm_params:
+        model: vertex_ai/gemini-2.5-pro
+        vertex_project: example-project
+        vertex_location: us-central1
+    - model_name: cloud-claude-pool
+      litellm_params:
+        model: vertex_ai/claude-opus-4-5
+        vertex_project: example-project
+        vertex_location: us-east5
+    - model_name: cloud-claude-pool
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+        aws_region_name: us-west-2
+    - model_name: cloud-claude-pool
+      litellm_params:
+        model: bedrock_mantle/anthropic.claude-opus-4-5
+        aws_region_name: us-east-1
+    - model_name: vertex-claude-backed
+      litellm_params:
+        model: vertex_ai/claude-opus-4-5
+        vertex_project: example-project
+        vertex_location: us-east5
+    - model_name: bedrock-claude-backed
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+        aws_region_name: us-west-2
+    - model_name: bedrock-claude-by-id
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+        model_id: arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/example
+        aws_region_name: us-west-2
+  router_settings:
+    fallbacks:
+      - vertex-claude-backed: [bedrock-nova]
+      - bedrock-claude-backed: [cloud-claude-pool]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: claude on vertex
+    headers: {authorization: Bearer gateway-key}
+    body: {model: vertex-claude, max_tokens: 16, messages: [{role: user, content: Say ok}]}
+    expect: rust
+
+  - name: claude on vertex streamed
+    headers: {authorization: Bearer gateway-key}
+    body: {model: vertex-claude, max_tokens: 16, stream: true, messages: []}
+    expect: rust
+
+  - name: claude on bedrock invoke
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: claude on bedrock with its keys in the config
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-claude-keyed, max_tokens: 16, stream: true, messages: []}
+    expect: rust
+
+  - name: claude on the mantle route of bedrock
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-mantle-route, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: claude on mantle
+    headers: {authorization: Bearer gateway-key}
+    body: {model: mantle-claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a group of claude deployments on every cloud provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: cloud-claude-pool, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a claude group that falls back to claude on every cloud provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-claude-backed, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: gemini on vertex
+    headers: {authorization: Bearer gateway-key}
+    body: {model: vertex-gemini, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model vertex_ai/gemini-2.5-pro is translated
+
+  - name: claude through bedrock converse
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-converse-claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0 is translated
+
+  - name: nova on bedrock
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-nova, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model bedrock/amazon.nova-pro-v1:0 is translated
+
+  - name: gpt on mantle
+    headers: {authorization: Bearer gateway-key}
+    body: {model: mantle-gpt, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model bedrock_mantle/openai.gpt-oss-120b is translated
+
+  - name: a group that mixes claude with gemini on vertex
+    headers: {authorization: Bearer gateway-key}
+    body: {model: cloud-mixed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model vertex_ai/gemini-2.5-pro is translated
+
+  - name: claude on vertex that falls back to nova on bedrock
+    headers: {authorization: Bearer gateway-key}
+    body: {model: vertex-claude-backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to bedrock-nova: model_list.litellm_params.model bedrock/amazon.nova-pro-v1:0 is translated'
+
+  - name: claude on bedrock invoked by an inference profile id
+    headers: {authorization: Bearer gateway-key}
+    body: {model: bedrock-claude-by-id, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model_id
