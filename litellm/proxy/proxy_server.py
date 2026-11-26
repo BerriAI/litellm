@@ -750,6 +750,7 @@ from litellm.proxy.discovery_endpoints import (
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
+from litellm.proxy.google_endpoints.endpoints import google_token_count_request
 from litellm.proxy.google_endpoints.endpoints import router as google_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
@@ -1620,6 +1621,10 @@ _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeaders
 _LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+class _CacheConstructorKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -6451,7 +6456,8 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**without(cache_params, "default_redis_ttl"))
+        cache_settings: Final[Mapping[str, object]] = cache_params
+        litellm.cache = Cache(**_CacheConstructorKwargs(**without(cache_settings, "default_redis_ttl")))
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
@@ -10443,7 +10449,7 @@ def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) 
 
 async def _apply_streaming_chunk_hooks(
     *,
-    chunk: Any,
+    chunk: object,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict[str, object],
     str_so_far: str,
@@ -16411,23 +16417,27 @@ async def token_counter(
         user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
-    return await answered_with_litellm_call_id(
-        count_request_tokens(
-            request=request,
-            call_endpoint=call_endpoint,
-            request_litellm_params=MappingProxyType(
-                {}
-                if request.additional_drop_params is None
-                else {"additional_drop_params": request.additional_drop_params}
-            ),
-            litellm_call_id=call_id,
-            caller=user_api_key_dict,
-            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
-        ),
-        call_id,
-        http_request,
-        fastapi_response,
-    )
+    match google_token_count_request(request):
+        case ProxyException() as invalid_body:
+            raise with_litellm_call_id(rejected_token_count(invalid_body, call_id, request.model), call_id)
+        case counted_request:
+            return await answered_with_litellm_call_id(
+                count_request_tokens(
+                    request=counted_request,
+                    call_endpoint=call_endpoint,
+                    request_litellm_params=MappingProxyType(
+                        {}
+                        if counted_request.additional_drop_params is None
+                        else {"additional_drop_params": counted_request.additional_drop_params}
+                    ),
+                    litellm_call_id=call_id,
+                    caller=user_api_key_dict,
+                    request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
+                ),
+                call_id,
+                http_request,
+                fastapi_response,
+            )
 
 
 async def count_request_tokens(

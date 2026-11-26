@@ -178,7 +178,9 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
 /// honored, since boot layers the stored config in, and [`settings`] checks what it could not
 /// load. `encryption_algorithm` only picks the format Python writes a secret in, and the at-rest
 /// crate reads either format. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
-/// who sends no key.
+/// who sends no key. `allowed_ips`, `use_x_forwarded_for` and `allowed_routes` are
+/// `middleware::request_allowlist`, and `head::forwarded_for` names the address the native app
+/// cannot resolve as Python does.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -208,6 +210,9 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         token_rate_limit_type: _,
         user_api_key_cache_ttl: _,
         user_api_key_cache_max_size: _,
+        allowed_routes: _,
+        use_x_forwarded_for: _,
+        allowed_ips: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
@@ -228,8 +233,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         enable_oauth2_proxy_auth,
         allow_requests_on_db_unavailable,
         allow_client_side_credentials,
-        allowed_ips,
-        allowed_routes,
         custom_auth,
         litellm_key_header_name,
         required_customer_headers,
@@ -257,8 +260,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             enable_oauth2_proxy_auth,
             allow_requests_on_db_unavailable,
             allow_client_side_credentials,
-            allowed_ips,
-            allowed_routes,
             custom_auth,
             litellm_key_header_name,
             required_customer_headers,
