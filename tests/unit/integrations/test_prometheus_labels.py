@@ -811,16 +811,16 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
         ("", None, "logged-deployment", "logged-deployment"),
         ("metadata-deployment", "request-deployment", "logged-deployment", "logged-deployment"),
         (None, "request-deployment", "logged-deployment", "logged-deployment"),
-        ("metadata-deployment", None, None, "metadata-deployment"),
-        (None, "request-deployment", None, "request-deployment"),
+        ("metadata-deployment", None, None, "None"),
+        (None, "request-deployment", None, "None"),
         (None, None, None, "None"),
     ),
 )
-async def test_failure_counters_keep_logged_deployment_attribution(
+async def test_failure_counters_label_only_the_router_logged_deployment(
     metadata_id: str | None, request_id: str | None, logged_id: str | None, expected: str
 ) -> None:
-    """The router-stamped ``model_id`` on the standard logging object wins over
-    request metadata, which only fills in when the payload has no id."""
+    """Only the standard logging object's ``model_id`` labels a failure. ``metadata`` and
+    ``model_info`` on the body are caller input, so they never become a label value."""
     from fastapi import HTTPException
 
     from litellm.integrations.prometheus import PrometheusLogger
@@ -849,25 +849,38 @@ async def test_failure_counters_keep_logged_deployment_attribution(
 
 
 @pytest.mark.asyncio
-async def test_failed_requests_metric_names_the_deployment_that_failed() -> None:
+async def test_failed_requests_metric_names_the_deployment_that_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failure raised by a deployment must attribute it on the proxy failure
-    metric, not only on the deployment-scoped counters."""
+    metric, from the deployment's config rather than from the labels the caller sent."""
     from fastapi import HTTPException
 
+    from litellm import Router
     from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "client-alias",
+                    "litellm_params": {
+                        "model": "hosted_vllm/qwen",
+                        "api_base": "http://vllm.internal:8000/v1",
+                        "api_key": "test-key",
+                    },
+                    "model_info": {"id": "deployment-abc123"},
+                }
+            ]
+        ),
+    )
     request_data: Final[dict[str, JsonValue]] = {
         "model": "client-alias",
         "litellm_params": {
             "model": "hosted_vllm/qwen",
-            "api_base": "http://vllm.internal:8000/v1/chat/completions",
-            "metadata": {
-                "deployment": "hosted_vllm/qwen",
-                "api_base": "http://vllm.internal:8000/v1/",
-                "model_info": {"id": "deployment-abc123"},
-                "model_group": "client-alias",
-            },
+            "metadata": {"api_base": "http://caller-chosen.invalid/v1", "model_group": "caller-chosen-group"},
         },
         "standard_logging_object": {
             "model_id": "deployment-abc123",
@@ -893,7 +906,13 @@ async def test_failed_requests_metric_names_the_deployment_that_failed() -> None
 
 
 @pytest.mark.asyncio
-async def test_failed_requests_metric_fills_deployment_identity_from_request_metadata() -> None:
+async def test_failed_requests_metric_ignores_a_caller_supplied_deployment_identity() -> None:
+    """A caller with a rejected key must not be able to mint deployment labels.
+
+    The auth-failure hook is handed the raw request body, so every deployment field a caller can write there
+    (``metadata``, ``litellm_params``) has to stay out of the labels, or one caller can grow the series without
+    bound.
+    """
     from fastapi import HTTPException
 
     from litellm.integrations.prometheus import PrometheusLogger
@@ -901,22 +920,26 @@ async def test_failed_requests_metric_fills_deployment_identity_from_request_met
 
     request_data: Final[dict[str, JsonValue]] = {
         "model": "client-alias",
-        "metadata": {"model_info": {"id": "deployment-from-metadata"}, "model_group": "client-alias"},
-        "litellm_params": {"api_base": "http://vllm.internal:8000/v1", "custom_llm_provider": "hosted_vllm"},
-        "standard_logging_object": {"custom_llm_provider": "hosted_vllm"},
+        "metadata": {"model_info": {"id": "caller-minted-id"}, "model_group": "caller-minted-group"},
+        "litellm_params": {
+            "api_base": "http://caller-chosen.invalid/v1",
+            "metadata": {
+                "api_base": "http://caller-chosen.invalid/v1",
+                "model_group": "caller-minted-group",
+                "model_info": {"id": "caller-minted-id"},
+            },
+        },
     }
     _clear_prometheus_registry()
     try:
         await PrometheusLogger().async_post_call_failure_hook(
             request_data=request_data,
-            original_exception=HTTPException(status_code=500, detail="upstream failed"),
+            original_exception=HTTPException(status_code=401, detail="invalid key"),
             user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
         )
         samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
-        assert [
-            (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"])
-            for sample in samples
-        ] == [("deployment-from-metadata", "client-alias", "http://vllm.internal:8000/v1")]
+        assert [(sample.labels["model_id"], sample.labels["api_base"]) for sample in samples] == [("None", "None")]
+        assert [sample.labels["model_group"] for sample in samples] == ["None"]
     finally:
         _clear_prometheus_registry()
 
@@ -941,7 +964,7 @@ async def test_failed_requests_metric_does_not_attribute_a_deployment_to_a_pre_r
         )
         samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
         assert [(sample.labels["model_id"], sample.labels["api_base"]) for sample in samples] == [("None", "None")]
-        assert [sample.labels["model_group"] for sample in samples] == ["other"]
+        assert [sample.labels["model_group"] for sample in samples] == ["None"]
     finally:
         _clear_prometheus_registry()
 

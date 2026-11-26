@@ -115,6 +115,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
+    from litellm.types.router import Deployment
 else:
     AsyncIOScheduler = Any
 
@@ -674,30 +675,37 @@ def _failed_request_deployment(
 ) -> _FailedRequestDeployment:
     """Deployment a failed proxy request reached, labelled the way the deployment-scoped metrics label it.
 
-    A request the proxy rejected before picking a deployment keeps its deployment labels empty, and its model group
-    is bounded the same way ``requested_model`` is.
+    ``standard_logging_object`` is the only deployment attribution a failure carries that the caller cannot write:
+    the failure hook discards the caller's copy and lifts the proxy's own payload in its place. Every other
+    deployment field in ``request_data`` on a request that never reached a deployment is the caller's request
+    body, so labels read from there can be minted by anyone holding an invalid key. A request with no routed
+    attribution therefore keeps its deployment labels empty, and its model group is bounded the same way
+    ``requested_model`` is.
     """
-    identity: Final = deployment_identity.identity_from_request_kwargs(request_data)
-    litellm_params: Final = _logged_fields(request_data.get("litellm_params"))
     logged: Final = _logged_fields(request_data.get("standard_logging_object"))
-    litellm_metadata: Final = _logged_fields(litellm_params.get("litellm_metadata"))
-    params_metadata: Final = _logged_fields(litellm_params.get("metadata"))
-    request_metadata: Final = _logged_fields(request_data.get("metadata"))
-    model_group: Final = _first_label_text(
-        logged.get("model_group"),
-        request_metadata.get("model_group"),
-        litellm_metadata.get("model_group"),
-        params_metadata.get("model_group"),
+    model_id: Final = (
+        None
+        if isinstance(original_exception, MalformedRequestFieldError)
+        else _first_label_text(logged.get("model_id"))
     )
-    routed: Final = bool(identity.model_id) and not (
-        litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
-        or isinstance(original_exception, MalformedRequestFieldError)
-    )
+    model_group: Final = _first_label_text(logged.get("model_group"))
+    if model_id is None:
+        return _FailedRequestDeployment(
+            model_id=None, model_group=_bounded_requested_model_label(model_group), api_base=None
+        )
+    deployment: Final = _answered_deployment(model_id)
+    identity: Final = None if deployment is None else deployment_identity.identity_from_deployment(deployment)
     return _FailedRequestDeployment(
-        model_id=identity.model_id if routed else None,
-        model_group=model_group if routed else _bounded_requested_model_label(model_group),
-        api_base=identity.api_base if routed else None,
+        model_id=model_id,
+        model_group=model_group,
+        api_base=None if identity is None else identity.api_base or None,
     )
+
+
+def _answered_deployment(model_id: str) -> Deployment | None:
+    """The configured deployment behind a router-built model id, so its labels are read from config."""
+    llm_router: Final = _get_proxy_llm_router()
+    return None if llm_router is None else llm_router.registry().deployment(model_id)
 
 
 class PrometheusLogger(CustomLogger):
