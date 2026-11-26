@@ -1055,6 +1055,37 @@ async def test_conditional_revocation_deletes_only_the_same_grant_generation(
 
 
 @pytest.mark.asyncio
+async def test_conditional_revocation_retries_when_a_refresh_rotates_the_same_grant(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
+    original_delete_many: Final = rows.delete_many
+    attempts: Final = itertools.count()
+
+    async def rotate_once_then_delete(where: Mapping[str, str]) -> int:
+        if next(attempts) == 0:
+            row: Final = rows.rows[("alice", "srv-1")]
+            grant: Final = json.loads(_decode_user_credential(row.credential_b64) or "{}")
+            grant["access_token"] = "at-rotated"
+            rows.rows = {
+                **rows.rows,
+                ("alice", "srv-1"): SimpleNamespace(
+                    **{**vars(row), "credential_b64": encrypt_value_helper(json.dumps(grant))}
+                ),
+            }
+            return 0
+        return await original_delete_many(where)
+
+    rows.delete_many = rotate_once_then_delete
+    assert await delete_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", connected_at
+    ) == "deleted"
+    assert ("alice", "srv-1") not in rows.rows
+
+
+@pytest.mark.asyncio
 async def test_invalidation_cannot_poison_a_replacement_grant(credentials_prisma: SimpleNamespace) -> None:
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")

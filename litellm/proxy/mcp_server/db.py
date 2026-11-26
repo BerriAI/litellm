@@ -2038,18 +2038,26 @@ async def delete_user_oauth_credential_if_grant_matches(
     connected_at: str | None,
 ) -> Literal["deleted", "missing", "changed"]:
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
-    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
-    if row is None or grant is None:
-        return "missing"
-    if grant.get("connected_at") != connected_at:
-        return "changed"
-    deleted: Final = await _user_credential_actions(prisma_client, use_writer=True).delete_many(
-        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64}
-    )
-    if deleted > 0:
-        return "deleted"
-    latest: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
-    return "missing" if latest is None else "changed"
+    current: prisma_db_models.LiteLLM_MCPUserCredentials | None = row
+    for _ in range(3):
+        grant: Final = None if current is None else decode_oauth_payload(current.credential_b64)
+        if current is None or grant is None:
+            return "missing"
+        if grant.get("connected_at") != connected_at:
+            return "changed"
+        deleted: Final = await _user_credential_actions(prisma_client, use_writer=True).delete_many(
+            where={"user_id": current.user_id, "server_id": current.server_id, "credential_b64": current.credential_b64}
+        )
+        if deleted > 0:
+            return "deleted"
+        latest: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+        latest_grant: Final = None if latest is None else decode_oauth_payload(latest.credential_b64)
+        if latest is None:
+            return "missing"
+        if latest_grant is None or latest_grant.get("connected_at") != connected_at:
+            return "changed"
+        current = latest
+    return "changed"
 
 
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
