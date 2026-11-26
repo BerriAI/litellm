@@ -57,6 +57,14 @@ def effective_max_request_size_mb(
     return min(route_limit, global_limit) if global_limit is not None else route_limit
 
 
+def max_request_size_bytes(
+    scope: Scope,
+    configured: float | None,
+    route_limits: Mapping[tuple[str, str], float],
+) -> int | None:
+    return _mb_to_bytes(effective_max_request_size_mb(scope, configured, route_limits))
+
+
 class RequestSizeLimitMiddleware:
     """
     Reject oversized requests before downstream auth/routes parse the body.

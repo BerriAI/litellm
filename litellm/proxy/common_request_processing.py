@@ -68,6 +68,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
+from litellm.google_genai.streaming_iterator import BaseGoogleGenAIGenerateContentStreamingIterator
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import subclass_overrides_hook
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -592,6 +593,8 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: Mapping[str, 
             sanitize_for_log(logging_obj.litellm_call_id),
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
+    if isinstance(response, BaseGoogleGenAIGenerateContentStreamingIterator):
+        return await _log_google_genai_stream_on_disconnect(logging_obj, response)
     chunks: Final[object] = getattr(response, "chunks", None)
     chunk_source: Final[object] = chunks
     if not isinstance(chunks, list) or not chunks:
@@ -672,6 +675,20 @@ async def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]
         await bill_in_flight_round()
     except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
         verbose_proxy_logger.debug("Failed to bill the in-flight round after client disconnect: %s", e)
+
+
+async def _log_google_genai_stream_on_disconnect(
+    logging_obj: LiteLLMLoggingObj, stream: BaseGoogleGenAIGenerateContentStreamingIterator
+) -> bool:
+    try:
+        return await stream.log_collected_stream()
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug(
+            "Failed to log the streamed generateContent response after client disconnect, litellm_call_id=%s: %s",
+            sanitize_for_log(logging_obj.litellm_call_id),
+            e,
+        )
+        return False
 
 
 async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, partial_response: object) -> bool:

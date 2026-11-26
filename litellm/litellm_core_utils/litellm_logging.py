@@ -112,6 +112,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import ServedRound
 from litellm.litellm_core_utils.batch_utils import (
@@ -605,6 +606,14 @@ def _published_direction(
     )
 
 
+def registered_model_info(model_id: str) -> ModelInfo:
+    """``get_model_info`` for a cost-map key, under the provider its own cost-map row names. A deployment id can also
+    read as another provider's model name, and the lookup would otherwise infer that provider and miss the row."""
+    registered: Final = as_str_mapping(model_cost_table.published().get(model_id))
+    provider: Final = registered.get("litellm_provider") if registered is not None else None
+    return litellm.get_model_info(model=model_id, custom_llm_provider=provider if isinstance(provider, str) else None)
+
+
 def deployment_pricing_model_info(model_id: str | None, deployment_model: str | None) -> ModelInfo | None:
     """Pricing the router registered under this deployment's model_info.id.
 
@@ -630,7 +639,7 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     if not isinstance(registered, dict) or not any(registered.get(key) is not None for key in _DEPLOYMENT_PRICING_KEYS):
         return None
     try:
-        merged: Final = litellm.get_model_info(model=model_id).copy()
+        merged: Final = registered_model_info(model_id).copy()
     except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
         return None
     published: Final = _published_pricing(deployment_model)

@@ -167,7 +167,7 @@ AMAZON_NOVA_CANVAS_NEXT_IMAGES_ONE: Final = CostTrackingTestCase(
     request={"prompt": "a deterministic bedrock image"},
     response=JsonResponse(content_type="application/json", body={"images": ["AA=="]}),
     expected=ExactExpected(
-        spend=0.045, input_cost=0.045, output_cost=0, prompt_tokens=0, completion_tokens=0, breakdown_persisted=False
+        spend=0.045, input_cost=0, output_cost=0.045, prompt_tokens=0, completion_tokens=0
     ),
 )
 

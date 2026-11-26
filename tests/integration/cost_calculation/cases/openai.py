@@ -8205,7 +8205,7 @@ DALL_E_3_NEXT_IMAGES_STANDARD: Final = CostTrackingTestCase(
         content_type="application/json", body={"created": 1700000000, "data": [{"url": "https://x/1.png"}]}
     ),
     expected=ExactExpected(
-        spend=0.04, input_cost=0.04, output_cost=0, prompt_tokens=0, completion_tokens=0, breakdown_persisted=False
+        spend=0.04, input_cost=0, output_cost=0.04, prompt_tokens=0, completion_tokens=0
     ),
 )
 
@@ -8221,7 +8221,7 @@ DALL_E_3_NEXT_IMAGES_TWO: Final = CostTrackingTestCase(
         body={"created": 1700000003, "data": [{"url": "https://x/1.png"}, {"url": "https://x/2.png"}]},
     ),
     expected=ExactExpected(
-        spend=0.08, input_cost=0.08, output_cost=0, prompt_tokens=0, completion_tokens=0, breakdown_persisted=False
+        spend=0.08, input_cost=0, output_cost=0.08, prompt_tokens=0, completion_tokens=0
     ),
 )
 
@@ -8238,7 +8238,7 @@ DALL_E_3_NEXT_IMAGES_HD: Final = CostTrackingTestCase(
         content_type="application/json", body={"created": 1700000001, "data": [{"url": "https://x/1.png"}]}
     ),
     expected=ExactExpected(
-        spend=0.08, input_cost=0.08, output_cost=0, prompt_tokens=0, completion_tokens=0, breakdown_persisted=False
+        spend=0.08, input_cost=0, output_cost=0.08, prompt_tokens=0, completion_tokens=0
     ),
 )
 
@@ -8255,7 +8255,7 @@ DALL_E_3_NEXT_IMAGES_WIDE: Final = CostTrackingTestCase(
         content_type="application/json", body={"created": 1700000002, "data": [{"url": "https://x/1.png"}]}
     ),
     expected=ExactExpected(
-        spend=0.06, input_cost=0.06, output_cost=0, prompt_tokens=0, completion_tokens=0, breakdown_persisted=False
+        spend=0.06, input_cost=0, output_cost=0.06, prompt_tokens=0, completion_tokens=0
     ),
 )
 

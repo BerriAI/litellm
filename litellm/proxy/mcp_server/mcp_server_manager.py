@@ -1341,7 +1341,25 @@ def _authorization_is_litellm_admission_credential_with_settings(
     authorization: Final = _raw_header_value(raw_headers, "authorization")
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
-    return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+    return bool(
+        user_api_key_auth
+        and (user_api_key_auth.api_key or user_api_key_auth.mcp_authorization_is_admission_credential)
+        and not admission_header
+    )
+
+
+def without_admission_authorization(
+    raw_headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth | None
+) -> Mapping[str, str]:
+    """Drop ``Authorization`` when it is the dashboard login an inference request was admitted with, so
+    neither guardrails nor a server listing it in ``extra_headers`` receive it."""
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_authorization_is_admission_credential
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    ):
+        return {name: value for name, value in raw_headers.items() if name.lower() != "authorization"}
+    return raw_headers
 
 
 def _authorization_is_admission_jwt(
