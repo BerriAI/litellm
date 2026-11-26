@@ -2797,6 +2797,30 @@ async def test_a_gateway_rejection_that_renaming_cannot_fix_is_not_retried(
     assert route.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_an_empty_replayed_tool_use_id_reaches_a_backend_that_keeps_ids_as_the_fallback_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://kimi.test/v1/messages").mock(
+            return_value=httpx.Response(200, json=_GATEWAY_MESSAGE)
+        )
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=_replayed_tool_round(""),
+            model="anthropic/kimi-k2",
+            api_base="http://kimi.test",
+            api_key="sk-test",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == _replayed_tool_round("tool_use_id")
+
+
 _CHAT_COMPLETION: Final = {
     "id": "chatcmpl-1",
     "object": "chat.completion",
