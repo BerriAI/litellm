@@ -8,18 +8,22 @@ import random
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from prometheus_client import REGISTRY, Metric
 
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus_helpers import deployment_identity
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
@@ -49,10 +53,14 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 from litellm.types.router import (
     AllowedFailsPolicy,
+    Deployment,
     DeploymentTypedDict,
+    LiteLLM_Params,
     LiteLLMParamsTypedDict,
+    ModelInfo,
     RouterRateLimitError,
 )
 from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
@@ -3297,3 +3305,183 @@ def test_is_response_lookup_not_found(status_code: int, call_type: str, expected
     error.status_code = status_code
 
     assert is_response_lookup_not_found(error, {"call_type": call_type}) is expected
+
+
+def _served_deployment_state_key() -> tuple[str, str, str, str]:
+    return ("hosted_vllm/served-a", "dep-a", "http://127.0.0.1:9/v1", "hosted_vllm")
+
+
+def _samples_of_metric(metric: Metric, metric_name: str) -> tuple[tuple[Mapping[str, str], float], ...]:
+    return tuple((sample.labels, sample.value) for sample in metric.samples if sample.name == metric_name)
+
+
+def _samples(metric_name: str) -> tuple[tuple[Mapping[str, str], float], ...]:
+    return tuple(
+        itertools.chain.from_iterable(_samples_of_metric(metric, metric_name) for metric in REGISTRY.collect())
+    )
+
+
+def _deployment_state_series() -> Mapping[tuple[str, str, str, str], float]:
+    return MappingProxyType(
+        {
+            (
+                labels.get("litellm_model_name", ""),
+                labels.get("model_id", ""),
+                labels.get("api_base", ""),
+                labels.get("api_provider", ""),
+            ): value
+            for labels, value in _samples("litellm_deployment_state")
+        }
+    )
+
+
+def _cooled_down_labels() -> tuple[Mapping[str, str], ...]:
+    return tuple(labels for labels, _ in _samples("litellm_deployment_cooled_down_total"))
+
+
+@pytest.fixture
+def prometheus_callback():
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+
+    original_callbacks: Final = list(litellm.callbacks)
+    original_async_success: Final = list(litellm._async_success_callback)
+    logger: Final = PrometheusLogger()
+    litellm.callbacks.append(logger)
+    litellm._async_success_callback.append(logger)
+
+    yield logger
+
+    litellm.callbacks[:] = original_callbacks
+    litellm._async_success_callback[:] = original_async_success
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+
+
+def test_deployment_state_identity_labels_the_served_deployment_not_the_model_group():
+    deployment: Final = Deployment(
+        model_name="my-alias",
+        litellm_params=LiteLLM_Params(model="hosted_vllm/served-a", api_base="http://127.0.0.1:9/v1/", api_key="noop"),
+        model_info=ModelInfo(id="dep-a"),
+    )
+
+    identity: Final = deployment_identity.identity_from_deployment(deployment)
+
+    assert identity.litellm_model_name == "hosted_vllm/served-a"
+    assert identity.model_id == "dep-a"
+    assert identity.api_base == "http://127.0.0.1:9/v1"
+    assert identity.api_provider == "hosted_vllm"
+
+
+def test_deployment_state_identity_masks_credentials_the_same_way_the_success_path_does():
+    deployment: Final = Deployment(
+        model_name="my-alias",
+        litellm_params=LiteLLM_Params(
+            model="hosted_vllm/served-a", api_base="http://127.0.0.1:9/v1?key=supersecretvalue"
+        ),
+        model_info=ModelInfo(id="dep-a"),
+    )
+
+    identity: Final = deployment_identity.identity_from_deployment(deployment)
+
+    assert identity.api_base == mask_api_base_credentials("http://127.0.0.1:9/v1?key=supersecretvalue")
+
+
+def _logged_payload(status: str) -> dict[str, object]:
+    return {
+        "call_type": "acompletion",
+        "status": status,
+        "model": "served-a",
+        "model_id": "dep-a",
+        "model_group": "my-alias",
+        "api_base": "http://127.0.0.1:9/v1/chat/completions",
+        "metadata": {},
+        "hidden_params": {"additional_headers": {}, "litellm_overhead_time_ms": None},
+        "response_cost": 0.0,
+        "total_tokens": 1,
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+        "startTime": 0.0,
+        "endTime": 1.0,
+    }
+
+
+def _routed_call_kwargs() -> dict[str, object]:
+    """The kwargs a proxied call carries once the router picked `dep-a`.
+
+    `model` is the served model after the provider split and `litellm_params.api_base` is the endpoint the call was
+    built for, while the router-stamped metadata holds the deployment record's own values.
+    """
+    return {
+        "model": "served-a",
+        "litellm_params": {
+            "custom_llm_provider": "hosted_vllm",
+            "api_base": "http://127.0.0.1:9/v1/chat/completions",
+            "metadata": {
+                "deployment": "hosted_vllm/served-a",
+                "api_base": "http://127.0.0.1:9/v1",
+                "model_info": {"id": "dep-a"},
+                "model_group": "my-alias",
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_cooldown_recovery_and_partial_outage_write_one_deployment_state_series(prometheus_callback):
+    """The three writers of `litellm_deployment_state` must agree on the series identity.
+
+    Keying the cooldown on the model group, or the call paths on the post-split model and the built endpoint url,
+    splits one deployment into several series that each need their own reset, which is how an outage value stays
+    latched after the deployment recovers.
+    """
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "my-alias",
+                "litellm_params": {"model": "hosted_vllm/served-a", "api_base": "http://127.0.0.1:9/v1/"},
+                "model_info": {"id": "dep-a"},
+            }
+        ]
+    )
+    payload: Final = _logged_payload("failure")
+    routed_kwargs: Final = {**_routed_call_kwargs(), "standard_logging_object": payload}
+    start_time: Final = datetime.datetime.now()
+    api_error: Final = litellm.InternalServerError(
+        message="deployment is down", llm_provider="hosted_vllm", model="served-a"
+    )
+
+    prometheus_callback.set_llm_deployment_failure_metrics({**routed_kwargs, "exception": api_error})
+    assert _deployment_state_series() == {_served_deployment_state_key(): 1.0}
+
+    await router_cooldown_event_callback(
+        ctx=RoutingContext(router),
+        deployment_id="dep-a",
+        exception_status="429",
+        cooldown_time=60.0,
+    )
+    assert _deployment_state_series() == {_served_deployment_state_key(): 2.0}
+    assert _cooled_down_labels() == (
+        {
+            "litellm_model_name": "hosted_vllm/served-a",
+            "model_id": "dep-a",
+            "api_base": "http://127.0.0.1:9/v1",
+            "api_provider": "hosted_vllm",
+            "exception_status": "429",
+        },
+    )
+
+    prometheus_callback.set_llm_deployment_success_metrics(
+        request_kwargs={**routed_kwargs, "standard_logging_object": _logged_payload("success")},
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=1),
+        enum_values=UserAPIKeyLabelValues(model_group="my-alias", model_id="dep-a"),
+        output_tokens=1.0,
+    )
+    assert _deployment_state_series() == {_served_deployment_state_key(): 0.0}

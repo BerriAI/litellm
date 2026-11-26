@@ -809,14 +809,18 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
     (
         (None, None, "logged-deployment", "logged-deployment"),
         ("", None, "logged-deployment", "logged-deployment"),
-        ("metadata-deployment", "request-deployment", "logged-deployment", "metadata-deployment"),
-        (None, "request-deployment", "logged-deployment", "request-deployment"),
+        ("metadata-deployment", "request-deployment", "logged-deployment", "logged-deployment"),
+        (None, "request-deployment", "logged-deployment", "logged-deployment"),
+        ("metadata-deployment", None, None, "metadata-deployment"),
+        (None, "request-deployment", None, "request-deployment"),
         (None, None, None, "None"),
     ),
 )
 async def test_failure_counters_keep_logged_deployment_attribution(
     metadata_id: str | None, request_id: str | None, logged_id: str | None, expected: str
 ) -> None:
+    """The router-stamped ``model_id`` on the standard logging object wins over
+    request metadata, which only fills in when the payload has no id."""
     from fastapi import HTTPException
 
     from litellm.integrations.prometheus import PrometheusLogger
@@ -842,6 +846,113 @@ async def test_failure_counters_keep_logged_deployment_attribution(
             ]
     finally:
         _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_names_the_deployment_that_failed() -> None:
+    """A failure raised by a deployment must attribute it on the proxy failure
+    metric, not only on the deployment-scoped counters."""
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "client-alias",
+        "litellm_params": {
+            "model": "hosted_vllm/qwen",
+            "api_base": "http://vllm.internal:8000/v1/chat/completions",
+            "metadata": {
+                "deployment": "hosted_vllm/qwen",
+                "api_base": "http://vllm.internal:8000/v1/",
+                "model_info": {"id": "deployment-abc123"},
+                "model_group": "client-alias",
+            },
+        },
+        "standard_logging_object": {
+            "model_id": "deployment-abc123",
+            "model_group": "client-alias",
+            "api_base": "http://vllm.internal:8000/v1/chat/completions",
+            "custom_llm_provider": "hosted_vllm",
+        },
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=500, detail="upstream failed"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [
+            (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"], sample.value)
+            for sample in samples
+        ] == [("deployment-abc123", "client-alias", "http://vllm.internal:8000/v1", 1.0)]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_fills_deployment_identity_from_request_metadata() -> None:
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "client-alias",
+        "metadata": {"model_info": {"id": "deployment-from-metadata"}, "model_group": "client-alias"},
+        "litellm_params": {"api_base": "http://vllm.internal:8000/v1", "custom_llm_provider": "hosted_vllm"},
+        "standard_logging_object": {"custom_llm_provider": "hosted_vllm"},
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=500, detail="upstream failed"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [
+            (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"])
+            for sample in samples
+        ] == [("deployment-from-metadata", "client-alias", "http://vllm.internal:8000/v1")]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_does_not_attribute_a_deployment_to_a_pre_routing_reject() -> None:
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "client-alias",
+        "litellm_params": {"metadata": {"model_group": "unregistered-client-chosen-group"}},
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=401, detail="invalid key"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [(sample.labels["model_id"], sample.labels["api_base"]) for sample in samples] == [("None", "None")]
+        assert [sample.labels["model_group"] for sample in samples] == ["other"]
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_proxy_failed_requests_metric_declares_deployment_identity_labels() -> None:
+    labels: Final = PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
+    assert {
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+    } <= set(labels)
 
 
 @pytest.mark.asyncio

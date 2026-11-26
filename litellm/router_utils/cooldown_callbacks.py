@@ -2,11 +2,11 @@
 Callbacks triggered on cooling down deployments
 """
 
-import copy
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.prometheus_helpers import deployment_identity
 from litellm.router_deprecated import renamed_router_param
 
 if TYPE_CHECKING:
@@ -37,39 +37,24 @@ async def router_cooldown_event_callback(
             deployment_id,
         )
         return
-    _litellm_params: Final = _deployment.litellm_params
-    temp_litellm_params = copy.deepcopy(_litellm_params)
-    temp_litellm_params = dict(temp_litellm_params)
-    _model_name: Final = _deployment.model_name or ""
-    _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
-    model_id: Final = _deployment.model_info.id
-
-    litellm_model_name: Final = temp_litellm_params.get("model") or ""
-    llm_provider = ""
-    try:
-        _, llm_provider, _, _ = litellm.get_llm_provider(
-            model=litellm_model_name,
-            custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
-        )
-    except Exception:
-        pass
+    identity: Final = deployment_identity.identity_from_deployment(_deployment)
 
     # get the prometheus logger from in memory loggers
     prometheusLogger: Final[PrometheusLogger | None] = get_prometheus_logger_from_callbacks()
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
-            litellm_model_name=_model_name,
-            model_id=model_id,
-            api_base=_api_base,
-            api_provider=llm_provider,
+            litellm_model_name=identity.litellm_model_name,
+            model_id=identity.model_id,
+            api_base=identity.api_base,
+            api_provider=identity.api_provider,
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=_model_name,
-            model_id=str(model_id),
-            api_base=_api_base,
-            api_provider=llm_provider,
+            litellm_model_name=identity.litellm_model_name,
+            model_id=identity.model_id,
+            api_base=identity.api_base,
+            api_provider=identity.api_provider,
             exception_status=str(exception_status),
         )
 

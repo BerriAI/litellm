@@ -535,6 +535,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_deployment_latency_per_output_token = [

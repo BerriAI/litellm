@@ -28,6 +28,13 @@ if sys.argv[2] == "stay":
     time.sleep(120)
 """
 
+_STATE_WORKER: Final = """
+import sys
+from prometheus_client import Gauge
+Gauge("litellm_deployment_state", "", ["litellm_model_name"]).labels(litellm_model_name="served").set(2)
+print("ready", flush=True)
+"""
+
 
 def _spawn_worker(directory: Path, in_flight: str, lifetime: str) -> subprocess.Popen[str]:
     env = {**os.environ, "PROMETHEUS_MULTIPROC_DIR": str(directory)}
@@ -43,6 +50,17 @@ def _livesum(directory: Path) -> float:
     multiprocess.MultiProcessCollector(registry, path=str(directory))
     value = registry.get_sample_value("litellm_in_flight")
     return 0.0 if value is None else value
+
+
+def _deployment_state(directory: Path) -> dict[str, float]:
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry, path=str(directory))
+    return {
+        sample.labels["pid"]: sample.value
+        for metric in registry.collect()
+        for sample in metric.samples
+        if sample.name == "litellm_deployment_state"
+    }
 
 
 class TestMarkDeadWorkers:
@@ -78,6 +96,26 @@ class TestMarkDeadWorkers:
         assert mark_dead_workers(str(tmp_path)) == ()
         assert (tmp_path / "gauge_livesum_1.db").exists()
 
+    def test_drops_default_mode_gauges_of_exited_workers(self, tmp_path: Path) -> None:
+        """`litellm_deployment_state` uses the default gauge mode, whose file is `gauge_all_<pid>.db` and which
+        prometheus_client's own mark_process_dead never removes. Left behind, a dead worker keeps re-exporting
+        its last state forever, so a deployment that cooled down stays at 2 after the worker that saw it is gone."""
+        worker = subprocess.Popen(
+            [sys.executable, "-I", "-c", _STATE_WORKER],
+            env={**os.environ, "PROMETHEUS_MULTIPROC_DIR": str(tmp_path)},
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert worker.stdout is not None and worker.stdout.readline() == "ready\n"
+        assert worker.wait(timeout=30) == 0
+        assert (tmp_path / f"gauge_all_{worker.pid}.db").exists()
+        assert _deployment_state(tmp_path) == {str(worker.pid): 2.0}
+
+        assert mark_dead_workers(str(tmp_path)) == (worker.pid,)
+
+        assert not (tmp_path / f"gauge_all_{worker.pid}.db").exists()
+        assert _deployment_state(tmp_path) == {}
+
 
 class TestWipeDirectory:
     def test_deletes_all_db_files(self, tmp_path):
@@ -111,6 +149,14 @@ class TestMarkWorkerExit:
                 # Should not raise
                 mark_worker_exit(99)
                 mock_mark.assert_called_once_with(99)
+
+    def test_drops_default_mode_gauge_files_and_keeps_counters(self, tmp_path: Path) -> None:
+        (tmp_path / "gauge_all_4242.db").touch()
+        (tmp_path / "counter_4242.db").touch()
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            with patch("prometheus_client.multiprocess.mark_process_dead"):
+                mark_worker_exit(4242)
+        assert sorted(path.name for path in tmp_path.glob("*.db")) == ["counter_4242.db"]
 
 
 class TestMaybeSetupPrometheusMultiprocDir:

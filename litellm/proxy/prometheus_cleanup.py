@@ -14,7 +14,7 @@ from typing import Final
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 
-_LIVE_GAUGE_PID: Final = re.compile(r"gauge_live[a-z]*_(\d+)\.db$")
+_GAUGE_PID: Final = re.compile(r"gauge_[a-z]+_(\d+)\.db$")
 
 
 def wipe_directory(directory: str) -> None:
@@ -44,15 +44,24 @@ def _removed(filepath: str) -> int:
 
 def mark_worker_exit(worker_pid: int) -> None:
     """Remove prometheus .db files for a dead worker. Called by gunicorn child_exit hook."""
-    if not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+    directory: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if not directory:
         return
     try:
         from prometheus_client import multiprocess
 
         multiprocess.mark_process_dead(worker_pid)
+        drop_gauge_files(directory, worker_pid)
         verbose_proxy_logger.info("Prometheus cleanup: marked worker %s as dead", worker_pid)
     except Exception as e:
         verbose_proxy_logger.warning("Failed to mark prometheus worker %s as dead: %s", worker_pid, e)
+
+
+def drop_gauge_files(directory: str, pid: int) -> None:
+    """Drop every gauge file a pid owns. `mark_process_dead` only removes the `live*` modes, so a default-mode
+    gauge such as `litellm_deployment_state` (`gauge_all_<pid>.db`) would otherwise re-export its last value
+    forever once that worker is gone."""
+    _remove(directory, tuple(glob.glob(os.path.join(directory, f"gauge_*_{pid}.db"))))
 
 
 def _is_running(pid: int) -> bool:
@@ -66,14 +75,14 @@ def _is_running(pid: int) -> bool:
 
 
 def mark_dead_workers(directory: str) -> tuple[int, ...]:
-    """Drop the live-gauge files of workers that no longer exist and return their pids.
+    """Drop the gauge files of workers that no longer exist and return their pids.
 
     Uvicorn's multi-worker supervisor has no exit hook, so a replacement worker calls this at startup; without it
-    a crashed worker's in-flight gauges stay in the aggregate forever.
+    a crashed worker's in-flight and state gauges stay in the aggregate forever.
     """
     owners: Final = frozenset(
         int(match.group(1))
-        for match in map(_LIVE_GAUGE_PID.search, glob.glob(os.path.join(directory, "gauge_live*_*.db")))
+        for match in map(_GAUGE_PID.search, glob.glob(os.path.join(directory, "gauge_*_*.db")))
         if match is not None
     )
     dead: Final = tuple(sorted(pid for pid in owners if pid != os.getpid() and not _is_running(pid)))
@@ -83,5 +92,6 @@ def mark_dead_workers(directory: str) -> tuple[int, ...]:
 
     for pid in dead:
         multiprocess.mark_process_dead(pid, path=directory)
+        drop_gauge_files(directory, pid)
     verbose_proxy_logger.info("Prometheus cleanup: marked dead workers %s in %s", dead, directory)
     return dead
