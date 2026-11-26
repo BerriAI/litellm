@@ -171,10 +171,15 @@ def test_concurrent_broken_streams_each_count_once_toward_the_budget(gateway: Ga
         with ThreadPoolExecutor(max_workers=_CONCURRENT_STREAMS) as pool:
             tuple(pool.map(lambda _: broken_stream(gateway, model, key), range(_CONCURRENT_STREAMS)))
         within_budget: Final = chat(gateway, model, key)
+        assert within_budget.status_code == 200, within_budget.text
+        eventually(
+            lambda: gateway.rows(ROWS, (sha256(key.encode()).hexdigest(),)),
+            lambda found: len(found) == _CONCURRENT_STREAMS + 1,
+            seconds=70,
+        )
         broken_stream(gateway, model, key)
         over_budget: Final = chat(gateway, model, key)
 
-        assert within_budget.status_code == 200, within_budget.text
         assert_budget_refusal(over_budget)
         assert sorted(failure_spend(gateway, key, rows=_CONCURRENT_STREAMS + 2)) == pytest.approx(
             [0.0] + [cost] * (_CONCURRENT_STREAMS + 1)
