@@ -2246,7 +2246,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             )
             return None
-        billed_cost: Final = self._a2a_agent_billed_cost(base_cost)
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        billed_cost: Final = billed_flat_cost(
+            base_cost=base_cost,
+            custom_llm_provider=provider if isinstance(provider, str) else None,
+            model=self.model,
+            litellm_logging_obj=self,
+        )
         additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
         total_cost: Final = (
             billed_cost + additional_response_cost
@@ -2261,19 +2267,6 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.cost_breakdown = None
         return 0.0
-
-    def _a2a_agent_billed_cost(self, base_cost: float) -> float:
-        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
-        try:
-            return billed_flat_cost(
-                base_cost=base_cost,
-                custom_llm_provider=provider if isinstance(provider, str) else None,
-                model=self.model,
-                litellm_logging_obj=self,
-            )
-        except Exception as e:  # noqa: BLE001  # a malformed discount or margin config bills the unadjusted price
-            verbose_logger.warning("A2A agent %s is billed without its unusable discount or margin: %s", self.model, e)
-            return base_cost
 
     def _record_zero_cost_diagnostic(
         self,

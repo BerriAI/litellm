@@ -967,6 +967,36 @@ async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_answers_and_b
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("discount_config", "margin_config", "adjustment"),
+    [
+        (["databricks_agent"], {"global": 0.10}, 1.10),
+        ({"databricks_agent": 0.10}, {"global": {"percentage": "ten"}}, 0.90),
+    ],
+    ids=["malformed-discount", "malformed-margin"],
+)
+async def test_route_a2a_bridge_agent_with_one_malformed_cost_config_still_applies_the_other(
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    discount_config: object,
+    margin_config: object,
+    adjustment: float,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    registry: Final = _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE))
+    unadjusted_cost, _, _ = await _billed_chat_call(registry, "per-query")
+    monkeypatch.setattr(litellm, "cost_discount_config", discount_config)
+    monkeypatch.setattr(litellm, "cost_margin_config", margin_config)
+
+    cost, _, _ = await _billed_chat_call(registry, "per-query")
+
+    assert unadjusted_cost is not None
+    assert cost == pytest.approx(unadjusted_cost * adjustment)
+
+
+@respx.mock
 async def test_route_a2a_bridge_agent_cost_adds_the_calls_additional_response_cost(httpx_transport: None) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)

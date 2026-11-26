@@ -1562,17 +1562,35 @@ def _store_cost_breakdown_in_logging_obj(
         # Don't fail the main cost calculation if breakdown storage fails
 
 
+def _usable_cost_discount(
+    base_cost: float, custom_llm_provider: str | None, model: str | None
+) -> tuple[float, float, float]:
+    try:
+        return _apply_cost_discount(base_cost=base_cost, custom_llm_provider=custom_llm_provider, model=model)
+    except Exception as e:  # noqa: BLE001  # a malformed cost_discount_config bills the cost without a discount
+        verbose_logger.warning("%s is billed without its unusable cost_discount_config: %s", model, e)
+        return base_cost, 0.0, 0.0
+
+
+def _usable_cost_margin(
+    base_cost: float, custom_llm_provider: str | None, model: str | None
+) -> tuple[float, float, float, float]:
+    try:
+        return _apply_cost_margin(base_cost=base_cost, custom_llm_provider=custom_llm_provider)
+    except Exception as e:  # noqa: BLE001  # a malformed cost_margin_config bills the cost without a margin
+        verbose_logger.warning("%s is billed without its unusable cost_margin_config: %s", model, e)
+        return base_cost, 0.0, 0.0, 0.0
+
+
 def billed_flat_cost(
     base_cost: float,
     custom_llm_provider: str | None,
     model: str | None,
     litellm_logging_obj: LitellmLoggingObject | None,
 ) -> float:
-    discounted_cost, discount_percent, discount_amount = _apply_cost_discount(
-        base_cost=base_cost, custom_llm_provider=custom_llm_provider, model=model
-    )
-    billed_cost, margin_percent, margin_fixed_amount, margin_total_amount = _apply_cost_margin(
-        base_cost=discounted_cost, custom_llm_provider=custom_llm_provider
+    discounted_cost, discount_percent, discount_amount = _usable_cost_discount(base_cost, custom_llm_provider, model)
+    billed_cost, margin_percent, margin_fixed_amount, margin_total_amount = _usable_cost_margin(
+        discounted_cost, custom_llm_provider, model
     )
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
