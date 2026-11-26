@@ -728,6 +728,7 @@ class PrometheusMetricLabels:
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
     litellm_deployment_attempts_total: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.PHASE.value,
         UserAPIKeyLabelNames.ATTEMPT_KIND.value,
         UserAPIKeyLabelNames.RESULT.value,

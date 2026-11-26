@@ -1485,21 +1485,152 @@ def test_routed_attempt_counter_keeps_phase_kind_and_result_together(
     _clear_prometheus_registry()
     try:
         logger: Final = PrometheusLogger()
-        logger.record_deployment_attempt("error", phase="primary", attempt_kind="initial")
-        logger.record_deployment_attempt("error", phase="fallback", attempt_kind="initial")
-        logger.record_deployment_attempt("success", phase="fallback", attempt_kind="retry")
+        logger.record_deployment_attempt("error", model_group="primary-chat", phase="primary", attempt_kind="initial")
+        logger.record_deployment_attempt("error", model_group="fallback-chat", phase="fallback", attempt_kind="initial")
+        logger.record_deployment_attempt("success", model_group="fallback-chat", phase="fallback", attempt_kind="retry")
+        logger.record_deployment_attempt("error", model_group=None, phase="primary", attempt_kind="initial")
         expected: Final = None if excluded else 1.0
         assert (
-            REGISTRY.get_sample_value(metric, {"phase": "primary", "attempt_kind": "initial", "result": "error"})
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "primary-chat", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
             == expected
         )
         assert (
-            REGISTRY.get_sample_value(metric, {"phase": "fallback", "attempt_kind": "initial", "result": "error"})
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "fallback-chat", "phase": "fallback", "attempt_kind": "initial", "result": "error"},
+            )
             == expected
         )
         assert (
-            REGISTRY.get_sample_value(metric, {"phase": "fallback", "attempt_kind": "retry", "result": "success"})
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "fallback-chat", "phase": "fallback", "attempt_kind": "retry", "result": "success"},
+            )
             == expected
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "other", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
+            == expected
+        )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_router_attempt_counter_bounds_model_group_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    metric: Final = "litellm_deployment_attempts_total"
+    _clear_prometheus_registry()
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    try:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "primary-group",
+                    "litellm_params": {
+                        "model": "openai/fail-primary",
+                        "api_key": "k",
+                        "mock_response": "litellm.InternalServerError",
+                    },
+                },
+                {
+                    "model_name": "fallback-group",
+                    "litellm_params": {
+                        "model": "openai/ok-fallback",
+                        "api_key": "k",
+                        "mock_response": "ok",
+                    },
+                },
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "k",
+                        "mock_response": "ok",
+                    },
+                },
+            ],
+            num_retries=1,
+            retry_after=0,
+            disable_cooldowns=True,
+            fallbacks=[{"primary-group": ["fallback-group"]}],
+        )
+        router.default_deployment = {
+            "model_name": "default-wildcard",
+            "litellm_params": {
+                "model": "openai/default-model",
+                "custom_llm_provider": "openai",
+                "api_key": "k",
+                "mock_response": "ok",
+            },
+            "model_info": {"id": "default-id"},
+        }
+
+        await router.acompletion(model="primary-group", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="openai/caller-a", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="openai/caller-b", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="unconfigured-a", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="unconfigured-b", messages=[{"role": "user", "content": "hi"}])
+
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "primary-group", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "primary-group", "phase": "primary", "attempt_kind": "retry", "result": "error"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "fallback-group", "phase": "fallback", "attempt_kind": "initial", "result": "success"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "openai/*", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "openai/caller-a", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            is None
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "other", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "unconfigured-a", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            is None
         )
     finally:
         _clear_prometheus_registry()

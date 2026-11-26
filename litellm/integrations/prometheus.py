@@ -1794,6 +1794,7 @@ class PrometheusLogger(CustomLogger):
         self,
         result: DeploymentAttemptResult,
         *,
+        model_group: str | None = None,
         phase: Literal["primary", "fallback"],
         attempt_kind: Literal["initial", "retry"],
     ) -> None:
@@ -1807,7 +1808,12 @@ class PrometheusLogger(CustomLogger):
             self._inc_labeled_counter(
                 counter,
                 "litellm_deployment_attempts_total",
-                UserAPIKeyLabelValues(phase=phase, attempt_kind=attempt_kind, result=result),
+                UserAPIKeyLabelValues(
+                    model_group=model_group or UNRECOGNIZED_REQUESTED_MODEL_LABEL,
+                    phase=phase,
+                    attempt_kind=attempt_kind,
+                    result=result,
+                ),
             )
         except Exception:  # noqa: BLE001  # metric collection cannot change the provider outcome
             verbose_logger.debug("Could not record deployment attempt", exc_info=True)

@@ -5447,6 +5447,16 @@ class _Driver:
         reading_stream.report_first_chunk_failure(error)
         return {**failed, "recorded": True}
 
+    def _attempt_model_group(self, step: Mapping[str, object]) -> str | None:
+        deployment_id: Final = step.get("deployment_id")
+        if not isinstance(deployment_id, str) or not deployment_id:
+            return None
+        record: Final = as_str_mapping(
+            self._core._handle.deployment(deployment_id)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        )
+        model_name: Final = None if record is None else record.get("model_name")
+        return model_name if isinstance(model_name, str) and model_name else None
+
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
@@ -5496,6 +5506,7 @@ class _Driver:
                     host.deployment_attempt_recorder(
                         call.host_op,
                         stream=compacted.get("stream"),
+                        model_group=partial(self._attempt_model_group, step),
                         fallback_level=step.get("fallback_level"),
                         retry=step.get("retry"),
                     )

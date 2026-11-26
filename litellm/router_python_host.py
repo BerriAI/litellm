@@ -119,7 +119,13 @@ class PythonHost:
         return without_global_fallbacks_around(endpoint)
 
     def deployment_attempt_recorder(
-        self, op: str, *, stream: object, fallback_level: object, retry: object
+        self,
+        op: str,
+        *,
+        stream: object,
+        model_group: Callable[[], str | None],
+        fallback_level: object,
+        retry: object,
     ) -> Callable[[DeploymentAttemptResult], None] | None:
         if op != "acompletion" or stream or not litellm.callbacks:
             return None
@@ -131,6 +137,7 @@ class PythonHost:
             return None
         return partial(
             logger.record_deployment_attempt,
+            model_group=model_group(),
             phase="fallback" if isinstance(fallback_level, int) and fallback_level > 0 else "primary",
             attempt_kind="retry" if isinstance(retry, int) and retry > 0 else "initial",
         )
