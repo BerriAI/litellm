@@ -400,25 +400,27 @@ async def test_customer_margin_scales_the_reservation_only_for_customer_requests
     spend_counter_store, margin: float | None, customer: CustomerHierarchyAuth | None, factor: float
 ) -> None:
     router: Final = Router(model_list=[_tiered_deployment(0.1).model_dump()])
-    estimate: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
-    input_estimate: Final = estimate_request_input_cost(
-        request_body=TIERED_BODY, route="/chat/completions", llm_router=router
-    )
-    with patch.dict(litellm.cost_margin_config, {} if margin is None else {"customer": margin}, clear=True):
-        reservation: Final = await reserve_budget_for_request(
-            request_body=TIERED_BODY,
-            route="/chat/completions",
-            llm_router=router,
-            valid_token=UserAPIKeyAuth(token="margin-allowed", max_budget=10000, customer_hierarchy=customer),
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=UserApiKeyCache(),
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-        )
-    assert estimate is not None and input_estimate is not None and reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(estimate * factor)
-    assert reservation["input_cost"] == pytest.approx(input_estimate * factor)
+
+    async def reserve(token: str, cost_margin_config: dict[str, float]) -> dict[str, object] | None:
+        with patch.dict(litellm.cost_margin_config, cost_margin_config, clear=True):
+            return await reserve_budget_for_request(
+                request_body=TIERED_BODY,
+                route="/chat/completions",
+                llm_router=router,
+                valid_token=UserAPIKeyAuth(token=token, max_budget=10000, customer_hierarchy=customer),
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=UserApiKeyCache(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            )
+
+    unmarked: Final = await reserve("margin-unmarked", {})
+    reservation: Final = await reserve("margin-allowed", {} if margin is None else {"customer": margin})
+
+    assert unmarked is not None and reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(unmarked["reserved_cost"] * factor)
+    assert reservation["input_cost"] == pytest.approx(unmarked["input_cost"] * factor)
 
 
 def test_repeated_estimates_reuse_cached_model_cost_info() -> None:
@@ -1103,10 +1105,21 @@ def test_cached_content_reservation_prices_the_rest_of_the_window(
     assert reserved == pytest.approx(expected)
 
 
-def test_a_gemini_prompt_past_a_price_threshold_is_held_at_the_higher_rates() -> None:
+@pytest.mark.parametrize(
+    ("request_body", "route"),
+    [
+        (GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 100}}, GEMINI_ROUTES[0]),
+        ({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}, "/v1/chat/completions"),
+        ({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}, "/v1/messages"),
+    ],
+    ids=["generate-content", "chat-completions", "messages"],
+)
+def test_a_counted_prompt_past_a_price_threshold_is_held_at_the_higher_rates(
+    request_body: dict[str, object], route: str
+) -> None:
     reserved: Final = max_cost_for_cost_info(
-        request_body=GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 100}},
-        route=GEMINI_ROUTES[0],
+        request_body=request_body,
+        route=route,
         model_info=_THRESHOLD_PRICED,
         requested_output_tokens=100,
         output_multiplier=1,
@@ -1133,6 +1146,22 @@ def test_a_gemini_body_held_at_the_whole_window_it_could_not_count_keeps_the_bas
     assert floor == pytest.approx(300_000 * 1e-06)
 
 
+async def _reserve_generate_content(request_body: dict[str, object], token: str) -> dict[str, object]:
+    reservation: Final = await reserve_budget_for_request(
+        request_body=request_body,
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token=token, max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+    assert reservation is not None
+    return reservation
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overrides",
@@ -1146,54 +1175,30 @@ async def test_a_gemini_hold_is_sized_from_the_body_extra_body_sends(
     spend_counter_store, overrides: dict[str, object]
 ) -> None:
     requested: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 1}}
-    sent: Final = requested | overrides
 
-    reservation: Final = await reserve_budget_for_request(
-        request_body=requested | {"extra_body": overrides},
-        route=GEMINI_ROUTES[2],
-        llm_router=None,
-        valid_token=UserAPIKeyAuth(token="extra-body-key", max_budget=10000),
-        team_object=None,
-        user_object=None,
-        prisma_client=None,
-        user_api_key_cache=UserApiKeyCache(),
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-    )
+    reservation: Final = await _reserve_generate_content(requested | {"extra_body": overrides}, "extra-body-key")
+    sent: Final = await _reserve_generate_content(requested | overrides, "extra-body-sent-key")
+    unmerged: Final = await _reserve_generate_content(requested, "extra-body-unmerged-key")
 
-    assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(
-        estimate_request_max_cost(request_body=sent, route=GEMINI_ROUTES[2], llm_router=None)
+    assert reservation["reserved_cost"] == pytest.approx(sent["reserved_cost"])
+    assert reservation["input_cost"] == pytest.approx(sent["input_cost"])
+    assert reservation["reserved_cost"] > unmerged["reserved_cost"]
+    await asyncio.gather(
+        *(reconcile_budget_reservation(held, actual_cost=0.0) for held in (reservation, sent, unmerged))
     )
-    assert reservation["input_cost"] == pytest.approx(
-        estimate_request_input_cost(request_body=sent, route=GEMINI_ROUTES[2], llm_router=None)
-    )
-    assert reservation["reserved_cost"] > (
-        estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None) or 0
-    )
-    await reconcile_budget_reservation(reservation, actual_cost=0.0)
 
 
 @pytest.mark.asyncio
 async def test_an_extra_body_generation_config_replaces_an_output_cap_sent_as_config(spend_counter_store) -> None:
     override: Final = {"generationConfig": {"maxOutputTokens": 4096}}
 
-    reservation: Final = await reserve_budget_for_request(
-        request_body=GEMINI_QUESTION | {"config": {"maxOutputTokens": 1}, "extra_body": override},
-        route=GEMINI_ROUTES[2],
-        llm_router=None,
-        valid_token=UserAPIKeyAuth(token="extra-body-config-key", max_budget=10000),
-        team_object=None,
-        user_object=None,
-        prisma_client=None,
-        user_api_key_cache=UserApiKeyCache(),
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    reservation: Final = await _reserve_generate_content(
+        GEMINI_QUESTION | {"config": {"maxOutputTokens": 1}, "extra_body": override}, "extra-body-config-key"
     )
+    sent: Final = await _reserve_generate_content(GEMINI_QUESTION | override, "extra-body-config-sent-key")
 
-    assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(
-        estimate_request_max_cost(request_body=GEMINI_QUESTION | override, route=GEMINI_ROUTES[2], llm_router=None)
-    )
-    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+    assert reservation["reserved_cost"] == pytest.approx(sent["reserved_cost"])
+    await asyncio.gather(*(reconcile_budget_reservation(held, actual_cost=0.0) for held in (reservation, sent)))
 
 
 @pytest.mark.asyncio
@@ -1213,26 +1218,12 @@ async def test_an_extra_body_that_shrinks_a_gemini_body_keeps_the_hold_of_the_bo
         "generationConfig": {"maxOutputTokens": 4096},
     }
 
-    reservation: Final = await reserve_budget_for_request(
-        request_body=requested | {"extra_body": overrides},
-        route=GEMINI_ROUTES[2],
-        llm_router=None,
-        valid_token=UserAPIKeyAuth(token="extra-body-shrink-key", max_budget=10000),
-        team_object=None,
-        user_object=None,
-        prisma_client=None,
-        user_api_key_cache=UserApiKeyCache(),
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-    )
+    reservation: Final = await _reserve_generate_content(requested | {"extra_body": overrides}, "extra-body-shrink-key")
+    unmerged: Final = await _reserve_generate_content(requested, "extra-body-shrink-unmerged-key")
 
-    assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(
-        estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None)
-    )
-    assert reservation["input_cost"] == pytest.approx(
-        estimate_request_input_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None)
-    )
-    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+    assert reservation["reserved_cost"] == pytest.approx(unmerged["reserved_cost"])
+    assert reservation["input_cost"] == pytest.approx(unmerged["input_cost"])
+    await asyncio.gather(*(reconcile_budget_reservation(held, actual_cost=0.0) for held in (reservation, unmerged)))
 
 
 @pytest.mark.parametrize(("small", "large"), [("generationConfig", "generation_config"), ("config", "generationConfig")])
@@ -2200,6 +2191,118 @@ def test_priced_model_the_provider_resolver_rejects_still_gets_a_full_hold(monke
     )
     assert chat_uncapped is not None and responses_uncapped is not None
     assert chat_decoy == pytest.approx(chat_uncapped)
+
+
+_LONG_PROMPT: Final = "a" * 400_000
+_LONG_PROMPT_INPUT_RATE: Final = 0.0001
+
+
+def _long_prompt_body(group: str) -> dict[str, object]:
+    return {"model": group, "messages": [{"role": "user", "content": _LONG_PROMPT}], "max_tokens": 16}
+
+
+def _single_deployment_router(group: str, backend_model: str) -> Router:
+    return Router(
+        model_list=[
+            Deployment(
+                model_name=group,
+                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id=f"{group}-deployment",
+                    input_cost_per_token=_LONG_PROMPT_INPUT_RATE,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=128000,
+                ),
+            ).model_dump()
+        ]
+    )
+
+
+async def _reserve_long_prompt(
+    router: Router, group: str, max_budget: float, fail_closed: bool
+) -> dict[str, object] | None:
+    return await reserve_budget_for_request(
+        request_body=_long_prompt_body(group),
+        route="/v1/chat/completions",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token=f"long-prompt-{group}-{max_budget}", max_budget=max_budget, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        fail_closed_budget_enforcement=fail_closed,
+    )
+
+
+_STAND_IN_COUNTED: Final = pytest.mark.parametrize(
+    ("group", "backend_model"),
+    [
+        ("claude-haiku-5-5", "anthropic/claude-haiku-5-5"),
+        ("claude-haiku-5-5", "vertex_ai/claude-haiku-5-5"),
+        ("gemini-3.8-flash", "gemini/gemini-3.8-flash"),
+        ("priced-model", "deepseek/deepseek-chat"),
+    ],
+)
+
+
+@pytest.mark.asyncio
+@_STAND_IN_COUNTED
+async def test_a_strict_key_refuses_a_long_prompt_a_stand_in_tokenizer_undercounts(
+    spend_counter_store: SpendCounterStore, group: str, backend_model: str
+) -> None:
+    with pytest.raises(litellm.BudgetExceededError):
+        await _reserve_long_prompt(
+            _single_deployment_router(group, backend_model),
+            group,
+            max_budget=len(_LONG_PROMPT) * _LONG_PROMPT_INPUT_RATE / 2,
+            fail_closed=True,
+        )
+
+
+@pytest.mark.asyncio
+@_STAND_IN_COUNTED
+async def test_a_long_prompt_holds_a_token_per_byte_while_its_cancel_floor_keeps_the_count(
+    spend_counter_store: SpendCounterStore, group: str, backend_model: str
+) -> None:
+    router: Final = _single_deployment_router(group, backend_model)
+    counted: Final = await count_request_input_tokens(
+        request_body=_long_prompt_body(group), route="/v1/chat/completions", llm_router=router, team_id=None
+    )
+
+    reservation: Final = await _reserve_long_prompt(router, group, max_budget=1000.0, fail_closed=False)
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] >= len(_LONG_PROMPT) * _LONG_PROMPT_INPUT_RATE
+    assert reservation["input_cost"] == pytest.approx(counted[group] * _LONG_PROMPT_INPUT_RATE)
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "backend_model"),
+    [("gpt-5.5", "openai/gpt-5.5"), ("priced-model", "azure/gpt-5.5"), ("deepseek-chat", "deepseek/deepseek-chat")],
+)
+async def test_a_long_prompt_counted_with_the_serving_models_own_tokenizer_holds_at_the_count(
+    spend_counter_store: SpendCounterStore, group: str, backend_model: str
+) -> None:
+    router: Final = _single_deployment_router(group, backend_model)
+    counted: Final = await count_request_input_tokens(
+        request_body=_long_prompt_body(group), route="/v1/chat/completions", llm_router=router, team_id=None
+    )
+
+    reservation: Final = await _reserve_long_prompt(router, group, max_budget=1000.0, fail_closed=False)
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(
+            request_body=_long_prompt_body(group),
+            route="/v1/chat/completions",
+            llm_router=router,
+            input_token_counts=counted,
+        )
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
 
 
 @pytest.mark.asyncio

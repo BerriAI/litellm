@@ -2389,9 +2389,10 @@ def _body_with_content_size(model: str, content_chars: int) -> dict:
 @pytest.mark.asyncio
 async def test_reservation_tokenizes_the_prompt_once(spend_counter_state):
     """Tokenizing is the reservation path's dominant CPU cost, so a request is
-    tokenized once no matter how many cost estimates and pricing candidates it
-    is priced against. The max-cost and input-cost estimates each used to
-    re-tokenize the prompt, once per tiered-pricing candidate."""
+    tokenized once with its model's tokenizer no matter how many cost estimates
+    and pricing candidates it is priced against. The max-cost and input-cost
+    estimates each used to re-tokenize the prompt, once per tiered-pricing
+    candidate. The hold's one-token-per-byte bound splits bytes without merges."""
     _, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(token="key-tokenize-once", spend=0.0, max_budget=100.0)
@@ -2419,7 +2420,7 @@ async def test_reservation_tokenizes_the_prompt_once(spend_counter_state):
     assert reservation is not None
     assert reservation["reserved_cost"] > 0
     assert reservation["input_cost"] > 0
-    assert len(calls) == 1
+    assert len([call for call in calls if call.get("custom_tokenizer") is None]) == 1
 
 
 @pytest.mark.asyncio

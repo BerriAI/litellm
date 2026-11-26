@@ -1,5 +1,5 @@
 {
- "source": "main f631dbd13213 budget_reservation estimate_request_max_cost",
+ "source": "main f631dbd13213 budget_reservation estimate_request_max_cost, a counted prompt reading its above-threshold prices",
  "cases": [
   {
    "name": "anthropic_requested_output",
@@ -65,10 +65,10 @@
    "route": "/v1/messages",
    "counted": 300000,
    "expected": {
-    "max": 0.094,
-    "input": 0.03,
-    "max_direct": 0.094,
-    "input_direct": 0.03
+    "max": 0.47,
+    "input": 0.15,
+    "max_direct": 0.47,
+    "input_direct": 0.15
    }
   },
   {
@@ -117,10 +117,10 @@
    "route": "/v1/messages",
    "counted": 250001,
    "expected": {
-    "max": 0.027554560000000002,
-    "input": 0.02750011,
-    "max_direct": 0.027554560000000002,
-    "input_direct": 0.02750011
+    "max": 0.1377728,
+    "input": 0.13750055,
+    "max_direct": 0.1377728,
+    "input_direct": 0.13750055
    }
   },
   {
@@ -143,10 +143,10 @@
    "route": "/v1/messages",
    "counted": 120000,
    "expected": {
-    "max": 0.012256,
-    "input": 0.012,
-    "max_direct": 0.012256,
-    "input_direct": 0.012
+    "max": 0.06128,
+    "input": 0.06,
+    "max_direct": 0.06128,
+    "input_direct": 0.06
    }
   },
   {

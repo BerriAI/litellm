@@ -15,10 +15,12 @@ import asyncio
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+import tiktoken
 from pydantic import TypeAdapter
 
 import litellm
@@ -39,6 +41,7 @@ from litellm.litellm_core_utils.deployment_pricing import (
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_media_for_tpm
 from litellm.litellm_core_utils.token_counter import (
     deployment_openai_model,
+    is_openai_model,
     pdf_page_pricing,
     reads_pdf_pages,
     unresolved_tokenizer_model,
@@ -56,8 +59,8 @@ from litellm.rust_bridge.token_counter import (
     native_count,
     rust_tokenizer,
 )
-from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.types.utils import LlmProviders, SelectTokenizerResponse
+from litellm.utils import ProviderConfigManager, huggingface_tokenizer_kind
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -67,6 +70,30 @@ TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 _OPENAI_PREFIX: Final = "openai/"
 
 REQUEST_BODY_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+_OWN_HUGGINGFACE_TOKENIZERS: Final = frozenset({"cohere", "deepseek", "llama2", "llama3"})
+
+
+@dataclass(frozen=True, slots=True)
+class _Counting:
+    custom_tokenizer: SelectTokenizerResponse | None = None
+    use_default_image_token_count: bool = False
+
+
+_ESTIMATE: Final = _Counting()
+
+_UTF8_BYTE_BOUND: Final = _Counting(
+    custom_tokenizer={
+        "type": "openai_tokenizer",
+        "tokenizer": tiktoken.Encoding(
+            name="utf8_bytes",
+            pat_str=r"[\s\S]+",
+            mergeable_ranks={bytes((byte,)): byte for byte in range(256)},
+            special_tokens={},
+        ),
+    },
+    use_default_image_token_count=True,
+)
 
 _INPUT_SIZE_FIELDS: Final = (
     "messages",
@@ -173,6 +200,7 @@ def _count_input_tokens_for_models(
     request_body: dict[str, object],
     models: Sequence[str],
     served_models: Sequence[str] = (),
+    counting: _Counting = _ESTIMATE,
 ) -> Mapping[str, int]:
     return MappingProxyType(
         {
@@ -180,12 +208,31 @@ def _count_input_tokens_for_models(
             for model in models
             if (
                 tokens := count_input_tokens_for_model(
-                    request_body=request_body, model=model, served_models=served_models
+                    request_body=request_body, model=model, served_models=served_models, counting=counting
                 )
             )
             is not None
         }
     )
+
+
+async def count_input_token_bounds(
+    request_body: Mapping[str, object],
+    models: Sequence[str],
+    served_models: Sequence[str] = (),
+) -> Mapping[str, int]:
+    """Input tokens per model at one token per UTF-8 byte of text, the most any byte-level tokenizer splits the text
+    into, with images at their default count."""
+    count: Final = partial(
+        _count_input_tokens_for_models,
+        request_body=dict(request_body),
+        models=models,
+        served_models=served_models,
+        counting=_UTF8_BYTE_BOUND,
+    )
+    if not models or _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
+        return count()
+    return await asyncio.to_thread(count)
 
 
 def models_counted_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
@@ -201,6 +248,30 @@ def models_counted_for(model: str, llm_router: Router | None, team_id: str | Non
     written."""
     deployments: Final = _routed_deployments(model, llm_router, team_id) if llm_router else ()
     return tuple(dict.fromkeys(_counted_name(model, deployment) for deployment in deployments)) or (model,)
+
+
+def models_held_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
+    """The names `models_counted_for` counts `model` with whose tokenizer only stands in for the serving model's own,
+    so a long prompt can bill several times what they count. These are the names of deployments that serve no OpenAI
+    model, bar the Cohere, DeepSeek and Llama tokenizers."""
+    deployments: Final = _routed_deployments(model, llm_router, team_id) if llm_router else ()
+    names: Final = (
+        tuple(_counted_name(model, deployment) for deployment in filter(_serves_no_openai_model, deployments))
+        if deployments
+        else tuple(name for name in (model,) if not is_openai_model(name))
+    )
+    return tuple(filter(_counted_with_stand_in, dict.fromkeys(names)))
+
+
+def _serves_no_openai_model(deployment: object) -> bool:
+    return deployment_openai_model(deployment) is None
+
+
+def _counted_with_stand_in(model: str) -> bool:
+    return (
+        litellm.disable_hf_tokenizer_download is True
+        or huggingface_tokenizer_kind(model) not in _OWN_HUGGINGFACE_TOKENIZERS
+    )
 
 
 def models_served_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
@@ -271,51 +342,69 @@ def _served_by_openai(deployment: object) -> bool:
     return served_provider == "openai"
 
 
-def count_input_tokens_for_model(request_body: dict, model: str, served_models: Sequence[str] = ()) -> int | None:
+def count_input_tokens_for_model(
+    request_body: dict,
+    model: str,
+    served_models: Sequence[str] = (),
+    counting: _Counting = _ESTIMATE,
+) -> int | None:
+    tokenizer: Final = counting.custom_tokenizer
     try:
         if "messages" in request_body:
             try:
                 return litellm.token_counter(
                     model=model,
+                    custom_tokenizer=tokenizer,
                     messages=request_body.get("messages") or (),
                     tools=request_body.get("tools"),
                     tool_choice=request_body.get("tool_choice"),
+                    use_default_image_token_count=counting.use_default_image_token_count,
                 )
             except ValueError:
-                return _count_text_tokens(model=model, text=request_body.get("messages"))
+                return _count_text_tokens(model=model, text=request_body.get("messages"), custom_tokenizer=tokenizer)
         if "prompt" in request_body:
-            return _count_text_tokens(model=model, text=request_body.get("prompt"))
+            return _count_text_tokens(model=model, text=request_body.get("prompt"), custom_tokenizer=tokenizer)
         if "input" in request_body:
             return _count_text_tokens(
-                model=model, text=billable_input_since_newest_compaction(request_body.get("input"))
+                model=model,
+                text=billable_input_since_newest_compaction(request_body.get("input")),
+                custom_tokenizer=tokenizer,
             )
         if "query" in request_body or "documents" in request_body:
-            query_tokens: Final = _count_text_tokens(model=model, text=request_body.get("query"))
+            query_tokens: Final = _count_text_tokens(
+                model=model, text=request_body.get("query"), custom_tokenizer=tokenizer
+            )
             document_tokens: Final = _count_text_tokens(
-                model=model,
-                text=request_body.get("documents"),
+                model=model, text=request_body.get("documents"), custom_tokenizer=tokenizer
             )
             return query_tokens + document_tokens
         if "contents" in request_body:
             return _count_contents_tokens(
-                request_body=REQUEST_BODY_FIELDS.validate_python(request_body), model=model, served_models=served_models
+                request_body=REQUEST_BODY_FIELDS.validate_python(request_body),
+                model=model,
+                served_models=served_models,
+                counting=counting,
             )
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
 
 
-def _count_contents_tokens(request_body: Mapping[str, object], model: str, served_models: Sequence[str]) -> int | None:
+def _count_contents_tokens(
+    request_body: Mapping[str, object], model: str, served_models: Sequence[str], counting: _Counting
+) -> int | None:
     adapter_served: Final = frozenset(map(_completion_adapter_serves, served_models or (model,)))
     if adapter_served == frozenset({True}):
-        return _count_adapted_gemini_tokens(request_body=request_body, model=model)
+        return _count_adapted_gemini_tokens(request_body=request_body, model=model, counting=counting)
     gemini_tokens: Final = _count_gemini_tokens(
         request_body=request_body,
-        counter=_GeminiCounter(model=model, audio_models=tuple(served_models) or (model,)),
+        counter=_GeminiCounter(
+            model=model, audio_models=tuple(served_models) or (model,), custom_tokenizer=counting.custom_tokenizer
+        ),
     )
     if True not in adapter_served:
         return gemini_tokens
-    adapted_tokens: Final = _count_adapted_gemini_tokens(request_body=request_body, model=model)
+    adapted_tokens: Final = _count_adapted_gemini_tokens(request_body=request_body, model=model, counting=counting)
     return max(gemini_tokens, adapted_tokens) if gemini_tokens is not None and adapted_tokens is not None else None
 
 
@@ -331,7 +420,7 @@ def _completion_adapter_serves(model: str) -> bool | None:
     return native_config is None
 
 
-def _count_adapted_gemini_tokens(request_body: Mapping[str, object], model: str) -> int | None:
+def _count_adapted_gemini_tokens(request_body: Mapping[str, object], model: str, counting: _Counting) -> int | None:
     completion: Final = generate_content_body_to_completion(body=request_body, model=model)
     if completion is None:
         return None
@@ -340,8 +429,10 @@ def _count_adapted_gemini_tokens(request_body: Mapping[str, object], model: str)
         return None
     return _sum_if_all_sized(
         (
-            count_input_tokens_for_model(request_body=dict(completion), model=model),
-            _count_text_tokens(model=model, text=completion.get("response_format")),
+            count_input_tokens_for_model(request_body=dict(completion), model=model, counting=counting),
+            _count_text_tokens(
+                model=model, text=completion.get("response_format"), custom_tokenizer=counting.custom_tokenizer
+            ),
             openai_chat_pdf_file_tokens(model, inline_pdf_file_count(messages)),
         )
     )
@@ -354,7 +445,7 @@ def _sized_by_chat_counter(part: Mapping[str, object]) -> bool:
     return part.get("type") == "text" or _is_inline_pdf_file(part)
 
 
-def _count_text_tokens(model: str, text: object) -> int:
+def _count_text_tokens(model: str, text: object, custom_tokenizer: SelectTokenizerResponse | None = None) -> int:
     if text is None:
         return 0
 
@@ -368,9 +459,9 @@ def _count_text_tokens(model: str, text: object) -> int:
             stack.extend(item)
             continue
         if isinstance(item, dict):
-            token_count += litellm.token_counter(model=model, text=json.dumps(item))
+            token_count += litellm.token_counter(model=model, custom_tokenizer=custom_tokenizer, text=json.dumps(item))
             continue
-        token_count += litellm.token_counter(model=model, text=str(item))
+        token_count += litellm.token_counter(model=model, custom_tokenizer=custom_tokenizer, text=str(item))
     return token_count
 
 
@@ -395,13 +486,14 @@ _GEMINI_RESPONSE_SCHEMA_FIELDS: Final = (
 class _GeminiCounter:
     model: str
     audio_models: tuple[str, ...]
+    custom_tokenizer: SelectTokenizerResponse | None = None
 
 
 def _count_gemini_tokens(request_body: Mapping[str, object], counter: _GeminiCounter) -> int | None:
     return _sum_if_all_sized(
         (
-            _gemini_function_declaration_tokens(request_body.get("tools"), counter.model),
-            _gemini_response_schema_tokens(request_body, counter.model),
+            _gemini_function_declaration_tokens(request_body.get("tools"), counter),
+            _gemini_response_schema_tokens(request_body, counter),
             *(_gemini_part_tokens(part, counter) for part in _gemini_body_parts(request_body)),
         )
     )
@@ -434,13 +526,17 @@ def _first_mapping(part: Mapping[str, object], fields: Sequence[str]) -> Mapping
     return MappingProxyType({}) if value is None else value
 
 
-def _gemini_response_schema_tokens(request_body: Mapping[str, object], model: str) -> int:
+def _gemini_response_schema_tokens(request_body: Mapping[str, object], counter: _GeminiCounter) -> int:
     configs: Final = (as_str_mapping(request_body.get(field)) for field in GOOGLE_GENAI_CONFIG_FIELDS)
-    return max((_gemini_config_response_schema_tokens(config, model) for config in configs if config), default=0)
+    return max((_gemini_config_response_schema_tokens(config, counter) for config in configs if config), default=0)
 
 
-def _gemini_config_response_schema_tokens(config: Mapping[str, object], model: str) -> int:
-    return sum(_count_text_tokens(model=model, text=config.get(field)) for field in _GEMINI_RESPONSE_SCHEMA_FIELDS)
+def _gemini_config_response_schema_tokens(config: Mapping[str, object], counter: _GeminiCounter) -> int:
+    return sum(_gemini_text_tokens(config.get(field), counter) for field in _GEMINI_RESPONSE_SCHEMA_FIELDS)
+
+
+def _gemini_text_tokens(text: object, counter: _GeminiCounter) -> int:
+    return _count_text_tokens(model=counter.model, text=text, custom_tokenizer=counter.custom_tokenizer)
 
 
 def _sum_if_all_sized(counts: Sequence[int | None]) -> int | None:
@@ -466,17 +562,17 @@ def _gemini_content_parts(content: object) -> Sequence[object]:
     return _gemini_items(fields.get("parts"))
 
 
-def _gemini_function_declaration_tokens(tools: object, model: str) -> int | None:
+def _gemini_function_declaration_tokens(tools: object, counter: _GeminiCounter) -> int | None:
     entries: Final = tuple(map(as_str_mapping, _gemini_items(tools)))
     if any(entry is None or not entry.keys() <= _GEMINI_FUNCTION_DECLARATION_FIELDS for entry in entries):
         return None
-    return _count_text_tokens(model=model, text=tools)
+    return _gemini_text_tokens(tools, counter)
 
 
 def _gemini_part_tokens(part: object, counter: _GeminiCounter) -> int | None:
     fields: Final = as_str_mapping(part)
     if fields is None:
-        return _count_text_tokens(model=counter.model, text=part)
+        return _gemini_text_tokens(part, counter)
     if any(field in fields for field in _GEMINI_FILE_DATA_FIELDS):
         return None
     has_inline_data: Final = any(field in fields for field in _GEMINI_INLINE_DATA_FIELDS)
@@ -489,7 +585,7 @@ def _gemini_part_tokens(part: object, counter: _GeminiCounter) -> int | None:
     return _sum_if_all_sized(
         (
             _gemini_inline_audio_tokens(fields, counter.audio_models) if has_inline_data else 0,
-            _count_text_tokens(model=counter.model, text=text) if isinstance(text, str) else 0,
+            _gemini_text_tokens(text, counter) if isinstance(text, str) else 0,
             _gemini_structured_part_tokens(billed, counter) if billed else 0,
             _thought_signature_tokens(fields),
         )
@@ -524,11 +620,11 @@ def _gemini_structured_part_tokens(part: Mapping[str, object], counter: _GeminiC
     response_field: Final = next((field for field in _GEMINI_FUNCTION_RESPONSE_FIELDS if field in part), None)
     response: Final = as_str_mapping(part.get(response_field)) if response_field is not None else None
     if response_field is None or response is None:
-        return _count_text_tokens(model=counter.model, text=dict(part))
+        return _gemini_text_tokens(dict(part), counter)
     response_without_parts: Final = {key: value for key, value in response.items() if key != "parts"}
     return _sum_if_all_sized(
         (
-            _count_text_tokens(model=counter.model, text={**part, response_field: response_without_parts}),
+            _gemini_text_tokens({**part, response_field: response_without_parts}, counter),
             *(_gemini_part_tokens(nested, counter) for nested in _gemini_items(response.get("parts"))),
         )
     )

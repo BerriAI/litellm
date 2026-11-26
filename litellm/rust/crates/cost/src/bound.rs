@@ -1,8 +1,7 @@
 //! `bound`: what to hold against a budget before a call runs, a parity port of `estimate_request_max_cost`,
 //! `estimate_request_input_cost` and their helpers in `proxy/spend_tracking/budget_reservation.py`. Policy `Legacy`
-//! keeps main's heuristic exactly, including where it under-holds: uplifts, discount and margin never reach the hold,
-//! and only a Gemini body that was counted reads the `_above_<n>_tokens` prices. A true worst case is a later,
-//! separate change
+//! keeps main's heuristic exactly, including where it under-holds: uplifts, discount and margin never reach the hold.
+//! A counted prompt reads the `_above_<n>_tokens` prices it reaches. A true worst case is a later, separate change
 //!
 //! The adapter reads the request: which output caps the serving deployments honor, how many outputs it asks for, and
 //! whether a Gemini body carries inline audio or names a cached content. This module reads the rows
@@ -120,8 +119,6 @@ pub struct RequestCaps {
     /// A Gemini body naming a cached content, whose tokens up to the row's input window are held at the cache-read
     /// rate
     pub cached_content: bool,
-    /// A Gemini body, whose counted prompt reads the `_above_<n>_tokens` prices it reaches
-    pub sized_prompt: bool,
 }
 
 /// `max` is the hold, `input_floor` what a cancelled call has already spent. `None` when no candidate prices
@@ -276,7 +273,7 @@ impl<'a> Shape<'a> {
     }
 
     /// `_hold_rates`: the rates of a prompt of `prompt_tokens`, cached tokens included, which pick the tier or, once
-    /// a Gemini prompt was counted, the `_above_<n>_tokens` prices. Output holds at the higher of the output and
+    /// the prompt was counted, the `_above_<n>_tokens` prices. Output holds at the higher of the output and
     /// reasoning rates, since the reasoning share is unknown before the call runs
     fn hold_rates(&self, request: &RequestCaps, prompt_tokens: i64, counted: bool) -> HoldRates {
         if let Some(tier) = self.tier(prompt_tokens) {
@@ -297,7 +294,7 @@ impl<'a> Shape<'a> {
                 ),
             };
         }
-        let sized = (counted && request.sized_prompt)
+        let sized = counted
             .then(|| u64::try_from(prompt_tokens).ok())
             .flatten();
         let input_meters: &[Meter] = if request.inline_audio {
@@ -511,7 +508,8 @@ mod parity {
     //! Parity with main's legacy budget hold. `fixtures/bound_parity.json` was captured once from main's Python
     //! (f631dbd13213, `LITELLM_LOCAL_MODEL_COST_MAP=True`): `estimate_request_max_cost` and `estimate_request_input_cost`
     //! on catalog rows without a router, and `_max_cost_for_cost_info` and `_input_cost_for_cost_info` on the group rates
-    //! a router reports
+    //! a router reports. Since then, the three cases whose counted prompt passes an `_above_<n>_tokens` threshold hold
+    //! at those prices, which main read only off a Gemini `contents` body
 
     use rstest::rstest;
     use serde_json::Value;
@@ -741,7 +739,6 @@ mod tests {
         RequestCaps {
             inline_audio,
             cached_content,
-            sized_prompt: true,
             ..RequestCaps::default()
         }
     }
@@ -888,19 +885,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_body_that_is_not_gemini(Some(10), RequestCaps::default(), Some(10.0 + 15.0))]
-    #[case::an_uncounted_gemini_body(None, gemini(false, false), None)]
+    #[case::an_uncounted_body(None, RequestCaps::default(), None)]
+    #[case::a_counted_chat_body_reaches_the_threshold_it_equals(
+        Some(10),
+        RequestCaps::default(),
+        Some(10.0 * 200.0 + 5.0 * 20.0)
+    )]
     #[case::a_counted_gemini_body_reaches_the_threshold_it_equals(
         Some(10),
         gemini(false, false),
         Some(10.0 * 200.0 + 5.0 * 20.0)
     )]
-    #[case::a_counted_gemini_body_below_a_threshold(
-        Some(9),
-        gemini(false, false),
-        Some(9.0 * 100.0 + 5.0 * 3.0)
-    )]
-    fn only_a_counted_gemini_body_reads_the_above_threshold_prices(
+    #[case::a_counted_body_below_a_threshold(Some(9), RequestCaps::default(), Some(9.0 * 100.0 + 5.0 * 3.0))]
+    fn only_a_counted_body_reads_the_above_threshold_prices(
         #[case] counted: Option<i64>,
         #[case] request: RequestCaps,
         #[case] expected: Option<f64>,

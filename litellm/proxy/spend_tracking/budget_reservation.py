@@ -59,11 +59,13 @@ from litellm.proxy.spend_tracking.customer_cost_margin import (
     key_customer_cost_margin,
 )
 from litellm.proxy.spend_tracking.input_tokens import (
+    count_input_token_bounds,
     count_input_tokens,
     count_input_tokens_for_model,
     gemini_body_has_inline_audio,
     inline_pdf_file_count,
     models_counted_for,
+    models_held_for,
     models_served_for,
     openai_chat_pdf_file_tokens,
 )
@@ -383,13 +385,21 @@ async def _estimate_hold(
         raw_body=raw_body,
         path_params=path_params,
     )
+    held_token_counts: Final = await hold_request_input_tokens(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        team_id=team_id,
+        input_token_counts=input_token_counts,
+        path_params=path_params,
+    )
     return _HoldEstimate(
         input_token_counts=input_token_counts,
         reservation_cost=estimate_request_max_cost(
             request_body=request_body,
             route=route,
             llm_router=llm_router,
-            input_token_counts=input_token_counts,
+            input_token_counts=held_token_counts,
             path_params=path_params,
         ),
         input_cost=estimate_request_input_cost(
@@ -1334,7 +1344,6 @@ class _RequestCaps(TypedDict):
     input_only: ReadOnly[bool]
     inline_audio: ReadOnly[bool]
     cached_content: ReadOnly[bool]
-    sized_prompt: ReadOnly[bool]
 
 
 class _BoundDocument(TypedDict):
@@ -1470,7 +1479,6 @@ def _request_caps(request_body: Mapping[str, object], route: str) -> _RequestCap
         input_only=_is_input_only_route(route=route),
         inline_audio=gemini_body_has_inline_audio(request_body),
         cached_content=gemini_body and any(cached_contents),
-        sized_prompt=gemini_body,
     )
 
 
@@ -1650,16 +1658,11 @@ async def count_request_input_tokens(
     counted_models: Final = MappingProxyType(
         {model: models_counted_for(model, llm_router, team_id) for model in models}
     )
-    served_models: Final = (
-        tuple(dict.fromkeys(chain.from_iterable(models_served_for(model, llm_router, team_id) for model in models)))
-        if "contents" in request_body
-        else ()
-    )
     counts: Final = await count_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
-        served_models=served_models,
+        served_models=_served_models(request_body, models, llm_router, team_id),
     )
     chat_pdf_files: Final = (
         inline_pdf_file_count(request_body.get("messages"))
@@ -1669,6 +1672,46 @@ async def count_request_input_tokens(
     return MappingProxyType(
         {model: _largest_count(counts, names, chat_pdf_files) for model, names in counted_models.items()}
     )
+
+
+async def hold_request_input_tokens(
+    request_body: Mapping[str, object],
+    route: str,
+    llm_router: Router | None,
+    team_id: str | None,
+    input_token_counts: Mapping[str, int | None],
+    path_params: Mapping[str, object] | None = None,
+) -> Mapping[str, int | None]:
+    """`input_token_counts` raised to one token per UTF-8 byte of text for each candidate model a deployment counts
+    with a stand-in tokenizer, which can count a long prompt at a fraction of what the provider bills. Only the hold
+    reads it, since a cancelled call settles at the counted input."""
+    models: Final = _get_request_models(
+        request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
+    )
+    held_models: Final = MappingProxyType({model: models_held_for(model, llm_router, team_id) for model in models})
+    bounds: Final = await count_input_token_bounds(
+        request_body=request_body,
+        models=tuple(dict.fromkeys(chain.from_iterable(held_models.values()))),
+        served_models=_served_models(request_body, models, llm_router, team_id),
+    )
+    return MappingProxyType(
+        {
+            model: _held_count(tokens, _largest_count(bounds, held_models.get(model, ()), 0))
+            for model, tokens in input_token_counts.items()
+        }
+    )
+
+
+def _held_count(counted: int | None, bound: int | None) -> int | None:
+    return None if counted is None else max(counted, bound or 0)
+
+
+def _served_models(
+    request_body: Mapping[str, object], models: Sequence[str], llm_router: Router | None, team_id: str | None
+) -> tuple[str, ...]:
+    if "contents" not in request_body:
+        return ()
+    return tuple(dict.fromkeys(chain.from_iterable(models_served_for(model, llm_router, team_id) for model in models)))
 
 
 def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_files: int) -> int | None:
