@@ -2,7 +2,8 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from collections.abc import Mapping, Sequence
+import itertools
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    generic_cost_per_token,
     get_web_search_requests_from_usage,
 )
 from litellm.types.llms.openai import (
@@ -21,6 +23,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
+    ImageSVGUsage,
     Message,
     ModelInfo,
     ModelResponse,
@@ -29,6 +32,18 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
     Usage,
 )
+
+_IMAGE_TOOL_RATE_FIELDS: Final = (
+    "input_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+    "output_cost_per_token",
+)
+_IMAGE_TOOL_RATE_SECTIONS: Final = ("litellm_params", "model_info")
+
+
+def _first_set(values: Iterable[object]) -> object:
+    return next((value for value in values if value is not None), None)
 
 
 def _output_item_field(output_item: object, field: str) -> object:
@@ -41,6 +56,10 @@ def _output_item_field(output_item: object, field: str) -> object:
 def _output_item_type(output_item: object) -> str | None:
     item_type: Final = _output_item_field(output_item, "type")
     return item_type if isinstance(item_type, str) else None
+
+
+def _response_output_items(response_object: ResponsesAPIResponse) -> Sequence[object]:
+    return response_object.output
 
 
 def _responses_tool_usage(response_object: ResponsesAPIResponse) -> ResponsesToolUsage | None:
@@ -96,7 +115,7 @@ class StandardBuiltInToolCostTracking:
         - Computer Use (Azure)
         - Code Interpreter (Azure)
         """
-        standard_built_in_tools_params = standard_built_in_tools_params or {}
+        tool_params: Final = standard_built_in_tools_params or StandardBuiltInToolsParams()
 
         google_maps_grounding_cost: Final = StandardBuiltInToolCostTracking._handle_google_maps_grounding_cost(
             model=model,
@@ -109,44 +128,40 @@ class StandardBuiltInToolCostTracking:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Handle web search
-        if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        has_web_search: Final = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
-        ):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_web_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    usage=usage,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                    response_object=response_object,
-                )
-            )
-
-        # Handle file search
-        if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_file_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                )
-            )
-
-        # Handle Azure assistant features
-        return (
-            google_maps_grounding_cost
-            + image_generation_cost
-            + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        )
+        has_file_search: Final = StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
+            response_object=response_object
+        )
+        base_cost: Final = google_maps_grounding_cost + image_generation_cost
+        if not has_web_search and not has_file_search:
+            return base_cost + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                standard_built_in_tools_params=standard_built_in_tools_params,
+                standard_built_in_tools_params=tool_params,
             )
+        web_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_web_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                usage=usage,
+                standard_built_in_tools_params=tool_params,
+                response_object=response_object,
+            )
+            if has_web_search
+            else 0.0
         )
+        file_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_file_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                standard_built_in_tools_params=tool_params,
+            )
+            if has_file_search
+            else 0.0
+        )
+        return base_cost + web_search_cost + file_search_cost
 
     @staticmethod
     def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
@@ -208,11 +223,14 @@ class StandardBuiltInToolCostTracking:
             usage=usage, response_object=response_object
         )
 
+        response_model: Final = _output_item_field(response_object, "model")
         if model_info is not None and resolved_usage is not None and resolved_provider is not None:
             result: Final = get_cost_for_web_search_request(
                 custom_llm_provider=resolved_provider,
                 usage=resolved_usage,
                 model_info=model_info,
+                response_model=response_model if isinstance(response_model, str) else None,
+                lookup_model_info=StandardBuiltInToolCostTracking._safe_get_model_info,
             )
             if result is not None:
                 return result
@@ -221,7 +239,20 @@ class StandardBuiltInToolCostTracking:
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
-        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+        return per_call_cost * StandardBuiltInToolCostTracking._billable_web_search_calls(
+            resolved_usage, response_object
+        )
+
+    @staticmethod
+    def _billable_web_search_calls(usage: Usage | None, response_object: object) -> int:
+        """
+        Providers without their own calculator but whose usage carries server_tool_use.web_search_requests
+        (OpenAI-compatible providers that report a per-tool count) are billed that many calls on the per-call path.
+        """
+        reported: Final = None if usage is None else get_web_search_requests_from_usage(usage)
+        if isinstance(reported, int) and not isinstance(reported, bool) and reported > 0:
+            return reported
+        return StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
 
     @staticmethod
     def _count_web_search_calls(response_object: object) -> int:
@@ -240,7 +271,9 @@ class StandardBuiltInToolCostTracking:
         if reported is not None:
             return reported
         count: Final = sum(
-            1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
+            1
+            for output_item in _response_output_items(response_object)
+            if _output_item_type(output_item) == "web_search_call"
         )
         return max(count, 1)
 
@@ -253,6 +286,77 @@ class StandardBuiltInToolCostTracking:
             if isinstance(model := _output_item_field(tool, "model"), str) and model:
                 return model
         return None
+
+    @staticmethod
+    def _image_generation_svg_tool_model(response_object: ResponsesAPIResponse) -> str | None:
+        tools: Final[Sequence[object]] = cast(Sequence[object], response_object.tools or ())  # cast-ok: dict tool union
+        for tool in tools:
+            if _output_item_field(tool, "type") != "image_generation":
+                continue
+            if (svg_config := _output_item_field(tool, "svg")) is None:
+                continue
+            if isinstance(model := _output_item_field(svg_config, "model"), str) and model:
+                return model
+        return None
+
+    @staticmethod
+    def _parse_image_generation_svg_usage(
+        raw_svg_usage: object, fallback_svg_model: str | None
+    ) -> ImageSVGUsage | None:
+        if raw_svg_usage is None:
+            return None
+        if isinstance(raw_svg_usage, ImageSVGUsage):
+            return raw_svg_usage if raw_svg_usage.model else None
+        raw_payload: Final[Mapping[str, object]] = (
+            cast(Mapping[str, object], raw_svg_usage)  # cast-ok: narrowed by isinstance
+            if isinstance(raw_svg_usage, Mapping)
+            else {
+                field: value
+                for field in ("model", "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
+                if (value := getattr(raw_svg_usage, field, None)) is not None
+            }
+        )
+        model_val: Final = raw_payload.get("model")
+        payload: Final[Mapping[str, object]] = (
+            {**raw_payload, "model": fallback_svg_model}
+            if (not isinstance(model_val, str) or not model_val) and fallback_svg_model
+            else raw_payload
+        )
+        try:
+            parsed: Final = ImageSVGUsage.model_validate(payload)
+        except ValidationError:
+            verbose_logger.debug("Ignoring invalid SVG authoring usage in Responses API image_generation_call")
+            return None
+        return parsed if parsed.model else None
+
+    @staticmethod
+    def _image_generation_svg_usage_cost(
+        output_item: object,
+        fallback_svg_model: str | None,
+        custom_llm_provider: str | None,
+    ) -> float:
+        raw_svg_usage: Final = _output_item_field(output_item, "svg_usage")
+        svg_usage: Final = StandardBuiltInToolCostTracking._parse_image_generation_svg_usage(
+            raw_svg_usage, fallback_svg_model
+        )
+        if svg_usage is None:
+            return 0.0
+        try:
+            prompt_cost, completion_cost = generic_cost_per_token(
+                model=svg_usage.model,
+                usage=Usage(
+                    prompt_tokens=svg_usage.input_tokens,
+                    completion_tokens=svg_usage.output_tokens,
+                    total_tokens=svg_usage.total_tokens or (svg_usage.input_tokens + svg_usage.output_tokens),
+                ),
+                custom_llm_provider=custom_llm_provider or "openai",
+            )
+        except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
+            verbose_logger.debug(
+                "Unable to price Responses API SVG authoring usage for model=%s: %s", svg_usage.model, exc
+            )
+            return 0.0
+        return prompt_cost + completion_cost
 
     @staticmethod
     def _image_generation_call_cost(output_item: object, tool_model: str, custom_llm_provider: str | None) -> float:
@@ -286,17 +390,49 @@ class StandardBuiltInToolCostTracking:
         except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; fall back
             verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
             return None
+        deployment_rates: Final = StandardBuiltInToolCostTracking._image_tool_deployment_rates(tool_model)
+
+        def rate(field: str) -> float:
+            configured: Final = deployment_rates.get(field)
+            return configured if configured is not None else cast(float, model_info.get(field) or 0)  # cast-ok: price
+
         image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
         token_cost: Final = (
-            (input_details.text_tokens if input_details else 0) * (model_info.get("input_cost_per_token") or 0)
-            + (input_details.image_tokens if input_details else 0) * (model_info.get("input_cost_per_image_token") or 0)
-            + (output_details.image_tokens if output_details else 0)
-            * (model_info.get("output_cost_per_image_token") or 0)
-            + (output_details.text_tokens if output_details else 0) * (model_info.get("output_cost_per_token") or 0)
+            (input_details.text_tokens if input_details else 0) * rate("input_cost_per_token")
+            + (input_details.image_tokens if input_details else 0) * rate("input_cost_per_image_token")
+            + (output_details.image_tokens if output_details else 0) * rate("output_cost_per_image_token")
+            + (output_details.text_tokens if output_details else 0) * rate("output_cost_per_token")
         )
-        return token_cost if token_cost > 0 else None
+        priced_at_zero: Final = bool(deployment_rates) and (input_details is not None or output_details is not None)
+        return token_cost if token_cost > 0 or priced_at_zero else None
+
+    @staticmethod
+    def _image_tool_deployment_rates(tool_model: str) -> Mapping[str, float]:
+        """The provider runs the tool model itself, so no deployment is picked for it: the rates of the
+        deployments named after the tool model apply only when every one of them configures the same ones."""
+        from litellm.router_rust.surface.replay import operator_registries
+
+        deployments: Final = itertools.chain.from_iterable(
+            registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
+            for registry in operator_registries()
+        )
+        configured: Final = frozenset(
+            tuple(
+                _first_set(_output_item_field(deployment.get(section), field) for section in _IMAGE_TOOL_RATE_SECTIONS)
+                for field in _IMAGE_TOOL_RATE_FIELDS
+            )
+            for deployment in deployments
+            if deployment.get("model_name") == tool_model
+        )
+        if len(configured) != 1:
+            return {}
+        return {
+            field: float(value)
+            for field, value in zip(_IMAGE_TOOL_RATE_FIELDS, next(iter(configured)), strict=True)
+            if isinstance(value, int | float)
+        }
 
     @staticmethod
     def _handle_image_generation_cost(response_object: object, custom_llm_provider: str | None) -> float:
@@ -311,16 +447,23 @@ class StandardBuiltInToolCostTracking:
         )
         if not completed_items:
             return 0.0
+        svg_tool_model: Final = StandardBuiltInToolCostTracking._image_generation_svg_tool_model(response_object)
+        svg_authoring_cost: Final = sum(
+            StandardBuiltInToolCostTracking._image_generation_svg_usage_cost(
+                output_item, svg_tool_model, custom_llm_provider
+            )
+            for output_item in completed_items
+        )
         tool_model: Final = StandardBuiltInToolCostTracking._image_generation_tool_model(response_object)
         if tool_model is None:
             verbose_logger.debug("Responses API image_generation_call has no tools[].model to price, billing 0.0")
-            return 0.0
+            return svg_authoring_cost
         token_cost: Final = StandardBuiltInToolCostTracking._image_generation_token_cost(
             response_object, tool_model, custom_llm_provider
         )
         if token_cost is not None:
-            return token_cost
-        return sum(
+            return token_cost + svg_authoring_cost
+        return svg_authoring_cost + sum(
             StandardBuiltInToolCostTracking._image_generation_call_cost(output_item, tool_model, custom_llm_provider)
             for output_item in completed_items
         )
@@ -637,7 +780,9 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        return any(_output_item_type(output_item) == output_type for output_item in response_object.output)
+        return any(
+            _output_item_type(output_item) == output_type for output_item in _response_output_items(response_object)
+        )
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
@@ -723,7 +868,7 @@ class StandardBuiltInToolCostTracking:
     def get_cost_for_vector_store(
         vector_store_usage: dict | None = None,
         provider: str | None = None,
-        model_info: dict | None = None,
+        model_info: dict[str, object] | None = None,
     ) -> float:
         """
         Calculate cost for vector store usage.

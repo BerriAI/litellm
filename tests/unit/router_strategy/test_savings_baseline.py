@@ -1,6 +1,7 @@
 import pytest
 
 from litellm.router import Router
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.savings_baseline import (
     Baseline,
     canonical_model,
@@ -11,7 +12,7 @@ from litellm.router_strategy.savings_baseline import (
 
 
 @pytest.fixture
-def parent() -> Router:
+def parent() -> RoutingContext:
     return Router(
         model_list=[
             {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
@@ -19,7 +20,7 @@ def parent() -> Router:
             {"model_name": "pool", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
             {"model_name": "pool", "litellm_params": {"model": "anthropic/claude-opus-5"}},
         ]
-    )
+    )._core_ctx
 
 
 class TestCanonicalModel:
@@ -107,7 +108,7 @@ class TestResolveBaseline:
         served; a dashboard counterfactual must not be able to take routing down."""
 
         class Exploding:
-            def deployments_named(self, model_name):
+            def registry(self):
                 raise RuntimeError("router is mid-reload")
 
         assert resolve_baseline(Exploding(), ["anything"]) is None
@@ -128,8 +129,8 @@ class TestDeploymentsPricedByBaseModel:
     """
 
     @staticmethod
-    def _router(*deployments: dict) -> Router:
-        return Router(model_list=list(deployments))
+    def _router(*deployments: dict) -> RoutingContext:
+        return Router(model_list=list(deployments))._core_ctx
 
     def test_model_info_base_model_is_preferred_over_the_deployment_name(self):
         router = self._router(
@@ -178,6 +179,42 @@ class TestDeploymentsPricedByBaseModel:
         )
         assert resolve_baseline(router, ["big"]).model == "azure/gpt-4.1"
 
+    def test_a_bedrock_profile_base_model_without_prices_is_priced_as_the_served_model(self, monkeypatch):
+        import litellm
+
+        cheap = "anthropic.savings-cheap-served-test"
+        big = "anthropic.savings-big-served-test"
+        profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/savings-test"
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.model_cost,
+                cheap: {
+                    "litellm_provider": "bedrock",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.02,
+                },
+                big: {
+                    "litellm_provider": "bedrock",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.03,
+                    "output_cost_per_token": 0.04,
+                },
+            },
+        )
+        router = self._router(
+            {"model_name": "by-arn", "litellm_params": {"model": f"bedrock/{profile}"}},
+            {"model_name": "cheap", "litellm_params": {"model": f"bedrock/converse/{cheap}"}},
+            {
+                "model_name": "big",
+                "litellm_params": {"model": f"bedrock/converse/{big}", "model_id": profile},
+                "model_info": {"base_model": f"bedrock/{profile}"},
+            },
+        )
+        assert resolve_baseline(router, ["cheap", "big"]).model == f"bedrock/converse/{big}"
+
 
 class TestDeploymentPricingOverrides:
     """A deployment may not be charged the public rate for the model it names."""
@@ -192,7 +229,7 @@ class TestDeploymentPricingOverrides:
                 {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-5"}},
             ]
         )
-        assert resolve_baseline(router, ["cheap", "top"]).model == "anthropic/claude-opus-5"
+        assert resolve_baseline(router._core_ctx, ["cheap", "top"]).model == "anthropic/claude-opus-5"
 
         overridden = Router(
             model_list=[
@@ -207,4 +244,4 @@ class TestDeploymentPricingOverrides:
                 {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-5"}},
             ]
         )
-        assert resolve_baseline(overridden, ["cheap", "top"]).model == "anthropic/claude-haiku-4-5"
+        assert resolve_baseline(overridden._core_ctx, ["cheap", "top"]).model == "anthropic/claude-haiku-4-5"

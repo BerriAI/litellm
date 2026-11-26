@@ -1,17 +1,27 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import asyncio
 import logging
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
+import anyio
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._internal_context import internal_sub_call
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_kept_on_follow_up,
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.mcp.chat_stream_round_billing import ChatStreamRoundBilling, engaged_round_billing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
+    MCPToolResult,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.round_billing import (
@@ -19,7 +29,7 @@ from litellm.responses.mcp.round_billing import (
     first_round_billed_on_failure,
     summed_cost_breakdown,
 )
-from litellm.types.utils import Message, ModelResponse
+from litellm.types.utils import Message, ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
@@ -34,9 +44,9 @@ class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
 
 def _add_mcp_metadata_to_response(
     response: ModelResponse | CustomStreamWrapper,
-    openai_tools: list | None,
-    tool_calls: list | None = None,
-    tool_results: list | None = None,
+    openai_tools: Sequence[object] | None,
+    tool_calls: Sequence[object] | None = None,
+    tool_results: Sequence[object] | None = None,
 ) -> None:
     """
     Add MCP metadata to response's provider_specific_fields.
@@ -132,6 +142,7 @@ async def acompletion_with_mcp(
             _skip_mcp_handler=True,
             **kwargs,
         )
+    raise_if_mcp_tool_choice_forces_a_gateway_server(kwargs.get("tool_choice"), mcp_tools_with_litellm_proxy, model)
 
     context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
     user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth
@@ -159,6 +170,9 @@ async def acompletion_with_mcp(
         deduplicated_mcp_tools,
         target_format="chat",
     )
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        kwargs.get("tool_choice"), tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -172,12 +186,13 @@ async def acompletion_with_mcp(
     # Remove keys that shouldn't be passed to acompletion
     clean_kwargs: Final = {k: v for k, v in kwargs.items() if k not in ["acompletion"]}
 
-    base_call_args: Final = {
+    base_call_args: Final[dict[str, object]] = {
         "model": model,
         "messages": messages,
         "tools": all_tools,
         "_skip_mcp_handler": True,  # Prevent recursion
         **clean_kwargs,
+        "tool_choice": allowed_tools_tool_choice_with_gateway_tools_as_functions(kwargs.get("tool_choice"), gateway),
     }
 
     # If not auto-executing, just make the call with transformed tools
@@ -222,19 +237,19 @@ async def acompletion_with_mcp(
 
             def __init__(
                 self,
-                stream_wrapper,
-                messages,
+                stream_wrapper: CustomStreamWrapper,
+                messages: list[object],
                 tool_server_map,
-                user_api_key_auth,
-                mcp_auth_header,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers,
-                litellm_call_id,
-                litellm_trace_id,
-                openai_tools,
-                base_call_args,
-                request_tags,
+                user_api_key_auth: "UserAPIKeyAuth | None",
+                mcp_auth_header: str | None,
+                mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+                oauth2_headers: dict[str, str] | None,
+                raw_headers: dict[str, str] | None,
+                litellm_call_id: str | None,
+                litellm_trace_id: str | None,
+                openai_tools: Sequence[object],
+                base_call_args: Mapping[str, object],
+                request_tags: list[str] | None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -250,17 +265,27 @@ async def acompletion_with_mcp(
                 self.base_call_args = base_call_args
                 self.request_tags = request_tags
                 self.collected_chunks: list[ModelResponseStream] = []
-                self.tool_calls: list | None = None
-                self.tool_results: list | None = None
+                self.tool_calls: Sequence[object] | None = None
+                self.tool_results: list[MCPToolResult] | None = None
                 self.complete_response: ModelResponse | None = None
                 self.stream_exhausted = False
                 self.tool_execution_done = False
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
+                self._round_billing: ChatStreamRoundBilling | None = engaged_round_billing(initial_stream.logging_obj)
+                self._unsent_usage_chunk: ModelResponseStream | None = None
 
             def __aiter__(self):
                 return self
+
+            def __del__(self) -> None:
+                self.release_abandoned()
+
+            def release_abandoned(self) -> None:
+                round_billing: Final[object] = getattr(self, "_round_billing", None)
+                if isinstance(round_billing, ChatStreamRoundBilling):
+                    round_billing.release_abandoned()
 
             def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
@@ -321,18 +346,54 @@ async def acompletion_with_mcp(
 
                 return chunk
 
-            async def _drain_inner_stream(self):
+            async def _drain_inner_stream(self) -> tuple[ModelResponseStream, ...]:
                 try:
-                    while True:
-                        await self._stream_iterator.__anext__()
-                except StopAsyncIteration:
-                    pass
+                    return tuple([chunk async for chunk in initial_stream])
                 except Exception:
                     logging.getLogger("LiteLLM").exception(
                         "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
                     )
+                    return ()
 
-            async def __anext__(self):
+            async def _complete_first_round(self) -> ModelResponseStream | None:
+                drained: Final = await self._drain_inner_stream()
+                if self._round_billing is not None:
+                    self._round_billing.complete_first_round()
+                usage_chunks: Final = tuple(
+                    chunk for chunk in drained if isinstance(getattr(chunk, "usage", None), Usage)
+                )
+                return usage_chunks[-1] if usage_chunks else None
+
+            async def _follow_up_or_release_first_round(self, usage_chunk: ModelResponseStream | None) -> None:
+                if self.tool_results and self.complete_response:
+                    await self._prepare_follow_up_call()
+                if self.follow_up_stream is not None:
+                    return
+                self._unsent_usage_chunk = usage_chunk
+                if self._round_billing is not None:
+                    self._round_billing.finish()
+
+            async def __anext__(self) -> ModelResponseStream:
+                round_billing: Final = self._round_billing
+                if round_billing is None:
+                    return await self._next_chunk()
+                with round_billing.armed_while_reading():
+                    try:
+                        return await self._next_chunk()
+                    except StopAsyncIteration:
+                        usage_chunk: Final = round_billing.finish()
+                        if usage_chunk is None:
+                            raise
+                        return usage_chunk
+                    except asyncio.CancelledError:
+                        with anyio.CancelScope(shield=True):
+                            await round_billing.bill_in_flight_round()
+                        raise
+                    except Exception:
+                        round_billing.fail()
+                        raise
+
+            async def _next_chunk(self) -> ModelResponseStream:
                 # Phase 1: Collect and yield initial stream chunks
                 if not self.stream_exhausted:
                     # Get the iterator from the stream wrapper
@@ -362,29 +423,22 @@ async def acompletion_with_mcp(
 
                         if is_final:
                             self.stream_exhausted = True
+                            usage_chunk: Final = await self._complete_first_round()
                             await self._process_tool_calls()
                             chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                            if self.tool_results and self.complete_response:
-                                await self._prepare_follow_up_call()
-                            # Drain inner stream so CustomStreamWrapper fires its
-                            # end-of-stream handler (dispatch_success_handlers →
-                            # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
-                            # yield one usage chunk before raising StopAsyncIteration.
-                            await self._drain_inner_stream()
+                            await self._follow_up_or_release_first_round(usage_chunk)
 
                         return chunk
                     except StopAsyncIteration:
                         self.stream_exhausted = True
+                        drained_usage_chunk: Final = await self._complete_first_round()
                         # Process tool calls after stream is exhausted
                         await self._process_tool_calls()
                         # If we have chunks, yield the final one with metadata
                         if self.collected_chunks:
                             final_chunk = self.collected_chunks[-1]
                             final_chunk = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
-                            # If we have tool results, prepare follow-up call
-                            if self.tool_results and self.complete_response:
-                                await self._prepare_follow_up_call()
-                            await self._drain_inner_stream()
+                            await self._follow_up_or_release_first_round(drained_usage_chunk)
                             return final_chunk
 
                 # Phase 2: Yield follow-up stream chunks if available
@@ -400,7 +454,6 @@ async def acompletion_with_mcp(
                         from litellm._logging import verbose_logger
 
                         verbose_logger.debug("Follow-up chunk yielded: %s", chunk)
-                        return chunk
                     except StopAsyncIteration:
                         self.follow_up_exhausted = True
                         from litellm._logging import verbose_logger
@@ -408,6 +461,10 @@ async def acompletion_with_mcp(
                         verbose_logger.debug("Follow-up stream exhausted")
                         # After follow-up stream is exhausted, check if we need to raise StopAsyncIteration
                         raise StopAsyncIteration
+                    client_chunk: Final = (
+                        chunk if self._round_billing is None else self._round_billing.client_chunk(chunk)
+                    )
+                    return await self._next_chunk() if client_chunk is None else client_chunk
 
                 # If we're here and follow_up_stream is None but we expected it, log a warning
                 if (
@@ -420,7 +477,11 @@ async def acompletion_with_mcp(
 
                     verbose_logger.warning("Follow-up stream was not created despite having tool results")
 
-                raise StopAsyncIteration
+                unsent_usage_chunk: Final = self._unsent_usage_chunk
+                if unsent_usage_chunk is None:
+                    raise StopAsyncIteration
+                self._unsent_usage_chunk = None
+                return unsent_usage_chunk
 
             async def _process_tool_calls(self):
                 """Process tool calls after streaming completes."""
@@ -441,8 +502,10 @@ async def acompletion_with_mcp(
                 if isinstance(complete_response, ModelResponse):
                     self.complete_response = complete_response
                     # Extract tool calls from complete response
-                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(
-                        response=complete_response
+                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                        LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=complete_response),
+                        kwargs.get("tool_choice"),
+                        gateway,
                     )
 
                     if self.tool_calls:
@@ -478,20 +541,28 @@ async def acompletion_with_mcp(
                 )
 
                 # Make follow-up call with streaming
-                follow_up_call_args: Final = dict(self.base_call_args)
-                follow_up_call_args["messages"] = follow_up_messages
-                follow_up_call_args["stream"] = True
-                # Ensure follow-up call doesn't trigger MCP handler again
-                follow_up_call_args["_skip_mcp_handler"] = True
+                follow_up_call_args: Final[dict[str, object]] = {
+                    **self.base_call_args,
+                    **allowed_tools_tool_choice_kept_on_follow_up(self.base_call_args.get("tool_choice")),
+                    "messages": follow_up_messages,
+                    "stream": True,
+                    "_skip_mcp_handler": True,
+                }
 
                 # Import litellm here to ensure we get the patched version
                 # This ensures the patch works correctly in tests
                 import litellm
 
+                earlier_rounds: Final = None if self._round_billing is None else self._round_billing.bank_first_round()
                 follow_up_response: Final = await litellm.acompletion(**follow_up_call_args)
 
                 # Ensure follow-up response is a CustomStreamWrapper
                 if isinstance(follow_up_response, CustomStreamWrapper):
+                    if earlier_rounds is not None:
+                        follow_up_response.bill_failure_after_earlier_rounds(earlier_rounds)
+                    follow_up_response.messages = follow_up_messages
+                    if self._round_billing is not None:
+                        self._round_billing.follow_up_started(follow_up_response.partial_response)
                     self.follow_up_stream = follow_up_response
                     from litellm._logging import verbose_logger
 
@@ -548,11 +619,13 @@ async def acompletion_with_mcp(
             def __aiter__(self):
                 return self._custom_iterator
 
+            async def aclose(self) -> None:
+                self._custom_iterator.release_abandoned()
+                await super().aclose()
+
             def __iter__(self):
                 # For synchronous iteration, create a sync wrapper
                 if self._sync_iterator is None:
-                    import asyncio
-
                     try:
                         self._sync_loop = asyncio.get_event_loop()
                     except RuntimeError:
@@ -573,7 +646,7 @@ async def acompletion_with_mcp(
 
         # Helper class to wrap async iterator for sync iteration
         class _SyncIteratorWrapper:
-            def __init__(self, async_iterator, loop):
+            def __init__(self, async_iterator, loop: asyncio.AbstractEventLoop):
                 self._async_iterator = async_iterator
                 self._loop = loop
                 self._iterator = None
@@ -606,14 +679,18 @@ async def acompletion_with_mcp(
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         initial_response: Final = await litellm_acompletion(**initial_call_args)
     first_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
 
     if not isinstance(initial_response, ModelResponse):
         return initial_response
 
-    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response)
+    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+        LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response),
+        kwargs.get("tool_choice"),
+        gateway,
+    )
 
     if not tool_calls:
         _add_mcp_metadata_to_response(
@@ -652,11 +729,14 @@ async def acompletion_with_mcp(
             tool_results=tool_results,
         )
 
-        follow_up_call_args: Final = dict(base_call_args)
-        follow_up_call_args["messages"] = follow_up_messages
-        follow_up_call_args["stream"] = stream
+        follow_up_call_args: Final = {
+            **base_call_args,
+            **allowed_tools_tool_choice_kept_on_follow_up(base_call_args.get("tool_choice")),
+            "messages": follow_up_messages,
+            "stream": stream,
+        }
 
-        with internal_sub_call():
+        with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
             final_response: Final = await litellm_acompletion(**follow_up_call_args)
 
     if not isinstance(final_response, ModelResponse):

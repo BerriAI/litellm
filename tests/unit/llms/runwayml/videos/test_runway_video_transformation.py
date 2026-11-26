@@ -3,9 +3,11 @@ Tests for RunwayML video generation transformation.
 """
 
 from unittest.mock import Mock
+from typing import Final
 
 import httpx
 import pytest
+from litellm.exceptions import UnsupportedParamsError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.runwayml.videos.transformation import (
@@ -15,6 +17,12 @@ from litellm.llms.runwayml.videos.transformation import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
+    params: Final = {"seed": 0, "duration": 6, "aspect_ratio": "1:1", "generate_audio": False}
+    assert RunwayMLVideoConfig().map_openai_params({"seconds": "5", **params}, "gen4_turbo", drop_params) == params
 
 
 class TestRunwayMLVideoTransformation:
@@ -372,3 +380,11 @@ class TestRunwayMLVideoTransformation:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = RunwayMLVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

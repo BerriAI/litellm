@@ -1,17 +1,35 @@
-from typing import Final, Literal
+import asyncio
+import base64
+import json
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import chain
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
+import responses
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 import litellm
-
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents
+from litellm.llms.vertex_ai.context_caching.transformation import transform_openai_messages_to_gemini_context_caching
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
+)
+from litellm.types.llms.openai import (
+    ChatCompletionAssistantMessage,
+    ChatCompletionImageUrlObject,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolParam,
+    ChatCompletionUserMessage,
 )
 
 
@@ -1702,7 +1720,17 @@ class TestContextCachingEndpoints:
                     "role": "system",
                     "content": "Tool results are authoritative.",
                     "cache_control": {"type": "ephemeral"},
-                }
+                },
+                {"role": "tool", "tool_call_id": "call_abc123", "content": "72F and sunny"},
+            ],
+            "system_before_an_uncached_reminder": [
+                {
+                    "role": "system",
+                    "content": "Tool results are authoritative.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"role": "system", "content": "2 of 8 turns used"},
+                {"role": "tool", "tool_call_id": "call_abc123", "content": "72F and sunny"},
             ],
         }[final_cached_role]
         return [
@@ -1726,7 +1754,7 @@ class TestContextCachingEndpoints:
             {"role": "user", "content": "What is the weather in Boston?"},
         ]
 
-    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system", "system_before_an_uncached_reminder"])
     def test_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(self, final_cached_role):
         """The cachedContents API rejects contents ending on an assistant or tool turn
         with HTTP 400 "Requests ending with a model turn are not supported", so the
@@ -1758,7 +1786,7 @@ class TestContextCachingEndpoints:
         self.mock_client.get.assert_not_called()
         self.mock_client.post.assert_not_called()
 
-    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system", "system_before_an_uncached_reminder"])
     @pytest.mark.asyncio
     async def test_async_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(self, final_cached_role):
         """Async variant: an unsupported terminal turn skips caching instead of failing."""
@@ -1787,6 +1815,97 @@ class TestContextCachingEndpoints:
         assert "tools" in returned_params
         self.mock_async_client.get.assert_not_called()
         self.mock_async_client.post.assert_not_called()
+
+
+def _marked_user(text: str) -> ChatCompletionUserMessage:
+    return {"role": "user", "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]}
+
+
+_SYSTEM: Final[ChatCompletionSystemMessage] = {"role": "system", "content": "sys"}
+_Q1: Final[ChatCompletionUserMessage] = {"role": "user", "content": "Q1"}
+_A1: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": "A1"}
+_A2: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": "A2"}
+_Q3: Final[ChatCompletionUserMessage] = {"role": "user", "content": "Q3"}
+_MARKED_Q2: Final = _marked_user("Q2")
+_MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
+    "role": "system",
+    "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("messages", "cache_accepts", "expected_cached", "expected_non_cached"),
+    [
+        pytest.param(
+            [_SYSTEM, _Q1, _A1, _MARKED_Q2],
+            True,
+            [_SYSTEM],
+            [_Q1, _A1, _MARKED_Q2],
+            id="marked-latest-turn",
+        ),
+        pytest.param(
+            [_MARKED_SYSTEM, _MARKED_Q2],
+            True,
+            [_MARKED_SYSTEM, _MARKED_Q2],
+            [],
+            id="fully-marked",
+        ),
+        pytest.param(
+            [_SYSTEM, _MARKED_Q2],
+            True,
+            [_SYSTEM, _MARKED_Q2],
+            [],
+            id="one-marked-turn",
+        ),
+        pytest.param(
+            [_MARKED_Q2],
+            True,
+            [_MARKED_Q2],
+            [],
+            id="one-marked-turn-without-system",
+        ),
+        pytest.param(
+            [_Q1, _A1, _MARKED_Q2],
+            True,
+            [],
+            [_Q1, _A1, _MARKED_Q2],
+            id="marked-latest-turn-without-system",
+        ),
+        pytest.param(
+            [_Q1, _A1, _MARKED_Q2, _A2, _Q3],
+            True,
+            [_Q1, _A1, _MARKED_Q2],
+            [_A2, _Q3],
+            id="marked-middle-turn",
+        ),
+        pytest.param(
+            [_SYSTEM, _Q1, _A1, _MARKED_Q2, _A2, _Q3],
+            False,
+            [_SYSTEM],
+            [_Q1, _A1, _MARKED_Q2, _A2, _Q3],
+            id="marked-middle-turn-the-cache-does-not-accept",
+        ),
+        pytest.param(
+            [_MARKED_SYSTEM, _Q1],
+            True,
+            [_MARKED_SYSTEM],
+            [_Q1],
+            id="marked-system",
+        ),
+    ],
+)
+def test_separate_cached_messages_caches_prefix_through_marked_block(
+    messages: list[AllMessageValues],
+    cache_accepts: bool,
+    expected_cached: list[AllMessageValues],
+    expected_non_cached: list[AllMessageValues],
+) -> None:
+    from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
+
+    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: cache_accepts)
+
+    assert cached_messages == expected_cached
+    assert non_cached_messages == expected_non_cached
 
 
 def test_cached_messages_end_on_supported_turn():
@@ -2507,3 +2626,1158 @@ def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
 
     assert cache_name == "cachedContents/created"
     assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
+
+
+def _caches_created_so_far(calls: list[httpx.Request]) -> dict[str, list[dict[str, str]]]:
+    return {
+        "cachedContents": [
+            {"name": "cachedContents/created", "displayName": json.loads(call.content)["displayName"]}
+            for call in calls
+            if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        ]
+    }
+
+
+def _recording_gemini_route(calls: list[httpx.Request]) -> Callable[[httpx.Request], httpx.Response]:
+    def route(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/cachedContents"):
+            return httpx.Response(
+                200, json=_caches_created_so_far(calls) if request.method == "GET" else _created_cache_body(3000)
+            )
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "OK"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 3000, "candidatesTokenCount": 1, "totalTokenCount": 3001},
+            },
+        )
+
+    return route
+
+
+def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_recording_gemini_route(calls))))
+
+
+async def _gemini_calls(
+    messages: list[AllMessageValues], use_async: bool, model: str = "gemini/gemini-flash-latest"
+) -> list[httpx.Request]:
+    calls: Final[list[httpx.Request]] = []
+    transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
+    if use_async:
+        await litellm.acompletion(
+            model=model,
+            messages=messages,
+            api_key="test-key",
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    else:
+        litellm.completion(
+            model=model,
+            messages=messages,
+            api_key="test-key",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+    return calls
+
+
+def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(local_model_cost_map) -> None:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "plain system prefix " * 3000, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+            {"role": "user", "content": "Reply with OK only."},
+        ],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert "system_instruction" not in generated
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_order(
+    local_model_cost_map, use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What's the weather in Tokyo today?"},
+            {"role": "assistant", "content": "Sunny."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "And Nagoya tomorrow? " * 3000, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+        ],
+        use_async,
+    )
+
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert not any(call.url.path.endswith("/cachedContents") for call in calls)
+    assert "cachedContent" not in generated
+    assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert [content["role"] for content in generated["contents"]] == ["user", "model", "user"]
+
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_reminder_after_the_marked_latest_turn_still_sends_the_conversation_uncached_in_order(
+    local_model_cost_map, use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What's the weather in Tokyo today?"},
+            {"role": "assistant", "content": "Sunny."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "And Nagoya tomorrow? " * 3000, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+            {"role": "system", "content": "2 of 8 turns used"},
+        ],
+        use_async,
+    )
+
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert not any(call.url.path.endswith("/cachedContents") for call in calls)
+    assert "cachedContent" not in generated
+    assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["contents"][-1]["parts"][-1] == {"text": "2 of 8 turns used"}
+    assert [content["role"] for content in generated["contents"]] == ["user", "model", "user"]
+
+
+async def _complete_each_turn(
+    turns: Sequence[list[AllMessageValues]], use_async: bool, tools: list[ChatCompletionToolParam] | None = None
+) -> list[httpx.Request]:
+    calls: Final[list[httpx.Request]] = []
+    transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
+    for messages in turns:
+        if use_async:
+            await litellm.acompletion(
+                model="gemini/gemini-flash-latest",
+                messages=messages,
+                tools=tools,
+                api_key="test-key",
+                client=AsyncHTTPHandler(transport=transport),
+            )
+        else:
+            litellm.completion(
+                model="gemini/gemini-flash-latest",
+                messages=messages,
+                tools=tools,
+                api_key="test-key",
+                client=HTTPHandler(client=httpx.Client(transport=transport)),
+            )
+    return calls
+
+
+def _created_caches(calls: Sequence[httpx.Request]) -> list[dict[str, object]]:
+    return [
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    ]
+
+
+def _generate_requests(calls: Sequence[httpx.Request]) -> list[dict[str, object]]:
+    return [json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent")]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_mark_on_each_newest_turn_caches_the_system_prompt_from_the_second_turn_and_the_third_turn_reads_it(
+    local_model_cost_map, use_async: bool
+) -> None:
+    system: Final[ChatCompletionSystemMessage] = {"role": "system", "content": "house rules " * 3000}
+    first_turn: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What's the weather in Tokyo today?"},
+        {"role": "assistant", "content": "Sunny."},
+    ]
+    second_turn: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "And Nagoya tomorrow?"},
+        {"role": "assistant", "content": "Cloudy."},
+    ]
+
+    calls: Final = await _complete_each_turn(
+        (
+            [system, _marked_user("What's the weather in Tokyo today?")],
+            [system, *first_turn, _marked_user("And Nagoya tomorrow?")],
+            [system, *first_turn, *second_turn, _marked_user("And Osaka on Friday?")],
+        ),
+        use_async,
+    )
+
+    created: Final = _created_caches(calls)
+    generated: Final = _generate_requests(calls)
+    assert [cache["system_instruction"] for cache in created] == [{"parts": [{"text": "house rules " * 3000}]}] * 2
+    assert "Tokyo" in json.dumps(created[0]["contents"])
+    assert "Tokyo" not in json.dumps(created[1].get("contents", []))
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 3
+    assert [[content["role"] for content in request["contents"]] for request in generated[1:]] == [
+        ["user", "model", "user"],
+        ["user", "model", "user", "model", "user"],
+    ]
+    assert generated[2]["contents"][-1]["parts"] == [{"text": "And Osaka on Friday?"}]
+
+
+@pytest.mark.parametrize(
+    "system_prompt", ["You are terse.", "house rules " * 3000], ids=["short-system-prompt", "big-system-prompt"]
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_repeat_of_one_marked_turn_under_an_unmarked_system_prompt_reads_the_gemini_cache_it_made(
+    local_model_cost_map, system_prompt: str, use_async: bool
+) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": system_prompt},
+        _marked_user("contract clause " * 3000),
+    ]
+
+    calls: Final = await _complete_each_turn((messages, messages), use_async)
+
+    created: Final = _created_caches(calls)
+    generated: Final = _generate_requests(calls)
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": system_prompt}]}
+    assert "contract clause" in json.dumps(created[0]["contents"])
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 2
+    assert all("contract clause" not in json.dumps(request["contents"]) for request in generated)
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_one_marked_turn_without_a_system_prompt_goes_into_the_gemini_cache_beside_tools_that_clear_the_floor(
+    local_model_cost_map, use_async: bool
+) -> None:
+    tools: Final[list[ChatCompletionToolParam]] = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"archive_lookup_{index}",
+                "description": "Looks up one archive record. " * 200,
+                "parameters": {"type": "object", "properties": {"record_id": {"type": "string"}}},
+            },
+        }
+        for index in range(4)
+    ]
+    messages: Final[list[AllMessageValues]] = [_marked_user("Which archive holds the Tokyo station logs?")]
+
+    calls: Final = await _complete_each_turn((messages, messages), use_async, tools=tools)
+
+    created: Final = _created_caches(calls)
+    generated: Final = _generate_requests(calls)
+    assert len(created) == 1
+    assert "Tokyo station logs" in json.dumps(created[0]["contents"])
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 2
+    assert all("Tokyo station logs" not in json.dumps(request["contents"]) for request in generated)
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_repeat_of_a_marked_system_prompt_and_marked_turn_reads_one_gemini_cache_of_both_with_the_turn_ttl(
+    local_model_cost_map, use_async: bool
+) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "house rules " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Which archive holds the Tokyo station logs?",
+                    "cache_control": {"type": "ephemeral", "ttl": "300s"},
+                }
+            ],
+        },
+    ]
+
+    calls: Final = await _complete_each_turn((messages, messages), use_async)
+
+    created: Final = _created_caches(calls)
+    generated: Final = _generate_requests(calls)
+    assert len(created) == 1
+    assert created[0]["ttl"] == "300s"
+    assert "Tokyo station logs" in json.dumps(created[0]["contents"])
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 2
+    assert all("Tokyo station logs" not in json.dumps(request.get("contents", [])) for request in generated)
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_reminder_inside_the_cached_prefix_stays_in_its_place_in_the_gemini_cache(
+    local_model_cost_map, use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        [
+            {"role": "system", "content": "shared policy " * 3000},
+            {"role": "user", "content": "question 1"},
+            {"role": "system", "content": "1 of 8 turns used"},
+            {"role": "assistant", "content": "answer 1"},
+            {"role": "user", "content": [{"type": "text", "text": "question 2", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "assistant", "content": "answer 2"},
+            {"role": "user", "content": "question 3"},
+        ],
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert created["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
+    assert created["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
+        {"role": "model", "parts": [{"text": "answer 1"}]},
+        {"role": "user", "parts": [{"text": "question 2"}]},
+    ]
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert generated["contents"] == [
+        {"role": "model", "parts": [{"text": "answer 2"}]},
+        {"role": "user", "parts": [{"text": "question 3"}]},
+    ]
+
+
+_SERVED_IMAGE: Final = b"\x89PNG\r\n\x1a\nserved"
+
+
+def _serve_images(monkeypatch: pytest.MonkeyPatch, status_code: int) -> list[str]:
+    fetched: Final[list[str]] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        fetched.append(str(request.url))
+        return httpx.Response(status_code, content=_SERVED_IMAGE, headers={"content-type": "image/png"})
+
+    transport: Final = httpx.MockTransport(serve)
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=transport)))
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=transport))
+    return fetched
+
+
+@pytest.fixture
+def served_images(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    return _serve_images(monkeypatch, 200)
+
+
+@pytest.fixture
+def missing_images(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    return _serve_images(monkeypatch, 404)
+
+
+_CACHED_NOTES: Final[AllMessageValues] = {
+    "role": "user",
+    "content": [{"type": "text", "text": "Background notes. " * 3000, "cache_control": {"type": "ephemeral"}}],
+}
+
+
+def _conversation_cached_through_notes(*opening: AllMessageValues) -> list[AllMessageValues]:
+    return [
+        *opening,
+        _CACHED_NOTES,
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "What color was the button?"},
+    ]
+
+
+def _button_question(image_url: ChatCompletionImageUrlObject) -> AllMessageValues:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What does this button say?"},
+            {"type": "image_url", "image_url": image_url},
+        ],
+    }
+
+
+def _button_link_opening(url: str) -> tuple[AllMessageValues, ...]:
+    return _button_question({"url": url}), {"role": "assistant", "content": "Deploy."}
+
+
+def _system_link_opening(url: str) -> tuple[AllMessageValues, ...]:
+    return (
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Match our house style."},
+                {"type": "image_url", "image_url": {"url": url}},
+            ],
+        },
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_image_before_the_mark_reaches_the_gemini_cache_inlined(
+    local_model_cost_map: None, served_images: list[str], use_async: bool
+) -> None:
+    image_url: Final = f"https://images.example.com/button-{use_async}.png"
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(
+            _button_question({"url": image_url}), {"role": "assistant", "content": "Deploy."}
+        ),
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert served_images == [image_url]
+    assert created["contents"][0]["parts"][1] == {
+        "inline_data": {"data": base64.b64encode(_SERVED_IMAGE).decode(), "mime_type": "image/png"}
+    }
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert [content["role"] for content in generated["contents"]] == ["model", "user"]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_image_the_proxy_cannot_fetch_fails_the_gemini_request_after_one_fetch(
+    local_model_cost_map: None, missing_images: list[str], use_async: bool
+) -> None:
+    image_url: Final = f"https://images.example.com/missing-{use_async}.png"
+
+    with pytest.raises(litellm.BadRequestError):
+        await _gemini_calls(
+            _conversation_cached_through_notes(
+                _button_question({"url": image_url}), {"role": "assistant", "content": "Deploy."}
+            ),
+            use_async,
+        )
+
+    assert missing_images == [image_url]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_an_image_in_a_cached_system_message_is_never_downloaded(
+    local_model_cost_map: None, missing_images: list[str], use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse."},
+                    {"type": "image_url", "image_url": {"url": f"https://images.example.com/logo-{use_async}.png"}},
+                ],
+            }
+        ),
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert missing_images == []
+    assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert [content["role"] for content in generated["contents"]] == ["model", "user"]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_system_image_is_inlined_into_the_gemini_cache_when_the_system_prompt_is_sent_as_a_turn(
+    local_model_cost_map: None, served_images: list[str], use_async: bool
+) -> None:
+    image_url: Final = f"https://images.example.com/house-style-{use_async}.png"
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(*_system_link_opening(image_url)),
+        use_async,
+        model="gemini/house-style-tuned-model",
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert served_images == [image_url]
+    assert "system_instruction" not in created
+    assert created["contents"][0]["parts"][1] == {
+        "inline_data": {"data": base64.b64encode(_SERVED_IMAGE).decode(), "mime_type": "image/png"}
+    }
+
+
+@pytest.mark.parametrize("api_version", ["v1beta", "v1"])
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_files_api_file_before_the_mark_reaches_the_gemini_cache_as_a_link(
+    local_model_cost_map: None, served_images: list[str], use_async: bool, api_version: str
+) -> None:
+    file_uri: Final = f"https://generativelanguage.googleapis.com/{api_version}/files/button-{use_async}"
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(
+            _button_question({"url": file_uri, "format": "image/png"}), {"role": "assistant", "content": "Deploy."}
+        ),
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert served_images == []
+    assert created["contents"][0]["parts"][1] == {"file_data": {"mime_type": "image/png", "file_uri": file_uri}}
+
+
+async def _vertex_cache_check(
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    model: str,
+    use_async: bool,
+    litellm_params: Mapping[str, object] | None = None,
+) -> tuple[tuple[list[AllMessageValues], dict[str, object], str | None], list[httpx.Request]]:
+    calls: Final[list[httpx.Request]] = []
+    transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
+    request: Final = {
+        "messages": messages,
+        "optional_params": optional_params,
+        "api_key": "",
+        "api_base": None,
+        "model": model,
+        "timeout": 30.0,
+        "logging_obj": MagicMock(),
+        "custom_llm_provider": "vertex_ai",
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "vertex_auth_header": "test-token",
+        "litellm_params": litellm_params,
+    }
+    result: Final = (
+        await ContextCachingEndpoints().async_check_and_create_cache(
+            client=AsyncHTTPHandler(transport=transport), **request
+        )
+        if use_async
+        else ContextCachingEndpoints().check_and_create_cache(
+            client=HTTPHandler(client=httpx.Client(transport=transport)), **request
+        )
+    )
+    return result, calls
+
+
+_PRIVATE_BUTTON_METADATA: Final = {"host": "storage.googleapis.com", "path": "/storage/v1/b/private-bucket/o/button"}
+
+
+def _service_account_credentials() -> str:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "request-project",
+            "private_key_id": "request-key",
+            "private_key": key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            ).decode(),
+            "client_email": "cache@request-project.iam.gserviceaccount.com",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_private_extensionless_gs_image_before_the_mark_is_typed_with_the_request_credentials(
+    use_async: bool,
+) -> None:
+    with responses.RequestsMock() as google_auth, respx.mock(using="httpcore") as gcs:
+        google_auth.add(
+            responses.POST,
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "request-token", "expires_in": 3600, "token_type": "Bearer"},
+        )
+        metadata: Final = gcs.get(**_PRIVATE_BUTTON_METADATA).respond(json={"contentType": "image/png"})
+        _, calls = await _vertex_cache_check(
+            _conversation_cached_through_notes(
+                _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
+            ),
+            {},
+            "gemini-2.5-flash",
+            use_async,
+            litellm_params={"vertex_project": "request-project", "vertex_credentials": _service_account_credentials()},
+        )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert [call.request.headers.get("Authorization") for call in metadata.calls] == ["Bearer request-token"]
+    assert created["contents"][0]["parts"][1] == {
+        "file_data": {"mime_type": "image/png", "file_uri": "gs://private-bucket/button"}
+    }
+
+
+def _runs_on_an_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+async def test_an_async_gemini_cache_types_an_extensionless_gs_image_off_the_event_loop() -> None:
+    lookups_on_the_loop: Final[list[bool]] = []
+
+    def serve_metadata(request: httpx.Request) -> httpx.Response:
+        lookups_on_the_loop.append(_runs_on_an_event_loop())
+        return httpx.Response(200, json={"contentType": "image/png"})
+
+    with respx.mock(using="httpcore") as gcs:
+        gcs.get(**_PRIVATE_BUTTON_METADATA).mock(side_effect=serve_metadata)
+        (_, _, cache_name), _ = await _vertex_cache_check(
+            _conversation_cached_through_notes(
+                _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
+            ),
+            {},
+            "gemini-2.5-flash",
+            use_async=True,
+        )
+
+    assert cache_name == "cachedContents/created"
+    assert lookups_on_the_loop == [False]
+
+
+@pytest.mark.parametrize(
+    ("model", "opening"),
+    [
+        ("gemini-2.5-flash", _button_link_opening("https://images.example.com/button.png")),
+        (
+            "gemini-2.5-flash",
+            (
+                _button_question({"url": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "format": "video/mp4"}),
+                {"role": "assistant", "content": "Deploy."},
+            ),
+        ),
+        (
+            "gemini-2.5-flash",
+            (
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this spec."},
+                        {"type": "file", "file": {"file_id": "https://docs.example.com/spec.pdf"}},
+                    ],
+                },
+                {"role": "assistant", "content": "Deploy."},
+            ),
+        ),
+        ("house-style-tuned-model", _system_link_opening("https://images.example.com/house-style.png")),
+    ],
+    ids=["image-link", "typed-video-link", "pdf-file-link", "system-image-link-sent-as-a-turn"],
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with_its_tools(
+    local_model_cost_map: None,
+    served_images: list[str],
+    model: str,
+    opening: tuple[AllMessageValues, ...],
+    use_async: bool,
+) -> None:
+    messages: Final = _conversation_cached_through_notes(*opening)
+    tools: Final = [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
+
+    result, calls = await _vertex_cache_check(messages, {"tools": tools}, model, use_async)
+
+    assert result == (messages, {"tools": tools}, None)
+    assert served_images == []
+    assert calls == []
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_link_vertex_fetches_itself_leaves_the_turns_uncached_and_caches_the_system_prompt_alone(
+    local_model_cost_map: None, served_images: list[str], use_async: bool
+) -> None:
+    system: Final[ChatCompletionSystemMessage] = {"role": "system", "content": "house rules " * 3000}
+    turns: Final = _conversation_cached_through_notes(*_button_link_opening("https://images.example.com/button.png"))
+
+    (uncached, _, cache_name), calls = await _vertex_cache_check([system, *turns], {}, "gemini-2.5-flash", use_async)
+
+    created: Final = [json.loads(call.content) for call in calls if call.method == "POST"]
+    assert cache_name == "cachedContents/created"
+    assert uncached == turns
+    assert [cache["system_instruction"] for cache in created] == [{"parts": [{"text": "house rules " * 3000}]}]
+    assert "images.example.com" not in json.dumps(created)
+    assert served_images == []
+
+
+@pytest.mark.parametrize(
+    ("opening_for", "url_template", "downloads"),
+    [
+        (_system_link_opening, "https://images.example.com/vertex-house-style-{}.png", 0),
+        (_button_link_opening, "http://images.example.com/plain-button-{}.png", 1),
+        (_button_link_opening, "https://images.example.com/untyped-button-{}", 1),
+    ],
+    ids=["system-image-link", "plain-http-image-link", "untyped-image-link"],
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_vertex_caches_a_prefix_whose_web_media_it_downloads_or_reads_as_instruction(
+    local_model_cost_map: None,
+    served_images: list[str],
+    opening_for: Callable[[str], tuple[AllMessageValues, ...]],
+    url_template: str,
+    downloads: int,
+    use_async: bool,
+) -> None:
+    url: Final = url_template.format(use_async)
+
+    result, _ = await _vertex_cache_check(
+        _conversation_cached_through_notes(*opening_for(url)), {}, "gemini-2.5-flash", use_async
+    )
+
+    assert result[2] == "cachedContents/created"
+    assert served_images == [url] * downloads
+
+
+def _cached_conversation_with_tool_arguments(arguments: str) -> list[Mapping[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "cached prefix " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": arguments}}
+            ],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Sunny", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "Thanks.", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": "Reply with OK only."},
+    ]
+
+
+async def _complete_sync(request: Mapping[str, object], calls: list[httpx.Request]) -> None:
+    litellm.completion(**request, client=_recording_gemini_client(calls))
+
+
+async def _complete_async(request: Mapping[str, object], calls: list[httpx.Request]) -> None:
+    await litellm.acompletion(
+        **request, client=AsyncHTTPHandler(transport=httpx.MockTransport(_recording_gemini_route(calls)))
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_cache_creation_drops_tool_call_arguments_gemini_cannot_use_when_drop_params_is_set(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    await complete(
+        {
+            "model": "gemini/gemini-flash-latest",
+            "messages": _cached_conversation_with_tool_arguments('["Boston"]'),
+            "api_key": "test-key",
+            "drop_params": True,
+        },
+        calls,
+    )
+
+    created: Final = next(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    function_call: Final = created["contents"][1]["parts"][0]["function_call"]
+    assert (function_call["name"], function_call["args"]) == ("get_weather", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_strict_request_rejects_tool_call_arguments_even_when_a_lenient_request_cached_that_history(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    request: Final = {
+        "model": "gemini/gemini-flash-latest",
+        "messages": _cached_conversation_with_tool_arguments('["Boston"]'),
+        "api_key": "test-key",
+    }
+    await complete({**request, "drop_params": True}, calls)
+
+    with pytest.raises(litellm.BadRequestError, match="get_weather"):
+        await complete({**request, "drop_params": False}, calls)
+
+
+@pytest.mark.parametrize("empty_content", [pytest.param("", id="empty_string"), pytest.param(None, id="null")])
+def test_a_cached_segment_ending_on_an_empty_user_message_caches_no_blank_user_turn(empty_content: str | None) -> None:
+    cached: Final = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-2.5-pro",
+        messages=cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": empty_content},
+            ],
+        ),
+        custom_llm_provider="gemini",
+        cache_key="test-cache-key",
+        ttl=None,
+        vertex_project=None,
+        vertex_location=None,
+    )
+
+    assert {"text": " "} not in chain.from_iterable(content["parts"] for content in cached["contents"])
+
+
+_CACHED_PREFIX_WITH_A_REMINDER: Final[tuple[AllMessageValues, ...]] = (
+    {
+        "role": "system",
+        "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}],
+    },
+    {"role": "user", "content": [{"type": "text", "text": "question 1", "cache_control": {"type": "ephemeral"}}]},
+    {"role": "system", "content": "1 of 8 turns used"},
+)
+
+
+def _later_turn_with_a_reminder(turn: int) -> tuple[AllMessageValues, ...]:
+    return (
+        {"role": "assistant", "content": f"answer {turn - 1}"},
+        {"role": "user", "content": f"question {turn}"},
+        {"role": "system", "content": f"{turn} of 8 turns used"},
+    )
+
+
+def _cached_conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list[AllMessageValues]:
+    later_turns: Final = tuple(chain.from_iterable(map(_later_turn_with_a_reminder, range(2, user_turns + 1))))
+    return [*_CACHED_PREFIX_WITH_A_REMINDER, *later_turns]
+
+
+def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_reaches_the_request(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for user_turns in (1, 2):
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            messages=_cached_conversation_with_a_reminder_after_each_user_turn(user_turns),
+            api_key="test-key",
+            client=_recording_gemini_client(calls),
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
+    assert created[0]["contents"] == [{"role": "user", "parts": [{"text": "question 1"}]}]
+    assert generated[1]["cachedContent"] == "cachedContents/created"
+    assert "system_instruction" not in generated[1]
+    assert generated[1]["contents"] == [
+        {"role": "user", "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
+        {"role": "model", "parts": [{"text": "answer 1"}]},
+        {"role": "user", "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}]},
+    ]
+
+
+def _uncached_conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list[AllMessageValues]:
+    later_turns: Final = tuple(chain.from_iterable(map(_later_turn_with_a_reminder, range(2, user_turns + 1))))
+    return [
+        {"role": "system", "content": "shared policy " * 3000},
+        {"role": "user", "content": "question 1"},
+        {"role": "system", "content": "1 of 8 turns used"},
+        *later_turns,
+    ]
+
+
+def test_a_cache_mark_on_the_last_reminder_keeps_one_gemini_cache_and_the_reminder_in_place(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for user_turns in (1, 2):
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            messages=_uncached_conversation_with_a_reminder_after_each_user_turn(user_turns),
+            cache_control_injection_points=[{"location": "message", "index": -1}],
+            api_key="test-key",
+            client=_recording_gemini_client(calls),
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
+    assert generated[1]["cachedContent"] == "cachedContents/created"
+    assert generated[1]["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
+        {"role": "model", "parts": [{"text": "answer 1"}]},
+        {"role": "user", "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}]},
+    ]
+
+
+def _cached_question_then_a_reminder_marked(
+    reminder_mark: Mapping[str, str], user_turns: int
+) -> list[AllMessageValues]:
+    later_turns: Final = tuple(chain.from_iterable(map(_later_turn_with_a_reminder, range(2, user_turns + 1))))
+    return [
+        {"role": "system", "content": "shared policy " * 3000},
+        {"role": "user", "content": [{"type": "text", "text": "question 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "system", "content": [{"type": "text", "text": "1 of 8 turns used", "cache_control": reminder_mark}]},
+        *later_turns,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_ttl_on_a_reminder_that_ends_the_cached_block_still_sets_how_long_the_gemini_cache_lives(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for user_turns in (1, 2):
+        await complete(
+            {
+                "model": "gemini/gemini-flash-latest",
+                "messages": _cached_question_then_a_reminder_marked({"type": "ephemeral", "ttl": "5m"}, user_turns),
+                "api_key": "test-key",
+            },
+            calls,
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert [("question 1" in json.dumps(body["contents"]), body.get("ttl")) for body in created] == [(True, "300s")]
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_reminder_ttl_gets_its_own_gemini_cache_beside_one_made_without_a_ttl(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for reminder_mark in ({"type": "ephemeral"}, {"type": "ephemeral", "ttl": "5m"}):
+        await complete(
+            {
+                "model": "gemini/gemini-flash-latest",
+                "messages": _cached_question_then_a_reminder_marked(reminder_mark, 2),
+                "api_key": "test-key",
+            },
+            calls,
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert [body.get("ttl") for body in created] == [None, "300s"]
+    assert created[0]["displayName"] != created[1]["displayName"]
+
+
+def test_a_cached_block_from_a_later_turn_that_ends_on_a_reminder_goes_out_uncached_and_in_order(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "shared policy"},
+            {"role": "user", "content": "question 1"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "answer 1 " * 3000, "cache_control": {"type": "ephemeral"}}],
+            },
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "1 of 8 turns used", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "question 2"},
+        ],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    assert not any(call.url.path.endswith("/cachedContents") for call in calls)
+    (generated,) = (json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert generated["system_instruction"] == {"parts": [{"text": "shared policy"}]}
+    assert generated["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}]},
+        {"role": "model", "parts": [{"text": "answer 1 " * 3000}]},
+        {"role": "user", "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}, {"text": "question 2"}]},
+    ]
+
+
+def test_a_video_in_a_system_message_after_the_cached_block_is_a_bad_request_before_any_cache_call(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    messages: Final[list[AllMessageValues]] = [
+        *_cached_conversation_with_a_reminder_after_each_user_turn(1),
+        {"role": "assistant", "content": "answer 1"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Watch this first"},
+                {"type": "video_url", "video_url": {"url": "https://videos.example/clip.mp4"}},
+            ],
+        },
+        {"role": "user", "content": "Describe the clip"},
+    ]
+
+    with pytest.raises(litellm.BadRequestError, match="system instructions take text only"):
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            messages=messages,
+            api_key="test-key",
+            client=_recording_gemini_client(calls),
+        )
+    assert calls == []
+
+
+def _last_generated_contents(calls: list[httpx.Request]) -> list[object]:
+    return next(json.loads(call.content) for call in reversed(calls) if call.url.path.endswith(":generateContent"))[
+        "contents"
+    ]
+
+
+def _last_gemini_request_contents(messages: list[AllMessageValues], model: str) -> object:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(model=model, messages=messages, api_key="test-key", client=_recording_gemini_client(calls))
+    return _last_generated_contents(calls)[-1]
+
+
+def test_a_model_without_system_messages_gets_a_later_reminder_the_same_way_with_or_without_a_cache(
+    local_model_cost_map,
+) -> None:
+    later_turns: Final[list[AllMessageValues]] = [
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "question 2"},
+        {"role": "system", "content": "2 of 8 turns used"},
+    ]
+    cached: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}]},
+        *later_turns,
+    ]
+    uncached: Final[list[AllMessageValues]] = [{"role": "user", "content": "shared policy " * 3000}, *later_turns]
+
+    with_cache: Final = _last_gemini_request_contents(cached, "gemini/gemma-3-27b-it")
+
+    assert with_cache == _last_gemini_request_contents(uncached, "gemini/gemma-3-27b-it")
+    assert with_cache == {"role": "user", "parts": [{"text": "question 2"}, {"text": "2 of 8 turns used"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_model_without_system_messages_takes_a_video_in_a_later_system_message_the_same_way_with_or_without_a_cache(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    later_turns: Final[list[AllMessageValues]] = [
+        {"role": "assistant", "content": "answer 1"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Watch this first"},
+                {"type": "video_url", "video_url": {"url": "gs://videos-example/clip.mp4"}},
+            ],
+        },
+        {"role": "user", "content": "Describe the clip"},
+    ]
+    cached: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}]},
+        *later_turns,
+    ]
+    uncached: Final[list[AllMessageValues]] = [{"role": "user", "content": "shared policy " * 3000}, *later_turns]
+    cached_calls: Final[list[httpx.Request]] = []
+    uncached_calls: Final[list[httpx.Request]] = []
+
+    await complete({"model": "gemini/gemma-3-27b-it", "messages": cached, "api_key": "test-key"}, cached_calls)
+    await complete({"model": "gemini/gemma-3-27b-it", "messages": uncached, "api_key": "test-key"}, uncached_calls)
+
+    assert _last_generated_contents(cached_calls)[-1] == _last_generated_contents(uncached_calls)[-1]
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+@pytest.fixture
+def search_with_functions_model(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setitem(
+        litellm.model_cost, "gemini-3-search-next-to-functions", {"supports_search_tools_with_functions": True}
+    )
+    return "gemini/gemini-3-search-next-to-functions"
+
+
+def _cached_request_with_search_and_functions(model: str) -> dict[str, object]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "cached prefix " * 3000, "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "Search the web, then reply with OK only."},
+        ],
+        "tools": [{"type": "web_search"}, _GET_WEATHER_TOOL],
+        "api_key": "test-key",
+    }
+
+
+def _created_and_generated_bodies(calls: list[httpx.Request]) -> tuple[dict, dict]:
+    created: Final = next(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    return created, generated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_search_kept_next_to_functions_goes_into_the_gemini_cache_with_its_server_side_tool_flag(
+    search_with_functions_model: str,
+    complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]],
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    await complete(_cached_request_with_search_and_functions(search_with_functions_model), calls)
+
+    created, generated = _created_and_generated_bodies(calls)
+    assert {key for tool in created["tools"] for key in tool} == {"function_declarations", "googleSearch"}
+    assert created["toolConfig"] == {"includeServerSideToolInvocations": True}
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert "toolConfig" not in generated
+    assert "tools" not in generated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_caller_who_turns_server_side_tools_off_caches_functions_without_search(
+    search_with_functions_model: str,
+    complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]],
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    await complete(
+        {**_cached_request_with_search_and_functions(search_with_functions_model), "includeServerSideToolInvocations": False},
+        calls,
+    )
+
+    created, generated = _created_and_generated_bodies(calls)
+    assert {key for tool in created["tools"] for key in tool} == {"function_declarations"}
+    assert "toolConfig" not in created
+    assert "toolConfig" not in generated

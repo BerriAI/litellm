@@ -37,13 +37,16 @@ import litellm.batches.main as bm
 import asyncio
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 import httpx
+import openai
 import respx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
+from openai.types.batch import Batch
+from litellm.types.utils import LiteLLMBatch, admin_api_key_secret_reference
 
 
 # --------------------------------------------------------------------------- #
@@ -730,34 +733,30 @@ def test_resolve_timeout__httpx_timeout_returns_float_read():
     assert resolved == 99.0
 
 
-def test_retrieve__forwards_trusted_model_credentials_into_litellm_params(seams):
+def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams: Seams) -> None:
     """The batch's cost is computed by reading its output file after the retrieve, and
-    Bedrock resolves that bucket only from this immutable snapshot. get_litellm_params has
-    a fixed signature that drops it, so without re-adding it here the snapshot never
-    reaches the logging object and cost accounting fails on a bucket that is configured."""
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket"})
+    that read finds the Bedrock bucket in these litellm_params. Dropping them fails cost
+    accounting on a bucket the deployment has configured."""
     logging_obj = MagicMock()
 
     bm.retrieve_batch(
         batch_id="batch-1",
         custom_llm_provider="openai",
         litellm_logging_obj=logging_obj,
-        _litellm_internal_model_credentials=snapshot,
+        s3_bucket_name="configured-bucket",
+        s3_output_bucket_name="output-bucket",
+        allow_legacy_cloud_file_ids=True,
     )
 
     litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is snapshot
-
-
-def test_retrieve__omits_trusted_model_credentials_when_not_supplied(seams):
-    """A retrieve with no snapshot must not invent an empty one, which would read as a
-    configured bucket of nothing."""
-    logging_obj = MagicMock()
-
-    bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="openai", litellm_logging_obj=logging_obj)
-
-    litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert "_litellm_internal_model_credentials" not in litellm_params
+    assert {
+        key: litellm_params[key]
+        for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
+    } == {
+        "s3_bucket_name": "configured-bucket",
+        "s3_output_bucket_name": "output-bucket",
+        "allow_legacy_cloud_file_ids": True,
+    }
 
 
 # =========================================================================== #
@@ -856,7 +855,7 @@ async def test_batch_logging_azure_credentials_regression():
         "timeout": 600,
     }
 
-    batch_output = b'{"id": "batch_req_1", "custom_id": "request-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-azure", "object": "chat.completion", "model": "gpt-4", "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40}}}}\n'
+    batch_output = b'{"id": "batch_req_1", "custom_id": "request-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-azure", "object": "chat.completion", "model": "gpt-4.1", "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40}}}}\n'
 
     print("\n1. Testing credential extraction...")
 
@@ -1204,3 +1203,482 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_route.call_count == 1
     assert delete_response.id == "file-output123"
     assert delete_response.deleted is True
+
+
+async def _create_batch(sync_mode: bool, batch: Mapping[str, object]) -> LiteLLMBatch:
+    if sync_mode:
+        return litellm.create_batch(**batch)
+    return await litellm.acreate_batch(**batch)
+
+
+def _batch(custom_llm_provider: str, api_base: str, **overrides: object) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "completion_window": "24h",
+            "endpoint": "/v1/chat/completions",
+            "input_file_id": "file-abc123",
+            "custom_llm_provider": custom_llm_provider,
+            "api_key": "sk-test",
+            "api_base": api_base,
+            "api_version": "2025-04-01-preview",
+            **overrides,
+        }
+    )
+
+
+def _created_batch() -> httpx.Response:
+    return httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
+
+
+def _resend_at_once(**_: object) -> float:
+    return 0.0
+
+
+@pytest.fixture
+def resend_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", _resend_at_once)
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize(
+    "first_answer",
+    [
+        pytest.param(lambda: httpx.Response(429, json={"error": {"message": "slow down"}}), id="429"),
+        pytest.param(lambda: httpx.Response(503, json={"error": {"message": "overloaded"}}), id="503"),
+        pytest.param(lambda: httpx.ConnectError("connection refused"), id="connect-error"),
+        pytest.param(lambda: httpx.ConnectTimeout("no connection in time"), id="connect-timeout"),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_batch_create_is_resent_when_a_resend_cannot_create_a_duplicate(
+    first_answer: Callable[[], httpx.Response | Exception],
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=[first_answer(), _created_batch()])
+
+    created: Final = await _create_batch(sync_mode, _batch(custom_llm_provider, api_base))
+
+    assert create_route.call_count == 2
+    assert created.id == _OPENAI_BATCH_JSON["id"]
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize(
+    "first_answer, expected_error",
+    [
+        pytest.param(lambda: httpx.ReadTimeout("no answer in time"), openai.APITimeoutError, id="read-timeout"),
+        pytest.param(
+            lambda: httpx.RemoteProtocolError("connection dropped mid-answer"),
+            openai.APIConnectionError,
+            id="remote-protocol-error",
+        ),
+        pytest.param(
+            lambda: httpx.Response(
+                503, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}
+            ),
+            openai.APIStatusError,
+            id="503-should-not-retry",
+        ),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_batch_create_is_sent_once_when_the_provider_may_have_created_it(
+    first_answer: Callable[[], httpx.Response | Exception],
+    expected_error: type[Exception],
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=[first_answer(), _created_batch()])
+
+    with pytest.raises(expected_error):
+        await _create_batch(sync_mode, _batch(custom_llm_provider, api_base))
+
+    assert create_route.call_count == 1
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("max_retries, expected_posts", [(0, 1), (1, 2), (None, 3)])
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_rate_limited_batch_create_is_resent_up_to_the_callers_max_retries(
+    max_retries: int | None,
+    expected_posts: int,
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+    explicit_max_retries: Final = {} if max_retries is None else {"max_retries": max_retries}
+
+    with pytest.raises(openai.RateLimitError):
+        await _create_batch(
+            sync_mode,
+            _batch(custom_llm_provider, api_base, extra_headers={"x-request-tag": "kept"}, **explicit_max_retries),
+        )
+
+    assert create_route.call_count == expected_posts
+    assert [call.request.headers["x-stainless-retry-count"] for call in create_route.calls] == [
+        str(retries_taken) for retries_taken in range(expected_posts)
+    ]
+    assert {call.request.headers["x-request-tag"] for call in create_route.calls} == {"kept"}
+
+
+@pytest.mark.asyncio
+async def test_router_cancel_batch_sends_the_token_behind_an_admin_oidc_env_api_key_on_each_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token-one")
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-4o", "api_key": "oidc/env/OPENAI_SA_TOKEN"}}
+        ]
+    )
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    await router.acancel_batch(model="gpt", batch_id="batch_abc123")
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token-two")
+    cancelled: Final = await router.acancel_batch(model="gpt", batch_id="batch_abc123")
+
+    assert [call.request.headers["Authorization"] for call in cancel_route.calls] == [
+        "Bearer env-token-one",
+        "Bearer env-token-two",
+    ]
+    assert cancelled.status == "cancelling"
+
+
+def test_cancel_batch_sends_the_token_behind_an_admin_oidc_env_api_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token")
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    litellm.cancel_batch(
+        batch_id="batch_abc123",
+        custom_llm_provider="openai",
+        api_key=admin_api_key_secret_reference({"api_key": "oidc/env/OPENAI_SA_TOKEN"})["api_key"],
+    )
+
+    assert cancel_route.calls.last.request.headers["Authorization"] == "Bearer env-token"
+
+
+VERTEX_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+VERTEX_IDENTITY: Final = MappingProxyType(
+    {"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"}
+)
+VERTEX_PROXY_METADATA: Final = MappingProxyType({**VERTEX_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+VERTEX_BATCH_FILE: Final = "gs://bucket/publishers/google/models/gemini-3.8-flash/file-uuid"
+VERTEX_SENT_JOB: Final = TypeAdapter(Mapping[str, object])
+VERTEX_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+VERTEX_BATCH_JOBS_URL: Final = (
+    "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/batchPredictionJobs"
+)
+
+
+async def _vertex_batch_job_sent(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, batch_metadata: Mapping[str, object]
+) -> Mapping[str, object]:
+    import litellm.llms.vertex_ai.batches.handler as vertex_batches
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    reply: Final = MagicMock(
+        side_effect=lambda _request: httpx.Response(
+            200,
+            json={
+                "name": "projects/proj/locations/us-central1/batchPredictionJobs/123",
+                "state": "JOB_STATE_PENDING",
+                "createTime": "2026-10-29T00:00:00Z",
+            },
+        )
+    )
+    transport: Final = httpx.MockTransport(reply)
+    handler: Final = vertex_batches.VertexAIBatchPrediction(gcs_bucket_name="bucket")
+    monkeypatch.setattr(handler, "_ensure_access_token", lambda **_: ("token", "proj"))
+    monkeypatch.setattr(bm, "vertex_ai_batches_instance", handler)
+    monkeypatch.setattr(
+        vertex_batches, "get_httpx_client", lambda **_: HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    monkeypatch.setattr(vertex_batches, "get_async_httpx_client", lambda **_: AsyncHTTPHandler(transport=transport))
+    batch: Final = {
+        "completion_window": "24h",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": VERTEX_BATCH_FILE,
+        "custom_llm_provider": "vertex_ai",
+        "vertex_location": "us-central1",
+        **batch_metadata,
+    }
+    if is_async:
+        await bm.acreate_batch(**batch)
+    else:
+        bm.create_batch(**batch)
+
+    sent: Final[httpx.Request] = reply.call_args.args[0]
+    assert str(sent.url) == VERTEX_BATCH_JOBS_URL
+    return VERTEX_SENT_JOB.validate_json(sent.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_job_carries_proxy_identity_never_the_callers_batch_metadata(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", VERTEX_LABEL_FIELDS)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch,
+        is_async,
+        {
+            "metadata": {"user_api_key_alias": "forged", "user_api_key_team_alias": "forged", "app": "bot"},
+            "litellm_metadata": dict(VERTEX_PROXY_METADATA),
+        },
+    )
+
+    labels: Final = VERTEX_SENT_LABELS.validate_python(job["labels"])
+    assert list(labels.items()) == [*VERTEX_IDENTITY.items(), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_metadata_alone_never_labels_the_job(monkeypatch: pytest.MonkeyPatch, is_async: bool):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", VERTEX_LABEL_FIELDS)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch, is_async, {"metadata": {**VERTEX_IDENTITY, "spend_logs_metadata": "cc-1"}}
+    )
+
+    assert "labels" not in job
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_job_with_the_setting_off_is_unlabelled(monkeypatch: pytest.MonkeyPatch, is_async: bool):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch, is_async, {"metadata": {"app": "bot"}, "litellm_metadata": dict(VERTEX_PROXY_METADATA)}
+    )
+
+    assert "labels" not in job
+
+
+VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"
+VLLM_ROUTER_BATCH: Final = MappingProxyType(
+    {
+        "id": "batch_5f8dac",
+        "status": "pending",
+        "input_file_id": "file-b73f4c",
+        "created_at": 1793239207,
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "output_file_id": None,
+        "total_requests": None,
+        "completed_requests": 0,
+        "failed_requests": 0,
+        "metadata": {},
+    }
+)
+
+
+async def _create_on_vllm_router() -> LiteLLMBatch:
+    return await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-b73f4c",
+        custom_llm_provider="hosted_vllm",
+        api_key="sk-test",
+        api_base=VLLM_ROUTER_API_BASE,
+    )
+
+
+async def _retrieve_from_vllm_router() -> LiteLLMBatch:
+    return await litellm.aretrieve_batch(
+        batch_id="batch_5f8dac", custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    )
+
+
+VLLM_ROUTER_BATCH_CALLS: Final = (
+    pytest.param("POST", "/batches", _create_on_vllm_router, id="acreate_batch"),
+    pytest.param("GET", "/batches/batch_5f8dac", _retrieve_from_vllm_router, id="aretrieve_batch"),
+)
+
+
+@pytest.mark.parametrize("method, path, call_router", VLLM_ROUTER_BATCH_CALLS)
+@pytest.mark.parametrize(
+    "router_status, openai_status",
+    (
+        ("pending", "validating"),
+        ("running", "in_progress"),
+        ("completed", "completed"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+    ),
+)
+async def test_hosted_vllm_router_batch_comes_back_as_an_openai_batch(
+    respx_mock: respx.MockRouter,
+    method: str,
+    path: str,
+    call_router: Callable[[], Awaitable[LiteLLMBatch]],
+    router_status: str,
+    openai_status: str,
+):
+    respx_mock.route(method=method, url=f"{VLLM_ROUTER_API_BASE}{path}").respond(
+        200, json={**VLLM_ROUTER_BATCH, "status": router_status}
+    )
+
+    batch: Final = await call_router()
+
+    assert (batch.id, batch.object, batch.status) == ("batch_5f8dac", "batch", openai_status)
+
+
+@pytest.mark.parametrize("method, path, call_router", VLLM_ROUTER_BATCH_CALLS)
+@pytest.mark.parametrize("field, value", (("status", "queued"), ("object", "file")))
+async def test_hosted_vllm_router_batch_with_an_unknown_value_is_rejected(
+    respx_mock: respx.MockRouter,
+    method: str,
+    path: str,
+    call_router: Callable[[], Awaitable[LiteLLMBatch]],
+    field: str,
+    value: str,
+):
+    respx_mock.route(method=method, url=f"{VLLM_ROUTER_API_BASE}{path}").respond(
+        200, json={**VLLM_ROUTER_BATCH, field: value}
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        await call_router()
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
+
+
+async def _list_on_vllm_router() -> Sequence[Batch]:
+    page: Final = await litellm.alist_batches(
+        custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    )
+    return page.data
+
+
+async def _list_on_vllm_router_sync() -> Sequence[Batch]:
+    return litellm.list_batches(custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE).data
+
+
+@pytest.mark.parametrize("list_router", (_list_on_vllm_router, _list_on_vllm_router_sync))
+async def test_hosted_vllm_router_batch_list_comes_back_as_openai_batches(
+    respx_mock: respx.MockRouter, list_router: Callable[[], Awaitable[Sequence[Batch]]]
+):
+    respx_mock.get(f"{VLLM_ROUTER_API_BASE}/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {**VLLM_ROUTER_BATCH, "id": "batch_5f8dac", "status": "pending"},
+                {**VLLM_ROUTER_BATCH, "id": "batch_c74802", "status": "running"},
+            ],
+            "first_id": "batch_5f8dac",
+            "last_id": "batch_c74802",
+            "has_more": False,
+        },
+    )
+
+    batches: Final = await list_router()
+
+    assert [(batch.id, batch.object, batch.status) for batch in batches] == [
+        ("batch_5f8dac", "batch", "validating"),
+        ("batch_c74802", "batch", "in_progress"),
+    ]
+
+
+async def test_hosted_vllm_router_batch_list_passes_through_a_status_that_is_not_a_string(
+    respx_mock: respx.MockRouter,
+):
+    respx_mock.get(f"{VLLM_ROUTER_API_BASE}/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [{**VLLM_ROUTER_BATCH, "status": ["pending"]}],
+            "first_id": "batch_5f8dac",
+            "last_id": "batch_5f8dac",
+            "has_more": False,
+        },
+    )
+
+    batches: Final = await _list_on_vllm_router()
+
+    assert [(batch.id, batch.object, batch.status) for batch in batches] == [("batch_5f8dac", "batch", ["pending"])]
+
+
+async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock: respx.MockRouter):
+    respx_mock.get("http://openai.test/v1/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    **_OPENAI_BATCH_JSON,
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "input_tokens_details": {"cached_tokens": 4},
+                        "output_tokens": 5,
+                        "output_tokens_details": {"reasoning_tokens": 2},
+                        "total_tokens": 15,
+                    },
+                },
+                {**_OPENAI_BATCH_JSON, "id": "batch_def456", "status": "queued"},
+            ],
+            "first_id": "batch_abc123",
+            "last_id": "batch_def456",
+            "has_more": False,
+        },
+    )
+
+    page: Final = await litellm.alist_batches(
+        custom_llm_provider="openai", api_key="sk-test", api_base="http://openai.test/v1"
+    )
+
+    first, second = page.data
+    assert first.usage is not None
+    assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (4, 2)
+    assert (second.id, second.object, second.status) == ("batch_def456", "batch", "queued")
+
+
+# =========================================================================== #
+# gemini - a provider-config provider, like mistral, so it requires `model`
+# =========================================================================== #
+
+
+def test_create__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.create_batch(**CREATE_KW, custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.create_batch.return_value
+    _assert_only(seams.base_http.create_batch, seams, "create_batch")
+    forwarded = seams.base_http.create_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["model"] == "gemini-3.8-flash"
+
+
+def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.retrieve_batch(batch_id="la6", custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.retrieve_batch.return_value
+    _assert_only(seams.base_http.retrieve_batch, seams, "retrieve_batch")
+    forwarded = seams.base_http.retrieve_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["batch_id"] == "la6"

@@ -75,7 +75,7 @@ class GeminiTranscriptionUsage(LiteLLMBaseModel):
 
 
 class GeminiTranscriptionInteractionResponse(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     id: str | None = None
     status: str | None = None

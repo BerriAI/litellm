@@ -12,7 +12,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, overload
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypedDict, overload
 
 from typing_extensions import ReadOnly
 
@@ -22,15 +22,12 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
+from litellm.router_deprecated import renamed_router_param
 from litellm.types.router import BaggageMappedTagsStamp, ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
 if TYPE_CHECKING:
-    from litellm.router import Router as _Router
-
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+    from litellm.router_api import RoutingContext
 
 
 class _TagLitellmParamsLike(Protocol):
@@ -394,18 +391,20 @@ def _resolve_constraint_only_pool(
 
 
 def _all_deployments_or_fallback(
-    llm_router_instance: LitellmRouter,
-    model: str,
+    ctx: "RoutingContext",
+    model: str | None,
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
+    if model is None:  # a group of no name has no deployments, it is not a failed lookup
+        return ()
     try:
-        return llm_router_instance.get_all_deployments(model_name=model)
+        return ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
         return fallback
 
 
 def _chain_tag_filtering_override(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     healthy_deployments: _DeploymentPool,
 ) -> bool | None:
@@ -418,7 +417,7 @@ def _chain_tag_filtering_override(
     # repeatedly failing that one deployment into cooldown. Falls back to
     # healthy_deployments on a lookup error, preserving today's behavior rather
     # than crashing the request.
-    all_deployments: Final = _all_deployments_or_fallback(llm_router_instance, model, healthy_deployments)
+    all_deployments: Final = _all_deployments_or_fallback(ctx, model, healthy_deployments)
     for d in all_deployments:
         value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
         if value is not None:
@@ -458,7 +457,7 @@ def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_pref
 
 
 def _tag_known_to_group(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     positive_tags: Sequence[str],
     routing_confirmed: frozenset[str],
@@ -467,7 +466,7 @@ def _tag_known_to_group(
     if tag_set & routing_confirmed:
         return True
     try:
-        all_deployments: Final = llm_router_instance.get_all_deployments(model_name=model)
+        all_deployments: Final = ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
     return any(
@@ -481,9 +480,9 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     # inside the routed group. The request's other tags still apply there, on top of the
     # inherited_tags snapshot that keeps key/team policy applying. Every other model
     # group keeps the full list.
-    if not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None:
         return None
-    typed_metadata: Final[Mapping[str, object]] = metadata
     request_tags: Final = _tags_in_metadata(
         typed_metadata,
         key=ROUTING_REQUEST_TAGS_METADATA_KEY if ROUTING_REQUEST_TAGS_METADATA_KEY in typed_metadata else "tags",
@@ -503,9 +502,9 @@ def without_baggage_mapped_tags(
     request_tags: Sequence[str] | None, metadata: object, *, keep_serving_deployment_tags: bool = False
 ) -> Sequence[str] | None:
     """Drop baggage-mapped tags that neither key, team or project policy nor the caller itself asked for."""
-    if request_tags is None or not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if request_tags is None or typed_metadata is None:
         return request_tags
-    typed_metadata: Final[Mapping[str, object]] = metadata
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     if not isinstance(stamp, BaggageMappedTagsStamp):
         return request_tags
@@ -518,9 +517,9 @@ def without_baggage_mapped_tags(
 
 
 def baggage_stamp_for_serving_deployment(metadata: object, deployment_tags: object) -> BaggageMappedTagsStamp | None:
-    if not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None:
         return None
-    typed_metadata: Final[Mapping[str, object]] = metadata
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     if not isinstance(stamp, BaggageMappedTagsStamp):
         return None
@@ -532,9 +531,9 @@ def baggage_stamp_for_serving_deployment(metadata: object, deployment_tags: obje
 def tags_with_serving_deployment_tags(metadata: object, deployment_tags: object) -> tuple[object, ...] | None:
     """Merge the serving deployment's tags ahead of baggage-mapped tags, so baggage never changes tag precedence."""
     serving_tags: Final = _tag_sequence(deployment_tags)
-    if not isinstance(metadata, Mapping) or not serving_tags:
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None or not serving_tags:
         return None
-    typed_metadata: Final[Mapping[str, object]] = metadata
     existing_tags: Final = _metadata_tags(typed_metadata, "tags")
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     mapped_tags: Final = stamp.tags if isinstance(stamp, BaggageMappedTagsStamp) else ()
@@ -557,8 +556,9 @@ def _tag_sequence(tags: object) -> Sequence[object]:
     return typed_tags
 
 
+@renamed_router_param("llm_router_instance")
 async def get_deployments_for_tag(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,  # used to raise the correct error
     healthy_deployments: _DeploymentPool,
     request_kwargs: _RequestKwargsLike | None = None,
@@ -587,11 +587,9 @@ async def get_deployments_for_tag(
         return healthy_deployments
 
     request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
-    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, healthy_deployments)
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(ctx, model, healthy_deployments)
     chain_default: Final = (
-        chain_enable_tag_filtering
-        if chain_enable_tag_filtering is not None
-        else llm_router_instance.enable_tag_filtering
+        chain_enable_tag_filtering if chain_enable_tag_filtering is not None else ctx.settings().enable_tag_filtering
     )
     if request_enable_tag_filtering is not True and chain_default is not True:
         return healthy_deployments
@@ -602,8 +600,8 @@ async def get_deployments_for_tag(
         request_tags: Final = without_baggage_mapped_tags(
             _request_tags_after_router_consumption(metadata, model), metadata
         )
-        match_any: Final = llm_router_instance.tag_filtering_match_any
-        routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
+        match_any: Final = ctx.settings().tag_filtering_match_any
+        routing_prefix: Final = ctx.settings().tag_routing_prefix or ""
 
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
@@ -703,7 +701,7 @@ async def get_deployments_for_tag(
             if (
                 len(new_healthy_deployments) == 0
                 and positive_tags
-                and _tag_known_to_group(llm_router_instance, model, positive_tags, routing_confirmed)
+                and _tag_known_to_group(ctx, model, positive_tags, routing_confirmed)
             ):
                 return _resolve_or_fail_open(
                     request_deployments,
@@ -746,9 +744,9 @@ def _tags_in_metadata(metadata: object, key: str = "tags") -> list[str]:
     allowed, an unparsed string or null included, so any shape that is not a list
     of string tags carries no tags rather than raising.
     """
-    if not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None:
         return []
-    typed_metadata: Final[Mapping[str, object]] = metadata
     tags: Final = typed_metadata.get(key)
     if isinstance(tags, str) or not isinstance(tags, Sequence):
         return []
@@ -774,14 +772,13 @@ def get_tags_from_request_kwargs(
     """
     if request_kwargs is None:
         return []
-    resolved_variable_name: Final = metadata_variable_name or get_metadata_variable_name_from_kwargs(request_kwargs)
+    resolved_variable_name: Final = metadata_variable_name or get_tag_metadata_variable_name_from_kwargs(request_kwargs)
     if resolved_variable_name in request_kwargs:
         return _tags_in_metadata(request_kwargs[resolved_variable_name])
     if "litellm_params" in request_kwargs:
-        litellm_params: Final = request_kwargs["litellm_params"]
-        if not isinstance(litellm_params, Mapping):
+        typed_litellm_params: Final = as_str_mapping(request_kwargs["litellm_params"])
+        if typed_litellm_params is None:
             return []
-        typed_litellm_params: Final[Mapping[str, object]] = litellm_params
         return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
 
@@ -789,14 +786,31 @@ def get_tags_from_request_kwargs(
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs
 
 
-def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+def get_tag_metadata_variable_name_from_kwargs(
+    request_kwargs: Mapping[str, object],
+) -> Literal["metadata", "litellm_metadata"]:
     metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
+    metadata: Final = request_kwargs.get("litellm_metadata")
+    legacy_metadata: Final = request_kwargs.get("metadata")
+    if (
+        metadata_variable_name == "litellm_metadata"
+        and isinstance(metadata, Mapping)
+        and "tags" not in metadata
+        and "inherited_tags" not in metadata
+        and isinstance(legacy_metadata, Mapping)
+        and "inherited_tags" in legacy_metadata
+    ):
+        return "metadata"
+    return metadata_variable_name
+
+
+def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+    metadata_variable_name: Final = get_tag_metadata_variable_name_from_kwargs(request_kwargs)
     if metadata_variable_name in request_kwargs:
         return request_kwargs[metadata_variable_name]
-    litellm_params: Final = request_kwargs.get("litellm_params")
-    if not isinstance(litellm_params, Mapping):
+    typed_litellm_params: Final = as_str_mapping(request_kwargs.get("litellm_params"))
+    if typed_litellm_params is None:
         return None
-    typed_litellm_params: Final[Mapping[str, object]] = litellm_params
     return typed_litellm_params.get(metadata_variable_name)
 
 

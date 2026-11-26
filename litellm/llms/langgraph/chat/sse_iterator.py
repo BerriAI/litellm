@@ -6,6 +6,7 @@ Handles Server-Sent Events (SSE) streaming responses from LangGraph.
 
 import json
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -16,6 +17,18 @@ from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _as_list(value: object) -> Sequence[object] | None:
+    if isinstance(value, list):
+        return value
+    return None
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
 
 
 class LangGraphSSEStreamIterator:
@@ -41,8 +54,9 @@ class LangGraphSSEStreamIterator:
         return self
 
     def __aiter__(self):
-        """Initialize async iteration."""
-        self.async_line_iterator = aiter_sse_lines(self.response.aiter_text())
+        """Initialize async iteration once; CustomStreamWrapper re-enters `async for` on every chunk."""
+        if self.async_line_iterator is None:
+            self.async_line_iterator = aiter_sse_lines(self.response.aiter_text())
         return self
 
     def _parse_sse_line(self, line: str) -> ModelResponseStream | None:
@@ -72,16 +86,18 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_data(self, data) -> ModelResponseStream | None:
+    def _process_data(self, data: object) -> ModelResponseStream | None:
         """
         Process parsed data from SSE stream.
 
         LangGraph uses tuple format: [event_type, payload]
         """
+        items: Final = _as_list(data)
+        fields: Final = _as_dict(data)
         # Handle tuple format: ["messages", ...]
-        if isinstance(data, list) and len(data) >= 2:
-            event_type: Final = data[0]
-            payload: Final = data[1]
+        if items is not None and len(items) >= 2:
+            event_type: Final = items[0]
+            payload: Final = items[1]
 
             if event_type == "messages":
                 return self._process_messages_event(payload)
@@ -91,8 +107,8 @@ class LangGraphSSEStreamIterator:
 
         # Handle dict format (alternative response format)
         elif isinstance(data, dict):
-            if "content" in data:
-                return self._create_content_chunk(data.get("content", ""))
+            if fields is not None and "content" in fields:
+                return self._create_content_chunk(fields.get("content", ""))
             elif "messages" in data:
                 messages: Final = data.get("messages", [])
                 if messages:
@@ -102,32 +118,35 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_messages_event(self, payload) -> ModelResponseStream | None:
+    def _process_messages_event(self, payload: object) -> ModelResponseStream | None:
         """
         Process a messages event from the stream.
 
         payload format: [[message_object, metadata], ...]
         """
-        if isinstance(payload, list):
-            for item in payload:
-                if isinstance(item, list) and len(item) >= 1:
-                    msg = item[0]
-                    if isinstance(msg, dict):
+        items: Final = _as_list(payload)
+        if items is not None:
+            for item in items:
+                entry = _as_list(item)
+                item_fields = _as_dict(item)
+                if entry is not None and len(entry) >= 1:
+                    msg = _as_dict(entry[0])
+                    if msg is not None:
                         msg_type = msg.get("type", "")
                         content = msg.get("content", "")
 
                         # Only return AI messages with content
                         if msg_type == "ai" and content or msg_type == "AIMessageChunk" and content:
                             return self._create_content_chunk(content)
-                elif isinstance(item, dict):
-                    msg_type = item.get("type", "")
-                    content = item.get("content", "")
+                elif item_fields is not None:
+                    msg_type = item_fields.get("type", "")
+                    content = item_fields.get("content", "")
                     if msg_type in ("ai", "AIMessageChunk") and content:
                         return self._create_content_chunk(content)
 
         return None
 
-    def _process_metadata_event(self, payload) -> ModelResponseStream | None:
+    def _process_metadata_event(self, payload: object) -> ModelResponseStream | None:
         """
         Process a metadata event, which may signal the end of the stream.
         """
@@ -138,7 +157,7 @@ class LangGraphSSEStreamIterator:
                 return self._create_final_chunk()
         return None
 
-    def _create_content_chunk(self, text: str) -> ModelResponseStream:
+    def _create_content_chunk(self, text: object) -> ModelResponseStream:
         """Create a ModelResponseStream chunk with content."""
         chunk: Final = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",

@@ -281,12 +281,12 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
 def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
     """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
 
-    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
-    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
-    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
-    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
-    profitable route into a reported loss. Such a model pays its plain input rate for
-    those tokens, so the buckets it cannot price become ordinary input below.
+    A missing rate is not a free bucket. Were an absent `cache_read_input_token_cost` or
+    `cache_creation_input_token_cost` priced at 0.0, a baseline whose provider prices
+    caching implicitly, which is every OpenAI, Azure and Gemini entry for cache writes,
+    would carry the whole prompt for nothing and turn a profitable route into a reported
+    loss. Such a model pays its plain input rate for those tokens, so the buckets it
+    cannot price become ordinary input below.
     """
     if baseline_info is None:
         return True, True
@@ -464,7 +464,7 @@ def classifier_cost_from_decision(routing_decision: Mapping[str, object] | None)
     the savings netting, the session rollup and the response header, so the three can
     never disagree about what counts as a classifier charge.
     """
-    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    decision: Final[Mapping[str, object]] = routing_decision if isinstance(routing_decision, Mapping) else {}
     return _numeric_savings(decision.get("classifier_cost"))
 
 
@@ -483,7 +483,7 @@ def autorouter_savings_for_request(
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
         return None
-    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    decision: Final[Mapping[str, object]] = routing_decision if isinstance(routing_decision, Mapping) else {}
     recorded: Final = decision.get("savings_baseline_model")
     recorded_id: Final = decision.get("savings_baseline_deployment_id")
     baseline_model: Final = recorded if isinstance(recorded, str) else None
@@ -689,9 +689,13 @@ def compute_savings_spend(
             cost_breakdown=cost_breakdown,
         )
     )
-    return SavingsSpend(
+    savings: Final = SavingsSpend(
         compression=compression,
         prompt_caching=prompt_caching,
         autorouter=0.0 if autorouter is None else autorouter,
         gateway_injected_caching=gateway_injected_caching,
     )
+    if all(isfinite(value) for value in savings):
+        return savings
+    verbose_proxy_logger.warning("Spend tracking - recording non-finite savings %s as 0 for model=%s", savings, model)
+    return SavingsSpend(*(value if isfinite(value) else 0.0 for value in savings))

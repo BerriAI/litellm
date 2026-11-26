@@ -18,7 +18,7 @@ DOCKERFILE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",
     "..",
-    "Dockerfile",
+    "litellm/deploy/docker/Dockerfile",
 )
 
 

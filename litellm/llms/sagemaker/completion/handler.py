@@ -2,7 +2,7 @@ import json
 import types
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -14,8 +14,12 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
+from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     get_async_httpx_client,
     get_httpx_client,
 )
@@ -34,11 +38,27 @@ from ..common_utils import (
     client_error_details,
     with_inference_component_hint,
 )
+from ..embedding.cohere_transformation import cohere_extra_body_params
 from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
 sagemaker_config: Final = SagemakerConfig()
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _PrepareRequestArgs(TypedDict):
+    model: ReadOnly[str]
+    data: ReadOnly[Mapping[str, object]]
+    optional_params: ReadOnly[Mapping[str, object]]
+    litellm_params: ReadOnly[dict[str, object]]
+    credentials: ReadOnly["Credentials"]
+    aws_region_name: ReadOnly[str]
+    messages: ReadOnly[list[AllMessageValues]]
 
 
 class _InvokeEndpointArgs(TypedDict):
@@ -57,6 +77,8 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = ""
 
 # set os.environ['AWS_REGION_NAME'] = <your-region_name>
 class SagemakerLLM(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SAGEMAKER_SESSION_POLICY
+
     def _load_credentials(
         self,
         optional_params: dict,
@@ -88,12 +110,12 @@ class SagemakerLLM(BaseAWSLLM):
 
     def _prepare_request(
         self,
-        credentials,
+        credentials: "Credentials",
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         messages: list[AllMessageValues],
-        litellm_params: dict,
-        optional_params: dict,
+        litellm_params: dict[str, object],
+        optional_params: Mapping[str, object],
         aws_region_name: str,
         extra_headers: dict | None = None,
     ):
@@ -134,19 +156,19 @@ class SagemakerLLM(BaseAWSLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: object,
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         timeout: float | httpx.Timeout | None = None,
-        custom_prompt_dict={},
-        hf_model_name=None,
-        logger_fn=None,
+        custom_prompt_dict: object = {},
+        hf_model_name: str | None = None,
+        logger_fn: object = None,
         acompletion: bool = False,
-        headers: dict = {},
+        headers: dict[str, object] = {},
     ):
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)
@@ -251,7 +273,7 @@ class SagemakerLLM(BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
-        prepared_request_args: Final = {
+        prepared_request_args: Final[_PrepareRequestArgs] = {
             "model": model,
             "data": _data,
             "optional_params": optional_params,
@@ -326,8 +348,8 @@ class SagemakerLLM(BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: str,
-        logging_obj,
-        client=None,
+        logging_obj: LiteLLMLoggingObj,
+        client: HTTPHandler | None = None,
     ):
         if client is None:
             client = get_httpx_client()
@@ -342,15 +364,15 @@ class SagemakerLLM(BaseAWSLLM):
             raise SagemakerError(status_code=sync_response.status_code, message=str(sync_response.read()))
 
         decoder: Final = AWSEventStreamDecoder(model="")
-        return decoder.iter_bytes(sync_response.iter_bytes())
+        return decoder.iter_bytes(sync_response.iter_bytes(), response_headers=sync_response.headers)
 
     async def make_async_call(
         self,
         api_base: str,
         headers: dict,
         data: str,
-        logging_obj,
-        client=None,
+        logging_obj: LiteLLMLoggingObj,
+        client: AsyncHTTPHandler | None = None,
     ):
         try:
             if client is None:
@@ -368,7 +390,7 @@ class SagemakerLLM(BaseAWSLLM):
                 raise SagemakerError(status_code=response.status_code, message=response.text)
 
             decoder: Final = AWSEventStreamDecoder(model="")
-            completion_stream: Final = decoder.aiter_bytes(response.aiter_bytes())
+            completion_stream: Final = decoder.aiter_bytes(response.aiter_bytes(), response_headers=response.headers)
 
             return completion_stream
 
@@ -392,17 +414,17 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         messages: list[AllMessageValues],
         model: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: object,
         hf_model_name: str | None,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
-        optional_params,
-        encoding,
+        optional_params: Mapping[str, object],
+        encoding: object,
         model_response: ModelResponse,
         model_id: str | None,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ):
         data: Final = await sagemaker_config.async_transform_request(
             model=model,
@@ -412,7 +434,7 @@ class SagemakerLLM(BaseAWSLLM):
             headers=headers,
         )
         asyncified_prepare_request: Final = asyncify(self._prepare_request)
-        prepared_request_args: Final = {
+        prepared_request_args: Final[_PrepareRequestArgs] = {
             "model": model,
             "data": data,
             "optional_params": optional_params,
@@ -456,17 +478,17 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         messages: list[AllMessageValues],
         model: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: object,
         hf_model_name: str | None,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
-        encoding,
+        encoding: "Tokenizer | None",
         model_response: ModelResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model_id: str | None,
-        headers: dict,
-        litellm_params: dict,
+        headers: dict[str, object],
+        litellm_params: dict[str, object],
     ):
         timeout: Final = 300.0
         async_handler: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.SAGEMAKER)
@@ -480,7 +502,7 @@ class SagemakerLLM(BaseAWSLLM):
         )
 
         asyncified_prepare_request: Final = asyncify(self._prepare_request)
-        prepared_request_args: Final = {
+        prepared_request_args: Final[_PrepareRequestArgs] = {
             "model": model,
             "data": data,
             "optional_params": optional_params,
@@ -543,15 +565,15 @@ class SagemakerLLM(BaseAWSLLM):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: list[str] | list[int] | list[list[int]],  # mutable-ok: mirrors the provider transform contract
         model_response: EmbeddingResponse,
-        print_verbose: Callable,
-        encoding,
-        logging_obj,
+        print_verbose: Callable[[str], object],
+        encoding: object,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        custom_prompt_dict={},
-        litellm_params=None,
-        logger_fn=None,
+        custom_prompt_dict: object = {},
+        litellm_params: Mapping[str, object] | None = None,
+        logger_fn: object = None,
     ):
         """
         Supports Hugging Face (TGI), Voyage, and Cohere embedding endpoints
@@ -591,8 +613,15 @@ class SagemakerLLM(BaseAWSLLM):
         inference_component_name: Final = embedding_params.get("model_id")
         if inference_component_name is not None and not isinstance(inference_component_name, str):
             raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
-        body_params: Final = {k: v for k, v in embedding_params.items() if k != "model_id"}
-        request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
+        extra_body: Final = extra_body_fields(embedding_params)
+        body_params: Final = {
+            **cohere_extra_body_params(provider_config, input, extra_body),
+            **{k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")},
+        }
+        request_data: Final = {
+            **extra_body,
+            **provider_config.transform_embedding_request(endpoint_name, input, body_params, {}),
+        }
         data: Final = json.dumps(request_data).encode("utf-8")
         invoke_args: Final = _InvokeEndpointArgs(
             EndpointName=endpoint_name,

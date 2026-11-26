@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -7,7 +8,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
-from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
+from litellm.types.utils import ModelResponse, ServerToolUse, StandardBuiltInToolsParams, Usage
 
 
 def test_web_search_cost_low():
@@ -676,6 +677,32 @@ def test_responses_web_search_and_image_generation_costs_are_additive(local_mode
     assert combined == pytest.approx(web_search_only + image_only)
 
 
+def test_responses_web_search_and_file_search_costs_are_additive(local_model_cost_map: None) -> None:
+    model: Final = "gpt-4o-search-preview"
+    tools: Final = StandardBuiltInToolsParams(file_search=FileSearchTool(type="file_search"))
+    web_search: Final[dict[str, object]] = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+    file_search: Final[dict[str, object]] = {
+        "type": "file_search_call",
+        "id": "fs_1",
+        "status": "completed",
+        "queries": ["test"],
+    }
+
+    def tool_cost(*output: dict[str, object]) -> float:
+        return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=_openai_responses_response(model, list(output)),
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=tools,
+        )
+
+    web_cost: Final = tool_cost(web_search)
+    file_cost: Final = tool_cost(file_search)
+    assert web_cost > 0
+    assert file_cost > 0
+    assert tool_cost(web_search, file_search) == pytest.approx(web_cost + file_cost)
+
+
 def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_map):
     """A failed image_generation_call produced no billable image, so it must cost $0."""
     response = _openai_responses_response(
@@ -1052,6 +1079,175 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
 
 
+def _register_priced_deployment(
+    model: str, search_cost_per_query: float | None, deployment_id: str | None = None
+) -> str:
+    from litellm import Router
+
+    token_rates: Final = {"input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5}
+    search_rates: Final = (
+        {}
+        if search_cost_per_query is None
+        else {
+            "search_context_cost_per_query": {
+                "search_context_size_low": search_cost_per_query,
+                "search_context_size_medium": search_cost_per_query,
+                "search_context_size_high": search_cost_per_query,
+            }
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "priced-deployment",
+                "litellm_params": {"model": model, "api_key": "k", "vertex_project": "p", "vertex_location": "global"},
+                "model_info": {**token_rates, **search_rates, **({} if deployment_id is None else {"id": deployment_id})},
+            }
+        ]
+    )
+    return router.model_list[0]["model_info"]["id"]
+
+
+def _claude_chat_response(
+    web_search_requests: int, model: str = "claude-sonnet-5-5"
+) -> tuple[object, Usage | None]:
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=web_search_requests),
+    )
+    return ModelResponse(model=model, usage=usage), usage
+
+
+def _claude_messages_response(
+    web_search_requests: int, model: str = "claude-sonnet-5-5"
+) -> tuple[object, Usage | None]:
+    return {
+        "id": "msg_vertex_claude_web_search",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "scripted answer"}],
+        "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "server_tool_use": {"web_search_requests": web_search_requests},
+        },
+    }, None
+
+
+@pytest.mark.parametrize("build_response", [_claude_chat_response, _claude_messages_response])
+@pytest.mark.parametrize(("web_search_requests", "search_cost_per_query"), [(2, 0.01), (3, 0.01), (2, 0.0)])
+def test_vertex_claude_deployment_priced_web_search_billed_per_request(
+    local_model_cost_map: None,
+    build_response: Callable[[int], tuple[object, Usage | None]],
+    web_search_requests: int,
+    search_cost_per_query: float,
+) -> None:
+    deployment_id: Final = _register_priced_deployment("vertex_ai/claude-sonnet-5-5", search_cost_per_query)
+    response_object, usage = build_response(web_search_requests)
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=response_object,
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(web_search_requests * search_cost_per_query)
+
+
+@pytest.mark.parametrize("build_response", [_claude_chat_response, _claude_messages_response])
+@pytest.mark.parametrize(
+    ("deployment_model", "served_model", "custom_llm_provider"),
+    # Google bills Claude web search on Sonnet 4.5 and Haiku 4.5 too:
+    # https://cloud.google.com/model-garden/partner-models/pricing (read 2026-10-30)
+    [
+        ("vertex_ai/claude-sonnet-5-5", "claude-sonnet-5-5", "vertex_ai"),
+        ("vertex_ai/claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929", "vertex_ai"),
+        ("vertex_ai/claude-haiku-4-5@20251001", "claude-haiku-4-5-20251001", "vertex_ai"),
+        ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", "anthropic"),
+        ("azure_ai/claude-sonnet-5-5", "claude-sonnet-5-5", "azure_ai"),
+    ],
+)
+@pytest.mark.parametrize("deployment_id", [None, "claude-token-priced"], ids=["hashed_id", "claude_in_id"])
+def test_claude_deployment_with_token_rates_only_bills_served_model_search_price(
+    local_model_cost_map: None,
+    build_response: Callable[[int, str], tuple[object, Usage | None]],
+    deployment_model: str,
+    served_model: str,
+    custom_llm_provider: str,
+    deployment_id: str | None,
+) -> None:
+    served_search_pricing: Final = (
+        litellm.get_model_info(model=deployment_model).get("search_context_cost_per_query") or {}
+    )
+    served_search_price: Final = served_search_pricing.get("search_context_size_medium") or 0.0
+    registered_id: Final = _register_priced_deployment(deployment_model, None, deployment_id)
+    response_object, usage = build_response(2, served_model)
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=registered_id,
+        response_object=response_object,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+
+    assert served_search_price > 0
+    assert cost == pytest.approx(2 * served_search_price)
+
+
+def test_vertex_claude_deployment_with_token_rates_only_and_unmapped_served_model_bills_no_search(
+    local_model_cost_map: None,
+) -> None:
+    deployment_id: Final = _register_priced_deployment("vertex_ai/claude-sonnet-5-5", None)
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=ModelResponse(model="claude-unmapped-preview", usage=usage),
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+@pytest.mark.parametrize("deployment_id", [None, "claude-code-gemini"], ids=["hashed_id", "claude_in_id"])
+def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(
+    local_model_cost_map: None, deployment_id: str | None
+) -> None:
+    search_cost_per_prompt: Final = 0.03
+    registered_id: Final = _register_priced_deployment(
+        "vertex_ai/gemini-2.5-flash", search_cost_per_prompt, deployment_id
+    )
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=registered_id,
+        response_object=ModelResponse(model="gemini-2.5-flash", usage=usage),
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(search_cost_per_prompt)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [{"tools": 5}, {"web_search_options": None}, {"web_search_options": 5}],
@@ -1060,3 +1256,385 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
 def test_built_in_tool_lookups_ignore_malformed_request_values(kwargs: dict[str, object]) -> None:
     assert StandardBuiltInToolCostTracking.get_web_search_options(kwargs) is None
     assert StandardBuiltInToolCostTracking.get_file_search_tool_call(kwargs) is None
+
+
+def test_per_call_web_search_path_bills_the_count_the_usage_reports(local_model_cost_map):
+    """
+    A provider with no web search calculator of its own (an OpenAI-compatible JSON provider) that
+    reports server_tool_use.web_search_requests is billed that many per-call searches, not one.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    model = "empiriolabs/qwen3-7-plus"
+    per_search = litellm.model_cost[model]["search_context_cost_per_query"]["search_context_size_medium"]
+    response = ModelResponse(model="qwen3-7-plus")
+    usage = Usage(
+        prompt_tokens=4, completion_tokens=5, total_tokens=9, server_tool_use=ServerToolUse(web_search_requests=3)
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=usage,
+        custom_llm_provider="empiriolabs",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(3 * per_search)
+
+
+def _image_tool_deployment(deployment_id: str, rates: dict[str, float]) -> dict[str, object]:
+    return {
+        "model_name": "gpt-image-2",
+        "litellm_params": {"model": "openai/gpt-image-2", "api_key": "sk-test"},
+        "model_info": {"id": deployment_id, "mode": "image_generation", **rates},
+    }
+
+
+@pytest.mark.parametrize(
+    ("discounts", "billed_discount"),
+    (((0.5,), 0.5), ((0.5, 0.5), 0.5), ((0.0,), 0.0), ((0.5, 0.25), 1.0), ((0.5, None), 1.0), ((None,), 1.0)),
+    ids=(
+        "one_deployment_with_custom_rates",
+        "deployments_with_the_same_rates",
+        "zero_rated_deployment",
+        "deployments_with_different_rates_keep_list_price",
+        "custom_rates_beside_an_unpriced_deployment_keep_list_price",
+        "unpriced_deployment_keeps_list_price",
+    ),
+)
+def test_responses_image_tool_bills_the_rates_of_the_deployments_named_after_the_tool_model(
+    local_model_cost_map: None, discounts: tuple[float | None, ...], billed_discount: float
+) -> None:
+    listed: Final = litellm.get_model_info("gpt-image-2", custom_llm_provider="openai")
+    rate_fields: Final = ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
+    router: Final = litellm.Router(
+        model_list=[
+            _image_tool_deployment(
+                f"image-tool-deployment-{position}",
+                {} if discount is None else {field: listed[field] * discount for field in rate_fields},
+            )
+            for position, discount in enumerate(discounts)
+        ]
+    )
+    response: Final = _openai_responses_response(
+        "gpt-5",
+        [{"type": "image_generation_call", "id": "ig_1", "status": "completed"}],
+        usage=_image_gen_token_usage(40, 300, 1000, 0),
+        tools=[{"type": "image_generation", "model": "gpt-image-2"}],
+    )
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5", response_object=response, usage=None, custom_llm_provider="openai"
+    )
+    list_price: Final = _expected_image_gen_token_cost(listed, 40, 300, 1000, 0)
+    assert list_price > 0
+    assert cost == pytest.approx(list_price * billed_discount, rel=1e-9)
+    assert router.registry().all()
+
+
+def test_responses_image_tool_without_token_details_keeps_per_image_billing_beside_a_custom_rate_deployment(
+    local_model_cost_map: None,
+) -> None:
+    def cost() -> float:
+        return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model="gpt-5",
+            response_object=_openai_responses_response(
+                "gpt-5",
+                [
+                    {
+                        "type": "image_generation_call",
+                        "id": "ig_1",
+                        "status": "completed",
+                        "quality": "low",
+                        "size": "1024x1024",
+                    }
+                ],
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                    "tool_usage": {"image_gen": {"input_tokens": 340, "output_tokens": 1000, "total_tokens": 1340}},
+                },
+                tools=[{"type": "image_generation", "model": "gpt-image-1", "quality": "low", "size": "1024x1024"}],
+            ),
+            usage=None,
+            custom_llm_provider="openai",
+        )
+
+    per_image_cost: Final = cost()
+    listed: Final = litellm.get_model_info("gpt-image-1", custom_llm_provider="openai")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-1",
+                "litellm_params": {"model": "openai/gpt-image-1", "api_key": "sk-test"},
+                "model_info": {
+                    "id": "image-tool-deployment-without-details",
+                    "output_cost_per_image_token": listed["output_cost_per_image_token"] * 0.5,
+                },
+            }
+        ]
+    )
+    assert per_image_cost > 0
+    assert cost() == pytest.approx(per_image_cost, rel=1e-9)
+    assert router.registry().all()
+
+
+def test_responses_image_tool_ignores_the_rates_of_a_request_scoped_router(local_model_cost_map: None) -> None:
+    listed: Final = litellm.get_model_info("gpt-image-2", custom_llm_provider="openai")
+    router: Final = litellm.Router(
+        model_list=[
+            _image_tool_deployment("image-tool-deployment-from-user-config", {"output_cost_per_image_token": 0.0})
+        ]
+    )
+    router.observe(request_scoped=True)
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=_openai_responses_response(
+            "gpt-5",
+            [{"type": "image_generation_call", "id": "ig_1", "status": "completed"}],
+            usage=_image_gen_token_usage(40, 300, 1000, 0),
+            tools=[{"type": "image_generation", "model": "gpt-image-2"}],
+        ),
+        usage=None,
+        custom_llm_provider="openai",
+    )
+    assert cost == pytest.approx(_expected_image_gen_token_cost(listed, 40, 300, 1000, 0), rel=1e-9)
+
+
+def test_responses_image_tool_keeps_the_operator_rates_when_a_request_scoped_router_reuses_the_deployment_id(
+    local_model_cost_map: None,
+) -> None:
+    listed: Final = litellm.get_model_info("gpt-image-2", custom_llm_provider="openai")
+    rate_fields: Final = ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
+    operator_router: Final = litellm.Router(
+        model_list=[
+            _image_tool_deployment("image-tool-shared-id", {field: listed[field] * 0.5 for field in rate_fields})
+        ]
+    )
+    request_router: Final = litellm.Router(
+        model_list=[_image_tool_deployment("image-tool-shared-id", dict.fromkeys(rate_fields, 0.0))]
+    )
+    request_router.observe(request_scoped=True)
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=_openai_responses_response(
+            "gpt-5",
+            [{"type": "image_generation_call", "id": "ig_1", "status": "completed"}],
+            usage=_image_gen_token_usage(40, 300, 1000, 0),
+            tools=[{"type": "image_generation", "model": "gpt-image-2"}],
+        ),
+        usage=None,
+        custom_llm_provider="openai",
+    )
+    list_price: Final = _expected_image_gen_token_cost(listed, 40, 300, 1000, 0)
+    assert list_price > 0
+    assert cost == pytest.approx(list_price * 0.5, rel=1e-9)
+    assert operator_router.registry().all()
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", None])
+@pytest.mark.parametrize("reasoning_tokens", [0, 257])
+def test_responses_image_generation_svg_usage_billed(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str | None,
+    reasoning_tokens: int,
+) -> None:
+    """Responses image_generation_call svg_usage bills author-model tokens without double-billing reasoning_tokens."""
+    author_rates = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-7,
+        "output_cost_per_token": 5e-7,
+    }
+    monkeypatch.setitem(litellm.model_cost, "gpt-6-luna", author_rates)
+    monkeypatch.setitem(litellm.model_cost, "openai/gpt-6-luna", author_rates)
+    litellm.get_model_info.cache_clear()
+
+    tools = [
+        {
+            "type": "image_generation",
+            "model": "gpt-image-1",
+            "output_format": "svg",
+            "svg": {"model": "gpt-6-luna"},
+        }
+    ]
+    svg_usage = {
+        "input_tokens": 2235,
+        "model": "gpt-6-luna",
+        "output_tokens": 332,
+        "reasoning_tokens": reasoning_tokens,
+        "total_tokens": 2567,
+    }
+    base_item: dict[str, object] = {
+        "type": "image_generation_call",
+        "id": "ig_1",
+        "status": "completed",
+        "output_format": "svg",
+        "result": "PHN2Zy8+",
+    }
+    response_with_svg = _openai_responses_response(
+        "gpt-5-nano",
+        [{**base_item, "svg_usage": svg_usage}],
+        tools=tools,
+    )
+    response_without_svg = _openai_responses_response(
+        "gpt-5-nano",
+        [base_item],
+        tools=tools,
+    )
+
+    cost_with = litellm.completion_cost(
+        completion_response=response_with_svg,
+        model="gpt-5-nano",
+        custom_llm_provider=custom_llm_provider,
+        call_type="aresponses",
+    )
+    cost_without = litellm.completion_cost(
+        completion_response=response_without_svg,
+        model="gpt-5-nano",
+        custom_llm_provider=custom_llm_provider,
+        call_type="aresponses",
+    )
+
+    expected_svg_cost = 2235 * 1e-7 + 332 * 5e-7
+    assert cost_with - cost_without == pytest.approx(expected_svg_cost)
+
+
+def test_responses_image_generation_svg_usage_additive_with_token_usage_and_multiple_calls(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """svg_usage is summed across completed calls, added to tool_usage.image_gen cost, and supports tools[].svg.model fallback."""
+    author_rates = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-7,
+        "output_cost_per_token": 5e-7,
+    }
+    monkeypatch.setitem(litellm.model_cost, "gpt-6-luna", author_rates)
+    monkeypatch.setitem(litellm.model_cost, "openai/gpt-6-luna", author_rates)
+    litellm.get_model_info.cache_clear()
+
+    tool_model = "gpt-image-2"
+    model_info = litellm.get_model_info(tool_model, custom_llm_provider="openai")
+    tools = [
+        {
+            "type": "image_generation",
+            "model": tool_model,
+            "output_format": "svg",
+            "svg": {"model": "gpt-6-luna"},
+        }
+    ]
+    output = [
+        {
+            "type": "image_generation_call",
+            "id": "ig_1",
+            "status": "completed",
+            "output_format": "svg",
+            "result": "PHN2Zy8+",
+            "svg_usage": {"model": "gpt-6-luna", "input_tokens": 1000, "output_tokens": 200, "total_tokens": 1200},
+        },
+        {
+            "type": "image_generation_call",
+            "id": "ig_2",
+            "status": "completed",
+            "output_format": "svg",
+            "result": "PHN2Zy8+",
+            # Omit model here to verify fallback to tools[].svg.model
+            "svg_usage": {"input_tokens": 500, "output_tokens": 100, "total_tokens": 600},
+        },
+        {
+            "type": "image_generation_call",
+            "id": "ig_failed",
+            "status": "failed",
+            "output_format": "svg",
+            "result": None,
+            "svg_usage": {"model": "gpt-6-luna", "input_tokens": 9999, "output_tokens": 9999, "total_tokens": 19998},
+        },
+    ]
+
+    response = _openai_responses_response(
+        "gpt-5",
+        output,
+        usage=_image_gen_token_usage(10, 0, 50, 0),
+        tools=tools,
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    expected_image_cost = _expected_image_gen_token_cost(model_info, 10, 0, 50, 0)
+    expected_svg_cost = (1000 + 500) * 1e-7 + (200 + 100) * 5e-7
+    assert cost == pytest.approx(expected_image_cost + expected_svg_cost)
+
+
+def test_responses_image_generation_svg_usage_without_tool_model_and_invalid_svg_usage(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """svg_usage is still billed when tools[].model is omitted, and invalid/unmapped svg_usage fails safe."""
+    author_rates = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-7,
+        "output_cost_per_token": 5e-7,
+    }
+    monkeypatch.setitem(litellm.model_cost, "gpt-6-luna", author_rates)
+    monkeypatch.setitem(litellm.model_cost, "openai/gpt-6-luna", author_rates)
+    litellm.get_model_info.cache_clear()
+
+    response_no_tool_model = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "output_format": "svg",
+                "svg_usage": {"model": "gpt-6-luna", "input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            }
+        ],
+    )
+    assert StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response_no_tool_model,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    ) == pytest.approx(100 * 1e-7 + 50 * 5e-7)
+
+    response_bad_svg = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": "high",
+                "size": "1024x1024",
+                "svg_usage": {"model": "unmapped-svg-author", "input_tokens": 100, "output_tokens": 50},
+            },
+            {
+                "type": "image_generation_call",
+                "id": "ig_2",
+                "status": "completed",
+                "quality": "high",
+                "size": "1024x1024",
+                "svg_usage": {"model": "gpt-6-luna", "input_tokens": -5, "output_tokens": 50},
+            },
+        ],
+        tools=_GPT_IMAGE_1_TOOLS,
+    )
+    expected_image_cost = 2 * litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    assert StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response_bad_svg,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    ) == pytest.approx(expected_image_cost)

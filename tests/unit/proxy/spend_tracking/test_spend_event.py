@@ -16,6 +16,11 @@ from litellm.proxy.spend_tracking.spend_event import (
     is_offloadable_success,
     spend_event_callback_args,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import LiteLLMBatch, ModelResponse, Usage
 
 _BIG_PROMPT: Final = "x" * 20_000
@@ -151,6 +156,40 @@ def test_round_trip_preserves_identity_usage_reservation_and_tools():
     assert "complete_streaming_response" not in args.kwargs
 
 
+@pytest.mark.parametrize(
+    ("failed_attempt_kwargs", "tokens"),
+    (
+        pytest.param(
+            {
+                "failed_attempts_billed_on_success": (
+                    (Usage(prompt_tokens=16, completion_tokens=2, total_tokens=18), 0.25),
+                )
+            },
+            (5016, 4002, 9018),
+            id="success_bills_a_failed_attempt",
+        ),
+        pytest.param({}, (5000, 4000, 9000), id="no_failed_attempt"),
+    ),
+)
+def test_collector_row_counts_the_tokens_the_success_billed(
+    failed_attempt_kwargs: dict[str, object], tokens: tuple[int, int, int]
+):
+    kwargs: Final = {
+        **_success_kwargs(),
+        "combined_usage_object": Usage(prompt_tokens=5016, completion_tokens=4002, total_tokens=9018),
+        **failed_attempt_kwargs,
+    }
+    event: Final = decode_spend_event(_build(kwargs, _response()))
+    assert not isinstance(event, SpendEventDecodeError)
+    args: Final = spend_event_callback_args(event)
+
+    row: Final = get_logging_payload(
+        kwargs=dict(args.kwargs), response_obj=args.response_obj, start_time=args.start_time, end_time=args.end_time
+    )
+
+    assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == tokens
+
+
 def test_streaming_event_reconstructs_complete_streaming_response():
     kwargs: Final = {**_success_kwargs(), "stream": True, "complete_streaming_response": _response()}
     event: Final = decode_spend_event(_build(kwargs, _response()))
@@ -194,9 +233,23 @@ def test_undecodable_line_is_an_error_value():
     assert isinstance(decode_spend_event(b"not json\n"), SpendEventDecodeError)
 
 
-def test_batch_retrieves_stay_in_process():
-    assert is_offloadable_success(_response()) is True
-    assert is_offloadable_success(None) is True
+@pytest.mark.parametrize(
+    ("settlement", "offloadable"),
+    [(BackgroundResponseSettlement.SETTLES, False), (None, True), ("settles", True)],
+    ids=["settling_read_stays_in_process", "other_read_is_offloaded", "lookalike_string_is_offloaded"],
+)
+def test_only_a_background_response_settling_read_stays_in_process(
+    settlement: BackgroundResponseSettlement | str | None, offloadable: bool
+) -> None:
+    kwargs: Final = {"call_type": "pass_through_endpoint", SETTLES_BACKGROUND_RESPONSE_KWARG: settlement}
+    assert is_offloadable_success(None, kwargs) is offloadable
+
+
+def test_batch_retrieves_and_video_status_polls_stay_in_process():
+    assert is_offloadable_success(_response(), {"call_type": "acompletion"}) is True
+    assert is_offloadable_success(None, {}) is True
+    assert is_offloadable_success(None, {"call_type": "avideo_generation"}) is True
+    assert is_offloadable_success(None, {"call_type": "avideo_status"}) is False
     assert (
         is_offloadable_success(
             LiteLLMBatch(
@@ -207,7 +260,8 @@ def test_batch_retrieves_stay_in_process():
                 input_file_id="f",
                 object="batch",
                 status="completed",
-            )
+            ),
+            {"call_type": "aretrieve_batch"},
         )
         is False
     )

@@ -12,6 +12,7 @@ inflating TTFT and turning a steady provider stream into gap-then-burst delivery
 import binascii
 import json
 import struct
+from collections.abc import Mapping
 from typing import AsyncIterator, Final, Iterator
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ import litellm
 import pytest
 import respx
 
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.sagemaker.common_utils import SagemakerError
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 
@@ -374,6 +376,27 @@ def test_completion_sagemaker_non_stream(
 
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.usefixtures("fake_provider_credentials")
+def test_completion_sagemaker_sends_the_inference_component_only_as_a_header(respx_mock: respx.MockRouter) -> None:
+    url: Final = "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-endpoint/invocations"
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    litellm.completion(
+        model="sagemaker/my-endpoint",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        model_id="my-inference-component",
+        aws_region_name="us-west-2",
+        num_retries=0,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["X-Amzn-SageMaker-Inference-Component"] == "my-inference-component"
+    assert json.loads(request.content) == {"inputs": "hi", "parameters": {"temperature": 0.2}}
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_completion_sagemaker_non_stream_with_aws_params(respx_mock: respx.MockRouter) -> None:
     url: Final = (
         "https://runtime.sagemaker.us-west-5.amazonaws.com/endpoints/"
@@ -528,7 +551,7 @@ async def test_completion_sagemaker(
 
     assert route.called
     assert response.choices[0].message.content == "SageMaker reply"
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(rate)
+    assert litellm.completion_cost(completion_response=response, custom_cost_per_second=rate) == pytest.approx(rate)
 
 
 @pytest.mark.asyncio
@@ -618,3 +641,45 @@ async def test_completion_sagemaker_streaming_bad_request(
     assert route.called
     assert exc_info.value.status_code == 400
     assert exc_info.value.llm_provider == "sagemaker"
+
+
+async def _drain_stream(request: Mapping[str, object], sync_mode: bool) -> None:
+    if sync_mode:
+        _ = tuple(litellm.completion(**request))
+        return
+    _ = [chunk async for chunk in await litellm.acompletion(**request)]
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_sagemaker_stream_with_an_empty_200_body_raises_bad_gateway(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    respx_mock.post(
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations-response-stream"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            content=b"",
+            headers={"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": "req-sagemaker-1"},
+        )
+    )
+    request: Final = {
+        "model": "sagemaker/my-endpoint",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+    }
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await _drain_stream(request, sync_mode)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.is_pre_first_chunk is True
+    assert isinstance(exc_info.value.original_exception, litellm.BadGatewayError)
+    assert "decoded to no events" in str(exc_info.value)
+    assert "req-sagemaker-1" in str(exc_info.value)

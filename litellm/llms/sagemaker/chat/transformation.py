@@ -7,8 +7,8 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import httpx
 from httpx._models import Headers
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -28,7 +29,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import INFERENCE_COMPONENT_HEADER, OBJECT_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -39,36 +40,45 @@ else:
 
 
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SAGEMAKER_SESSION_POLICY
+
     def __init__(self, **kwargs):
         OpenAIGPTConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return SagemakerError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[object, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[object, object]:
         inference_component_name: Final = optional_params.get("model_id")
         if not isinstance(inference_component_name, str):
             return headers
-        return {**headers, "X-Amzn-SageMaker-Inference-Component": inference_component_name}
+        other_headers: Final = {
+            name: value
+            for name, value in OBJECT_KEYED_MAPPING.validate_python(headers).items()
+            if not isinstance(name, str) or name.lower() != INFERENCE_COMPONENT_HEADER.lower()
+        }
+        return {**other_headers, INFERENCE_COMPONENT_HEADER: inference_component_name}
 
     def transform_request(
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: matches the base chat transform signature
-        optional_params: dict,  # mutable-ok: matches the base chat transform signature
-        litellm_params: dict,  # mutable-ok: matches the base chat transform signature
-        headers: dict,  # mutable-ok: matches the base chat transform signature
-    ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
+        optional_params: dict[str, object],  # mutable-ok: matches the base chat transform signature
+        litellm_params: dict[str, object],  # mutable-ok: matches the base chat transform signature
+        headers: dict[str, object],  # mutable-ok: matches the base chat transform signature
+    ) -> dict[str, object]:  # mutable-ok: the handler sends this body straight to httpx
         request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: base transform returns a dict
             model=model,
             messages=messages,
@@ -76,9 +86,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
-        container_request: Final = {
-            key: value for key, value in request.items() if key not in self.aws_authentication_params
-        }
+        header_only_params: Final = frozenset((*self.aws_authentication_params, "model_id"))
+        container_request: Final = {key: value for key, value in request.items() if key not in header_only_params}
         served_model_name: Final = litellm_params.get("hf_model_name")
         if not isinstance(served_model_name, str):
             return container_request
@@ -89,8 +98,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         aws_region_name: Final = self._get_aws_region_name(
@@ -112,15 +121,15 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         return self._sign_request(
             service_name="sagemaker",
             headers=headers,
@@ -147,9 +156,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -175,7 +184,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.iter_bytes(response.iter_bytes())
+        completion_stream: Final = custom_stream_decoder.iter_bytes(
+            response.iter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -192,9 +203,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -224,7 +235,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.aiter_bytes(response.aiter_bytes())
+        completion_stream: Final = custom_stream_decoder.aiter_bytes(
+            response.aiter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

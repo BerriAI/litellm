@@ -1,20 +1,26 @@
 import enum
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
+from typing import Any, Final, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
-from pydantic import Field, PositiveInt, field_validator, model_validator
+from pydantic import Field, PositiveInt, StrictBool, field_validator, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
-from litellm.types.router import UpdateRouterConfig
+from litellm.types.router import ContentPolicyFallbackRules, UpdateRouterConfig
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
     index_permissions: list[Literal["read", "write"]]
+
+
+def _fallback_targets(rules: ContentPolicyFallbackRules) -> Iterator[object]:
+    for rule in rules:
+        for targets in rule.values():
+            yield from targets
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -29,7 +35,7 @@ class KeyRequestBase(GenerateRequestBase):
     enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
-    allowed_routes: list[Any] | None = []
+    allowed_routes: list[object] | None = []
     allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
@@ -41,6 +47,18 @@ class KeyRequestBase(GenerateRequestBase):
     )
     router_settings: UpdateRouterConfig | None = None
     access_group_ids: list[str] | None = None
+
+    @field_validator("router_settings")
+    @classmethod
+    def content_policy_fallbacks_name_models(
+        cls, router_settings: UpdateRouterConfig | None
+    ) -> UpdateRouterConfig | None:
+        rules: Final = None if router_settings is None else router_settings.content_policy_fallbacks
+        if rules is not None and not all(isinstance(target, str) for target in _fallback_targets(rules)):
+            raise ValueError(
+                'A key\'s content_policy_fallbacks targets must be model names, e.g. [{"gpt-4": ["gpt-4o"]}]'
+            )
+        return router_settings
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -92,6 +110,14 @@ class UpdateKeyRequest(KeyRequestBase):
     spend: float | None = None
     soft_budget: float | None = None
     metadata: dict[Any, Any] | None = None
+    lens_enabled: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Enable or disable Lens tracing for this key. Omit to retain its policy or send null to inherit "
+            "the team policy. This updates only metadata.lens_enabled and preserves other stored metadata. "
+            "When metadata is also supplied, this field takes precedence over metadata.lens_enabled."
+        ),
+    )
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
     auto_rotate: bool | None = None
@@ -100,7 +126,7 @@ class UpdateKeyRequest(KeyRequestBase):
 
     project_id: str | None = Field(
         default=None,
-        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+        description="Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.",
     )
 
     @model_validator(mode="before")

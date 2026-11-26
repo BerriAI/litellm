@@ -2,11 +2,16 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PromptLayerLogger:
@@ -15,10 +20,17 @@ class PromptLayerLogger:
         # Instance variables
         self.key = os.getenv("PROMPTLAYER_API_KEY")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str], object],
+    ):
         # Method definition
         try:
-            new_kwargs: Final = {}
+            new_kwargs: Final[dict[str, object]] = {}
             new_kwargs["model"] = kwargs["model"]
             new_kwargs["messages"] = kwargs["messages"]
 
@@ -61,8 +73,8 @@ class PromptLayerLogger:
                 },
             )
 
-            response_json: Final = request_response.json()
-            if not request_response.json().get("success", False):
+            response_json: Final = decoded_json_object(_DECODED_JSON.validate_python(request_response.json()))
+            if not response_json.get("success", False):
                 raise Exception("Promptlayer did not successfully log the response!")
 
             print_verbose(f"Prompt Layer Logging: success - final response object: {request_response.text}")

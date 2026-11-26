@@ -170,7 +170,7 @@ def test_user_delete_revokes_keys_and_memberships(gateway: Gateway, peer: Gatewa
         assert info.json() == {
             "error": {
                 "message": f"User {user_id} not found",
-                "type": "internal_server_error",
+                "type": "invalid_request_error",
                 "param": None,
                 "code": "404",
             }
@@ -337,7 +337,7 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypa
         expected_info: Final = {
             "error": {
                 "message": f"User {user_id} not found",
-                "type": "internal_server_error",
+                "type": "invalid_request_error",
                 "param": None,
                 "code": "404",
             }

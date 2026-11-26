@@ -1,9 +1,12 @@
 import asyncio
+import contextlib
 import gzip
 import importlib
+import inspect
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping
+import queue
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
@@ -11,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, Omit, OpenAI, omit
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -19,11 +22,14 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 import litellm
 from litellm import create_thread, get_thread
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
+    OpenAIBatchesAPI,
     OpenAIChatCompletion,
     OpenAIConfig,
     OpenAIMessage as Message,
@@ -37,7 +43,7 @@ from litellm.types.utils import (
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -222,6 +228,379 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     prompt_tokens_details: Final = response.usage.prompt_tokens_details
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
+
+
+_SDK_READS_OPENAI_ADMIN_KEY: Final = "admin_api_key" in inspect.signature(AsyncOpenAI.__init__).parameters
+
+
+@pytest.mark.skipif(not _SDK_READS_OPENAI_ADMIN_KEY, reason="openai<3 has no OPENAI_ADMIN_KEY fallback to leak")
+@pytest.mark.asyncio
+async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-only")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-no-admin-key",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
+        with contextlib.suppress(litellm.AuthenticationError, litellm.InternalServerError):
+            await asyncio.wait_for(
+                litellm.acompletion(
+                    model="openai/gpt-5.4-mini",
+                    api_key="",
+                    messages=[{"role": "user", "content": "who signs this request"}],
+                    num_retries=0,
+                    max_retries=0,
+                ),
+                timeout=10,
+            )
+
+    sent: Final = tuple(outbound.get_nowait() for _ in range(outbound.qsize()))
+    assert all(authorization is None for authorization in sent), sent
+
+
+
+class _SearchingChatGate(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call-1"}]}
+
+
+class _FailingFollowUpChatLoop(_SearchingChatGate):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+        self.logging_objs: list[object] = []
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        self.runs += 1
+        self.logging_objs.append(logging_obj)
+        raise self.error
+
+
+class _RaisingAgenticGate(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        raise ValueError("gate bug")
+
+
+class _AnsweringChatLoop(_SearchingChatGate):
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        self.runs += 1
+        return litellm.ModelResponse(
+            choices=[
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "after the search"}}
+            ]
+        )
+
+
+def _respond_with_a_search_tool_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-search",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "litellm_web_search", "arguments": '{"query": "weather"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+
+async def _acompletion_through(http_client: httpx.AsyncClient) -> object:
+    return await asyncio.wait_for(
+        litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "search the web for the weather"}],
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_surfaces_a_failed_agentic_follow_up_instead_of_the_first_turn(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    follow_up_error: Final = litellm.RateLimitError(
+        message="follow-up rate limited", llm_provider="openai", model="gpt-5.6"
+    )
+    loop: Final = _FailingFollowUpChatLoop(follow_up_error)
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.RateLimitError) as raised:
+            await _acompletion_through(http_client)
+
+    assert raised.value.message == follow_up_error.message
+    assert loop.runs == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_agentic_follow_up_bills_the_first_call_on_the_failure_log(monkeypatch: pytest.MonkeyPatch):
+    loop: Final = _FailingFollowUpChatLoop(
+        litellm.RateLimitError(message="follow-up rate limited", llm_provider="openai", model="gpt-5.6")
+    )
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.RateLimitError):
+            await _acompletion_through(http_client)
+
+    (logging_obj,) = loop.logging_objs
+    price: Final = litellm.model_cost["gpt-5.6"]
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 8
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        5 * price["input_cost_per_token"] + 3 * price["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_does_not_resend_the_first_call_when_the_agentic_follow_up_answers_422(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    follow_up_error: Final = litellm.UnprocessableEntityError(
+        message="follow-up rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        response=httpx.Response(422, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+    )
+    loop: Final = _FailingFollowUpChatLoop(follow_up_error)
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.UnprocessableEntityError) as raised:
+            await _acompletion_through(http_client)
+
+    assert raised.value.message == follow_up_error.message
+    assert loop.runs == 1
+
+
+def _rejecting_the_user_param(outbound: asyncio.Queue[dict[str, object]]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        outbound.put_nowait(body)
+        if "user" in body:
+            rejection: Final = json.dumps({"detail": [{"loc": ["body", "user"], "msg": "extra fields not permitted"}]})
+            return httpx.Response(422, json={"error": {"message": rejection}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-resent",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            },
+        )
+
+    return httpx.MockTransport(respond)
+
+
+async def _acompletion_with_a_user_param(http_client: httpx.AsyncClient) -> object:
+    return await asyncio.wait_for(
+        litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "hi"}],
+            user="end-user-1",
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_resends_without_the_param_a_422_rejects_when_drop_params_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+    outbound: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async with httpx.AsyncClient(transport=_rejecting_the_user_param(outbound)) as http_client:
+        response: Final = await _acompletion_with_a_user_param(http_client)
+
+    assert response.choices[0].message.content == "done"
+    assert outbound.get_nowait()["user"] == "end-user-1"
+    assert "user" not in outbound.get_nowait()
+    assert outbound.empty()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_raises_a_422_without_resending_when_drop_params_is_off(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    outbound: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async with httpx.AsyncClient(transport=_rejecting_the_user_param(outbound)) as http_client:
+        with pytest.raises(litellm.BadRequestError, match="extra fields not permitted"):
+            await _acompletion_with_a_user_param(http_client)
+
+    assert outbound.get_nowait()["user"] == "end-user-1"
+    assert outbound.empty()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_skips_a_failing_agentic_gate_and_runs_the_next_hook(monkeypatch: pytest.MonkeyPatch):
+    loop: Final = _AnsweringChatLoop()
+    monkeypatch.setattr(litellm, "callbacks", [_RaisingAgenticGate(), loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        response = await _acompletion_through(http_client)
+
+    assert loop.runs == 1
+    assert response.choices[0].message.content == "after the search"
+
+
+class _SearchAgainLoop(CustomLogger):
+    def __init__(self, client: AsyncOpenAI) -> None:
+        super().__init__()
+        self._client = client
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        searches: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in response.choices[0].message.tool_calls or []
+            if call.function.name == "litellm_web_search"
+        ]
+        return bool(searches), {"tool_calls": searches}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> AgenticLoopPlan:
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[*messages, {"role": "user", "content": "here are the search results"}],
+                kwargs={"client": self._client},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_ends_the_turn_at_max_agentic_loops_without_the_internal_search_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    upstream_calls: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def always_search(request: httpx.Request) -> httpx.Response:
+        upstream_calls.put_nowait(request)
+        return _respond_with_a_search_tool_call(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(always_search)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        monkeypatch.setattr(litellm, "callbacks", [_SearchAgainLoop(client)])
+        response: Final = await asyncio.wait_for(
+            litellm.acompletion(
+                model="openai/gpt-5.6",
+                api_key="transport-only",
+                client=client,
+                messages=[{"role": "user", "content": "search the web for the weather"}],
+                max_agentic_loops=1,
+                num_retries=0,
+                max_retries=0,
+            ),
+            timeout=10,
+        )
+
+    assert upstream_calls.qsize() == 2
+    assert not response.choices[0].message.tool_calls
 
 
 _REASONING_TOOL_CALL_REPLY: Final = {
@@ -548,7 +927,7 @@ _QUERY_SECRET: Final = "query-secret"
     ("status_code", "mapped_error", "body"),
     (
         (400, litellm.BadRequestError, _REFUSAL_BODY),
-        (403, litellm.APIError, _REFUSAL_BODY),
+        (403, litellm.PermissionDeniedError, _REFUSAL_BODY),
         (408, litellm.Timeout, _REFUSAL_BODY),
         (408, litellm.Timeout, _GATEWAY_TIMEOUT_BODY),
         (409, litellm.APIError, _REFUSAL_BODY),
@@ -1452,7 +1831,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -2285,6 +2664,132 @@ async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_head
     assert sent.headers["authorization"] == "Bearer sk-test"
 
 
+_HEADER_WIRE_BASE: Final = "https://openai-compatible.example/v1"
+_EMBEDDING_RESPONSE_JSON: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+_CHAT_STREAM_CHUNK: Final = {
+    **_CHAT_RESPONSE_JSON,
+    "object": "chat.completion.chunk",
+    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+}
+_CHAT_STREAM_BODY: Final = f"data: {json.dumps(_CHAT_STREAM_CHUNK)}\n\ndata: [DONE]\n\n".encode()
+_HeaderCall = Literal[
+    "completion",
+    "completion_stream",
+    "acompletion",
+    "acompletion_stream",
+    "embedding",
+    "aembedding",
+    "embedding_float",
+    "aembedding_float",
+]
+_HEADER_CALLS_BYPASSING_SDK_TRANSFORM: Final[tuple[_HeaderCall, ...]] = (
+    "completion",
+    "completion_stream",
+    "acompletion",
+    "acompletion_stream",
+    "embedding",
+    "aembedding",
+)
+_ALL_HEADER_CALLS: Final[tuple[_HeaderCall, ...]] = (
+    *_HEADER_CALLS_BYPASSING_SDK_TRANSFORM,
+    "embedding_float",
+    "aembedding_float",
+)
+
+
+def _recording_transport(sent: queue.SimpleQueue[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        if request.url.path.endswith("/embeddings"):
+            return httpx.Response(200, json=_EMBEDDING_RESPONSE_JSON)
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(200, content=_CHAT_STREAM_BODY, headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+
+    return httpx.MockTransport(respond)
+
+
+async def _call_with_extra_headers(
+    call: _HeaderCall, extra_headers: Mapping[str, object], transport: httpx.MockTransport
+) -> None:
+    chat: Final = {"model": "openai/gpt-5.4", "messages": _MESSAGES, "num_retries": 0, "extra_headers": extra_headers}
+    embed: Final = {
+        "model": "openai/text-embedding-3-small",
+        "input": ["hi"],
+        "num_retries": 0,
+        "extra_headers": extra_headers,
+    }
+    with OpenAI(
+        api_key="sk-test", base_url=_HEADER_WIRE_BASE, max_retries=0, http_client=httpx.Client(transport=transport)
+    ) as sync_client:
+        async with AsyncOpenAI(
+            api_key="sk-test",
+            base_url=_HEADER_WIRE_BASE,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as async_client:
+            match call:
+                case "completion":
+                    litellm.completion(client=sync_client, **chat)
+                case "completion_stream":
+                    list(litellm.completion(client=sync_client, stream=True, **chat))
+                case "acompletion":
+                    await litellm.acompletion(client=async_client, **chat)
+                case "acompletion_stream":
+                    async for _ in await litellm.acompletion(client=async_client, stream=True, **chat):
+                        pass
+                case "embedding":
+                    litellm.embedding(client=sync_client, **embed)
+                case "aembedding":
+                    await litellm.aembedding(client=async_client, **embed)
+                case "embedding_float":
+                    litellm.embedding(client=sync_client, encoding_format="float", **embed)
+                case "aembedding_float":
+                    await litellm.aembedding(client=async_client, encoding_format="float", **embed)
+
+
+@pytest.mark.parametrize("call", _ALL_HEADER_CALLS)
+@pytest.mark.parametrize(
+    ("authorization", "expected_authorization"),
+    ((omit, None), (Omit(), None), ("Bearer caller", "Bearer caller"), (None, "Bearer sk-test")),
+    ids=("omit", "fresh-omit-instance", "string-override", "default"),
+)
+async def test_extra_headers_control_the_sdk_authorization_header_on_the_wire(
+    call: _HeaderCall,
+    authorization: str | Omit | None,
+    expected_authorization: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
+    sent: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+    auth_header: Final = {} if authorization is None else {"Authorization": authorization}
+
+    await _call_with_extra_headers(call, {**auth_header, "x-caller": "unit"}, _recording_transport(sent))
+
+    request: Final = sent.get_nowait()
+    assert sent.empty()
+    assert request.headers.get("authorization") == expected_authorization
+    assert request.headers["x-caller"] == "unit"
+
+
+@pytest.mark.parametrize("call", _HEADER_CALLS_BYPASSING_SDK_TRANSFORM)
+async def test_extra_headers_with_a_non_string_value_fail_before_any_request(
+    call: _HeaderCall, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
+    sent: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    with pytest.raises(litellm.InternalServerError):
+        await _call_with_extra_headers(call, {"x-caller": 1}, _recording_transport(sent))
+
+    assert sent.empty()
+
+
 def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
     return [
         {"role": "system", "content": "You are terse."},
@@ -2320,3 +2825,236 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+class _ChatCompletionOnlyAgenticLoop(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, ModelResponse) and response.choices[0].finish_reason == "tool_calls", {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> ModelResponse:
+        return ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_runs_a_callback_that_only_implements_the_chat_completion_agentic_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_ChatCompletionOnlyAgenticLoop()])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://openai-compatible.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-lookup",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_lookup",
+                                    "type": "function",
+                                    "function": {"name": "lookup_order", "arguments": '{"order_id": "42"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Where is order 42?"}],
+        tools=[{"type": "function", "function": {"name": "lookup_order", "parameters": {"type": "object"}}}],
+        api_key="sk-test",
+        api_base="https://openai-compatible.example/v1",
+    )
+
+    assert response.choices[0].message.content == "order shipped"
+
+
+@pytest.mark.asyncio
+async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_can_await(
+    http_backend: ModuleType,
+):
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert str(request.url).startswith("http://vllm-router.test/v1/batches")
+        return http_backend.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "batch_5f8dac",
+                        "status": "pending",
+                        "input_file_id": "file-b73f4c",
+                        "created_at": 1793239207,
+                        "endpoint": "/v1/chat/completions",
+                        "completion_window": "24h",
+                    }
+                ],
+                "first_id": "batch_5f8dac",
+                "last_id": "batch_5f8dac",
+                "has_more": False,
+            },
+        )
+
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        page: Final = OpenAIBatchesAPI().list_batches(
+            _is_async=False,
+            api_key="sk-test",
+            api_base="http://vllm-router.test/v1",
+            timeout=5.0,
+            max_retries=0,
+            organization=None,
+            client=AsyncOpenAI(api_key="sk-test", base_url="http://vllm-router.test/v1", http_client=http_client),
+        )
+
+        assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]
+
+
+_STREAM_CHUNK_BASE: Final = {
+    "id": "chatcmpl-decode",
+    "object": "chat.completion.chunk",
+    "created": 1700000000,
+    "model": "gpt-5.5",
+}
+_STREAM_CHUNK_PAYLOADS: Final = (
+    {
+        **_STREAM_CHUNK_BASE,
+        "system_fingerprint": "fp_1",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "logprobs": None, "finish_reason": None}
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}},
+                        {"index": 1, "type": None, "function": {"arguments": None}},
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 2,
+            "total_tokens": 11,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "cost": 0.5,
+        },
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "a"},
+                "logprobs": {"content": [{"token": "a", "logprob": 0, "bytes": [97], "top_logprobs": []}]},
+                "finish_reason": "stop",
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "provider": "upstream",
+        "citations": ["https://e.example"],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "", "reasoning_content": "think", "provider_specific_fields": {"k": 1}},
+                "finish_reason": None,
+                "stop_reason": 128009,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "created": "1700000000",
+        "choices": [{"index": 0, "delta": {"content": "numeric string"}, "finish_reason": None}],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "object": "chat.completion",
+        "choices": [{"index": 0, "delta": {"content": "loose"}, "finish_reason": "eos"}],
+    },
+    {**_STREAM_CHUNK_BASE, "created": 1700000000.5, "choices": [{"index": "0", "delta": None}]},
+)
+
+
+def _model_state(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return (
+            type(value),
+            {key: _model_state(item) for key, item in value.__dict__.items()},
+            {key: _model_state(item) for key, item in (value.__pydantic_extra__ or {}).items()},
+            frozenset(value.model_fields_set & type(value).model_fields.keys()),
+        )
+    if isinstance(value, list):
+        return [_model_state(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _model_state(item) for key, item in value.items()}
+    return (type(value), value)
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_chunks_decode_exactly_like_the_sdk_for_strict_and_loose_payloads():
+    from openai._models import construct_type
+    from openai.types.chat import ChatCompletionChunk
+
+    body: Final = b"".join(f"data: {json.dumps(p)}\n\n".encode() for p in _STREAM_CHUNK_PAYLOADS) + b"data: [DONE]\n\n"
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        _, stream = await OpenAIChatCompletion().make_openai_chat_completion_request(
+            openai_aclient=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "q"}], "stream": True},
+            timeout=10,
+            logging_obj=MagicMock(),
+        )
+        decoded: Final = [chunk async for chunk in stream]
+
+    assert [_model_state(chunk) for chunk in decoded] == [
+        _model_state(construct_type(type_=ChatCompletionChunk, value=payload)) for payload in _STREAM_CHUNK_PAYLOADS
+    ]

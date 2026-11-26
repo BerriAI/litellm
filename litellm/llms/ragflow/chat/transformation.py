@@ -10,6 +10,7 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -65,8 +66,8 @@ class RAGFlowConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -168,14 +169,14 @@ class RAGFlowConfig(OpenAIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for RAGFlow API.
 
@@ -221,10 +222,10 @@ class RAGFlowConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform request for RAGFlow API.
 

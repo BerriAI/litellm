@@ -10,8 +10,9 @@ import itertools
 import json
 import os
 import re
-from collections.abc import AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias
 from urllib.parse import urlparse
 
@@ -23,9 +24,23 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    is_undecodable_json_object,
+    joined,
+    json_contains,
+)
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    tool_calls_with_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -137,6 +152,8 @@ class _ResponsesInputItem(LiteLLMBaseModel):
 _ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
 _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_DECODED_JSON: Final = TypeAdapter(object)
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _AirsToolEvent(TypedDict):
@@ -338,14 +355,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return ""
 
-    def _extract_text_from_content_list(self, content_list: list[dict[str, Any]]) -> str:
+    def _extract_text_from_content_list(self, content_list: Sequence[object]) -> str:
         """Extract text from content list format."""
         text_parts: Final = [
             part.get("text", "")
-            for part in content_list
+            for part in map(as_str_mapping, content_list)
             if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
         ]
-        return " ".join(text_parts) if text_parts else ""
+        return joined(" ", text_parts) if text_parts else ""
 
     def _extract_response_text(self, response: ModelResponse) -> str:
         """
@@ -354,7 +371,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         Returns concatenated text for scanning.
         """
         try:
-            text_parts: Final = []
+            text_parts: Final[list[str]] = []
 
             if hasattr(response, "choices") and response.choices:
                 for choice in response.choices:
@@ -364,10 +381,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                             text_parts.append(str(choice.message.content))
 
                         # Extract tool call arguments
-                        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                            for tool_call in choice.message.tool_calls:
-                                if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-                                    text_parts.append(str(tool_call.function.arguments))
+                        for tool_call in tool_calls_with_server_tool_calls(choice.message):
+                            if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                                text_parts.append(str(tool_call.function.arguments))
 
                         # Extract function call arguments (legacy)
                         if hasattr(choice.message, "function_call") and choice.message.function_call:
@@ -386,7 +402,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         metadata: Mapping[str, object] | None = None,
         call_id: object = None,
         tool_event: _AirsToolEvent | None = None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         """Call PANW Prisma AIRS API to scan content or a tool_event."""
 
         if tool_event is None and not content.strip():
@@ -498,30 +514,32 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
             response.raise_for_status()
 
-            result: Final[dict[str, object]] = response.json()
+            result: Final = _DECODED_JSON.validate_python(response.json())
 
             # Validate response format
-            if "action" not in result:
+            if not json_contains(result, "action"):
                 verbose_proxy_logger.error("PANW Prisma AIRS: Invalid API response format: %s", result)
                 return {"action": "block", "category": "api_error"}
 
+            body: Final = decoded_json_object(result)
+
             # Check for profile-related errors from PANW API
-            if result.get("action") == "block" and "error" in result:
-                error_msg: Final = str(result.get("error", "")).lower()
+            if body.get("action") == "block" and "error" in body:
+                error_msg: Final = str(body.get("error", "")).lower()
                 if "profile" in error_msg and (
                     "not found" in error_msg or "required" in error_msg or "invalid" in error_msg
                 ):
                     verbose_proxy_logger.error(
                         "PANW Prisma AIRS: Profile configuration error. Ensure your API key has a linked profile in Strata Cloud Manager, or provide 'profile_name' or 'profile_id' in config/metadata. PANW API response: %s",
-                        result,
+                        body,
                     )
 
             verbose_proxy_logger.debug(
                 "PANW Prisma AIRS: Scan result - Action: %s, Category: %s",
-                result.get("action"),
-                result.get("category", "unknown"),
+                body.get("action"),
+                body.get("category", "unknown"),
             )
-            return result
+            return body
 
         except httpx.HTTPStatusError as e:
             status: Final = e.response.status_code
@@ -641,7 +659,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return None
 
     @staticmethod
-    def _mask_content_list(content_list: list, masked_text: str) -> list:
+    def _mask_content_list(content_list: Sequence[object], masked_text: str) -> list:
         """Replace text parts in a content list, preserving non-text parts (images, etc.)."""
         new_content: Final = []
         for part in content_list:
@@ -653,7 +671,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     @staticmethod
     def _apply_mcp_masking(
-        request_data: dict,
+        request_data: dict[str, object],
         original_args: object,
         masked_text: str,
         *,
@@ -756,6 +774,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     elif isinstance(content, list):
                         choice.message.content = self._mask_content_list(content, masked_text)
 
+                write_anthropic_server_tool_calls(
+                    choice.message,
+                    tuple(
+                        with_server_tool_call_arguments(server_tool_call, masked_text)
+                        for server_tool_call in anthropic_server_tool_call_params(choice.message)
+                    ),
+                )
+
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
@@ -823,7 +849,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     def _handle_api_error_with_logging(
         self,
-        scan_result: dict[str, object],
+        scan_result: Mapping[str, object],
         data: dict[str, object],
         start_time: datetime,
         event_type: GuardrailEventHooks,
@@ -888,7 +914,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-    def _prepare_metadata_from_request(self, data: dict[str, Any]) -> dict[str, object]:
+    def _prepare_metadata_from_request(self, data: Mapping[str, object]) -> dict[str, object]:
         """
         Extract and prepare metadata from request data for PANW API call.
 
@@ -902,8 +928,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         the profile linked to the API key (configured in Strata Cloud Manager).
         If both are provided, PANW API uses profile_id (profile_id takes precedence).
         """
-        user_metadata: Final = data.get("metadata", {}) or {}
-        requester_meta: Final = user_metadata.get("requester_metadata", {}) or {}
+        user_metadata: Final = decoded_json_object(data.get("metadata") or _NO_METADATA)
+        requester_meta: Final = user_metadata.get("requester_metadata") or _NO_METADATA
         metadata: Final[dict[str, object]] = {
             "user": data.get("user") or "litellm_user",
             "model": data.get("model") or "unknown",
@@ -911,7 +937,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         # Pass through PANW API fields (check requester_metadata fallback for /v1/messages routes)
         for key in ("profile_name", "profile_id", "user_ip", "app_name", "app_user"):
-            val = user_metadata.get(key) or requester_meta.get(key)
+            val = user_metadata.get(key) or decoded_json_object(requester_meta).get(key)
             if val:
                 metadata[key] = val
 
@@ -926,7 +952,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             data.get("litellm_trace_id")
             or user_metadata.get("litellm_trace_id")
             or user_metadata.get("trace_id")
-            or requester_meta.get("litellm_trace_id")
+            or decoded_json_object(requester_meta).get("litellm_trace_id")
         )
         if trace_id:
             metadata["litellm_trace_id"] = trace_id
@@ -942,9 +968,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             line = line.strip()
             if not line.startswith("data: "):
                 continue
+            if is_undecodable_json_object(line[6:]):
+                raise GuardrailRaisedException(
+                    message="PANW Prisma AIRS could not read an event in the upstream stream, so it cannot scan the response",
+                    should_wrap_with_default_message=False,
+                )
             try:
                 data = _DECODED_ARGUMENTS.validate_python(json.loads(line[6:]))
-            except (json.JSONDecodeError, ValueError):
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(data, dict):
                 continue
@@ -958,7 +989,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _extract_text_from_streaming_events(chunks: Sequence[object]) -> str:
         """Extract text from /v1/responses streaming events (object or dict)."""
 
-        def _attr(c, key):
+        def _attr(c: object, key: str) -> object:
             val = getattr(c, key, None)
             if val is None and isinstance(c, dict):
                 val = c.get(key)
@@ -987,7 +1018,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         parts.append(text)
         return "".join(parts)
 
-    async def _scan_raw_streaming_text(self, text: str, request_data: dict, start_time: datetime) -> None:
+    async def _scan_raw_streaming_text(self, text: str, request_data: dict[str, object], start_time: datetime) -> None:
         """Scan text from non-ModelResponse streaming chunks. Raises HTTPException(400) on block.
 
         Note: response masking is not supported on raw streaming paths
@@ -1345,9 +1376,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     async def _scan_and_process_streaming_response(
         self,
         assembled_model_response: ModelResponse,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: datetime,
-    ) -> tuple[bool, ModelResponse, dict[str, object]]:
+    ) -> tuple[bool, ModelResponse, Mapping[str, object]]:
         """
         Scan assembled streaming response and apply masking if needed.
         Returns (content_was_modified, response, scan_result).
@@ -1411,7 +1442,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
         request_data: dict[str, object],
-    ):
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and scan the assembled response.
         """
@@ -1531,11 +1562,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     async def _scan_tool_calls_for_guardrail(
         self,
-        tool_calls: list,
+        tool_calls: Sequence[ToolCallLike],
         is_response: bool,
         metadata: Mapping[str, object],
         call_id: object,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: datetime,
     ) -> None:
         """Scan tool calls with allow/block/mask treatment (in-place modification).
@@ -1797,6 +1828,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     def supports_scan_only_tool_results(self) -> bool:
         return False
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
 
     def supports_structured_messages(self) -> bool:
         return False

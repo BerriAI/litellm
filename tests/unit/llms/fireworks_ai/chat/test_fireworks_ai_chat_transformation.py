@@ -1,4 +1,6 @@
+import copy
 import json
+import logging
 from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -9,6 +11,7 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -20,6 +23,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
+from tests.unit.llms.fireworks_ai.latest_router_aliases import LATEST_ROUTER_ALIAS_TARGETS
 
 
 def test_validate_environment_sets_session_affinity_from_litellm_session_id():
@@ -365,6 +369,21 @@ def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     assert "tool_choice" not in supported_params
 
 
+@pytest.mark.parametrize(("alias", "target"), LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_accepts_the_same_params_as_the_model_it_points_to(alias: str, target: str) -> None:
+    config: Final = FireworksAIConfig()
+    alias_params: Final = set(config.get_supported_openai_params(alias))
+    target_params: Final = set(config.get_supported_openai_params(target))
+    excluded_params: Final = (
+        {"reasoning_effort", "reasoning_history", "thinking"}
+        if alias == "accounts/fireworks/routers/glm-flash-latest"
+        else set()
+    )
+
+    assert alias_params - excluded_params == target_params - excluded_params
+    assert "tool_choice" in alias_params
+
+
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
     """Test that Fireworks only overrides supports_reasoning for supported models."""
     config = FireworksAIConfig()
@@ -533,6 +552,26 @@ def test_tool_search_reply_sent_to_fireworks_drops_litellm_response_fields():
             }
         ],
     }
+
+
+def test_cache_control_is_stripped_from_the_request_but_kept_on_the_callers_messages():
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "a long cached prompt", "cache_control": hint}]},
+        {"role": "user", "content": "hi", "cache_control": hint},
+    ]
+    caller_messages_before: Final = json.dumps(messages)
+
+    request: Final = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(request["messages"])
+    assert json.dumps(messages) == caller_messages_before
 
 
 # -----------------------------------------------------------------------------
@@ -2361,6 +2400,39 @@ def test_global_disable_flag_with_transform_messages_helper(
     assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
 
 
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+def test_chat_template_kwargs_effort_dropped_for_non_reasoning_model_warns_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        FireworksAIConfig().map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512}}},
+            _NON_REASONING_MODEL,
+        )
+
+    warnings: Final = _warnings_naming(caplog, "chat_template_kwargs")
+    assert len(warnings) == 1
+    assert "'reasoning_budget': 512" in warnings[0]
+    assert "llama-v3-70b-instruct" in warnings[0]
+
+
+def test_chat_template_kwargs_thinking_off_for_non_reasoning_model_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        FireworksAIConfig().map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+            _NON_REASONING_MODEL,
+        )
+
+    assert _warnings_naming(caplog, "chat_template_kwargs") == ()
+
+
 _CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN: Final = (
     {"role": "system", "content": "You are Codex"},
     {"role": "user", "content": "Hi there"},
@@ -2442,3 +2514,43 @@ def test_translate_developer_role_follows_the_deployment_model_info_over_the_cos
     )
 
     assert [message["role"] for message in messages] == expected_roles
+
+
+def test_fireworks_request_rewrites_tools_without_touching_the_callers_tool() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                    "definitions": {"Thing": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                },
+            },
+        }
+    ]
+    tools_before: Final = copy.deepcopy(tools)
+
+    request: Final = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=[{"role": "user", "content": "Make a thing"}],
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                },
+            },
+        }
+    ]
+    assert tools == tools_before

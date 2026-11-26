@@ -88,6 +88,35 @@ def test_codex_agent_message_context_compaction_and_local_shell_call_reach_mantl
         assert JSON_OBJECT.validate_json(forwarded[0].body)["input"] == expected_input, forwarded[0].body
 
 
+def test_codex_agent_message_with_encrypted_content_reaches_mantle_intact(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    agent_message: Final[JsonValue] = {
+        "type": "agent_message",
+        "author": "/root/reviewer",
+        "recipient": "/root",
+        "content": [
+            {"type": "input_text", "text": "Worker message:\n"},
+            {"type": "encrypted_content", "encrypted_content": f"gAAAAABsynthetic-agent-ciphertext-{marker}=="},
+        ],
+    }
+    expected_input: Final = [agent_message, user_turn(f"next turn {marker}")]
+
+    def mantle_peer(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/openai/v1/responses", request.target
+        assert JSON_OBJECT.validate_json(request.body)["input"] == expected_input, request.body
+        return Reply(body=RESPONSE)
+
+    with wire_server(mantle_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=MODEL, api_key=TOKEN, api_base=wire.url, aws_region_name="us-east-2")
+        response: Final = gateway.request(
+            "POST", "/v1/responses", {"model": model, "input": expected_input, "store": False}
+        )
+        assert response.status_code == 200, response.text
+        forwarded: Final = wire.drain()
+        assert len(forwarded) == 1, forwarded
+        assert JSON_OBJECT.validate_json(forwarded[0].body)["input"] == expected_input, forwarded[0].body
+
+
 SHELL_TOOL: Final[JsonValue] = {
     "type": "function",
     "name": "shell",

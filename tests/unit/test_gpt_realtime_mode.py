@@ -24,13 +24,10 @@ REALTIME_ONLY_GPT_MODELS = (
 
 REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS = (
     "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17",
-    "azure/eu/gpt-4o-realtime-preview-2024-10-01",
     "azure/eu/gpt-4o-realtime-preview-2024-12-17",
     "azure/gpt-4o-mini-realtime-preview-2024-12-17",
-    "azure/gpt-4o-realtime-preview-2024-10-01",
     "azure/gpt-4o-realtime-preview-2024-12-17",
     "azure/us/gpt-4o-mini-realtime-preview-2024-12-17",
-    "azure/us/gpt-4o-realtime-preview-2024-10-01",
     "azure/us/gpt-4o-realtime-preview-2024-12-17",
     "gpt-4o-mini-realtime-preview",
     "gpt-4o-mini-realtime-preview-2024-12-17",

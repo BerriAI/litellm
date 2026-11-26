@@ -4,16 +4,18 @@ from typing import Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
+from litellm.llms.voyage.common_utils import get_voyage_api_base, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VoyageError(BaseLLMException):
@@ -47,13 +49,13 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        return ensure_api_route(api_base or get_default_base_url(api_key), "embeddings")
+        return ensure_api_route(get_voyage_api_base(api_base, api_key), "embeddings")
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "encoding_format",
             "dimensions",
@@ -61,8 +63,8 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -79,14 +81,14 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
@@ -95,9 +97,9 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {
             "input": input,
             "model": model,
@@ -111,9 +113,9 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = raw_response.json()
@@ -125,7 +127,8 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        response_body: Final = require_get(_DECODED_JSON.validate_python(raw_response_json))
+        usage_payload: Final = _JSON_OBJECT.validate_python(response_body.get("usage", {}))
         usage: Final = Usage(
             prompt_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),
             total_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),

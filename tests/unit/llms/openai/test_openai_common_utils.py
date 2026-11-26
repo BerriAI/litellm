@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +11,12 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    create_may_already_exist,
+    drop_params_from_unprocessable_entity_error,
+    is_openai_backed_api_base,
+)
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -319,6 +326,104 @@ def _completion_kwargs(provider: str, client, **overrides) -> dict:
     }
 
 
+_REASONING_EFFORT_422: Final = {
+    "error": {
+        "message": json.dumps(
+            {"detail": [{"loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}]}
+        )
+    }
+}
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-6.1-sol",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_CHAT_COMPLETION_STREAM: Final = (
+    'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-6.1-sol",'
+    '"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+def _answer_422_while_reasoning_effort_is_sent(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    if "reasoning_effort" in body:
+        return httpx.Response(422, json=_REASONING_EFFORT_422)
+    if body.get("stream"):
+        return httpx.Response(200, text=_CHAT_COMPLETION_STREAM, headers={"content-type": "text/event-stream"})
+    return httpx.Response(200, json=_CHAT_COMPLETION)
+
+
+async def _complete_through_the_422_retry(call_shape: str) -> str:
+    transport: Final = httpx.MockTransport(_answer_422_while_reasoning_effort_is_sent)
+    kwargs: Final = {
+        "model": "gpt-6.1-sol",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "high",
+    }
+    if call_shape == "sync":
+        sync_client: Final = openai.OpenAI(api_key="sk-not-a-real-key", http_client=httpx.Client(transport=transport))
+        return litellm.completion(**kwargs, client=sync_client).choices[0].message.content
+    async_client: Final = openai.AsyncOpenAI(
+        api_key="sk-not-a-real-key", http_client=httpx.AsyncClient(transport=transport)
+    )
+    if call_shape == "async":
+        return (await litellm.acompletion(**kwargs, client=async_client)).choices[0].message.content
+    stream: Final = await litellm.acompletion(**kwargs, client=async_client, stream=True)
+    return "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+
+
+@pytest.mark.parametrize("call_shape", ["sync", "async", "async_stream"])
+def test_a_422_naming_reasoning_effort_drops_it_with_one_warning(
+    call_shape: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        content: Final = asyncio.run(_complete_through_the_422_retry(call_shape))
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert content == "ok"
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("reasoning_effort='high'", "gpt-6.1-sol", "(drop_params=True)", "422")
+    )
+
+
+def test_a_422_with_an_unhashable_loc_still_drops_reasoning_effort_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    detail: Final = [
+        {"loc": ["body", ["messages", 0]], "msg": "Invalid"},
+        {"loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"},
+    ]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if "reasoning_effort" in json.loads(request.content):
+            return httpx.Response(422, json={"error": {"message": json.dumps({"detail": detail})}})
+        return httpx.Response(200, json=_CHAT_COMPLETION)
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    client: Final = openai.OpenAI(
+        api_key="sk-not-a-real-key", http_client=httpx.Client(transport=httpx.MockTransport(answer))
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = litellm.completion(
+            model="gpt-6.1-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="high",
+            client=client,
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert response.choices[0].message.content == "ok"
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort='high'" in drop_warnings[0]
+
+
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 def test_sync_output_limit_400_maps_to_length_truncated_response(provider):
     response = litellm.completion(
@@ -588,3 +693,60 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         )
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
+
+
+
+def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCaptureFixture) -> None:
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json=_REASONING_EFFORT_422),
+    )
+    data: Final[dict[str, object]] = {"model": "gpt-6.1-sol", "messages": [], "reasoning_effort": "x" * 5000}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = drop_params_from_unprocessable_entity_error(
+            error, data, model="gpt-6.1-sol", drop_params_gated=True
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert "reasoning_effort" not in retried
+    assert len(drop_warnings) == 1
+    assert len(drop_warnings[0]) < 300
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
+
+
+@pytest.mark.parametrize("upstream_body", ["upstream is down", "<html>bad gateway</html>", "[1, 2]", "12345"])
+@respx.mock
+def test_an_error_body_that_is_not_a_json_object_keeps_the_upstream_status(upstream_body: str) -> None:
+    respx.post("https://errors.example.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(400, text=upstream_body)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.completion(
+            model="openai/test-model",
+            api_base="https://errors.example.invalid/v1",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            max_retries=0,
+        )
+
+    assert raised.value.status_code == 400
+    assert upstream_body in raised.value.message
+
+
+@pytest.mark.parametrize(("method", "may_exist"), [("GET", False), ("POST", True)])
+def test_a_gateway_timeout_says_a_create_may_exist_only_when_it_answered_a_write(method: str, may_exist: bool) -> None:
+    response: Final = httpx.Response(504, request=httpx.Request(method, "https://files.example.invalid/v1/files"))
+
+    assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=response, body=None)) is may_exist
+
+
+def test_a_gateway_timeout_on_a_followed_redirect_says_the_create_may_exist() -> None:
+    upload: Final = httpx.Response(303, request=httpx.Request("POST", "https://files.example.invalid/v1/files"))
+    followed: Final = httpx.Response(
+        504, request=httpx.Request("GET", "https://files.example.invalid/v1/files"), history=[upload]
+    )
+
+    assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=followed, body=None))

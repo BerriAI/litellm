@@ -155,20 +155,15 @@ def test_cache_init_creates_redis_cache_without_cluster_config(
 )
 def test_router_create_redis_cache_cluster_detection(startup_nodes, env_var, expected_cache_type, monkeypatch):
     """
-    Test that Router._create_redis_cache() creates RedisClusterCache when
-    either startup_nodes is in config or REDIS_CLUSTER_NODES env var is set.
+    Test that a Router given Redis settings builds a RedisClusterCache when
+    either startup_nodes is in cache_kwargs or REDIS_CLUSTER_NODES env var is set.
     Also verifies that explicit startup_nodes take precedence over env var.
 
     Regression test for https://github.com/BerriAI/litellm/issues/22748
     """
     from litellm import Router
 
-    cache_config = dict(
-        host="mockhost",
-        port=6379,
-        password="mock-password",
-        startup_nodes=startup_nodes,
-    )
+    cache_kwargs = {"startup_nodes": startup_nodes} if startup_nodes is not None else None
 
     if env_var is not None:
         monkeypatch.setenv("REDIS_CLUSTER_NODES", env_var)
@@ -178,8 +173,15 @@ def test_router_create_redis_cache_cluster_detection(startup_nodes, env_var, exp
     def _mock_redis_cache_init(*args, **kwargs): ...
 
     with patch.object(RedisCache, "__init__", _mock_redis_cache_init):
-        redis_cache = Router._create_redis_cache(cache_config)
-        assert isinstance(redis_cache, expected_cache_type)
+        router = Router(
+            model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-4o", "api_key": "x"}}],
+            redis_host="mockhost",
+            redis_port=6379,
+            redis_password="mock-password",
+            cache_kwargs=cache_kwargs,
+        )
+        redis_cache = router.health().store.redis_cache
+        assert type(redis_cache) is expected_cache_type
 
 
 def _isolated_redis_cache(host: str) -> RedisCache:

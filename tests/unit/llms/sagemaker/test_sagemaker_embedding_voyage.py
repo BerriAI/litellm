@@ -7,6 +7,7 @@ transformation, and model type detection.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -37,9 +38,7 @@ class TestSagemakerEmbeddingFactory:
 
     def test_get_model_config_hf_model(self):
         """Test that non-Voyage models return base SagemakerEmbeddingConfig"""
-        config = SagemakerEmbeddingConfig.get_model_config(
-            "sentence-transformers-model"
-        )
+        config = SagemakerEmbeddingConfig.get_model_config("sentence-transformers-model")
 
         assert isinstance(config, SagemakerEmbeddingConfig)
         assert config.get_supported_openai_params("sentence-transformers-model") == []
@@ -104,6 +103,21 @@ class TestSagemakerCohereEmbeddingConfig:
             headers={},
         )
         assert result["texts"] == ["hello"]
+
+    def test_transform_request_keeps_max_tokens_and_priority(self):
+        result: Final = self.config.transform_embedding_request(
+            model="cohere-embed-v4",
+            input=["hello"],
+            optional_params={"max_tokens": 16, "priority": 5, "truncate": "END"},
+            headers={},
+        )
+        assert result == {
+            "texts": ["hello"],
+            "input_type": "search_document",
+            "max_tokens": 16,
+            "priority": 5,
+            "truncate": "END",
+        }
 
     def test_map_openai_params_dimensions_to_output_dimension(self):
         params = self.config.map_openai_params(
@@ -391,9 +405,7 @@ class TestSagemakerEmbeddingIntegration:
 
     def test_voyage_embedding_request_format(self):
         """Test that Voyage models use correct request format"""
-        with patch(
-            "litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding"
-        ) as mock_embedding:
+        with patch("litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding") as mock_embedding:
             # Mock the actual SageMaker call to avoid AWS credentials
             mock_embedding.return_value = EmbeddingResponse(
                 object="list",
@@ -421,15 +433,11 @@ class TestSagemakerEmbeddingIntegration:
             # Check that the parameters are in the optional_params
             optional_params = call_args[1].get("optional_params", {})
             assert optional_params.get("encoding_format") == "float"
-            assert (
-                optional_params.get("output_dimension") == 1024
-            )  # dimensions is mapped to output_dimension
+            assert optional_params.get("output_dimension") == 1024  # dimensions is mapped to output_dimension
 
     def test_hf_embedding_request_format(self):
         """Test that HF models use correct request format"""
-        with patch(
-            "litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding"
-        ) as mock_embedding:
+        with patch("litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding") as mock_embedding:
             # Mock the actual SageMaker call to avoid AWS credentials
             mock_embedding.return_value = EmbeddingResponse(
                 object="list",
@@ -457,14 +465,8 @@ class TestSagemakerEmbeddingIntegration:
             assert call_args[1]["input"] == ["Hello", "World"]
             # HF models should ignore these parameters in optional_params
             optional_params = call_args[1].get("optional_params", {})
-            assert (
-                "encoding_format" not in optional_params
-                or optional_params["encoding_format"] is None
-            )
-            assert (
-                "dimensions" not in optional_params
-                or optional_params["dimensions"] is None
-            )
+            assert "encoding_format" not in optional_params or optional_params["encoding_format"] is None
+            assert "dimensions" not in optional_params or optional_params["dimensions"] is None
 
     def test_parameter_validation_voyage(self):
         """Test parameter validation for Voyage models"""
@@ -626,3 +628,114 @@ class TestTEIEmbeddingResponse:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_voyage_endpoint_sends_extra_body_fields_in_the_invoke_body():
+    client = MagicMock()
+    client.invoke_endpoint.return_value = {
+        "Body": MagicMock(
+            read=MagicMock(
+                return_value=json.dumps(
+                    {
+                        "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                        "usage": {"total_tokens": 3},
+                    }
+                ).encode()
+            )
+        )
+    }
+    session = MagicMock()
+    session.client.return_value = client
+
+    with patch("boto3.Session", return_value=session):
+        response = embedding(
+            model="sagemaker/voyage-3-5-endpoint",
+            input=["hello"],
+            aws_region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            extra_body={"input_type": "query", "truncation": False, "output_dimension": 512},
+        )
+
+    assert json.loads(client.invoke_endpoint.call_args.kwargs["Body"]) == {
+        "input": ["hello"],
+        "model": "voyage-3-5-endpoint",
+        "input_type": "query",
+        "truncation": False,
+        "output_dimension": 512,
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "input_type"),
+    [({}, "search_query"), ({"input_type": "classification"}, "classification")],
+    ids=["extra_body_over_the_default", "explicit_argument_over_extra_body"],
+)
+def test_cohere_endpoint_sends_the_extra_body_input_type_instead_of_the_default(
+    arguments: dict[str, str], input_type: str
+) -> None:
+    client = MagicMock()
+    client.invoke_endpoint.return_value = {
+        "Body": MagicMock(
+            read=MagicMock(
+                return_value=json.dumps(
+                    {"embeddings": [[0.1, 0.2]], "texts": ["hello"], "meta": {"billed_units": {"input_tokens": 1}}}
+                ).encode()
+            )
+        )
+    }
+    session = MagicMock()
+    session.client.return_value = client
+
+    with patch("boto3.Session", return_value=session):
+        response = embedding(
+            model="sagemaker/cohere-embed-v4-endpoint",
+            input=["hello"],
+            aws_region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            extra_body={"input_type": "search_query", "truncate": "END"},
+            **arguments,
+        )
+
+    assert json.loads(client.invoke_endpoint.call_args.kwargs["Body"]) == {
+        "texts": ["hello"],
+        "input_type": input_type,
+        "truncate": "END",
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+IMAGE: Final = "data:image/png;base64,aGVsbG8="
+
+
+@pytest.mark.parametrize("image_input", [IMAGE, [IMAGE]], ids=["single_string", "list"])
+def test_cohere_endpoint_keeps_the_image_input_type_over_an_extra_body_text_input_type(
+    image_input: str | list[str],
+) -> None:
+    client = MagicMock()
+    client.invoke_endpoint.return_value = {
+        "Body": MagicMock(
+            read=MagicMock(
+                return_value=json.dumps(
+                    {"embeddings": [[0.1, 0.2]], "meta": {"billed_units": {"input_tokens": 1}}}
+                ).encode()
+            )
+        )
+    }
+    session = MagicMock()
+    session.client.return_value = client
+
+    with patch("boto3.Session", return_value=session):
+        response = embedding(
+            model="sagemaker/cohere-embed-v4-endpoint",
+            input=image_input,
+            aws_region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            extra_body={"input_type": "search_query"},
+        )
+
+    assert json.loads(client.invoke_endpoint.call_args.kwargs["Body"])["input_type"] == "image"
+    assert response.data[0]["embedding"] == [0.1, 0.2]

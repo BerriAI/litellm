@@ -11,7 +11,7 @@ import importlib
 import json
 import os
 import threading
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
@@ -20,13 +20,16 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_asyncio
-from pydantic import JsonValue
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import Field, Patch
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
+    TokenDataCheckedFields,
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
@@ -36,9 +39,12 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.responses.main import mock_responses_api_response
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
+    ChatCompletionAudioResponse,
     ModelResponse,
     ModelResponseStream,
     ResponsesAPIResponse,
@@ -54,12 +60,29 @@ SIGNATURE: Final = "opaque-thought-signature"
 def _provider_fields() -> dict[str, object]:
     return {
         "reasoning_content": SECRET,
+        "reasoning": SECRET,
+        "reasoning_text": SECRET,
+        "reasoning_details": [{"type": "reasoning.text", "text": SECRET, "index": 0, "format": "unknown"}],
         "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
+        "reasoningContent": {"reasoningText": {"text": SECRET}},
+        "annotations": [{"type": "file", "file": {"name": "notes.pdf", "content": [{"type": "text", "text": SECRET}]}}],
         "citations": [{"cited_text": SECRET}],
-        "thought_signatures": [SIGNATURE],
-        "compaction_blocks": [{"type": "compaction", "content": SECRET}],
+        "citationsContent": [{"citations": [{"location": {}}], "content": [{"text": SECRET}]}],
+        "citation": {"type": "char_location", "cited_text": SECRET},
+        "web_search_calls": [{"type": "web_search_call", "action": {"type": "search", "query": SECRET}}],
+        "web_search_results": [{"type": "web_search_tool_result", "content": [{"title": SECRET}]}],
+        "tool_results": [{"type": "web_fetch_tool_result", "content": {"text": SECRET}}],
+        "code_interpreter_results": [{"stdout": SECRET}],
+        "search_results": [{"object": "vector_store.search_results.page", "data": [{"content": [{"text": SECRET}]}]}],
+        "rerank_results": {"results": [{"document": {"text": SECRET}}]},
+        "executed_tools": [{"type": "search", "search_results": {"results": [{"content": SECRET}]}}],
+        "custom_outputs": {"answer": SECRET},
+        "tool_search_items": [{"type": "tool_search_output", "tools": [{"description": SECRET}]}],
+        "compaction_blocks": [{"type": "compaction", "content": SECRET, "signature": "compaction-signature"}],
+        "compaction_start": {"type": "compaction", "content": SECRET},
         "compaction_delta": {"type": "compaction_delta", "content": SECRET},
+        "thought_signatures": [SIGNATURE],
     }
 
 
@@ -109,6 +132,86 @@ def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(sha
     assert body["system"] == "kept-system" and body["model"] == "redaction-model"
     assert body["metadata"] is params["metadata"]
     assert result == original_result and params == original_params
+
+
+def _reasoning_items() -> list[dict[str, object]]:
+    return [{"type": "reasoning", "id": "rs_redaction", "summary": [{"type": "summary_text", "text": SECRET}]}]
+
+
+def _message_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer", "reasoning_items": _reasoning_items()}}]
+    )
+
+
+def _delta_choices() -> dict[str, object]:
+    return {"choices": [{"index": 0, "delta": {"content": "answer", "reasoning_items": _reasoning_items()}}]}
+
+
+@pytest.mark.parametrize(
+    ("details", "result"),
+    [
+        pytest.param({}, _message_response(), id="message_object"),
+        pytest.param({}, _message_response().model_dump(), id="message_dict"),
+        pytest.param({}, _delta_choices(), id="delta_dict"),
+        pytest.param(
+            {"stream": True, "complete_streaming_response": ModelResponseStream(**_delta_choices())},
+            None,
+            id="stream_chunk",
+        ),
+        pytest.param({"standard_logging_object": {"response": _message_response().model_dump()}}, None, id="logged"),
+        pytest.param({"standard_logging_object": {"response": _delta_choices()}}, None, id="logged_delta"),
+    ],
+)
+def test_redaction_hides_reasoning_item_summaries(details: dict[str, object], result: object) -> None:
+    assert SECRET in str(details) + str(result)
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+
+
+def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted() -> None:
+    logprobs: Final = {"tokens": [SECRET], "token_logprobs": [-0.1], "text_offset": [0], "top_logprobs": [{SECRET: -0.1}]}
+    response: Final = TextCompletionResponse(
+        choices=[{"index": 0, "text": SECRET, "logprobs": logprobs, "finish_reason": "stop"}]
+    )
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
+
+    assert isinstance(redacted, TextCompletionResponse)
+    assert redacted.choices[0].text == "redacted-by-litellm"
+    assert SECRET not in redacted.model_dump_json()
+    assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
+
+
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_redacts_a_chat_refusal(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": None, "refusal": SECRET}}]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"refusal": SECRET}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+
+    redacted: Final = perform_redaction({"litellm_params": _request_params({})}, result)
+
+    assert SECRET not in str(redacted), redacted
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_redacts_a_delta_refusal(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(refusal=SECRET))]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
 
 
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
@@ -166,6 +269,223 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
     assert SECRET not in str(response.choices[0].delta), response
     assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
     assert fields == _provider_fields()
+
+
+def _audio_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(
+                    content=None,
+                    audio=ChatCompletionAudioResponse(data=SECRET, expires_at=1, transcript="", id="audio_1"),
+                )
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_redaction_drops_audio_from_logged_response_objects_without_touching_the_client_response(key: str) -> None:
+    client_response: Final = _audio_response()
+    details: Final[dict[str, object]] = {"stream": True, key: _audio_response()}
+
+    redacted: Final = perform_redaction(details, client_response)
+
+    assert SECRET not in str(redacted), redacted
+    assert SECRET not in str(details[key]), details[key]
+    assert client_response.choices[0].message.audio is not None
+    assert client_response.choices[0].message.audio.data == SECRET
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_drops_delta_audio(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(audio={"data": SECRET}))]
+    )
+    details: Final[dict[str, object]] = {"stream": True, key: response}
+
+    perform_redaction(details, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
+_IMAGE_URL: Final = f"https://example.com/generated.png?signature={SECRET}"
+
+
+def _image_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(
+                    content=None,
+                    images=[{"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}],
+                )
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("shape", ["object", "dict", "standard"])
+def test_redaction_drops_generated_images_from_the_logged_chat_response_only(shape: str) -> None:
+    client_response: Final = _image_response()
+
+    redacted: Final = (
+        redacted_standard_logging_payload({"response": client_response.model_dump()})
+        if shape == "standard"
+        else perform_redaction({}, client_response if shape == "object" else client_response.model_dump())
+    )
+
+    assert SECRET not in str(redacted), redacted
+    assert client_response.choices[0].message.images == [
+        {"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}
+    ]
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_drops_delta_images(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(images=[{"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}])
+            )
+        ]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
+@pytest.mark.parametrize("shape", ["object", "dict", "standard"])
+def test_redaction_hides_the_image_generation_result_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="gpt-5.6",
+        object="response",
+        status="completed",
+        output=[{"id": "ig_1", "type": "image_generation_call", "status": "completed", "result": SECRET}],
+    )
+
+    redacted: Final = (
+        redacted_standard_logging_payload({"response": response.model_dump()})["response"]
+        if shape == "standard"
+        else perform_redaction({}, response if shape == "object" else response.model_dump())
+    )
+
+    item: Final = redacted.output[0].model_dump() if shape == "object" else redacted["output"][0]
+    assert (item["id"], item["status"], item["result"]) == ("ig_1", "completed", REDACTED_BY_LITELLM)
+    assert response.output[0].result == SECRET
+
+
+_SECRET_URL: Final = f"https://example.com/?q={SECRET}"
+_WEB_SEARCH_CALL: Final = TypeAdapter(ResponseFunctionWebSearch)
+
+
+def _claude_fetch_call() -> ResponseFunctionWebSearch:
+    return build_web_search_call(
+        "srvtoolu_01Fetch", {"url": _SECRET_URL}, {"content": []}, status="in_progress", tool_name="web_fetch"
+    )
+
+
+def _web_call_summaries(
+    calls: Mapping[str, object] | Iterable[object],
+) -> list[tuple[str, str | None, dict[str, object]]]:
+    items: Final = calls.values() if isinstance(calls, dict) else calls
+    return [
+        (call.id, call.status, call.action.model_dump(exclude_none=True))
+        for call in (_WEB_SEARCH_CALL.validate_python(item) for item in items)
+    ]
+
+
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_claude_server_call_inputs_but_keeps_the_calls(shape: str) -> None:
+    response: Final = ModelResponse(
+        model="claude-opus-5-5",
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01Fetch",
+                                "type": "function",
+                                "function": {"name": "web_fetch", "arguments": json.dumps({"url": _SECRET_URL})},
+                            }
+                        ],
+                        "web_search_calls": [
+                            _claude_fetch_call(),
+                            build_web_search_call(
+                                "srvtoolu_01Search", {"query": SECRET}, {"content": []}, status="in_progress"
+                            ),
+                        ],
+                    },
+                }
+            }
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    message: Final = (
+        redacted.choices[0].message if shape == "object" else SimpleNamespace(**redacted["choices"][0]["message"])
+    )
+    fields: Final = message.provider_specific_fields
+    assert fields["server_tool_calls"][0]["id"] == "srvtoolu_01Fetch"
+    assert fields["server_tool_calls"][0]["function"] == {"name": "web_fetch", "arguments": REDACTED_BY_LITELLM}
+    assert _web_call_summaries(fields["web_search_calls"]) == [
+        ("ws_srvtoolu_01Fetch", "in_progress", {"type": "open_page", "url": REDACTED_BY_LITELLM}),
+        ("ws_srvtoolu_01Search", "in_progress", {"type": "search", "query": REDACTED_BY_LITELLM}),
+    ]
+    assert SECRET not in str(redacted), redacted
+    assert SECRET in str(result)
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_hides_the_hosted_copy_of_a_claude_web_fetch(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    provider_specific_fields={"web_search_calls": {"srvtoolu_01Fetch": _claude_fetch_call()}}
+                )
+            )
+        ]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert _web_call_summaries(response.choices[0].delta.provider_specific_fields["web_search_calls"]) == [
+        ("ws_srvtoolu_01Fetch", "in_progress", {"type": "open_page", "url": REDACTED_BY_LITELLM})
+    ]
+
+
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_web_search_call_actions_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="claude-opus-5-5",
+        object="response",
+        status="completed",
+        output=[
+            build_web_search_call("srvtoolu_01Fetch", {"url": _SECRET_URL}, {"content": []}, tool_name="web_fetch"),
+            build_web_search_call("srvtoolu_01Search", {"query": SECRET}, {"content": []}),
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    output: Final = redacted.output if shape == "object" else redacted["output"]
+    assert _web_call_summaries(output) == [
+        ("ws_srvtoolu_01Fetch", "completed", {"type": "open_page", "url": REDACTED_BY_LITELLM}),
+        ("ws_srvtoolu_01Search", "completed", {"type": "search", "query": REDACTED_BY_LITELLM}),
+    ]
+    assert SECRET in str(result)
 
 
 @pytest.mark.parametrize("shape", ["object", "dict"])
@@ -559,6 +879,83 @@ class TestPerformRedaction:
             {"text": "redacted-by-litellm", "finish_reason": "stop", "index": 0},
             {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
         ]
+
+    def test_redacts_token_ids_that_decode_to_the_completion(self):
+        details = {
+            "stream": True,
+            "complete_streaming_response": litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(message=litellm.Message(content="secret", role="assistant"), token_ids=[20, 11])
+                ]
+            ),
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "token_ids": [20, 11],
+                            "message": {"content": "secret", "provider_specific_fields": {"token_ids": [20, 11]}},
+                        },
+                        {"text": " Paris.", "token_ids": [20, 11], "index": 1},
+                    ]
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        logged_choices = details["standard_logging_object"]["response"]["choices"]
+        assert [choice["token_ids"] for choice in logged_choices] == [None, None]
+        assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
+        assert details["complete_streaming_response"].choices[0].get("token_ids") is None
+
+    def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
+        details = {
+            "stream": True,
+            "async_complete_streaming_response": litellm.TextCompletionResponse(
+                choices=[
+                    litellm.utils.TextChoices(
+                        index=0, text=" Paris.", reasoning_content="thinking", token_ids=[20, 11], finish_reason="stop"
+                    )
+                ]
+            ),
+        }
+
+        perform_redaction(details, None)
+
+        logged_choice = details["async_complete_streaming_response"].choices[0]
+        assert (logged_choice.text, logged_choice.reasoning_content) == ("redacted-by-litellm", "redacted-by-litellm")
+        assert logged_choice.get("token_ids") is None
+        assert logged_choice.finish_reason == "stop"
+
+    def test_redacts_token_ids_a_cache_hit_keeps_on_the_choice_provider_specific_fields(self):
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret", role="assistant"),
+                    provider_specific_fields={"token_ids": [20, 11], "stop_reason": "END"},
+                )
+            ]
+        )
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {"content": "secret"},
+                            "provider_specific_fields": {"token_ids": [20, 11], "stop_reason": "END"},
+                        }
+                    ]
+                }
+            }
+        }
+
+        redacted = perform_redaction(details, result)
+
+        logged_fields = details["standard_logging_object"]["response"]["choices"][0]["provider_specific_fields"]
+        assert logged_fields == {"token_ids": None, "stop_reason": "END"}
+        assert redacted.choices[0].provider_specific_fields["token_ids"] is None
+        assert redacted.choices[0].provider_specific_fields["stop_reason"] == "END"
+        assert result.choices[0].provider_specific_fields["token_ids"] == [20, 11]
 
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
@@ -1754,6 +2151,80 @@ def test_request_body_redaction_replaces_instructions_only_when_sent() -> None:
     assert "instructions" not in chat_body
 
 
+def _vector_store_search_details(query_image: Mapping[str, str]) -> dict[str, object]:
+    return {
+        "query_image": query_image,
+        "optional_params": {"query_image": query_image},
+        "litellm_params": {"proxy_server_request": {"body": {"query_image": query_image}}},
+        "standard_logging_object": {"model_parameters": {"query_image": query_image}, "messages": [], "response": {}},
+    }
+
+
+def test_redaction_removes_a_vector_store_query_image_from_every_logged_copy() -> None:
+    details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    perform_redaction(details, result=None)
+
+    assert details["query_image"] == REDACTED_BY_LITELLM
+    assert SECRET not in json.dumps(details, default=str)
+
+
+def test_redaction_removes_a_query_image_sent_inside_extra_body() -> None:
+    image: Final = {"type": "base64", "media_type": "image/jpeg", "data": SECRET}
+    details: Final[dict[str, object]] = {
+        "optional_params": {"extra_body": {"query_image": image}},
+        "litellm_params": {"proxy_server_request": {"body": {"extra_body": {"query_image": image}}}},
+    }
+
+    perform_redaction(details, result=None)
+
+    assert SECRET not in json.dumps(details, default=str)
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_redaction_removes_a_raw_retrieval_query_sent_inside_extra_body(retrieval_query_param: str) -> None:
+    retrieval_query: Final = {"type": "IMAGE", "image": {"format": "jpeg", "inlineContent": SECRET}}
+    details: Final[dict[str, object]] = {
+        "litellm_params": {"proxy_server_request": {"body": {"extra_body": {retrieval_query_param: retrieval_query}}}},
+    }
+
+    perform_redaction(details, result=None)
+
+    assert SECRET not in json.dumps(details, default=str)
+
+
+def test_redaction_removes_the_image_from_the_provider_request_copy() -> None:
+    retrieval_query: Final = {"type": "IMAGE", "image": {"format": "jpeg", "inlineContent": SECRET}}
+    details: Final[dict[str, object]] = {
+        "additional_args": {"complete_input_dict": {"retrievalQuery": retrieval_query, "knowledgeBaseId": "kb"}},
+    }
+
+    perform_redaction(details, result=None)
+
+    assert SECRET not in json.dumps(details, default=str)
+    assert details["additional_args"]["complete_input_dict"]["knowledgeBaseId"] == "kb"
+
+
+def test_one_callback_opting_out_redacts_a_query_image_only_for_itself() -> None:
+    details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+
+
+def test_one_callback_opting_out_redacts_an_image_sent_to_apply_guardrail_only_for_itself() -> None:
+    details: Final[dict[str, object]] = {
+        "litellm_params": {"proxy_server_request": {"body": {"images": [f"data:image/png;base64,{SECRET}"]}}},
+    }
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_responses_api_stream():
@@ -2075,3 +2546,90 @@ def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_tr
     assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
     assert "123-45-6789" not in str(redacted_dict)
     assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"
+
+
+_GUARDRAIL_RECORD: Final = MappingProxyType(
+    {
+        "guardrail_name": "bedrock-guard",
+        "guardrail_status": "guardrail_intervened",
+        "guardrail_request": {"texts": ["my card is 4111 1111 1111 1111"]},
+        "guardrail_response": {"outputs": [{"text": "my card is 4111 1111 1111 1111"}]},
+        "match_details": [{"snippet": "4111 1111 1111 1111"}],
+        "classification": {"reason": "card 4111 1111 1111 1111"},
+        "guardrail_cost": 0.00075,
+        "duration": 0.4,
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "guardrail_information",
+    [[dict(_GUARDRAIL_RECORD)], dict(_GUARDRAIL_RECORD)],
+    ids=["list", "bare_record"],
+)
+def test_redaction_keeps_the_guardrail_verdict_and_drops_the_prompt_it_quotes(
+    guardrail_information: object,
+) -> None:
+    payload: Final = {"messages": [{"role": "user", "content": "x"}], "guardrail_information": guardrail_information}
+
+    redacted: Final = redacted_standard_logging_payload(payload)["guardrail_information"]
+
+    records: Final = redacted if isinstance(redacted, list) else [redacted]
+    assert "4111" not in str(records)
+    assert [
+        (record["guardrail_name"], record["guardrail_status"], record["guardrail_cost"], record["duration"])
+        for record in records
+    ] == [("bedrock-guard", "guardrail_intervened", 0.00075, 0.4)]
+    assert "4111" in str(payload["guardrail_information"]), "the caller's payload is not redacted in place"
+
+
+def test_redaction_keeps_the_compression_savings_a_guardrail_reports() -> None:
+    payload: Final = {
+        "messages": [{"role": "user", "content": "x"}],
+        "guardrail_information": [
+            {
+                "guardrail_name": "headroom",
+                "guardrail_provider": "headroom",
+                "guardrail_status": "success",
+                "guardrail_response": {
+                    "tokens_before": 1000,
+                    "tokens_after": 400,
+                    "tokens_saved": 600,
+                    "compression_ratio": 0.4,
+                    "compressed_text": "my card is 4111 1111 1111 1111",
+                },
+            }
+        ],
+    }
+
+    redacted: Final = redacted_standard_logging_payload(payload)
+
+    assert "4111" not in str(redacted["guardrail_information"])
+    assert extract_compression_saved_tokens(redacted) == extract_compression_saved_tokens(payload) == 600
+
+
+def _token_ids_answer(content: str) -> dict[str, object]:
+    return {
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": content}, "token_ids": [785, 6722, 12095, 13]}
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("patched_answer", "served_token_ids"),
+    [("The capital of France is [MASKED].", None), ("The capital of France is Paris. Enjoy!", [785, 6722, 12095, 13])],
+    ids=["masked", "extended"],
+)
+def test_token_data_checked_fields_checks_each_patch_on_a_plain_mapping(
+    patched_answer: str, served_token_ids: object
+) -> None:
+    fields = TokenDataCheckedFields(MappingProxyType({Field.response: _token_ids_answer("The capital of France is Paris.")}))
+
+    patched = fields.apply(Patch().set(Field.response, _token_ids_answer(patched_answer)))
+
+    choice = patched[Field.response]["choices"][0]
+    assert choice["message"]["content"] == patched_answer
+    assert choice["token_ids"] == served_token_ids
+    assert dict(patched) == {Field.response: patched[Field.response]}
+    assert len(patched) == 1

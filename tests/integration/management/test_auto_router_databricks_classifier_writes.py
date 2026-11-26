@@ -278,6 +278,8 @@ def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_
                 ],
                 "classifier_model": f"databricks/{model}",
                 **cost,
+                "classifier_input_truncated": False,
+                "classifier_input_budget_status": "unknown_limits",
                 "classifier_probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
                 "classifier_confidence": 0.91,
                 "conversation_continuing": False,

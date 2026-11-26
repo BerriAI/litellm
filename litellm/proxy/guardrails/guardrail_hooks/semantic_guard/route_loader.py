@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD
+from litellm.router_api import RoutingContext
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -30,7 +31,7 @@ class SemanticGuardRouteLoader:
     """Loads route definitions from YAML templates and custom configs, builds SemanticRouter."""
 
     @staticmethod
-    def load_builtin_template(template_name: str) -> dict[str, object]:
+    def load_builtin_template(template_name: str) -> Mapping[str, object]:
         """Load a built-in route template YAML by name."""
         file_path: Final = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
         if not os.path.exists(file_path):
@@ -39,12 +40,13 @@ class SemanticGuardRouteLoader:
                 f"Available templates: {SemanticGuardRouteLoader.list_builtin_templates()}"
             )
         with open(file_path, "r") as f:
-            return yaml.safe_load(f)
+            template: Final = _DECODED_YAML.validate_python(yaml.safe_load(f))
+        return template  # pyright: ignore[reportReturnType]  # main returned the raw YAML document
 
     @staticmethod
     def list_builtin_templates() -> list[str]:
         """List available built-in template names."""
-        templates: Final = []
+        templates: Final[list[str]] = []
         if os.path.isdir(ROUTE_TEMPLATES_DIR):
             for fname in os.listdir(ROUTE_TEMPLATES_DIR):
                 if fname.endswith(".yaml"):
@@ -134,7 +136,7 @@ class SemanticGuardRouteLoader:
         )
 
         encoder: Final = LiteLLMRouterEncoder(
-            litellm_router_instance=litellm_router,
+            ctx=RoutingContext(litellm_router),
             model_name=embedding_model,
             score_threshold=global_threshold,
         )

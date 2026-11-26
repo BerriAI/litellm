@@ -1,5 +1,5 @@
 import ssl
-from collections.abc import AsyncIterable, Callable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
@@ -14,6 +14,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -90,7 +91,7 @@ class BaseLLMAIOHTTPHandler:
         if self.transport is None:
             connector: Final = self._get_connector()
             if connector:
-                return aiohttp.ClientSession(connector=connector)
+                return aiohttp.ClientSession(connector=connector, trace_configs=[build_pool_wait_trace_config()])
 
         transport: Final = self.transport or self._get_or_create_transport()
         if transport is not None and hasattr(transport, "_get_valid_client_session"):
@@ -99,7 +100,7 @@ class BaseLLMAIOHTTPHandler:
             except RuntimeError:
                 pass
 
-        return aiohttp.ClientSession()
+        return aiohttp.ClientSession(trace_configs=[build_pool_wait_trace_config()])
 
     def _get_async_client_session(self, dynamic_client_session: ClientSession | None = None) -> ClientSession:
         if dynamic_client_session:
@@ -162,8 +163,8 @@ class BaseLLMAIOHTTPHandler:
         async_client_session: ClientSession | None,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict | None,
+        headers: Mapping[str, str],
+        data: dict[str, object] | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
         form_data: FormData | None = None,
@@ -207,7 +208,7 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout | None,
         litellm_params: dict,
         stream: bool = False,
@@ -259,7 +260,7 @@ class BaseLLMAIOHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: dict,
         timeout: float | httpx.Timeout,
         model: str,
@@ -303,7 +304,7 @@ class BaseLLMAIOHTTPHandler:
         api_base: str,
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding,
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
@@ -432,16 +433,16 @@ class BaseLLMAIOHTTPHandler:
         self,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         model: str,
         messages: list,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[object, dict]:
+    ) -> tuple[object, dict[str, object]]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:
@@ -485,7 +486,7 @@ class BaseLLMAIOHTTPHandler:
         client: ClientSession | None,
         provider_config: BaseImageVariationConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: HttpHandlerRequestFields,
         timeout: float,
         litellm_params: dict,
@@ -553,13 +554,13 @@ class BaseLLMAIOHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        print_verbose: Callable | None = None,
+        print_verbose: Callable[..., object] | None = None,
         api_base: str | None = None,
         aimage_variation: bool = False,
-        logger_fn=None,
+        logger_fn: object = None,
         client=None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,
     ) -> ImageResponse:
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
             model=model or "",

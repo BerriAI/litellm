@@ -1,19 +1,32 @@
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
+from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_system_texts,
+    drop_non_string_texts,
+    reject_emptied_messages,
+    reject_non_string_system_text,
+    reject_non_string_user_text,
+)
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
+    MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
+    MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE,
     AnthropicMessagesRequestOptionalParams,
+    AnthropicMessageThread,
     AnthropicStopDetails,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -49,7 +62,7 @@ def refusal_stop_details(explanation: str | None) -> AnthropicStopDetails:
     return AnthropicStopDetails(type="refusal", category=None, explanation=explanation)
 
 
-MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results")
+MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results", "container")
 
 
 def anthropic_message_delta(
@@ -57,10 +70,11 @@ def anthropic_message_delta(
 ) -> Mapping[str, object]:
     """
     The ``delta`` of the ``message_delta`` event synthesized from a complete
-    Anthropic Messages response. A real stream carries ``stop_details`` and
-    ``safeguard_results`` there, so a client that asked to stream reads them
-    from this event and nowhere else. ``optional_fields`` replaces the
-    response's own when it was rebuilt from a stream that carried them.
+    Anthropic Messages response. A real stream carries ``stop_details``,
+    ``safeguard_results`` and ``container`` there, so a client that asked to
+    stream reads them from this event and nowhere else. ``optional_fields``
+    replaces the response's own when it was rebuilt from a stream that carried
+    them.
     """
     optional_source: Final = response if optional_fields is None else optional_fields
     present_optional: Final = {
@@ -162,6 +176,34 @@ def openai_chat_refusal_text(message_or_delta: object) -> str | None:
     return _mapping_str_field(getattr(message_or_delta, "provider_specific_fields", None), "refusal")
 
 
+def anthropic_stop_reason(message_or_delta: object) -> str | None:
+    return _mapping_str_field(getattr(message_or_delta, "provider_specific_fields", None), "stop_reason")
+
+
+def refusal_reply_text(message_or_delta: object) -> str | None:
+    if anthropic_stop_reason(message_or_delta) == "refusal":
+        return None
+    return openai_chat_refusal_text(message_or_delta)
+
+
+@with_config(ConfigDict(extra="allow"))
+class _AnthropicRefusalStopDetails(AnthropicStopDetails, total=False):
+    pass
+
+
+_ANTHROPIC_REFUSAL_STOP_DETAILS: Final = TypeAdapter(_AnthropicRefusalStopDetails)
+
+
+def anthropic_refusal_stop_details(message_or_delta: object) -> AnthropicStopDetails | None:
+    provider_specific_fields: Final = getattr(message_or_delta, "provider_specific_fields", None)
+    if _mapping_str_field(provider_specific_fields, "stop_reason") != "refusal":
+        return None
+    try:
+        return _ANTHROPIC_REFUSAL_STOP_DETAILS.validate_python(_mapping_field(provider_specific_fields, "stop_details"))
+    except ValidationError:
+        return refusal_stop_details(openai_chat_refusal_text(message_or_delta))
+
+
 def _responses_message_refusal_text(item: object) -> str | None:
     from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
@@ -225,6 +267,32 @@ def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, obje
     )
 
 
+def native_messages_to_send(
+    messages: Sequence[object], drop_params: object
+) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]
+    return list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
+
+
+def cleaned_native_messages(
+    messages: Sequence[object], drop_params: object, *, model: str, custom_llm_provider: str | None
+) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
+    reject_non_string_user_text(messages, drop_params, model, custom_llm_provider)
+    cleaned: Final = native_messages_to_send(messages, drop_params)
+    reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
+    return cleaned
+
+
+def cleaned_native_system(
+    system: str | list[dict[str, JsonValue]] | None,  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    drop_params: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+) -> str | list[dict[str, JsonValue]] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    reject_non_string_system_text(system, drop_params, model, custom_llm_provider)
+    return drop_non_string_system_texts(system, drop_params)
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -236,12 +304,38 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
-    normalized: Final = messages if presanitized else normalize_native_messages(messages)
+    from litellm.responses.bridge_check import needs_empty_user_turn_back
+
+    normalized: Final = (
+        messages
+        if presanitized
+        else cleaned_native_messages(
+            messages, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
+    )
+    cleaned_system: Final = (
+        system
+        if presanitized
+        else cleaned_native_system(
+            system, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
+    )
+    restored: Final = (
+        [*normalized, {"role": "user", "content": ""}]
+        if needs_empty_user_turn_back(
+            messages[-1] if messages else None,
+            normalized,
+            model,
+            custom_llm_provider,
+            {**kwargs, "api_base": api_base},
+        )
+        else normalized
+    )
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(
-            normalized,
-            system,
+            restored,
+            cleaned_system,
             kwargs,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -249,6 +343,54 @@ def prepare_native_messages(
             api_base=api_base,
         ),
     )
+
+
+_THREAD_ADAPTER: Final = TypeAdapter(AnthropicMessageThread)
+
+
+def continues_message_thread(thread: object) -> bool:
+    """True when ``thread`` is a well-formed ``{"type": "continue", ...}`` body field."""
+    try:
+        return _THREAD_ADAPTER.validate_python(thread)["type"] == "continue"
+    except ValidationError:
+        return False
+
+
+def continued_message_id(thread: object) -> str | None:
+    try:
+        validated: Final = _THREAD_ADAPTER.validate_python(thread)
+    except ValidationError:
+        return None
+    return validated.get("previous_message_id") if validated["type"] == "continue" else None
+
+
+def _message_thread_error_body(error_type: str, error_code: str, message: str) -> str:
+    return json.dumps(
+        {"type": "error", "error": {"type": error_type, "message": message, "details": {"error_code": error_code}}}
+    )
+
+
+def message_thread_not_found_body(message: str) -> str:
+    return _message_thread_error_body("not_found_error", MESSAGE_THREAD_NOT_FOUND_ERROR_CODE, message)
+
+
+def message_thread_unsupported_body(message: str) -> str:
+    return _message_thread_error_body("invalid_request_error", MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE, message)
+
+
+def diagnostics_refusal(provider: str, model: str, drop_params: object) -> UnsupportedParamsError | None:
+    """Refuses ``diagnostics`` for a provider that rejects the field, or logs its drop under drop_params."""
+    if not drops_unsupported_params(drop_params):
+        return UnsupportedParamsError(
+            message=(
+                f"diagnostics is not supported for provider {provider}. "
+                "Send the request without diagnostics, or set drop_params to drop it"
+            ),
+            llm_provider=provider,
+            model=model,
+        )
+    verbose_logger.warning("Dropping diagnostics for provider %s: it rejects the field", provider)
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -271,6 +413,7 @@ class AnthropicMessagesRequestUtils:
         model: str | None = None,
         drop_params: bool = False,
         custom_llm_provider: str | None = None,
+        additional_drop_params: Iterable[str] = (),
     ) -> AnthropicMessagesRequestOptionalParams:
         """
         Filter parameters to only include those defined in AnthropicMessagesRequestOptionalParams.
@@ -280,11 +423,13 @@ class AnthropicMessagesRequestUtils:
             model: Resolved model id; when set, unsupported params may be dropped
             drop_params: Per-request drop_params flag (also respects litellm.drop_params)
             custom_llm_provider: Routed provider; fast mode is gated to direct Anthropic
+            additional_drop_params: Paths the deployment drops. A listed top-level key is left out
+                before the unsupported-param checks run, so it never raises
 
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys: Final = anthropic_messages_optional_param_keys()
+        valid_keys: Final = anthropic_messages_optional_param_keys().difference(additional_drop_params)
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -328,10 +473,10 @@ class AnthropicMessagesRequestUtils:
 
 def mock_response(
     model: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
-    **kwargs,
+    **kwargs: object,
 ) -> AnthropicMessagesResponse:
     """
     Mock response for Anthropic messages

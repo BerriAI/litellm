@@ -1,37 +1,50 @@
 import io
 import json
-from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from os import PathLike
-from typing import Final, TypeVar
+from typing import IO, Final, Literal, TypeVar
 
 from openai.types import Batch
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, canonical_video_id, is_video_status_call_type
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_UTF8_BOM: Final = b"\xef\xbb\xbf"
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
+_PAYLOAD_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
 
+_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
 BATCH_ENDPOINT: Final = "/v1/batch"
+POLLED_BATCH_ID_KWARG: Final = "polled_batch_id"
+POLLED_BATCH_COST_IS_FINAL_KWARG: Final = "polled_batch_cost_is_final"
+BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):
     def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
-        self.name = name
+        self.name: str = name
         self.content_type = content_type
 
 
-def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
+def parse_jsonl_with_embedded_newlines(content: str) -> list[object]:
     """
     Parse JSONL content that may contain JSON objects with embedded newlines in string values.
 
@@ -49,7 +62,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
         >>> parse_jsonl_with_embedded_newlines(content)
         [{"id":1,"msg":"Line 1\\nLine 2"}, {"id":2,"msg":"test"}]
     """
-    json_objects: Final = []
+    json_objects: Final[list[object]] = []
     buffer = ""
 
     for char in content:
@@ -225,7 +238,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
             # that followed it). Returning the partial `output` would silently
             # drop those rows; return the unchanged original so the provider
             # rejects the batch loudly instead of accepting a truncated one.
-            verbose_logger.error("error parsing trailing batch content: %s...", buffer[:100])
+            verbose_logger.error("error parsing trailing batch content after line %d", last_written_line)
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)
@@ -243,6 +256,65 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         # return the original file content if there is an error replacing the model name
         return file_content
+
+
+def rewrite_rows_naming_model(file_content: FileTypes, model: str, new_model: str, output_file: IO[bytes]) -> FileTypes:
+    source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
+    if model == new_model or isinstance(source, PathLike) or not _rewound(source):
+        return file_content
+    renamed_rows: Final = (
+        sum(_copy_line_renaming_model(line, model, new_model, output_file) for line in _lines(source))
+        if any(_renamed_row(line, model, new_model) is not None for line in _lines(source))
+        else 0
+    )
+    if not isinstance(source, bytes):
+        source.seek(0)
+    if not renamed_rows:
+        return file_content
+    output_file.seek(0)
+    return output_file
+
+
+def _rewound(source: IO[bytes] | bytes) -> bool:
+    if isinstance(source, bytes):
+        return True
+    try:
+        source.seek(0)
+    except OSError:
+        return False
+    return True
+
+
+def _lines(source: IO[bytes] | bytes) -> Iterator[bytes]:
+    if isinstance(source, bytes):
+        return iter(io.BytesIO(source))
+    source.seek(0)
+    return iter(source)
+
+
+def _copy_line_renaming_model(line: bytes, model: str, new_model: str, output_file: IO[bytes]) -> bool:
+    renamed: Final = _renamed_row(line, model, new_model)
+    output_file.write(line if renamed is None else renamed)
+    return renamed is not None
+
+
+def _renamed_row(line: bytes, model: str, new_model: str) -> bytes | None:
+    row_text: Final = line.rstrip(b"\r\n")
+    bom: Final = _UTF8_BOM if row_text.startswith(_UTF8_BOM) else b""
+    try:
+        row: Final = _JSON_OBJECT.validate_json(row_text.removeprefix(bom))
+        body: Final = _JSON_OBJECT.validate_python(row.get("body"))
+    except ValidationError:
+        return None
+    if body.get("model") != model:
+        return None
+    try:
+        renamed: Final = json.dumps(
+            {**row, "body": {**body, "model": new_model}}, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+    except ValueError:
+        return None
+    return bom + renamed.encode("utf-8") + line[len(row_text) :]
 
 
 def get_router_metadata_variable_name(function_name: str | None) -> str:
@@ -279,6 +351,58 @@ BATCH_RETRIEVE_CALL_TYPES: Final = frozenset(
 )
 
 
+_SYNC_VECTOR_STORE_AND_CONTAINER_CALLS: Final = frozenset(
+    {
+        *(f"vector_store_{name}" for name in ("create", "search", "retrieve", "list", "update", "delete")),
+        *(f"vector_store_file_{name}" for name in ("create", "list", "retrieve", "content", "update", "delete")),
+        "create_container",
+        "list_containers",
+        "retrieve_container",
+        "delete_container",
+        "upload_container_file",
+        "list_container_files",
+        "retrieve_container_file",
+        "delete_container_file",
+        "retrieve_container_file_content",
+    }
+)
+VECTOR_STORE_AND_CONTAINER_CALLS: Final = frozenset(
+    {*_SYNC_VECTOR_STORE_AND_CONTAINER_CALLS, *(f"a{name}" for name in _SYNC_VECTOR_STORE_AND_CONTAINER_CALLS)}
+)
+BATCH_API_CALL_TYPES: Final = frozenset(
+    {
+        *BATCH_RETRIEVE_CALL_TYPES,
+        *VECTOR_STORE_AND_CONTAINER_CALLS,
+        CallTypes.acreate_batch.value,
+        CallTypes.create_batch.value,
+        CallTypes.acancel_batch.value,
+        CallTypes.cancel_batch.value,
+        CallTypes.acreate_file.value,
+        CallTypes.create_file.value,
+        CallTypes.afile_content.value,
+        CallTypes.file_content.value,
+        CallTypes.afile_delete.value,
+        CallTypes.file_delete.value,
+        CallTypes.afile_list.value,
+        CallTypes.file_list.value,
+        CallTypes.acreate_fine_tuning_job.value,
+        CallTypes.create_fine_tuning_job.value,
+        CallTypes.acancel_fine_tuning_job.value,
+        CallTypes.cancel_fine_tuning_job.value,
+        CallTypes.alist_fine_tuning_jobs.value,
+        CallTypes.list_fine_tuning_jobs.value,
+        CallTypes.aretrieve_fine_tuning_job.value,
+        CallTypes.retrieve_fine_tuning_job.value,
+    }
+)
+
+
+def is_batch_api_call_type(call_type: object) -> bool:
+    """A batch, file, fine-tuning, vector store, or container call, which Azure scopes to the resource,
+    so an Azure deployment serving only batches also takes it."""
+    return isinstance(call_type, str) and call_type in BATCH_API_CALL_TYPES
+
+
 def is_batch_retrieve_call_type(call_type: object) -> bool:
     """
     A batch retrieve reports the whole job's token usage, which the provider spent
@@ -289,12 +413,151 @@ def is_batch_retrieve_call_type(call_type: object) -> bool:
     return isinstance(call_type, str) and call_type in BATCH_RETRIEVE_CALL_TYPES
 
 
-def batch_charged_once_marker_key(spend_key: str, batch_id: str) -> str:
-    return f"{spend_key}:batch:{batch_id}"
+@dataclass(frozen=True, slots=True)
+class ChargeOnceJob:
+    kind: Literal["batch", "video"]
+    job_id: str
+    repeat_poll_cost: float = 0.0
 
 
-def batch_id_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> str | None:
-    """A finished batch reports its whole cost on every poll, so its id is charged once per counter."""
-    if response_cost <= 0 or not is_batch_retrieve_call_type(call_type):
+def job_charged_once_marker_key(spend_key: str, job: ChargeOnceJob) -> str:
+    return f"{spend_key}:{job.kind}:{job.job_id}"
+
+
+def _guardrail_cost_of_poll(standard_logging_payload: object) -> float:
+    guardrail_information: Final = (
+        _PAYLOAD_FIELDS.validate_python(standard_logging_payload).get("guardrail_information")
+        if isinstance(standard_logging_payload, Mapping)
+        else None
+    )
+    return guardrail_information_cost(guardrail_information)
+
+
+def charged_poll_cost(kwargs: Mapping[str, object]) -> object:
+    """The poll's whole cost as the cost callback charges it, guardrails included, which the logging kwargs' own
+    response_cost leaves out."""
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    logged_cost: Final = (
+        _PAYLOAD_FIELDS.validate_python(standard_logging_payload).get("response_cost")
+        if isinstance(standard_logging_payload, Mapping)
+        else None
+    )
+    return kwargs.get("response_cost") if logged_cost is None else logged_cost
+
+
+def job_cost_of_poll(response_cost: object, standard_logging_payload: object) -> float:
+    """What the polled job itself cost, since a guardrail on the poll charges every poll, running or finished."""
+    return (finite_cost(response_cost) or 0.0) - _guardrail_cost_of_poll(standard_logging_payload)
+
+
+def repeat_poll_cost(call_type: object, response_cost: object, standard_logging_payload: object) -> float:
+    """What a poll still costs once an earlier poll charged its job: a video poll's guardrails, which every video
+    poll has always paid, and nothing for a batch poll, whose repeats have always been free."""
+    if not is_video_status_call_type(call_type):
+        return 0.0
+    return max(0.0, min(finite_cost(response_cost) or 0.0, _guardrail_cost_of_poll(standard_logging_payload)))
+
+
+def batch_cost_is_final(batch: Batch) -> bool:
+    """Whether this retrieve of the batch is the one to account its cost from.
+
+    A batch still in flight has nothing to price, and a "completed" batch can report
+    no output_file_id for a moment before the output populates; pricing either records
+    $0 under the batch's single spend row and pins it there. Final means a completed
+    batch whose output file has arrived or whose counts prove no line succeeded, or
+    any other terminal status (failed, cancelled, expired).
+    """
+    if batch.status not in _TERMINAL_BATCH_STATUSES:
+        return False
+    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
+        return True
+    request_counts: Final = batch.request_counts
+    return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0
+
+
+@dataclass(frozen=True, slots=True)
+class PolledBatch:
+    id: str
+    cost_is_final: bool
+
+
+def _polled_batch(kwargs: Mapping[str, object], response_obj: object) -> PolledBatch | None:
+    """The retrieved batch, read from the logging kwargs when message redaction replaced the logged response."""
+    if not is_batch_retrieve_call_type(kwargs.get("call_type")):
         return None
-    return response_obj.id if isinstance(response_obj, Batch) else None
+    if isinstance(response_obj, Batch):
+        return PolledBatch(id=response_obj.id, cost_is_final=batch_cost_is_final(response_obj))
+    stamped_id: Final = kwargs.get(POLLED_BATCH_ID_KWARG)
+    stamped_cost_is_final: Final = kwargs.get(POLLED_BATCH_COST_IS_FINAL_KWARG)
+    if not isinstance(stamped_id, str) or not stamped_id or not isinstance(stamped_cost_is_final, bool):
+        return None
+    return PolledBatch(id=stamped_id, cost_is_final=stamped_cost_is_final)
+
+
+def defers_batch_cost(kwargs: Mapping[str, object], response_obj: object) -> bool:
+    """A batch retrieve before the batch's cost is final charges nothing, guardrails included, since the retrieve
+    that settles the batch charges its whole cost once."""
+    polled: Final = _polled_batch(kwargs, response_obj)
+    return polled is not None and not polled.cost_is_final
+
+
+def pays_only_its_guardrail(call_type: object, kwargs: Mapping[str, object], response_cost: object) -> bool:
+    """A video poll whose whole cost is its guardrails', charged like any other request."""
+    if not is_video_status_call_type(call_type):
+        return False
+    return (
+        job_cost_of_poll(response_cost, kwargs.get("standard_logging_object"))
+        <= 0
+        < (finite_cost(response_cost) or 0.0)
+    )
+
+
+def _requested_video_id(kwargs: Mapping[str, object]) -> str | None:
+    litellm_params: Final = kwargs.get("litellm_params")
+    requested: Final = (
+        _PAYLOAD_FIELDS.validate_python(litellm_params).get("video_id") if isinstance(litellm_params, Mapping) else None
+    )
+    return requested if isinstance(requested, str) and requested else None
+
+
+def charged_video_id(
+    call_type: object, kwargs: Mapping[str, object], fallback_video_id: str | None, response_cost: object
+) -> str | None:
+    """The id a finished video's own cost is charged once under.
+
+    That is the id the client polled, which names the deployment that made the video, since a
+    custom provider's own id can repeat across deployments. The status comes from the logging
+    kwargs because message redaction replaces the logged video object.
+    """
+    if not is_video_status_call_type(call_type) or kwargs.get(POLLED_VIDEO_STATUS_KWARG) != "completed":
+        return None
+    if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
+        return None
+    video_id: Final = _requested_video_id(kwargs) or fallback_video_id
+    return None if video_id is None else canonical_video_id(video_id)
+
+
+def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_cost: float) -> ChargeOnceJob | None:
+    polled: Final = _polled_batch(kwargs, response_obj)
+    if polled is None or not polled.cost_is_final or response_cost <= 0:
+        return None
+    return ChargeOnceJob(kind="batch", job_id=polled.id)
+
+
+def job_to_charge_once(
+    kwargs: Mapping[str, object], response_obj: object, response_cost: float
+) -> ChargeOnceJob | None:
+    """A finished batch or video reports its whole cost on every poll, so it is charged once per counter."""
+    call_type: Final = kwargs.get("call_type")
+    if not is_video_status_call_type(call_type):
+        return _charged_batch(kwargs, response_obj, response_cost)
+    video_id: Final = charged_video_id(
+        call_type, kwargs, response_obj.id if isinstance(response_obj, VideoObject) else None, response_cost
+    )
+    if video_id is None:
+        return None
+    return ChargeOnceJob(
+        kind="video",
+        job_id=video_id,
+        repeat_poll_cost=repeat_poll_cost(call_type, response_cost, kwargs.get("standard_logging_object")),
+    )

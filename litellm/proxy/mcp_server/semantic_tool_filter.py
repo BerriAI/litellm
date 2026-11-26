@@ -14,13 +14,15 @@ from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.faults import iter_exception_tree
 from litellm.proxy.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
+from litellm.router_api import RoutingContext
 
 if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
 
-_Tool: Final = TypeVar("_Tool")
+_Tool = TypeVar("_Tool")
 
 
 class SemanticToolFilterContextWindowError(Exception):
@@ -97,7 +99,7 @@ class SemanticMCPToolFilter:
                 return
 
             # Fetch tools from all servers in parallel
-            all_tools: Final = []
+            all_tools: Final[list[MCPTool]] = []
             for server_id, server in registry.items():
                 try:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
@@ -137,7 +139,7 @@ class SemanticMCPToolFilter:
 
     _extract_tool_info = extract_tool_info
 
-    def _build_router(self, tools: list) -> None:
+    def _build_router(self, tools: Sequence[object]) -> None:
         """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
         from semantic_router.routers import SemanticRouter
         from semantic_router.routers.base import Route
@@ -172,7 +174,7 @@ class SemanticMCPToolFilter:
             self.tool_router = SemanticRouter(
                 routes=routes,
                 encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=self.router_instance,
+                    ctx=RoutingContext(self.router_instance),
                     model_name=self.embedding_model,
                     score_threshold=self.similarity_threshold,
                 ),
@@ -247,7 +249,7 @@ class SemanticMCPToolFilter:
                 router: Final = SemanticRouter(
                     routes=[],
                     encoder=LiteLLMRouterEncoder(
-                        litellm_router_instance=self.router_instance,
+                        ctx=RoutingContext(self.router_instance),
                         model_name=self.embedding_model,
                         score_threshold=self.similarity_threshold,
                     ),

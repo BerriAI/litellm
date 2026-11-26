@@ -20,12 +20,14 @@ from openai.types.responses.tool_param import Mcp
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.llms.fireworks_ai.latest_router_aliases import LATEST_ROUTER_ALIAS_TARGETS
 
 FIREWORKS_RESPONSES_URL: Final = "https://api.fireworks.ai/inference/v1/responses"
 HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client"
@@ -172,10 +174,10 @@ def test_responses_call_forwards_previous_response_id_and_store() -> None:
 
 
 def test_responses_call_folds_developer_items_into_instructions() -> None:
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
-            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             input=[
                 {"role": "user", "content": "Hi there"},
                 {"role": "developer", "content": "Answer with exactly one word."},
@@ -216,15 +218,98 @@ def test_responses_call_keeps_developer_items_in_place_for_a_deployment_that_acc
 
 @respx.mock
 @pytest.mark.parametrize(
+    "model",
+    [
+        "fireworks_ai/accounts/fireworks/models/kimi-k3",
+        "fireworks_ai/accounts/fireworks/models/glm-5p3",
+        "fireworks_ai/accounts/fireworks/routers/kimi-k3-fast",
+        "fireworks_ai/glm-5p3-us",
+        "fireworks_ai/models/kimi-k3",
+        "fireworks_ai/routers/kimi-k3-fast",
+    ],
+)
+def test_responses_call_keeps_developer_items_in_place_for_a_model_the_cost_map_declares_accepts_them(
+    model: str,
+) -> None:
+    route: Final = _fireworks_responses_route(model.removeprefix("fireworks_ai/"))
+    litellm.responses(
+        model=model,
+        instructions="You are Codex",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "You are Codex"
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": "What is the capital of France?"},
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(("alias", "target"), LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_places_developer_items_like_the_model_it_points_to(alias: str, target: str) -> None:
+    route: Final = _fireworks_responses_route(alias)
+    for model in (alias, target):
+        litellm.responses(
+            model=f"fireworks_ai/{model}",
+            input=[
+                {"role": "user", "content": "Hi there"},
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+                {"type": "message", "role": "assistant", "content": "Paris"},
+                {"role": "developer", "content": "Reply with PONG."},
+            ],
+            api_key="fw-test-key",
+        )
+    alias_body, target_body = (json.loads(call.request.content) for call in route.calls)
+    assert alias_body["model"] == alias
+    assert {**alias_body, "model": target} == target_body
+
+
+@respx.mock
+def test_responses_call_folds_developer_items_when_the_loaded_cost_map_turns_the_flag_off(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/kimi-k3", False)
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/kimi-k3")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+            {"type": "message", "role": "assistant", "content": "Paris"},
+            {"role": "developer", "content": "Reply with PONG."},
+        ],
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "Answer with exactly one word."
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "assistant", "content": "Paris"},
+        {"role": "user", "content": "Reply with PONG.", "type": "message"},
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
     ("model_info", "closing_role"),
     [(None, "system"), ({"id": "deployment-1", "supports_mid_conversation_system": False}, "user")],
 )
 def test_responses_call_sends_the_closing_developer_item_as_a_user_turn_only_for_a_declared_system_first_deployment(
     model_info: Mapping[str, object] | None, closing_role: str
 ) -> None:
-    route: Final = _fireworks_responses_route("accounts/fireworks/models/kimi-k3")
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/qwen3p8-2p4t-a95b")
     litellm.responses(
-        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
         input=[
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": "Answer with exactly one word."},
@@ -359,6 +444,59 @@ def test_responses_call_keeps_a_mid_conversation_system_item_in_place() -> None:
     )
 
 
+_LATER_SYSTEM_FIREWORKS_INPUT: Final = (
+    {"role": "user", "content": "Hi there"},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+    {"role": "system", "content": "Reply in French."},
+    {"type": "function_call_output", "call_id": "call_1", "output": "21C"},
+    {"type": "message", "role": "assistant", "content": "Il fait 21C."},
+    {"role": "system", "content": [{"type": "input_text", "text": "Stay brief."}]},
+)
+
+
+def _fireworks_reminder_as_user_item(text: str) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": CONVERTED_SYSTEM_NOTE}, {"type": "input_text", "text": text}],
+    }
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("model_info", "expected_input"),
+    [
+        pytest.param(None, _LATER_SYSTEM_FIREWORKS_INPUT, id="undeclared"),
+        pytest.param(
+            {"id": "deployment-1", "supports_mid_conversation_system": False},
+            (
+                _LATER_SYSTEM_FIREWORKS_INPUT[0],
+                _LATER_SYSTEM_FIREWORKS_INPUT[1],
+                _LATER_SYSTEM_FIREWORKS_INPUT[3],
+                _fireworks_reminder_as_user_item("Reply in French."),
+                _LATER_SYSTEM_FIREWORKS_INPUT[4],
+                _fireworks_reminder_as_user_item("Stay brief."),
+            ),
+            id="declared-system-first",
+        ),
+    ],
+)
+def test_responses_call_sends_later_system_items_as_user_turns_only_for_a_declared_system_first_deployment(
+    model_info: Mapping[str, object] | None, expected_input: tuple[Mapping[str, object], ...]
+) -> None:
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/qwen3p8-2p4t-a95b")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+        instructions="You are terse.",
+        input=list(_LATER_SYSTEM_FIREWORKS_INPUT),
+        model_info=model_info,
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "You are terse."
+    assert tuple(body["input"]) == expected_input
+
+
 def test_responses_call_keeps_a_developer_item_with_non_text_parts_in_place_as_a_system_item() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     developer_item: Final = {
@@ -402,7 +540,7 @@ def test_transform_request_forwards_non_string_instructions_and_input_untouched(
     developer_item: Final = {"role": "developer", "content": "Answer with exactly one word."}
     user_item: Final = {"role": "user", "content": "What is the capital of France?"}
     request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
-        model="accounts/fireworks/models/kimi-k3",
+        model="accounts/fireworks/models/qwen3p8-2p4t-a95b",
         input=cast(ResponseInputParam, [developer_item, user_item]),
         response_api_optional_request_params={"instructions": ["not", "a", "string"]},
         litellm_params=GenericLiteLLMParams(),
@@ -415,8 +553,86 @@ def test_transform_request_forwards_non_string_instructions_and_input_untouched(
     )
 
 
+CODEX_CLOCK_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "clock",
+    "description": "Clock tools.",
+    "tools": [
+        {
+            "type": "function",
+            "name": "sleep",
+            "description": "Sleep for some seconds.",
+            "parameters": {"type": "object", "properties": {"seconds": {"type": "number"}}, "required": ["seconds"]},
+        }
+    ],
+}
+CODEX_ADDITIONAL_TOOLS_ITEM: Final = {
+    "type": "additional_tools",
+    "role": "developer",
+    "tools": [CODEX_CLOCK_NAMESPACE_TOOL],
+}
+
+
+@pytest.mark.parametrize("instructions", [None, "Answer with exactly one word."], ids=["no-instructions", "instructions"])
+def test_transform_request_moves_codex_additional_tools_item_into_tools(instructions: str | None) -> None:
+    user_item: Final = {"role": "user", "content": "Sleep for two seconds."}
+    request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
+        model="accounts/fireworks/models/glm-5p3",
+        input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item]),
+        response_api_optional_request_params={} if instructions is None else {"instructions": instructions},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert tuple(request["tools"]) == (CODEX_CLOCK_NAMESPACE_TOOL,)
+    assert tuple(request["input"]) == (user_item,)
+    assert request.get("instructions") == instructions
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_clock_copies"),
+    [
+        pytest.param(True, 1, id="merged once under drop_params"),
+        pytest.param(None, 2, id="forwarded as sent without drop_params"),
+    ],
+)
+@pytest.mark.parametrize("tools_as_tuple", [False, True], ids=["tools-list", "tools-tuple"])
+def test_transform_request_merges_codex_additional_tools_into_existing_tools_only_under_drop_params(
+    drop_params: bool | None, expected_clock_copies: int, tools_as_tuple: bool
+) -> None:
+    weather_tool: Final = {
+        "type": "function",
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    }
+    user_item: Final = {"role": "user", "content": "Sleep for two seconds, then check the weather in Paris."}
+    request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
+        model="accounts/fireworks/models/glm-5p3",
+        input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item, CODEX_ADDITIONAL_TOOLS_ITEM]),
+        response_api_optional_request_params={"tools": (weather_tool,) if tools_as_tuple else [weather_tool]},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert tuple(request["tools"]) == (weather_tool, *(CODEX_CLOCK_NAMESPACE_TOOL,) * expected_clock_copies)
+    assert tuple(request["input"]) == (user_item,)
+
+
+@pytest.mark.parametrize("drop_params", [True, None], ids=["drop_params", "no-drop_params"])
+def test_transform_request_leaves_codex_additional_tools_in_input_when_tools_is_malformed(
+    drop_params: bool | None,
+) -> None:
+    user_item: Final = {"role": "user", "content": "Sleep for two seconds."}
+    request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
+        model="accounts/fireworks/models/glm-5p3",
+        input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item]),
+        response_api_optional_request_params={"tools": {"type": "function", "name": "get_weather"}},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert tuple(request["input"]) == (CODEX_ADDITIONAL_TOOLS_ITEM, user_item)
+
+
 def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_output_items() -> None:
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     pydantic_input: Final = cast(
         ResponseInputParam,
         [
@@ -435,7 +651,9 @@ def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_outpu
     )
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
-            model="fireworks_ai/accounts/fireworks/models/kimi-k3", input=pydantic_input, api_key="fw-test-key"
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            input=pydantic_input,
+            api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
     assert body["instructions"] == "Answer with exactly one word."

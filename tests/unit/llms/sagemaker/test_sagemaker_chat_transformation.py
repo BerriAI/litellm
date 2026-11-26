@@ -19,8 +19,10 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 
@@ -343,6 +345,26 @@ def test_body_carries_no_aws_credentials(
     assert client.request_headers["X-Amz-Security-Token"] == "test-session-token"
 
 
+@pytest.mark.parametrize("model", ["sagemaker_chat/my-endpoint", "sagemaker_nova/my-endpoint"])
+def test_inference_component_travels_only_in_the_header(monkeypatch: pytest.MonkeyPatch, model: str):
+    client = _invoke_sagemaker_chat(monkeypatch, model=model, model_id="my-inference-component")
+
+    assert client.request_headers[_INFERENCE_COMPONENT_HEADER] == "my-inference-component"
+    assert "model_id" not in client.request_body
+
+
+def test_inference_component_header_keeps_header_keys_that_are_not_strings():
+    headers = SagemakerChatConfig().validate_environment(
+        headers={7: "other", "x-amzn-sagemaker-inference-component": "client-component"},
+        model="my-endpoint",
+        messages=[],
+        optional_params={"model_id": "my-inference-component"},
+        litellm_params={},
+    )
+
+    assert headers == {7: "other", _INFERENCE_COMPONENT_HEADER: "my-inference-component"}
+
+
 def test_body_model_stays_the_endpoint_name_when_hf_model_name_is_unset(monkeypatch):
     """Without `hf_model_name` the body must keep the model it has today."""
     client = _invoke_sagemaker_chat(monkeypatch)
@@ -430,3 +452,53 @@ def test_sagemaker_explicit_region_overrides_the_default() -> None:
     )
 
     assert url == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations"
+
+
+@pytest.fixture
+def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+async def _drain_stream(request: Mapping[str, object], sync_mode: bool) -> None:
+    if sync_mode:
+        _ = tuple(litellm.completion(**request))
+        return
+    _ = [chunk async for chunk in await litellm.acompletion(**request)]
+
+
+@pytest.mark.usefixtures("_httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_with_an_empty_200_body_raises_bad_gateway_instead_of_an_empty_turn(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    respx_mock.post(
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations-response-stream"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            content=b"",
+            headers={"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": "req-sagemaker-1"},
+        )
+    )
+    request: Final = {
+        "model": "sagemaker_chat/my-endpoint",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+    }
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await _drain_stream(request, sync_mode)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.is_pre_first_chunk is True
+    assert isinstance(exc_info.value.original_exception, litellm.BadGatewayError)
+    assert "decoded to no events" in str(exc_info.value)
+    assert "req-sagemaker-1" in str(exc_info.value)

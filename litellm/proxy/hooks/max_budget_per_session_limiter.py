@@ -16,6 +16,7 @@ Follows the same pattern as max_iterations_limiter.py.
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, TypeAdapter
@@ -26,9 +27,19 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.batch_utils import (
+    ChargeOnceJob,
+    charged_poll_cost,
+    defers_batch_cost,
+    job_charged_once_marker_key,
+    job_to_charge_once,
+)
+from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_strategy.budget_limiter import cost_left_after_failed_attempts
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -44,6 +55,7 @@ _CACHE_AMOUNT_ADAPTER: Final[TypeAdapter[str | bytes | int | float]] = TypeAdapt
 _OPTIONAL_CACHE_AMOUNT_ADAPTER: Final[TypeAdapter[str | bytes | int | float | None]] = TypeAdapter(
     str | bytes | int | float | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 # Redis Lua script for atomic float increment with TTL.
@@ -61,6 +73,30 @@ if existed == 0 then
 end
 
 return new_val
+"""
+
+MAX_BUDGET_SESSION_CHARGE_JOB_ONCE_SCRIPT: Final = """
+local spend_key = KEYS[1]
+local marker_key = KEYS[2]
+local ttl = tonumber(ARGV[3])
+
+local polls = redis.call('INCR', marker_key)
+redis.call('EXPIRE', marker_key, ttl)
+local amount = ARGV[2]
+if polls == 1 then
+    amount = ARGV[1]
+end
+if tonumber(amount) <= 0 then
+    return '0'
+end
+
+local existed = redis.call('EXISTS', spend_key)
+redis.call('INCRBYFLOAT', spend_key, amount)
+if existed == 0 then
+    redis.call('EXPIRE', spend_key, ttl)
+end
+
+return amount
 """
 
 # Default TTL for session budget counters (1 hour)
@@ -87,12 +123,15 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             )
         )
 
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                MAX_BUDGET_SESSION_INCREMENT_SCRIPT
-            )
-        else:
-            self.increment_script = None
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        self.increment_script = (
+            redis_cache.async_register_script(MAX_BUDGET_SESSION_INCREMENT_SCRIPT) if redis_cache is not None else None
+        )
+        self.charge_job_once_script = (
+            redis_cache.async_register_script(MAX_BUDGET_SESSION_CHARGE_JOB_ONCE_SCRIPT)
+            if redis_cache is not None
+            else None
+        )
 
     @with_service_target("session_budgets")
     async def async_pre_call_hook(
@@ -101,7 +140,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Before each LLM call, check if max_budget_per_session is set and
         whether accumulated spend exceeds the budget (429 if so).
@@ -140,7 +179,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return None
 
     @with_service_target("session_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """
@@ -168,15 +207,25 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             if max_budget is None:
                 return
 
-            response_cost: Final = kwargs.get("response_cost") or 0.0
+            callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
+            response_cost: Final = cost_left_after_failed_attempts(
+                callback_fields, finite_cost(charged_poll_cost(callback_fields)) or 0.0
+            )
             if response_cost <= 0:
                 return
 
+            if defers_batch_cost(callback_fields, response_obj):
+                return
+
             cache_key: Final = self._make_cache_key(str(session_id))
-            await self._increment_spend(cache_key, float(response_cost))
+            job: Final = job_to_charge_once(callback_fields, response_obj, response_cost)
+            if job is None:
+                await self._increment_spend(cache_key, response_cost)
+            else:
+                await self._charge_job_once(cache_key, job, response_cost)
 
             verbose_proxy_logger.debug(
-                "MaxBudgetPerSessionHandler: incremented session %s spend by %.6f",
+                "MaxBudgetPerSessionHandler: charged session %s for a call that cost %.6f",
                 session_id,
                 response_cost,
             )
@@ -185,6 +234,14 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 "MaxBudgetPerSessionHandler: error in async_log_success_event: %s",
                 str(e),
             )
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""
@@ -220,6 +277,31 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     def _make_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
+
+    async def _charge_job_once(self, cache_key: str, job: ChargeOnceJob, response_cost: float) -> None:
+        marker_key: Final = job_charged_once_marker_key(spend_key=cache_key, job=job)
+        if self.charge_job_once_script is not None:
+            try:
+                await self.charge_job_once_script(
+                    keys=[cache_key, marker_key],
+                    args=[str(response_cost), str(job.repeat_poll_cost), self.ttl],
+                )
+            except Exception as e:
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis job charge failed, falling back to in-memory",
+                    e,
+                )
+            else:
+                return
+
+        polls: Final = await self.internal_usage_cache.dual_cache.in_memory_cache.async_increment(
+            key=marker_key, value=1, ttl=self.ttl
+        )
+        charge: Final = response_cost if polls == 1 else job.repeat_poll_cost
+        if charge > 0:
+            await self._in_memory_increment_spend(cache_key, charge)
 
     @with_service_target("session_budgets")
     async def _get_current_spend(self, cache_key: str) -> float:
