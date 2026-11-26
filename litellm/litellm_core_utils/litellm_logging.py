@@ -188,6 +188,8 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    logged_content_fingerprint,
+    logs_without_prompt_fields_once_masked,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
@@ -1333,6 +1335,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._failure_logged_cost_owed_on_success: float = 0.0
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
+        self.logging_only_guardrail_masked: bool = False
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
@@ -4751,10 +4754,19 @@ class Logging(LiteLLMLoggingBaseClass):
                 return None
 
             self.shadow_eval_request_snapshot = None
-            prepared.details, prepared.result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType]  # logging_hook is typed with a bare dict
+            content_before_hook: Final = logged_content_fingerprint(before, prepared.result)
+            hooked_details, hooked_result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # logging_hook is typed with a bare dict
                 kwargs=before,
                 result=prepared.result,
                 call_type=self.call_type,
+            )
+            self.logging_only_guardrail_masked, prepared.details, prepared.result = (
+                logs_without_prompt_fields_once_masked(
+                    self.logging_only_guardrail_masked,
+                    content_before_hook,
+                    hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                    hooked_result,
+                )
             )
         elif isinstance(callback, CustomLogger):
             prepared.details, prepared.result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType]  # logging_hook is typed with a bare dict
@@ -5408,10 +5420,19 @@ class Logging(LiteLLMLoggingBaseClass):
                     return None
 
                 self.shadow_eval_request_snapshot = None
-                self.model_call_details, prepared.result = await callback.async_logging_hook(
+                content_before_hook: Final = logged_content_fingerprint(self.model_call_details, prepared.result)
+                hooked_details, hooked_result = await callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # async_logging_hook is typed with a bare dict
                     kwargs=self.model_call_details,
                     result=prepared.result,
                     call_type=self.call_type,
+                )
+                self.logging_only_guardrail_masked, self.model_call_details, prepared.result = (
+                    logs_without_prompt_fields_once_masked(
+                        self.logging_only_guardrail_masked,
+                        content_before_hook,
+                        hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook is typed with a bare dict
+                        hooked_result,
+                    )
                 )
             else:
                 prepared.result = redact_message_input_output_from_custom_logger(
