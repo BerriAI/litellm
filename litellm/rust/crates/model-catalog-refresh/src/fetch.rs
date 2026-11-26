@@ -12,6 +12,8 @@ use url::Url;
 use crate::attempt::{self, Cause, Fetched, Rejected};
 use crate::{Location, RetryPolicy};
 
+const UNPARSEABLE_URL: &str = "<unparseable URL>";
+
 /// How an `s3://` fetch reaches S3
 #[derive(Clone, Debug)]
 pub enum S3Access {
@@ -144,10 +146,11 @@ fn reason(url: &str, cause: &Cause) -> String {
     }
 }
 
-/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials
-fn redacted(url: &str) -> Cow<'_, str> {
+/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials. A URL that does not parse
+/// could carry them anywhere, so it is not shown at all
+pub fn redacted(url: &str) -> Cow<'_, str> {
     let Ok(mut parsed) = Url::parse(url) else {
-        return Cow::Borrowed(url);
+        return Cow::Borrowed(UNPARSEABLE_URL);
     };
     if parsed.username().is_empty()
         && parsed.password().is_none()

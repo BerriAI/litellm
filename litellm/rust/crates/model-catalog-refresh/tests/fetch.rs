@@ -305,16 +305,20 @@ async fn a_failure_reason_drops_url_credentials() {
 }
 
 #[rstest]
-#[case::unsupported_scheme("ftp://example.com/cost.json")]
-#[case::not_a_url("not a url")]
-#[case::s3_without_a_key("s3://prices")]
+#[case::unsupported_scheme("ftp://example.com/cost.json", "ftp://example.com/cost.json")]
+#[case::not_a_url("not a url", "<unparseable URL>")]
+#[case::presigned_without_a_scheme(
+    "example.com/cost.json?X-Amz-Signature=sig-secret",
+    "<unparseable URL>"
+)]
+#[case::s3_without_a_key("s3://prices", "s3://prices")]
 #[tokio::test]
-async fn an_unfetchable_url_fails_without_a_request(#[case] url: &str) {
+async fn an_unfetchable_url_fails_without_a_request(#[case] url: &str, #[case] shown: &str) {
     let failed = fetched(url, POLICY).await.unwrap_err();
     assert!(
         failed
             .reason
-            .starts_with(&format!("error fetching {url}: ")),
+            .starts_with(&format!("error fetching {shown}: ")),
         "{}",
         failed.reason
     );
