@@ -2002,7 +2002,7 @@ async def get_user_oauth_credential(
     return _parse_oauth_payload(decoded)
 
 
-async def delete_user_oauth_credential_if_grant_matches(
+async def invalidate_user_oauth_credential_if_grant_matches(
     prisma_client: PrismaClient,
     user_id: str,
     server_id: str,
@@ -2015,10 +2015,12 @@ async def delete_user_oauth_credential_if_grant_matches(
         return False
     if grant.get("access_token") != access_token or grant.get("refresh_token") != refresh_token:
         return False
-    deleted: Final = await _user_credential_actions(prisma_client).delete_many(
-        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64}
+    invalidated: Final = _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER.validate_python({**grant, "access_token": ""})
+    written: Final = await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64},
+        data={"credential_b64": encrypt_value_helper(json.dumps(invalidated))},
     )
-    return deleted > 0
+    return written > 0
 
 
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:

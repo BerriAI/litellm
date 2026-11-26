@@ -143,13 +143,15 @@ async def _post_token_endpoint(
 
 async def _revoke_credential(user_id: str, server_id: str, access_token: str, refresh_token: str | None) -> None:
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # runtime global avoids a package import cycle
-        delete_user_oauth_credential_if_grant_matches,
+        invalidate_user_oauth_credential_if_grant_matches,
     )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
 
     if prisma_client is None:
         return
-    await delete_user_oauth_credential_if_grant_matches(prisma_client, user_id, server_id, access_token, refresh_token)
+    await invalidate_user_oauth_credential_if_grant_matches(
+        prisma_client, user_id, server_id, access_token, refresh_token
+    )
 
 
 def _redis_cache_is_available() -> bool:
