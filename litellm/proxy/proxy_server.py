@@ -3863,6 +3863,7 @@ async def increment_spend_counters(
     windows_from_ledger: bool = False,
     customer_counters: Sequence[BudgetCounter] = (),
     customer_hierarchy: object = None,
+    admitted_at: datetime | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3880,7 +3881,7 @@ async def increment_spend_counters(
     Deprecated: the ledger-off branch below is frozen and lives in
     ``legacy_spend_counters``. Delete it together with the ledger-off setting.
     """
-    with resolve_schedules_at(request_started_at):
+    with resolve_schedules_at(admitted_at or request_started_at):
         if windows_from_ledger:
             await charge_spend_counters(
                 token=token,

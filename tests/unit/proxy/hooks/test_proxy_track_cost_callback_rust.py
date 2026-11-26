@@ -609,3 +609,28 @@ async def test_spend_log_windows_resolve_schedules_at_the_request_start(
     started: Final = datetime.fromisoformat(str(rows[0]["startTime"])).astimezone(timezone.utc)
     assert len(seen) == 1
     assert abs((seen[0] - started).total_seconds()) < 0.05
+
+
+@pytest.mark.asyncio
+async def test_spend_log_windows_resolve_schedules_at_the_instant_auth_admitted_the_request(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.models.budget_schedule import schedule_clock
+
+    seen: Final[list[datetime]] = []
+
+    async def window_keys(*args: object, **kwargs: object) -> tuple[()]:
+        seen.append(schedule_clock())
+        return ()
+
+    monkeypatch.setattr(ps, "accounting_window_keys", window_keys)
+    admitted: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+    _ = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello there",
+        metadata={**_KEYED, "litellm_received_at": admitted},
+    )
+    _ = await proxy.rows()
+
+    assert seen == [admitted]

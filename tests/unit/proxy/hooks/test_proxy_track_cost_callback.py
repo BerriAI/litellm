@@ -1293,6 +1293,33 @@ async def test_charge_moves_only_the_committed_counters_auth_named_as_budgeted(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_charge_resolves_schedules_at_the_instant_auth_admitted_the_request(bucket: str) -> None:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+    admitted = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={"litellm_params": {bucket: {"litellm_received_at": admitted}}},
+        completion_response=None,
+        start_time=datetime(2026, 11, 25, 12, 1, tzinfo=timezone.utc),
+        end_time=datetime(2026, 11, 25, 12, 2, tzinfo=timezone.utc),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["admitted_at"] == admitted
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tracked", "expected_key", "expected_org"),
     [(True, pytest.approx(1.2), pytest.approx(2.2)), (False, 1.0, 2.0)],
@@ -1466,6 +1493,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         end_user_id="test_end_user_id",
         tags=["tag-a"],
         request_started_at=start_time,
+        admitted_at=None,
         model_access_groups=("premium",),
         project_id=None,
         committed_spend_scope=EntitySpendCounterKeys(),

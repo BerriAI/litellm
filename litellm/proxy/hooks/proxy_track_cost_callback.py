@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.models.budget_schedule import request_admitted_at
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -968,6 +969,7 @@ class _ProxyDBLogger(CustomLogger):
                 end_user_id=end_user_id,
                 tags=_get_request_tags_for_cost_tracking(sl_object=sl_object, metadata=dict(metadata)),
                 request_started_at=start_time,
+                admitted_at=request_admitted_at(row_kwargs),
                 model_access_groups=debitable_model_access_groups(
                     attributed=get_request_model_access_groups(row_kwargs),
                     served_model_id=served_model_id if isinstance(served_model_id, str) else None,
@@ -1521,6 +1523,7 @@ class _IncrementSpendCounters(Protocol):
         windows_from_ledger: bool = False,
         customer_counters: "Sequence[BudgetCounter]" = (),
         customer_hierarchy: object = None,
+        admitted_at: datetime | None = None,
     ) -> None: ...
 
 
@@ -1709,6 +1712,7 @@ async def _update_database_and_spend_counters_in_batch(
             end_user_id=end_user_id,
             tags=request_tags,
             request_started_at=start_time,
+            admitted_at=request_admitted_at(kwargs),
             model_access_groups=model_access_groups,
             project_id=project_id,
             committed_spend_scope=(

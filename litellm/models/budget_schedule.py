@@ -1,4 +1,4 @@
-from collections.abc import Callable, Generator, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone
@@ -6,7 +6,8 @@ from itertools import chain, pairwise
 from typing import Final, Literal, TypeAlias
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import ConfigDict, field_serializer, field_validator
+from pydantic import ConfigDict, TypeAdapter, field_serializer, field_validator
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -28,6 +29,29 @@ def resolve_schedules_at(at: datetime | None) -> Generator[None]:
         yield
     finally:
         _schedule_time.reset(token)
+
+
+class _ReceiveStamp(TypedDict, total=False):
+    litellm_received_at: ReadOnly[datetime | None]
+
+
+class _StampedParams(TypedDict, total=False):
+    litellm_metadata: ReadOnly[_ReceiveStamp | None]
+    metadata: ReadOnly[_ReceiveStamp | None]
+
+
+class _StampedKwargs(TypedDict, total=False):
+    litellm_params: ReadOnly[_StampedParams | None]
+
+
+_STAMPED_KWARGS: Final = TypeAdapter(_StampedKwargs)
+
+
+def request_admitted_at(kwargs: Mapping[str, object]) -> datetime | None:
+    """The instant auth admitted the request, which charging must resolve schedules at instead of the model call start."""
+    params: Final = _STAMPED_KWARGS.validate_python(kwargs).get("litellm_params") or {}
+    buckets: Final = (params.get("litellm_metadata") or {}, params.get("metadata") or {})
+    return next((stamp for bucket in buckets if (stamp := bucket.get("litellm_received_at")) is not None), None)
 
 
 def schedule_clock() -> datetime:

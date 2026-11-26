@@ -43,6 +43,7 @@ from litellm.integrations.otel.runtime import (
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.models.budget_schedule import resolve_schedules_at
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import *
@@ -3524,6 +3525,7 @@ async def user_api_key_auth(
         phase_span(f"auth {route}"),
         service_target(AUTH_OBJECTS_TARGET),
         spend_counter_batch_scope(_spend_counter_store()),
+        resolve_schedules_at(_ensure_litellm_received_at_on_request_state(request)),
     ):
         try:
             authenticated: Final = await user_api_key_auth_builder(

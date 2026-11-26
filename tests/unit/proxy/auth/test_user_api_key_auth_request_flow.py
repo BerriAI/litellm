@@ -10658,6 +10658,36 @@ class TestLitellmReceivedAtStamping:
         assert first == second
         assert request.state.litellm_received_at == first
 
+
+@pytest.mark.asyncio
+async def test_auth_resolves_scheduled_budgets_at_the_instant_the_request_arrived(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.models.budget_schedule import schedule_clock
+
+    seen: Final[list[datetime]] = []
+
+    async def custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        seen.append(schedule_clock())
+        return UserAPIKeyAuth(api_key=api_key, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.setattr(server, "user_custom_auth", custom_auth)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "prisma_client", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "more_body": False, "body": b'{"model": "m"}'}),
+    )
+    arrived: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+    request.state.litellm_received_at = arrived
+
+    await user_api_key_auth(request=request, api_key="Bearer external-token")
+
+    assert seen == [arrived]
+
     def test_does_not_overwrite_an_earlier_stamp(self):
         """Body-parse failures must not shorten the measured window: a value
         already on request.state (stamped earlier) must win."""

@@ -41,7 +41,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, finite_cost,
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.models.budget_schedule import resolve_schedules_at
+from litellm.models.budget_schedule import request_admitted_at, resolve_schedules_at
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     BaseDailySpendTransaction,
@@ -973,7 +973,7 @@ class DBSpendUpdateWriter:
             if use_ledger:
                 from litellm.proxy.spend_tracking.rust_spend_log_rows import LedgerRowInput, ledger_columns
 
-                with resolve_schedules_at(start_time):
+                with resolve_schedules_at(request_admitted_at(kwargs or {}) or start_time):
                     ledger_windows: Final = (
                         await accounting_window_keys(
                             hashed_token,
