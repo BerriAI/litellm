@@ -812,7 +812,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         saw_text_content = False
         tool_calls_released = False  # rebind-ok: set once a raw tool call reaches the client unscanned
         # With hold_tool_calls, the raw tool-call chunks wait here for the end-of-stream block inspection.
-        held_tool_call_chunks: Final[list[object]] = []  # mutable-ok: released, or dropped, at end of stream
+        held_tool_call_chunks: Final[list[ModelResponseStream]] = []  # mutable-ok: released or dropped at stream end
         end_of_stream_inspection_started = False  # rebind-ok: set once the end-of-stream inspection owns the verdict
 
         try:
@@ -844,21 +844,18 @@ class UnifiedLLMGuardrails(CustomLogger):
                     # passthrough so a mixed content+tool_call chunk defers its
                     # finish_reason to the final text terminator (see the
                     # _tool_call_passthrough_chunk docstring).
-                    tool_only = _with_stream_prompt_fields(
-                        self._tool_call_passthrough_chunk(
-                            item,
-                            finish_reason_per_choice=finish_reason_per_choice,
-                            held_choices=_held_choices(held_chars_per_choice),
-                        ),
-                        responses_so_far,
-                        responses_yielded,
+                    tool_only = self._tool_call_passthrough_chunk(
+                        item,
+                        finish_reason_per_choice=finish_reason_per_choice,
+                        held_choices=_held_choices(held_chars_per_choice),
                     )
                     if hold_tool_calls:
                         held_tool_call_chunks.append(tool_only)
                         continue
-                    responses_yielded.append(tool_only)
+                    released = _with_stream_prompt_fields(tool_only, responses_so_far, responses_yielded)
+                    responses_yielded.append(released)
                     tool_calls_released = True
-                    yield tool_only
+                    yield released
                     continue
 
                 if self._is_trailing_metadata_chunk(item):
@@ -972,7 +969,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         *,
         inspect: bool,
-        held_tool_call_chunks: Sequence[object],
+        held_tool_call_chunks: Sequence[ModelResponseStream],
         endpoint_translation: _EndpointTranslation,
         guardrail_to_apply: CustomGuardrail,
         request_data: _RequestData,
@@ -999,8 +996,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             ):
                 yield out
         for held_tool_call_chunk in held_tool_call_chunks:
-            responses_yielded.append(held_tool_call_chunk)
-            yield held_tool_call_chunk
+            released = _with_stream_prompt_fields(held_tool_call_chunk, responses_so_far, responses_yielded)
+            responses_yielded.append(released)
+            yield released
 
     async def _inspect_full_response_for_block(
         self,

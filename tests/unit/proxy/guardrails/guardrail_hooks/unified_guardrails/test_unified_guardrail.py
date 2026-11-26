@@ -942,9 +942,12 @@ class _StreamingTextGuardrail(CustomGuardrail):
     exercise the streaming underflow guard.
     """
 
-    def __init__(self, *, holdback_schedule=None, shrink_to=None, shrink_after=0, sampling_rate=1):
+    def __init__(
+        self, *, holdback_schedule=None, shrink_to=None, shrink_after=0, sampling_rate=1, hold_tool_calls=False
+    ):
         super().__init__(guardrail_name="streaming-text-guardrail")
         self.streaming_transform_mode = "incremental_diff"
+        self.streaming_hold_tool_calls = hold_tool_calls
         self.streaming_sampling_rate = sampling_rate
         self.streaming_end_of_stream_only = False
         self.guardrail_config = {}
@@ -1059,9 +1062,10 @@ class TestStreamingTransform:
         assert "hello" not in streamed
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("hold_tool_calls", [False, True])
     @pytest.mark.parametrize("first_chunk_is_tool_call", [False, True])
     async def test_incremental_diff_keeps_the_vllm_prompt_fields_on_the_first_chunk_it_sends(
-        self, first_chunk_is_tool_call: bool
+        self, first_chunk_is_tool_call: bool, hold_tool_calls: bool
     ):
         """vLLM puts its prompt fields on the first raw chunk only, and incremental_diff withholds that chunk"""
         prompt_fields: Final = {"prompt_token_ids": [151644, 872], "prompt_text": "<|im_start|>user\nSay hi."}
@@ -1086,11 +1090,14 @@ class TestStreamingTransform:
         first_chunk: Final = tool_call_chunk if first_chunk_is_tool_call else _stream_chunk("hello ")
         chunks: Final = [
             first_chunk.model_copy(update=prompt_fields),
+            tool_call_chunk,
             _stream_chunk("world"),
             _stream_chunk("", finish_reason="stop"),
         ]
 
-        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _StreamingTextGuardrail(), chunks)
+        out: Final = await _drive_stream(
+            UnifiedLLMGuardrails(), _StreamingTextGuardrail(hold_tool_calls=hold_tool_calls), chunks
+        )
         sent: Final = [json.loads(item.model_dump_json()) for item in out]
 
         assert {field: sent[0].get(field) for field in prompt_fields} == prompt_fields
