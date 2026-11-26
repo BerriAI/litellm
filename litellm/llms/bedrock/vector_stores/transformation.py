@@ -195,19 +195,22 @@ def _result_content(
 def _filename_from_uri(uri: str) -> str:
     if uri.startswith("s3://"):
         bucket, _, key = uri.removeprefix("s3://").partition("/")
-        return key.split("/")[-1] or bucket or uri
+        return key.rstrip("/").split("/")[-1] or bucket or uri
     try:
         parsed_uri: Final = urlparse(uri)
     except ValueError:
         return uri
-    return parsed_uri.path.split("/")[-1] or parsed_uri.netloc or uri
+    return parsed_uri.path.rstrip("/").split("/")[-1] or parsed_uri.netloc or uri
 
 
 def _names_only_a_host(uri: str) -> bool:
+    if uri.startswith("s3://"):
+        return not uri.removeprefix("s3://").partition("/")[2].strip("/")
     try:
-        return not urlparse(uri).path.strip("/")
+        parsed_uri: Final = urlparse(uri)
     except ValueError:
         return False
+    return not (parsed_uri.path.strip("/") or parsed_uri.query or parsed_uri.fragment)
 
 
 def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | None:
