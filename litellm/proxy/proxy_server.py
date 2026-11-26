@@ -94,6 +94,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    MCP_RESPONSE_HEADER_TIMEOUT,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS,
@@ -23537,7 +23538,7 @@ async def _stream_mcp_asgi_response(
     handler_task.add_done_callback(_ensure_eof)
 
     try:
-        status, raw_headers = await asyncio.wait_for(asyncio.shield(headers_ready), timeout=30.0)
+        status, raw_headers = await asyncio.wait_for(asyncio.shield(headers_ready), timeout=MCP_RESPONSE_HEADER_TIMEOUT)
     except asyncio.TimeoutError:
         handler_task.cancel()
         raise HTTPException(status_code=504, detail="MCP handler did not respond in time")
