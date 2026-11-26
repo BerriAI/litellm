@@ -870,7 +870,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def log_success_event(
         self,
-        kwargs: dict[str, object],
+        kwargs,
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -879,7 +879,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def log_failure_event(
         self,
-        kwargs: dict[str, object],
+        kwargs,
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -888,7 +888,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_log_success_event(
         self,
-        kwargs: dict[str, object],
+        kwargs,
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -897,7 +897,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_log_failure_event(
         self,
-        kwargs: dict[str, object],
+        kwargs,
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
