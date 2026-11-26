@@ -322,9 +322,9 @@ class _StreamThatOutlivesItsConsumer:
     def outlive_consumer_until_settled(self) -> None:
         self.kept_open = True
 
-    async def settle_after_consumer_left(self, *, drain: bool) -> str | None:
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
         self.settled_with_drain = (*self.settled_with_drain, drain)
-        return "success" if drain else None
+        return drain
 
 
 @pytest.mark.asyncio
@@ -336,7 +336,7 @@ async def test_a_cut_stream_served_by_its_primary_deployment_is_drained_to_the_p
     drained: Final = await wrapper.settle_after_consumer_left(drain=True)
 
     assert source.kept_open is True
-    assert (drained, source.settled_with_drain) == ("success", (True,))
+    assert (drained, source.settled_with_drain) == (True, (True,))
 
 
 @pytest.mark.asyncio
@@ -347,4 +347,4 @@ async def test_a_cut_stream_that_fell_back_is_closed_so_both_deployments_keep_th
 
     drained: Final = await wrapper.settle_after_consumer_left(drain=True)
 
-    assert (drained, source.settled_with_drain) == (None, (False,))
+    assert (drained, source.settled_with_drain) == (False, (False,))

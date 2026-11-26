@@ -284,8 +284,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def outlive_consumer_until_settled(self) -> None:
         """A bridged stream has no provider Responses stream to read on; its cut is billed from what already arrived."""
 
-    async def settle_after_consumer_left(self, *, drain: bool) -> None:
-        return None
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        return False
 
     def _tool_search_execution(self, call_id: str, fn_name: str) -> ToolSearchExecution | None:
         known: Final = self._tool_search_executions.get(call_id)
