@@ -16031,6 +16031,7 @@
     "statStrip": {
       "spend": "Spend",
       "budgetHint": "of {{budget}} budget",
+      "periodBudgetHint": "{{spend}} of {{budget}} this period ({{duration}})",
       "noBudget": "No budget set",
       "totalRequests": "Total Requests",
       "successfulCount": "<count/> ok",

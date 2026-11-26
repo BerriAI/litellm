@@ -672,6 +672,48 @@ describe("UsagePage", () => {
     expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
   });
 
+  describe("spend budget hint", () => {
+    beforeEach(() => {
+      mockUseCurrentUser.mockReturnValue({
+        data: {
+          user_id: "user-123",
+          spend: 12.4,
+          max_budget: 100,
+          budget_duration: "24h",
+          budget_reset_at: "2026-11-27T00:00:00Z",
+        },
+        isLoading: false,
+        error: null,
+      } as unknown as ReturnType<typeof useCurrentUser>);
+    });
+
+    it("shows no budget next to the deployment-wide spend in the admin global view", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(expect.objectContaining({ entityIds: null }));
+      });
+      expect(totalRequestsCell()).toBeInTheDocument();
+      expect(overview().queryByText(/budget|this period/i)).not.toBeInTheDocument();
+    });
+
+    it("never shows the admin's own budget next to another user's spend", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-001" });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          expect.objectContaining({ entityIds: ["user-001"] }),
+        );
+      });
+      expect(totalRequestsCell()).toBeInTheDocument();
+      expect(overview().queryByText(/budget|this period/i)).not.toBeInTheDocument();
+    });
+
+    it("pairs the admin's own periodic budget with the current period's spend in My Usage", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?view=my-usage" });
+      expect(await overview().findByText("$12.40 of $100.00 this period (daily)")).toBeInTheDocument();
+      expect(overview().queryByText("of $100.00 budget")).not.toBeInTheDocument();
+    });
+  });
+
   it("should render and fetch usage data on mount", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 

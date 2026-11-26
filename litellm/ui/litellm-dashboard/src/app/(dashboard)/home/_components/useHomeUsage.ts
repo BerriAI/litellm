@@ -13,6 +13,10 @@ import {
   overviewTotals,
   type OverviewTotals,
 } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
+import {
+  spendBudgetFromUser,
+  type SpendBudget,
+} from "@/app/(dashboard)/usage/_components/components/overview/spendBudget";
 
 export const HOME_USAGE_DAYS = 7;
 
@@ -22,7 +26,8 @@ export interface HomeUsage {
   loading: boolean;
   requestCountsPending: boolean;
   failed: boolean;
-  budget: number | null;
+  budget: SpendBudget | null;
+  showBudgetHint: boolean;
   retry: () => void;
 }
 
@@ -80,7 +85,8 @@ export function useHomeUsage(): HomeUsage {
     loading,
     requestCountsPending: loading && gateway === null,
     failed,
-    budget: currentUser?.max_budget ?? null,
+    budget: spendBudgetFromUser(currentUser),
+    showBudgetHint: !isAdmin,
     retry: () => setAttempt((n) => n + 1),
   };
 }

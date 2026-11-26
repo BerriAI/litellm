@@ -15744,6 +15744,7 @@
     "statStrip": {
       "spend": "费用",
       "budgetHint": "预算共 {{budget}}",
+      "periodBudgetHint": "本周期 {{spend}} / {{budget}}（{{duration}}）",
       "noBudget": "未设置预算",
       "totalRequests": "请求总数",
       "successfulCount": "成功 <count/>",
