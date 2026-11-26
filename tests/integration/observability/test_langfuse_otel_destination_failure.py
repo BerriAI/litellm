@@ -27,6 +27,7 @@ SERVER_SPAN_KIND: Final = 2
 FAILURE_SPAN: Final = "Failed Proxy Server Request"
 STACK_TRACE: Final = "error.stack_trace"
 ERROR_ATTRIBUTES: Final = ("error.type", "error.code", "http.response.status_code", "metadata.user_api_key_team_id")
+FAILURE_STATUS: Final = {"upstream_500": 500, "unknown_model": 400}
 
 
 def _upstream_error(_request: Request) -> Reply:
@@ -78,7 +79,7 @@ def _has_failure_record(spans: tuple[Span, ...]) -> bool:
     return _has_server_span(spans) and any(span["name"] == FAILURE_SPAN for span in spans)
 
 
-def _fail(proxy: Gateway, key: str, model: str) -> str:
+def _fail(proxy: Gateway, key: str, model: str, status: int) -> str:
     trace_id: Final = uuid.uuid4().hex
     response: Final = proxy.request(
         "POST",
@@ -87,7 +88,7 @@ def _fail(proxy: Gateway, key: str, model: str) -> str:
         key=key,
         headers={"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
     )
-    assert response.status_code >= 400, response.text
+    assert response.status_code == status, response.text
     return trace_id
 
 
@@ -98,7 +99,10 @@ def _operator_record(
     spans: Final = _trace(sinks.operator, since, trace_id)
     server: Final = next(span for span in spans if span["kind"] == SERVER_SPAN_KIND)
     failures: Final = tuple(str(span["name"]) for span in spans if span["name"] == FAILURE_SPAN)
-    return {name: server["attributes"].get(name) for name in ERROR_ATTRIBUTES}, failures
+    return {
+        **{name: server["attributes"].get(name) for name in ERROR_ATTRIBUTES},
+        STACK_TRACE: STACK_TRACE in server["attributes"],
+    }, failures
 
 
 @pytest.mark.parametrize("failure", ["upstream_500", "unknown_model"])
@@ -136,8 +140,8 @@ def test_the_operator_collector_records_a_destination_requests_failure_like_any_
         )
         since: Final = (recorded_spans(audit_sinks.operator)[0], recorded_spans(audit_sinks.tenant)[0])
 
-        plain_trace: Final = _fail(proxy, plain_key, model)
-        destination_trace: Final = _fail(proxy, destination_key, model)
+        plain_trace: Final = _fail(proxy, plain_key, model, FAILURE_STATUS[failure])
+        destination_trace: Final = _fail(proxy, destination_key, model, FAILURE_STATUS[failure])
         plain: Final = _operator_record(audit_sinks, since[0], plain_trace, _has_failure_record)
         destination: Final = _operator_record(audit_sinks, since[0], destination_trace, _has_server_span)
         held(lambda: _trace(audit_sinks.tenant, since[1], destination_trace), _has_server_span, holding=3, seconds=40)
@@ -146,6 +150,7 @@ def test_the_operator_collector_records_a_destination_requests_failure_like_any_
     assert plain[1] == (FAILURE_SPAN,), plain
     assert None not in plain[0].values(), plain[0]
     assert plain[0]["metadata.user_api_key_team_id"] == plain_team, plain[0]
+    assert plain[0][STACK_TRACE] is (failure == "upstream_500"), plain[0]
     assert destination[1] == plain[1], (destination, plain)
     assert {**destination[0], "metadata.user_api_key_team_id": None} == {
         **plain[0],
@@ -183,7 +188,7 @@ def test_an_arize_destination_gets_the_failure_without_the_operators_stack_trace
         )
         since: Final = recorded_spans(audit_sinks.arize)[0]
 
-        trace_id: Final = _fail(proxy, key, model)
+        trace_id: Final = _fail(proxy, key, model, FAILURE_STATUS[failure])
         held(lambda: _trace(audit_sinks.arize, since, trace_id), _has_server_span, holding=3, seconds=40)
         spans: Final = _trace(audit_sinks.arize, since, trace_id)
 
