@@ -17857,12 +17857,15 @@ async def test_an_unscoped_acompletion_hands_attempt_ended_call_facts_and_derive
 
 
 class _IdentityReader(CustomLoggerV2):
-    def __init__(self) -> None:
+    def __init__(self, call_id: str) -> None:
+        self.call_id = call_id
         self.seen: list[tuple[object, object]] = []
         self.done = threading.Event()
 
     @on(Hook.attempt_ended, reads={Field.logged_key_identity, Field.key_identity}, awaited=True)
     async def attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
+        if ctx.call is None or ctx.call.ids.call_id != self.call_id:
+            return
         self.seen.append((getattr(view, "logged_key_identity", None), getattr(view, "key_identity", None)))
         self.done.set()
 
@@ -17870,7 +17873,7 @@ class _IdentityReader(CustomLoggerV2):
 async def test_an_sdk_call_hands_attempt_ended_the_key_identity_its_logged_metadata_carries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reader: Final = _IdentityReader()
+    reader: Final = _IdentityReader("identity-call")
     _plane_lists(monkeypatch)
     monkeypatch.setattr(litellm, "callbacks", [reader])
 
@@ -17878,6 +17881,7 @@ async def test_an_sdk_call_hands_attempt_ended_the_key_identity_its_logged_metad
         model="gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="ok",
+        litellm_call_id="identity-call",
         user="end-user-body",
         metadata={"user_api_key_team_id": 7, "user_api_key_alias": "sdk-key", "user_api_key_end_user_id": "eu-1"},
     )
