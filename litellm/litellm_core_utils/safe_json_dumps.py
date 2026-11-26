@@ -1,7 +1,7 @@
 import json
 import math
 from collections.abc import Callable
-from typing import Final, Protocol
+from typing import Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
@@ -12,14 +12,15 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 UNSERIALIZABLE_OBJECT: Final = "Unserializable Object"
 
 
+@runtime_checkable
 class _Orderable(Protocol):
     def __lt__(self, other: Never, /) -> bool: ...
 
 
 def _orderable(value: object) -> _Orderable:
-    from litellm.litellm_core_utils.core_helpers import require_attributes
-
-    return require_attributes(value, _Orderable, "__lt__")
+    if isinstance(value, _Orderable):
+        return value
+    raise TypeError(f"{type(value).__name__!r} object does not support ordering")
 
 
 def strip_null_bytes(value: str) -> str:
