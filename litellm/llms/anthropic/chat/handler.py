@@ -298,7 +298,7 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict[str, object],
+    headers: Mapping[str, object],
     data: str,
     model: str,
     messages: Sequence[object],
@@ -589,7 +589,9 @@ class AnthropicChatCompletion(BaseLLM):
 
         transform_params: Final = {**optional_params, "is_vertex_request": is_vertex_request}
 
-        def finish_request(request_data: dict) -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
+        def finish_request(
+            request_data: dict,  # mutable-ok: dict-typed callees take it
+        ) -> tuple[dict[str, str], dict]:  # mutable-ok: rewritten in place downstream
             """Filter beta headers and emit pre_call, returning `(headers, data)`.
 
             The pair stays mutable because the streaming path rewrites it in

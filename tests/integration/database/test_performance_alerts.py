@@ -103,6 +103,7 @@ class Fixture:
 
     async def sweep(self) -> None:
         for _ in range(20):
+            write_rows('UPDATE "LiteLLM_PerformanceAlertState" SET next_run_at = now()', ())
             await run_performance_alerts(self.repository, interval=timedelta(0), now=lambda: NOW)
             state = read_rows(
                 'SELECT completed_at IS NOT NULL AS completed FROM "LiteLLM_PerformanceAlertState" WHERE id = 1', ()

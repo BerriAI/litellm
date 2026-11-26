@@ -49,6 +49,19 @@ pub struct SignIn {
     pub links_any_user: bool,
 }
 
+impl SignIn {
+    /// A sign-in that carries only `user_id`, as a plain lookup by id makes it.
+    pub fn by_id(user_id: &str) -> Self {
+        Self {
+            user_id: user_id.to_owned(),
+            sso_user_id: None,
+            user_email: None,
+            email_verified: None,
+            links_any_user: false,
+        }
+    }
+}
+
 /// What `default_internal_user_params` sets on a user created at sign-in. The host resolves them, the reset time
 /// of `budget_duration` and the opening windows of `budget_limits` included. `None` leaves the column unset.
 #[derive(Clone, Debug, Default)]

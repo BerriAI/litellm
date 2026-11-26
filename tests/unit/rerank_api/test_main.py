@@ -694,3 +694,48 @@ async def test_arerank_returns_cost_while_async_success_callback_is_held(respx_m
     assert _expected_rerank_cost() > 0
     assert returned_cost == _expected_rerank_cost()
     assert callback_cost == returned_cost
+
+
+def test_rerank_omits_instruction_that_is_not_a_string_from_the_provider_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://vllm.test/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    litellm.rerank(
+        model="hosted_vllm/reranker",
+        query="hello",
+        documents=["hello", "world"],
+        api_base="http://vllm.test",
+        instruction=123,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent == {
+        "model": "reranker",
+        "query": "hello",
+        "documents": ["hello", "world"],
+        "return_documents": True,
+    }, sent
+
+
+@pytest.mark.asyncio
+async def test_arerank_resolves_provider_without_api_base_that_is_not_a_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    resolved_api_bases: Final[list[object]] = []
+
+    def record_resolution(*args: object, **kwargs: object) -> tuple[str, str, None, None]:
+        resolved_api_bases.append(kwargs.get("api_base"))
+        return "rerank-v4.0-pro", "cohere", None, None
+
+    def rerank_raises_provider_error(*args: object, **kwargs: object) -> None:
+        raise BaseLLMException(status_code=401, message='{"error":"bad key"}')
+
+    monkeypatch.setattr(litellm, "get_llm_provider", record_resolution)
+    monkeypatch.setattr("litellm.rerank_api.main.rerank", rerank_raises_provider_error)
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.arerank(model="cohere/rerank-v4.0-pro", query="hello", documents=["hello"], api_base=123)
+
+    assert resolved_api_bases[0] is None, resolved_api_bases
