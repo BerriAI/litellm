@@ -41,11 +41,9 @@ def realtime_error_event(message: str, error_type: str) -> str:
 
 
 def websocket_close_reason(message: str, fallback: str) -> str:
-    encoded: Final = message.encode("utf-8")
+    encoded: Final = message.encode("utf-8", errors="replace")
     if not encoded:
         return fallback
-    if len(encoded) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES:
-        return message
     return encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
 
 

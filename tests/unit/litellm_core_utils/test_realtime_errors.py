@@ -50,6 +50,12 @@ def test_websocket_close_reason_truncates_multibyte_message_by_bytes():
     assert "�" not in reason
 
 
+def test_websocket_close_reason_replaces_a_lone_surrogate_instead_of_raising():
+    reason = websocket_close_reason("limit \ud800 hit", fallback="Internal server error")
+
+    assert reason.encode("utf-8") == b"limit ? hit"
+
+
 @pytest.mark.parametrize(
     ("upstream_code", "expected"),
     [(1000, 1000), (1008, 1008), (1011, 1011), (4001, 4001), (1005, 1011), (1006, 1011), (1015, 1011), (2999, 1011)],
