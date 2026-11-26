@@ -21,5 +21,7 @@
   "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::clearing the alias and budget sends null for both",
   "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::a save the server rejects shows its error, keeps the typed values, and the retry goes through",
   "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::cancel discards the draft without sending anything",
-  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::the Chinese dialog saves a non-ASCII alias on mobile"
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::the Chinese dialog saves a non-ASCII alias on mobile",
+  "tests/e2e/ui/tests/integrationCritical/customerHierarchy.spec.ts::creating an organization member without a team creates and assigns the default team",
+  "tests/e2e/ui/tests/integrationCritical/customerHierarchy.spec.ts::moving a member stores the selected default team first"
 ]

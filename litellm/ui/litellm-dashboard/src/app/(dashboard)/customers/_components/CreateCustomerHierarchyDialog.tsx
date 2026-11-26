@@ -1,18 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { Controller } from "react-hook-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { useCustomerBudgetForm } from "./useCustomerBudgetForm";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { useCustomerBudgetSave } from "./useCustomerBudgetSave";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CustomerBudgetDialog, CustomerBudgetForm } from "./CustomerBudgetDialog";
 import { createCustomerHierarchyEntity } from "./createCustomerHierarchyEntity";
 import CustomerLimitsFields from "./CustomerLimitsFields";
+import { hierarchyCreateDefaults } from "./customer-hierarchy-create/mapper";
+import { hierarchyCreateSchema } from "./customer-hierarchy-create/schema";
 import {
-  buildCustomerHierarchyCreate,
-  newCustomerHierarchyFields,
   CUSTOMER_HIERARCHY_FORM_ERRORS,
   type CreatedCustomerHierarchyEntity,
   type CustomerHierarchyCreateTarget,
@@ -27,19 +28,18 @@ type Props = CustomerHierarchyCreateTarget & {
 function CreateForm(props: Props) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
-  const [identifier, setIdentifier] = useState("");
-  const form = useCustomerBudgetForm({
-    initial: newCustomerHierarchyFields(props),
-    parse: (fields) => {
-      const result = buildCustomerHierarchyCreate(props, fields, identifier);
-      return result.ok
-        ? { ok: true, value: result.create }
-        : { ok: false, error: t(CUSTOMER_HIERARCHY_FORM_ERRORS[result.error]) };
-    },
-    write: async (create): Promise<void> => {
+  const schema = hierarchyCreateSchema(props);
+  const { control, getValues } = useZodForm(schema, { defaultValues: hierarchyCreateDefaults(props) });
+  const { pending, error, setError, run } = useCustomerBudgetSave();
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (pending) return;
+    const result = schema.parse(getValues());
+    if (!result.ok) return setError(t(CUSTOMER_HIERARCHY_FORM_ERRORS[result.error]));
+    await run(async () => {
       try {
-        const created = await createCustomerHierarchyEntity(create);
-        if (!created) return form.setError(t("customerPortal.hierarchy.createFailed"));
+        const created = await createCustomerHierarchyEntity(result.create);
+        if (!created) return setError(t("customerPortal.hierarchy.createFailed"));
         toast.success(
           t("customerPortal.hierarchy.created", {
             kind: t(props.kind === "team" ? "customerPortal.hierarchy.team" : "customerPortal.hierarchy.member"),
@@ -50,9 +50,8 @@ function CreateForm(props: Props) {
       } finally {
         void queryClient.invalidateQueries({ queryKey: ["get", "/management/v1/customer_portal/limits"] });
       }
-    },
-  });
-  const { fields, setFields, update, pending, error, save } = form;
+    });
+  };
   const title = t(
     props.kind === "team" ? "customerPortal.hierarchy.createTeam" : "customerPortal.hierarchy.createMember",
   );
@@ -86,63 +85,92 @@ function CreateForm(props: Props) {
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="create-hierarchy-alias">{t("customerPortal.hierarchy.alias")}</Label>
-            <Input
-              id="create-hierarchy-alias"
-              value={fields.alias}
-              onChange={(event) => update("alias", event.target.value)}
-              autoFocus
+            <Controller
+              control={control}
+              name="alias"
+              render={({ field }) => (
+                <Input
+                  id="create-hierarchy-alias"
+                  ref={field.ref}
+                  value={field.value}
+                  onChange={(event) => {
+                    field.onChange(event);
+                    setError(null);
+                  }}
+                  autoFocus
+                />
+              )}
             />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="create-hierarchy-id">{t("customerPortal.hierarchy.customIdentifier")}</Label>
-            <Input
-              id="create-hierarchy-id"
-              value={identifier}
-              onChange={(event) => setIdentifier(event.target.value)}
-              maxLength={256}
-              aria-describedby="create-hierarchy-id-hint"
+            <Controller
+              control={control}
+              name="identifier"
+              render={({ field }) => (
+                <Input
+                  id="create-hierarchy-id"
+                  ref={field.ref}
+                  value={field.value}
+                  onChange={field.onChange}
+                  maxLength={256}
+                  aria-describedby="create-hierarchy-id-hint"
+                />
+              )}
             />
             <p className="text-xs text-muted-foreground" id="create-hierarchy-id-hint">
               {t("customerPortal.hierarchy.identifierAutoGenerated")}
             </p>
           </div>
         </div>
-        <CustomerLimitsFields
-          fields={{
-            budgetMode: fields.budgetEnabled ? "custom" : "profile",
-            budgetId: fields.templateId,
-            budgetAmount: fields.maxBudget,
-            budgetDuration: fields.budgetDuration,
-            tpm: fields.tpm,
-            rpm: fields.rpm,
-            softBudget: fields.softBudget,
-            allowedModels: fields.allowedModels,
+        <Controller
+          control={control}
+          name="budget"
+          render={({ field }) => {
+            const fields = field.value;
+            return (
+              <CustomerLimitsFields
+                fields={{
+                  budgetMode: fields.budgetEnabled ? "custom" : "profile",
+                  budgetId: fields.templateId,
+                  budgetAmount: fields.maxBudget,
+                  budgetDuration: fields.budgetDuration,
+                  tpm: fields.tpm,
+                  rpm: fields.rpm,
+                  softBudget: fields.softBudget,
+                  allowedModels: fields.allowedModels,
+                }}
+                profiles={props.kind === "member" ? props.organization.default_budgets : undefined}
+                disabled={pending}
+                idPrefix="create-member"
+                title={t(
+                  props.kind === "member"
+                    ? "customerPortal.hierarchy.memberLimits"
+                    : "customerPortal.hierarchy.budgetTitle",
+                )}
+                description={t(
+                  props.kind === "member"
+                    ? "customerPortal.hierarchy.memberLimitsHelp"
+                    : "customerPortal.hierarchy.teamLimitsHelp",
+                )}
+                onChange={(patch) => {
+                  const limits = {
+                    ...getValues("budget"),
+                    ...(props.kind === "team" ? { budgetEnabled: true } : {}),
+                    ...(patch.budgetMode ? { budgetEnabled: patch.budgetMode === "custom" } : {}),
+                    ...(patch.budgetId !== undefined ? { templateId: patch.budgetId } : {}),
+                    ...(patch.budgetAmount !== undefined ? { maxBudget: patch.budgetAmount } : {}),
+                    ...(patch.budgetDuration !== undefined ? { budgetDuration: patch.budgetDuration } : {}),
+                    ...(patch.tpm !== undefined ? { tpm: patch.tpm } : {}),
+                    ...(patch.rpm !== undefined ? { rpm: patch.rpm } : {}),
+                    ...(patch.softBudget !== undefined ? { softBudget: patch.softBudget } : {}),
+                    ...(patch.allowedModels !== undefined ? { allowedModels: patch.allowedModels } : {}),
+                  };
+                  field.onChange(limits);
+                }}
+              />
+            );
           }}
-          profiles={props.kind === "member" ? props.organization.default_budgets : undefined}
-          disabled={pending}
-          idPrefix="create-member"
-          title={t(
-            props.kind === "member" ? "customerPortal.hierarchy.memberLimits" : "customerPortal.hierarchy.budgetTitle",
-          )}
-          description={t(
-            props.kind === "member"
-              ? "customerPortal.hierarchy.memberLimitsHelp"
-              : "customerPortal.hierarchy.teamLimitsHelp",
-          )}
-          onChange={(patch) =>
-            setFields((current) => ({
-              ...current,
-              ...(props.kind === "team" ? { budgetEnabled: true } : {}),
-              ...(patch.budgetMode ? { budgetEnabled: patch.budgetMode === "custom" } : {}),
-              ...(patch.budgetId !== undefined ? { templateId: patch.budgetId } : {}),
-              ...(patch.budgetAmount !== undefined ? { maxBudget: patch.budgetAmount } : {}),
-              ...(patch.budgetDuration !== undefined ? { budgetDuration: patch.budgetDuration } : {}),
-              ...(patch.tpm !== undefined ? { tpm: patch.tpm } : {}),
-              ...(patch.rpm !== undefined ? { rpm: patch.rpm } : {}),
-              ...(patch.softBudget !== undefined ? { softBudget: patch.softBudget } : {}),
-              ...(patch.allowedModels !== undefined ? { allowedModels: patch.allowedModels } : {}),
-            }))
-          }
         />
       </CustomerBudgetForm>
     </CustomerBudgetDialog>
