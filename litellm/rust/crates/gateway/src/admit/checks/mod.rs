@@ -19,8 +19,6 @@ use axum::http::request::Parts;
 use litellm_gateway_auth::Authenticated;
 use serde_json::{Map, Value};
 
-pub(super) use model::alias;
-
 use super::{Admit, Refused};
 use crate::host::NativeRows;
 
@@ -44,7 +42,11 @@ impl Reason {
 pub(super) type Authentication = Result<Authenticated<NativeRows>, litellm_gateway_auth::Error>;
 pub(super) type Fields = Map<String, Value>;
 
-pub(super) const HEAD: &[fn(&Admit, &Parts) -> Option<Reason>] =
-    &[config::settings, head::route, head::headers];
+pub(super) const HEAD: &[fn(&Admit, &Parts) -> Option<Reason>] = &[
+    config::settings,
+    head::route,
+    head::forwarded_for,
+    head::headers,
+];
 pub(super) const CALLER: &[fn(&Admit, &Authentication) -> Option<Reason>] = &[caller::caller];
 pub(super) const BODY: &[fn(&Admit, &Fields) -> Option<Reason>] = &[body::fields, model::model];

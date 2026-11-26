@@ -351,7 +351,7 @@ _FAILURE_KINDS: Final = (
 )
 _IMAGE_ANSWERS_WITHOUT_AN_IMAGE: Final = frozenset({"ImageRefusalError", "UnservedImageError"})
 _DECLINED: Final = frozenset(
-    {"MalformedRequestFieldError", "UnsupportedEndpointError", *_IMAGE_ANSWERS_WITHOUT_AN_IMAGE}
+    {"MalformedRequestFieldError", "UnsupportedEndpointError", "DocumentFetchError", *_IMAGE_ANSWERS_WITHOUT_AN_IMAGE}
 )
 _BATCH_API_KINDS: Final = frozenset({"batch", "cancel_batch", "create_file"})
 _BATCH_API_HANDLERS: Final = frozenset(

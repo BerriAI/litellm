@@ -17,12 +17,13 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use litellm_config::{Config, LitellmRole};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey, KeyAuthenticator, SystemClock};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks,
+    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks, Refreshed,
     RouteGroups, Rows, Settings, Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -30,6 +31,7 @@ use litellm_gateway_auth_core::{
         },
         key::Owner,
     },
+    record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
 };
 use litellm_redis_store::auth_cache::CachedKey;
 use serde_json::Value;
@@ -37,22 +39,22 @@ use serde_json::Value;
 pub use key::Key;
 pub use store::AuthStore;
 
-/// The rows the native host hands the core: a key's, and none of the objects it does not read
-/// yet. `Infallible` is a row this host does not read, so no identity that needs one exists. The
-/// end user's is `()`, since the key path asks for it on every request and a request that names
-/// no end user reads none.
+/// The rows the native host hands the core: a key's, and a core record for each thing a caller
+/// belongs to. The steps that would read those records still decline, so no caller this host
+/// serves holds one yet. `Infallible` is a row this host has no record for, so no identity that
+/// needs one exists. The end user's record is empty for a request that names none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
 impl Rows for NativeRows {
     type Key = Key;
-    type User = Infallible;
-    type Team = Infallible;
-    type EndUser = ();
+    type User = UserRecord;
+    type Team = TeamRecord;
+    type EndUser = EndUserRecord;
     type ObjectPermission = Infallible;
-    type Project = Infallible;
-    type Membership = Infallible;
-    type Org = Infallible;
+    type Project = ProjectRecord;
+    type Membership = MembershipRecord;
+    type Org = OrgRecord;
     type Agent = Infallible;
 }
 
@@ -62,6 +64,16 @@ pub struct NativeAuthHost {
     keys: Option<Arc<AuthStore>>,
     /// The hash Python caches the master key's identity under, which is no key row.
     master: Option<KeyHash>,
+}
+
+impl NativeAuthHost {
+    /// The host the request body check reads stored credentials through, which reads no key.
+    pub(crate) fn credential_store() -> Self {
+        Self {
+            keys: None,
+            master: None,
+        }
+    }
 }
 
 /// The request needs `step`, which this host does not answer yet.
@@ -149,7 +161,7 @@ impl AuthHost for NativeAuthHost {
 
     /// The core asks here only after `cached_key` missed, so the cache is not read again. The
     /// store caches the key it found, whoever answers the request.
-    async fn db_key(&self, hash: &KeyHash, _: &()) -> Result<Option<Keyed<Key>>, Error> {
+    async fn db_key(&self, hash: &KeyHash, _: &EndUserRecord) -> Result<Option<Keyed<Key>>, Error> {
         let Some(store) = &self.keys else {
             return declined("db_key");
         };
@@ -241,11 +253,11 @@ impl AuthHost for NativeAuthHost {
         declined("delegated_agent_team")
     }
 
-    async fn key_owner(&self, _: &str) -> Result<Option<Owner<Infallible>>, Error> {
+    async fn key_owner(&self, _: &str) -> Result<Option<Owner<UserRecord>>, Error> {
         declined("key_owner")
     }
 
-    async fn user(&self, _: &UserLookup<'_>) -> Result<UserRead<Infallible>, Error> {
+    async fn user(&self, _: &UserLookup<'_>) -> Result<UserRead<UserRecord>, Error> {
         declined("user")
     }
 
@@ -257,46 +269,50 @@ impl AuthHost for NativeAuthHost {
         declined("resolve_user_identity")
     }
 
-    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<Infallible>>, Error> {
+    async fn cached_team(&self, _: &str) -> Result<Option<Refreshed<TeamRecord>>, Error> {
         declined("cached_team")
     }
 
-    async fn key_team(&self, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn key_team(&self, _: &str) -> Result<Option<TeamRecord>, Error> {
         declined("key_team")
     }
 
-    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<Infallible>, Error> {
+    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<TeamRecord>, Error> {
         declined("team")
     }
 
-    async fn granting_team(&self, _: &str) -> Result<TeamRead<Infallible>, Error> {
+    async fn granting_team(&self, _: &str) -> Result<TeamRead<TeamRecord>, Error> {
         declined("granting_team")
     }
 
-    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<Infallible>, Error> {
+    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<TeamRecord>, Error> {
         declined("team_by_alias")
     }
 
-    async fn load_team_membership(&self, _: &str, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn load_team_membership(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<MembershipRecord>, Error> {
         declined("load_team_membership")
     }
 
-    async fn org(&self, _: &str) -> Result<Option<Org<Infallible>>, Error> {
+    async fn org(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
         declined("org")
     }
 
-    async fn org_by_alias(&self, _: &str) -> Result<Option<Org<Infallible>>, Error> {
+    async fn org_by_alias(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
         declined("org_by_alias")
     }
 
-    async fn jwt_end_user(&self, _: &str) -> Result<(), Error> {
+    async fn jwt_end_user(&self, _: &str) -> Result<EndUserRecord, Error> {
         declined("jwt_end_user")
     }
 
     /// A request that names no end user reads none.
-    async fn end_user(&self, end_user_id: Option<&str>) -> Result<(), Error> {
+    async fn end_user(&self, end_user_id: Option<&str>) -> Result<EndUserRecord, Error> {
         match end_user_id {
-            None => Ok(()),
+            None => Ok(EndUserRecord::default()),
             Some(_) => declined("end_user"),
         }
     }
@@ -309,7 +325,7 @@ impl AuthHost for NativeAuthHost {
         declined("object_permission")
     }
 
-    async fn project(&self, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn project(&self, _: &str) -> Result<Option<ProjectRecord>, Error> {
         declined("project")
     }
 
@@ -318,21 +334,21 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
-    async fn prefetch_auth_objects(&self, _: &Key, _: &()) -> Result<(), Error> {
+    async fn prefetch_auth_objects(&self, _: &Key, _: &EndUserRecord) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn set_user_role(&self, user: &Infallible, _: LitellmRole) -> Result<Infallible, Error> {
-        match *user {}
+    async fn set_user_role(&self, _: &UserRecord, _: LitellmRole) -> Result<UserRecord, Error> {
+        declined("set_user_role")
     }
 
     async fn patch_team_membership(
         &self,
-        user: &Infallible,
+        _: &UserRecord,
         _: &[String],
         _: &[String],
-    ) -> Result<Infallible, Error> {
-        match *user {}
+    ) -> Result<UserRecord, Error> {
+        declined("patch_team_membership")
     }
 
     async fn normalize_model(&self, key: &Key) -> Result<(), Error> {
@@ -353,16 +369,16 @@ impl AuthHost for NativeAuthHost {
         Ok(false)
     }
 
-    async fn team_model_access(&self, team: &Infallible, _: &str) -> Result<ModelAccess, Error> {
-        match *team {}
+    async fn team_model_access(&self, _: &TeamRecord, _: &str) -> Result<ModelAccess, Error> {
+        declined("team_model_access")
     }
 
     /// A key this host read has no team and no owner, so no membership budgets it.
-    async fn team_member_budget(&self, _: &Key, _: Option<&Infallible>) -> Result<(), Error> {
+    async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn key_budgets(&self, key: &Key, _: Option<&Infallible>, _: bool) -> Result<(), Error> {
+    async fn key_budgets(&self, key: &Key, _: Option<&UserRecord>, _: bool) -> Result<(), Error> {
         match key.budget {
             Some(column) => declined(column),
             None => Ok(()),
@@ -392,8 +408,14 @@ impl AuthHost for NativeAuthHost {
         declined("finish_jwt")
     }
 
-    async fn with_team(&self, _: &Key, team: &Infallible) -> Result<Key, Error> {
-        match *team {}
+    async fn with_team(&self, _: &Key, _: &TeamRecord) -> Result<Key, Error> {
+        declined("with_team")
+    }
+
+    // TODO: declined until the gateway reads the credentials table, which the native request body
+    // check needs once a gateway route runs it
+    async fn credential(&self, _: &str) -> Result<Option<Params>, Error> {
+        declined("credential")
     }
 }
 
@@ -415,7 +437,7 @@ mod tests {
     use jiff::Timestamp;
     use litellm_auth_store::KeyDatabase;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
-    use litellm_gateway_auth_core::Caller;
+    use litellm_gateway_auth_core::Credential;
     use litellm_redis_store::cache_invalidation::CacheInvalidation;
     use litellm_redis_testing::{RedisServer, eventually};
     use rstest::rstest;
@@ -526,8 +548,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            (&*caller, caller.role()),
-            (&Caller::MasterKey, LitellmRole::ProxyAdmin)
+            (&caller.credential, caller.role()),
+            (&Credential::MasterKey, LitellmRole::ProxyAdmin)
         );
     }
 
@@ -625,15 +647,15 @@ mod tests {
     ) {
         let caller = authenticate_holding(columns).await.unwrap();
 
-        let Caller::Key(key) = &*caller else {
+        let Credential::Key { key } = &caller.credential else {
             panic!("the key authenticated as the master key");
         };
         assert_eq!(
             (
                 caller.hash(),
                 caller.role(),
-                key.key.record.expires,
-                key.key.models().to_vec(),
+                key.record.expires,
+                key.models().to_vec(),
             ),
             (
                 Some(&Token::new(VIRTUAL_KEY).hash()),
@@ -709,10 +731,10 @@ mod tests {
     async fn a_keys_limits_reach_its_caller(#[case] columns: Columns, #[case] limits: KeyLimits) {
         let caller = authenticate_holding(columns).await.unwrap();
 
-        let Caller::Key(key) = &*caller else {
+        let Credential::Key { key } = &caller.credential else {
             panic!("the key authenticated as the master key");
         };
-        assert_eq!(key.key.limits(), &limits);
+        assert_eq!(key.limits(), &limits);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -721,10 +743,10 @@ mod tests {
             .await
             .unwrap();
 
-        let Caller::Key(key) = &*caller else {
+        let Credential::Key { key } = &caller.credential else {
             panic!("the key authenticated as the master key");
         };
-        assert_eq!(key.key.priority().map(|class| &**class), Some("prod"));
+        assert_eq!(key.priority().map(|class| &**class), Some("prod"));
     }
 
     #[rstest]
@@ -778,7 +800,9 @@ mod tests {
         let caller = presenting(held.database(), token).await;
 
         assert_eq!(
-            caller.ok().map(|caller| *caller == Caller::MasterKey),
+            caller
+                .ok()
+                .map(|caller| caller.credential == Credential::MasterKey),
             authenticated.then_some(true)
         );
         assert_eq!(held.key_reads(), 0);

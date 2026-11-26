@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
-from litellm._internal_context import service_target
+from litellm._internal_context import reporting_nested_tool_call_failure, service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.exceptions import ServiceUnavailableError
@@ -764,6 +764,8 @@ class NativeDynamicRateLimiter(RustLogger):
     async def run_rust(
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
     ) -> Patch | Abort | None:
+        if hook is Hook.post_call_failure and reporting_nested_tool_call_failure():
+            return None
         data: Final = as_str_mapping(getattr(view, Field.deprecated_kwargs.value, None))
         stash: Final = _request_stash(hook, data)
         auth: Final = (REQUEST_AUTH.get() or auth_from_request(data)) if hook is not Hook.attempt_ended else None

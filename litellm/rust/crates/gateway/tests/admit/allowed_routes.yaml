@@ -1,0 +1,28 @@
+# The proxy's route allowlist leaves the native route out. admit takes the request as sent without
+# reading its caller or body, and the native app refuses it with the proxy's 403 in both modes.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    allowed_routes: [/health, /v1/chat/completions]
+
+requests:
+  - name: unlisted route
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: unlisted route with a key the core refuses
+    headers: {authorization: Bearer sk-someone-else}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: listed route the native app does not serve
+    path: /v1/chat/completions
+    expect: python
+    reason: route
+    over: unserved_route

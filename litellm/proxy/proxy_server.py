@@ -68,7 +68,7 @@ from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import PydanticUndefined
 from pydantic.main import IncEx
-from pydantic_core import PydanticSerializationError, to_jsonable_python
+from pydantic_core import PydanticSerializationError, to_json, to_jsonable_python
 from typing_extensions import Never, NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -228,6 +228,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
     TextCompletionResponse,
     TokenCountMessagesFormat,
     TokenCountResponse,
@@ -750,6 +751,7 @@ from litellm.proxy.discovery_endpoints import (
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
+from litellm.proxy.google_endpoints.endpoints import google_token_count_request
 from litellm.proxy.google_endpoints.endpoints import router as google_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
@@ -1010,6 +1012,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
+    max_request_size_bytes,
 )
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
@@ -1619,6 +1622,10 @@ _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeaders
 _LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+class _CacheConstructorKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -2371,7 +2378,14 @@ from litellm.integrations.otel.mount import (
     trace_response_headers,
 )
 
-instrument_fastapi_app(app)
+
+def _max_request_body_bytes(scope: Scope) -> int | None:
+    return max_request_size_bytes(
+        scope, configured_max_request_size_mb() if premium_user is True else None, _ROUTE_MAX_REQUEST_SIZE_MB
+    )
+
+
+instrument_fastapi_app(app, max_request_body_bytes=_max_request_body_bytes)
 
 vertex_live_passthrough_vertex_base: Final = VertexBase()
 
@@ -6443,7 +6457,8 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**without(cache_params, "default_redis_ttl"))
+        cache_settings: Final[Mapping[str, object]] = cache_params
+        litellm.cache = Cache(**_CacheConstructorKwargs(**without(cache_settings, "default_redis_ttl")))
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
@@ -10302,6 +10317,8 @@ _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 _JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_NULLABLE_CHAT_CHOICE_FIELDS: Final = ("finish_reason", *VLLM_CHOICE_FIELDS)
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
@@ -10371,71 +10388,76 @@ def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset
     return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
 
 
-def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
-    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
-    if exclude:
-        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
-    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
-    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
-
-
 def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    null_choice_fields: Final = tuple(_null_chat_choice_fields(choice) for choice in chunk.choices)
     try:
-        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
-    except PydanticSerializationError:
-        return _serialize_chat_chunk_leniently(chunk)
+        return _serialize_keeping_null_choice_fields(chunk, null_choice_fields)
+    except ValueError:
+        return _json_bytes(_with_null_choice_fields(_dump_encodable_fields(chunk), null_choice_fields))
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
-    choices: Final = _streaming_chunk_choices(chunk)
-    null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in choices)
-    if any(null_choice_fields):
-        serialized_chunk: Final = _serialize_keeping_null_choice_fields(chunk, choices, null_choice_fields)
-        if serialized_chunk is not None:
-            return serialized_chunk
-    if isinstance(chunk, ModelResponseStream):
-        return _serialize_chat_chunk(chunk)
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
-
-
-def _serialize_keeping_null_choice_fields(
-    chunk: BaseModel, choices: Sequence[BaseModel], null_choice_fields: Sequence[Mapping[str, None]]
-) -> bytes | None:
-    try:
-        return json.dumps(
-            {
-                **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
-                "choices": [
-                    {**_dump_set_fields(choice), **nulls}
-                    for choice, nulls in zip(choices, null_choice_fields, strict=True)
-                ],
-            },
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode()
-    except ValueError:
-        return None
-
-
-def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
     match chunk:
-        case ModelResponseStream() | TextCompletionResponse():
-            return chunk.choices
+        case ModelResponseStream():
+            return _serialize_chat_chunk(chunk)
+        case TextCompletionResponse():
+            null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in chunk.choices)
+            return _serialize_keeping_null_choice_fields(chunk, null_choice_fields)
         case _:
-            return ()
+            return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
+def _serialize_keeping_null_choice_fields(chunk: BaseModel, null_choice_fields: Sequence[Mapping[str, None]]) -> bytes:
+    if not any(null_choice_fields):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    payload: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    return _json_bytes(_with_null_choice_fields(payload, null_choice_fields))
+
+
+def _with_null_choice_fields(
+    payload: Mapping[str, object], null_choice_fields: Sequence[Mapping[str, None]]
+) -> Mapping[str, object]:
+    choices: Final = _JSON_OBJECTS.validate_python(payload.get("choices", ()))
+    return {
+        **payload,
+        "choices": [{**choice, **nulls} for choice, nulls in zip(choices, null_choice_fields, strict=True)],
+    }
+
+
+def _json_bytes(payload: Mapping[str, object]) -> bytes:
+    try:
+        return to_json(payload, inf_nan_mode="null")
+    except PydanticSerializationError:
+        return json.dumps(
+            to_jsonable_python(payload, inf_nan_mode="null"), ensure_ascii=True, separators=(",", ":")
+        ).encode()
+
+
+def _null_chat_choice_fields(choice: StreamingChoices) -> Mapping[str, None]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType(
+        {
+            field: None
+            for field in _NULLABLE_CHAT_CHOICE_FIELDS
+            if field in choice_extras and choice_extras[field] is None
+        }
+    )
 
 
 def _null_vllm_choice_fields(choice: BaseModel) -> Mapping[str, None]:
     return MappingProxyType({field: None for field, value in _vllm_choice_fields(choice).items() if value is None})
 
 
-def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) -> Mapping[str, object]:
-    return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
+def _dump_encodable_fields(chunk: ModelResponseStream) -> Mapping[str, object]:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    return chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
 
 
 async def _apply_streaming_chunk_hooks(
     *,
-    chunk: Any,
+    chunk: object,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict[str, object],
     str_so_far: str,
@@ -16403,23 +16425,27 @@ async def token_counter(
         user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
-    return await answered_with_litellm_call_id(
-        count_request_tokens(
-            request=request,
-            call_endpoint=call_endpoint,
-            request_litellm_params=MappingProxyType(
-                {}
-                if request.additional_drop_params is None
-                else {"additional_drop_params": request.additional_drop_params}
-            ),
-            litellm_call_id=call_id,
-            caller=user_api_key_dict,
-            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
-        ),
-        call_id,
-        http_request,
-        fastapi_response,
-    )
+    match google_token_count_request(request):
+        case ProxyException() as invalid_body:
+            raise with_litellm_call_id(rejected_token_count(invalid_body, call_id, request.model), call_id)
+        case counted_request:
+            return await answered_with_litellm_call_id(
+                count_request_tokens(
+                    request=counted_request,
+                    call_endpoint=call_endpoint,
+                    request_litellm_params=MappingProxyType(
+                        {}
+                        if counted_request.additional_drop_params is None
+                        else {"additional_drop_params": counted_request.additional_drop_params}
+                    ),
+                    litellm_call_id=call_id,
+                    caller=user_api_key_dict,
+                    request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
+                ),
+                call_id,
+                http_request,
+                fastapi_response,
+            )
 
 
 async def count_request_tokens(

@@ -3,11 +3,13 @@ use std::{fmt, sync::Arc, time::Duration};
 use litellm_config::LitellmRole;
 use litellm_coroutine::{Co, Reply};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Refreshed, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
@@ -164,7 +166,7 @@ pub(crate) enum Ask {
     },
     CachedTeam {
         team_id: String,
-        reply: Reply<Option<CachedTeam<PyRow>>>,
+        reply: Reply<Option<Refreshed<PyRow>>>,
     },
     WithTeam {
         key: PyRow,
@@ -430,13 +432,18 @@ impl AuthHost for PythonAuthHost {
         let hash = hash.clone();
         self.ask(|reply| Ask::EvictKey { hash, reply }).await
     }
-    async fn cached_team(&self, team_id: &str) -> Result<Option<CachedTeam<PyRow>>, Error> {
+    async fn cached_team(&self, team_id: &str) -> Result<Option<Refreshed<PyRow>>, Error> {
         let team_id = team_id.to_owned();
         self.ask(|reply| Ask::CachedTeam { team_id, reply }).await
     }
     async fn with_team(&self, key: &PyRow, team: &PyRow) -> Result<PyRow, Error> {
         let (key, team) = (key.clone(), team.clone());
         self.ask(|reply| Ask::WithTeam { key, team, reply }).await
+    }
+    // TODO: declined until Python's request body check calls the Rust one, which asks Python's
+    // CredentialAccessor through a `RustAuthStep` added in that change
+    async fn credential(&self, _: &str) -> Result<Option<Params>, Error> {
+        Err(Error::HostDeclined)
     }
     async fn db_key(
         &self,
