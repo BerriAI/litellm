@@ -86,7 +86,7 @@ jobs:
       changed-tests: ${{ steps.plan.outputs.changed-tests }}
       tests-only: ${{ steps.plan.outputs.tests-only }}
       lint-runtime: ${{ steps.plan.outputs.lint-runtime }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -1856,7 +1856,7 @@ jobs:
     permissions: {}
     needs: [rust-bridge, plan, unit, unit-core, unit-changed, unit-python-310, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Require every unit job to succeed

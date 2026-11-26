@@ -25,7 +25,7 @@ jobs:
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       skipped: ${{ steps.plan.outputs.skipped }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Run the diff gates on pull requests and the tree-wide checks on main and labelled pull requests
@@ -693,7 +693,7 @@ jobs:
     name: lint passed
     needs: [plan, python, typecheck, e2e-harness, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
     steps:
