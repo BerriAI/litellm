@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from prometheus_client import REGISTRY
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger, TeamMemberSweepIO
@@ -16,9 +17,12 @@ from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy import proxy_server
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.team_member_budget import hours_until
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters.types import team_member_counter
 from litellm.types.proxy.carried_budget_state import TeamMemberBudgetSnapshot
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 MAX_METRIC: Final = "litellm_team_member_max_budget_metric"
@@ -348,3 +352,145 @@ async def test_sweep_keeps_going_when_one_team_default_lookup_fails(db_connected
     await PrometheusLogger()._sweep_team_member_budget_metrics(directory.sweep_io(), now=NOW)
 
     assert _series(MAX_METRIC) == {("t-search", "alice"): 20.0, ("t-ads", "carol"): 4.0}
+
+
+def _rows_matching(
+    rows: Sequence[Mapping[str, object]], where: Mapping[str, object] | None
+) -> list[Mapping[str, object]]:
+    if not where:
+        return list(rows)
+    ((field, condition),) = where.items()
+    wanted: Final = TypeAdapter(Mapping[str, list[object]]).validate_python(condition)["in"]
+    return [row for row in rows if row[field] in wanted]
+
+
+def _without_join(row: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({column: value for column, value in row.items() if column != "litellm_budget_table"})
+
+
+@dataclass(frozen=True, slots=True)
+class _FakePrismaTable:
+    rows: tuple[Mapping[str, object], ...]
+
+    async def find_many(
+        self,
+        take: int | None = None,
+        skip: int | None = None,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, object] | None = None,
+        order: Sequence[Mapping[str, str]] | None = None,
+    ) -> list[Mapping[str, object]]:
+        matching: Final = _rows_matching(self.rows, where)
+        ordered: Final = sorted(matching, key=lambda row: tuple(str(row[next(iter(key))]) for key in order or ()))
+        joined: Final = ordered if include and include.get("litellm_budget_table") else map(_without_join, ordered)
+        start: Final = skip or 0
+        return list(joined)[start : start + take if take is not None else None]
+
+    async def count(self, where: Mapping[str, object] | None = None) -> int:
+        return len(_rows_matching(self.rows, where))
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeDb:
+    litellm_teammembership: _FakePrismaTable
+    litellm_teamtable: _FakePrismaTable
+    litellm_usertable: _FakePrismaTable
+
+
+@dataclass(frozen=True, slots=True)
+class _FakePrisma:
+    db: _FakeDb
+
+
+class _UnreachableCounters:
+    async def read_many(self, counters: Sequence[str], *, batch: object) -> Mapping[str, float | None] | None:
+        raise ConnectionError("redis unreachable")
+
+
+def _membership_row(user_id: str, spend: float, own_budget: float | None) -> Mapping[str, object]:
+    own_row: Final = (
+        None
+        if own_budget is None
+        else {
+            "budget_id": f"{user_id}-own",
+            "max_budget": own_budget,
+            "budget_reset_at": NOW + timedelta(hours=3),
+            "created_at": NOW - timedelta(days=30),
+        }
+    )
+    return MappingProxyType(
+        {
+            "user_id": user_id,
+            "team_id": "t-search",
+            "spend": spend,
+            "budget_id": None if own_row is None else own_row["budget_id"],
+            "litellm_budget_table": own_row,
+        }
+    )
+
+
+INHERITING_USERS: Final = tuple(f"user-{index:03d}" for index in range(54))
+
+
+@pytest.fixture
+async def real_sweep_db(monkeypatch: pytest.MonkeyPatch) -> _FakePrisma:
+    memberships: Final = (
+        _membership_row("alice", spend=2.0, own_budget=20.0),
+        *(_membership_row(user_id, spend=0.0, own_budget=None) for user_id in INHERITING_USERS),
+    )
+    users: Final = tuple(
+        MappingProxyType({"user_id": user_id, "user_email": f"{user_id}@example.com"})
+        for user_id in ("alice", *INHERITING_USERS)
+    )
+    team: Final = MappingProxyType(
+        {"team_id": "t-search", "team_alias": "search", "metadata": {"team_member_budget_id": SEARCH_DEFAULT}}
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team_member_default_budget(SEARCH_DEFAULT),
+        value=LiteLLM_BudgetTable(budget_id=SEARCH_DEFAULT, max_budget=5.0),
+    )
+    monkeypatch.setattr(  # test-quality-ok: [TQ008] the sweep reads the default budget through the proxy's cache
+        proxy_server, "user_api_key_cache", cache
+    )
+    return _FakePrisma(
+        db=_FakeDb(
+            litellm_teammembership=_FakePrismaTable(memberships),
+            litellm_teamtable=_FakePrismaTable((team,)),
+            litellm_usertable=_FakePrismaTable(users),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_sweep_io_keeps_overrides_reset_times_and_every_page(
+    monkeypatch: pytest.MonkeyPatch, real_sweep_db: _FakePrisma, db_connected: None
+) -> None:
+    counters: Final = FakeSpendCounters(redis={team_member_counter("alice", "t-search"): 7.0})
+    monkeypatch.setattr(  # test-quality-ok: [TQ008] the sweep reads the proxy's spend counter store
+        proxy_server, "spend_counter_store", counters.store()
+    )
+    logger: Final = PrometheusLogger()
+
+    await logger._sweep_team_member_budget_metrics(logger._team_member_sweep_io(real_sweep_db), now=NOW)
+
+    alice: Final = _labels("alice", "t-search", "search")
+    assert _sample(MAX_METRIC, alice) == 20.0
+    assert _sample(REMAINING_METRIC, alice) == 13.0
+    assert _sample(HOURS_METRIC, alice) == pytest.approx(3.0)
+    assert _sample(MAX_METRIC, _labels(INHERITING_USERS[-1], "t-search", "search")) == 5.0
+    assert len(_series(MAX_METRIC)) == 1 + len(INHERITING_USERS)
+
+
+@pytest.mark.asyncio
+async def test_real_sweep_io_uses_stored_spend_when_the_counter_read_fails(
+    monkeypatch: pytest.MonkeyPatch, real_sweep_db: _FakePrisma, db_connected: None
+) -> None:
+    monkeypatch.setattr(  # test-quality-ok: [TQ008] the sweep reads the proxy's spend counter store
+        proxy_server, "spend_counter_store", _UnreachableCounters()
+    )
+    logger: Final = PrometheusLogger()
+
+    await logger._sweep_team_member_budget_metrics(logger._team_member_sweep_io(real_sweep_db), now=NOW)
+
+    assert _sample(REMAINING_METRIC, _labels("alice", "t-search", "search")) == 18.0
