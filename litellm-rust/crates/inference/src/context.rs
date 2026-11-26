@@ -31,9 +31,14 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         self.interceptors.result_ready(facts).await
     }
 
-    pub async fn response_received(&self, body: &str) -> Result<(), RouteError> {
+    pub async fn response_received(
+        &self,
+        body: &str,
+        headers: Vec<(String, String)>,
+    ) -> Result<(), RouteError> {
         let raw = RawResponse {
             body: body.to_owned(),
+            headers,
         };
         if let Some(observers) = &self.observers {
             observers.emit(CallEvent::Execution(

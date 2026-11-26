@@ -25,6 +25,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -4561,3 +4562,41 @@ def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_stil
         {"role": "assistant", "content": [search_use, search_result("get_weather"), weather_call]},
         messages[2],
     )
+
+
+def test_process_anthropic_headers_keeps_the_rate_limit_headers_a_provider_sends_under_openai_names():
+    foundry_headers: Final = httpx.Headers(
+        {
+            "x-ratelimit-remaining-requests": "49",
+            "x-ratelimit-remaining-tokens": "49900",
+            "x-ratelimit-limit-requests": "50",
+            "x-ratelimit-limit-tokens": "50000",
+            "apim-request-id": "req-1",
+        }
+    )
+
+    processed: Final = process_anthropic_headers(foundry_headers)
+
+    assert processed == {
+        "x-ratelimit-remaining-requests": "49",
+        "x-ratelimit-remaining-tokens": "49900",
+        "x-ratelimit-limit-requests": "50",
+        "x-ratelimit-limit-tokens": "50000",
+        "llm_provider-x-ratelimit-remaining-requests": "49",
+        "llm_provider-x-ratelimit-remaining-tokens": "49900",
+        "llm_provider-x-ratelimit-limit-requests": "50",
+        "llm_provider-x-ratelimit-limit-tokens": "50000",
+        "llm_provider-apim-request-id": "req-1",
+    }
+
+
+def test_process_anthropic_headers_prefers_the_anthropic_rate_limit_when_both_names_are_sent():
+    processed: Final = process_anthropic_headers(
+        {
+            "x-ratelimit-remaining-tokens": "49900",
+            "anthropic-ratelimit-tokens-remaining": "11999000",
+        }
+    )
+
+    assert processed["x-ratelimit-remaining-tokens"] == "11999000"
+    assert processed["llm_provider-x-ratelimit-remaining-tokens"] == "49900"

@@ -272,12 +272,24 @@ def _logged_fields(value: object) -> Mapping[str, object]:
         return _NO_LOGGED_FIELDS
 
 
+_ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
     if isinstance(value, bool):
         return None
     try:
         return limit.validate_python(value)
     except ValidationError:
+        return None
+
+
+def _gauge_reading_or_none(value: object) -> float | None:
+    if not isinstance(value, str | int | float):
+        return None
+    try:
+        return float(value)
+    except (ValueError, OverflowError):
         return None
 
 
@@ -3420,12 +3432,11 @@ class PrometheusLogger(CustomLogger):
                     model_group=enum_values.model_group,
                 )
 
-            remaining_requests: int | None = None
-            remaining_tokens: int | None = None
-            if additional_headers := standard_logging_payload["hidden_params"]["additional_headers"]:
-                # OpenAI / OpenAI Compatible headers
-                remaining_requests = additional_headers.get("x_ratelimit_remaining_requests", None)
-                remaining_tokens = additional_headers.get("x_ratelimit_remaining_tokens", None)
+            additional_headers: Final = _ADDITIONAL_HEADERS.validate_python(
+                standard_logging_payload["hidden_params"]["additional_headers"] or {}
+            )
+            remaining_requests: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_requests"))
+            remaining_tokens: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_tokens"))
 
             if litellm_overhead_time_ms := standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms"):
                 _labels = prometheus_label_factory(
@@ -3443,7 +3454,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if remaining_requests:
+            if remaining_requests is not None:
                 """
                 "model_group",
                 "api_provider",
@@ -3457,7 +3468,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if remaining_tokens:
+            if remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,

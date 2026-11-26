@@ -1,5 +1,7 @@
+import asyncio
 import datetime
 import inspect
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -7,11 +9,19 @@ from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    AnthropicPassthroughLoggingHandler,
+)
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
+from litellm.rust_bridge.host.routes import messages as messages_host
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import ModelResponse
 
 _OCR_KWARGS: Final = MappingProxyType(
@@ -40,6 +50,231 @@ def test_native_stream_headers_reach_spend_callbacks() -> None:
 
     assert logger.stream is True
     assert logger.model_call_details["response_headers"] == {"llm_provider-request-id": "req_native"}
+
+
+class _LoggedHiddenParams(TypedDict):
+    additional_headers: ReadOnly[Mapping[str, object]]
+
+
+class _LoggedPayload(TypedDict):
+    hidden_params: ReadOnly[_LoggedHiddenParams]
+    response_cost: ReadOnly[float]
+
+
+class _SuccessPayloadRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: Final[asyncio.Queue[_LoggedPayload]] = asyncio.Queue()
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.payloads.put_nowait(TypeAdapter(_LoggedPayload).validate_python(kwargs["standard_logging_object"]))
+
+
+def _sse(event: str, data: Mapping[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+_MESSAGES_STREAM: Final = (
+    _sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_native",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+    ),
+    _sse(
+        "content_block_start",
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    ),
+    _sse(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+    ),
+    _sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    _sse(
+        "message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}
+    ),
+    _sse("message_stop", {"type": "message_stop"}),
+)
+
+
+@pytest.mark.asyncio
+async def test_a_native_messages_stream_logs_the_rate_limit_from_the_provider_headers() -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="native-stream-rate-limit",
+        function_id="native-stream-rate-limit",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logger.update_environment_variables(
+        model="claude-sonnet-5-5",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    head: Final = messages_host.stream_hidden_params(
+        (
+            ("request-id", "req_native"),
+            ("anthropic-ratelimit-tokens-remaining", "11999000"),
+            ("anthropic-ratelimit-requests-remaining", "12999"),
+            ("content-type", "text/event-stream"),
+        )
+    )
+
+    legacy.stream_opened(logger, head)
+    assert logger.model_call_details["response_headers"] == {
+        **TypeAdapter(Mapping[str, str]).validate_python(head["additional_headers"]),
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "anthropic-ratelimit-requests-remaining": "12999",
+    }
+    handled: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logger,
+        passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-5-5", "stream": True},
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.datetime(2026, 1, 1),
+        all_chunks=list(_MESSAGES_STREAM),
+        end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+    )
+    await logger.dispatch_success_handlers(
+        result=handled["result"],
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+        **handled["kwargs"],
+    )
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    logged_headers: Final = logged["hidden_params"]["additional_headers"]
+    assert logged_headers["x_ratelimit_remaining_tokens"] == 11999000
+    assert logged_headers["x_ratelimit_remaining_requests"] == 12999
+    assert not [name for name in logged_headers if name.startswith("llm_provider-llm_provider-")]
+
+
+def _native_plain_messages_logger(recorder: CustomLogger) -> Logging:
+    logger: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="native-plain-rate-limit",
+        function_id="native-plain-rate-limit",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logger.update_environment_variables(
+        model="claude-sonnet-5-5",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    return logger
+
+
+async def _finish_native_plain_messages_call(logger: Logging) -> None:
+    await logger.dispatch_success_handlers(
+        result={
+            "id": "msg_native",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        },
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_native_plain_messages_call_logs_only_the_rate_limit_from_the_provider_headers() -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = _native_plain_messages_logger(recorder)
+
+    legacy.post_call(
+        logger,
+        "{}",
+        None,
+        {"complete_input_dict": {}, "headers": {}},
+        (
+            ("Anthropic-Ratelimit-Tokens-Remaining", "11999000"),
+            ("anthropic-ratelimit-requests-remaining", "12999"),
+            ("set-cookie", "session=secret"),
+            ("x-litellm-response-cost", "0.5"),
+            ("x-ms-is-spilled-over", "true"),
+        ),
+    )
+    await _finish_native_plain_messages_call(logger)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert logged["hidden_params"]["additional_headers"] == {
+        "x_ratelimit_remaining_tokens": 11999000,
+        "x_ratelimit_remaining_requests": 12999,
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "11999000",
+        "llm_provider-anthropic-ratelimit-requests-remaining": "12999",
+    }
+    assert 0 < logged["response_cost"] < 0.5
+    assert logger.model_call_details["response_headers"] == {
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "anthropic-ratelimit-requests-remaining": "12999",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded", [None, {"x-ratelimit-remaining-tokens": 7}, {"x-ratelimit-note": "dépassé"}])
+async def test_a_native_plain_messages_call_is_logged_without_usable_provider_headers(recorded: object) -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = _native_plain_messages_logger(recorder)
+
+    legacy.post_call(logger, "{}", None, {"complete_input_dict": {}, "headers": {}}, (("request-id", "req_native"),))
+    logger.model_call_details["response_headers"] = recorded
+    await _finish_native_plain_messages_call(logger)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert logged["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_a_native_plain_messages_fallback_never_logs_the_rate_limit_of_the_attempt_it_replaced() -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = _native_plain_messages_logger(recorder)
+    request: Final = MappingProxyType({"complete_input_dict": {}, "headers": {}})
+
+    legacy.post_call(logger, "undecodable", None, dict(request), (("anthropic-ratelimit-tokens-remaining", "7777"),))
+    legacy.post_call(logger, "{}", None, dict(request), (("request-id", "req_fallback"),))
+    await _finish_native_plain_messages_call(logger)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert "7777" not in json.dumps(dict(logged["hidden_params"]["additional_headers"] or {}))
+    assert logged["response_cost"] > 0
 
 
 def test_setup_reuses_a_supplied_logger() -> None:

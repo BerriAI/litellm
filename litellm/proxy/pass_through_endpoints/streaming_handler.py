@@ -12,8 +12,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    attribute_or_none,
     bind_budget_reservation_to_callbacks,
     proxy_request_headers,
+    rate_limit_headers,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -160,6 +162,7 @@ class PassThroughStreamingHandler:
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
         )
+        PassThroughStreamingHandler._retain_anthropic_response_headers(response, endpoint_type, litellm_logging_obj)
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
 
@@ -302,6 +305,17 @@ class PassThroughStreamingHandler:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
                 else:
                     bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
+
+    @staticmethod
+    def _retain_anthropic_response_headers(
+        response: httpx.Response, endpoint_type: EndpointType, logging_obj: LiteLLMLoggingObj
+    ) -> None:
+        response_headers: Final = as_str_mapping(attribute_or_none(response, "headers"))
+        details: Final = logging_obj.model_call_details
+        if endpoint_type != EndpointType.ANTHROPIC or response_headers is None:
+            return
+        if details.get("response_headers") is None:
+            details["response_headers"] = dict(rate_limit_headers(response_headers))
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:

@@ -116,6 +116,43 @@ async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: 
     assert_eq!(message.stop_reason.as_deref(), Some("end_turn"));
 }
 
+#[rstest]
+#[tokio::test]
+async fn the_provider_headers_reach_the_response_hook(call: MessagesCall) {
+    let upstream = upstream([message_response()
+        .insert_header("anthropic-ratelimit-tokens-remaining", "11999000")
+        .insert_header("anthropic-ratelimit-requests-remaining", "12999")])
+    .await;
+    let host = RecordingCall::<Messages>::new(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    });
+
+    messages_route(no_secrets())
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    let responses = host.responses.lock().unwrap();
+    let [raw] = responses.as_slice() else {
+        panic!("expected one provider response, got {responses:?}");
+    };
+    let remaining: Vec<(&str, &str)> = raw
+        .headers
+        .iter()
+        .filter(|(name, _)| name.contains("ratelimit"))
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        remaining,
+        [
+            ("anthropic-ratelimit-tokens-remaining", "11999000"),
+            ("anthropic-ratelimit-requests-remaining", "12999"),
+        ]
+    );
+}
+
 /// A refusal and fields the route does not model come back exactly as the provider sent
 /// them, since the Python side returns the raw message and the router decides what to do.
 #[rstest]

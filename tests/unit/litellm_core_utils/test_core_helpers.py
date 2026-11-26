@@ -2,7 +2,7 @@
 
 import logging
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
+    get_recorded_rate_limit_headers,
     map_finish_reason,
     normalize_drop_params,
     process_response_headers,
@@ -609,6 +610,33 @@ class TestProviderResponseHeadersInHiddenParams:
 
     def test_getter_returns_none_for_an_object_without_hidden_params(self):
         assert get_provider_response_headers_from_hidden_params(object()) is None
+
+    @pytest.mark.parametrize("as_recorded", [dict, httpx.Headers])
+    def test_recorded_rate_limit_headers_leave_every_other_header_out(
+        self, as_recorded: Callable[[Mapping[str, str]], Mapping[str, str]]
+    ) -> None:
+        recorded: Final = as_recorded(
+            {
+                "Anthropic-Ratelimit-Tokens-Remaining": "11999000",
+                "x-ratelimit-remaining-requests": "49",
+                "set-cookie": "session=secret",
+                "x-litellm-response-cost": "0.5",
+            }
+        )
+
+        kept: Final = get_recorded_rate_limit_headers({"response_headers": recorded})
+
+        assert kept is not None
+        assert dict(kept) == {
+            "anthropic-ratelimit-tokens-remaining": "11999000",
+            "x-ratelimit-remaining-requests": "49",
+        }
+
+    @pytest.mark.parametrize(
+        "call_details", [{}, {"response_headers": None}, {"response_headers": {"x-ratelimit-remaining-tokens": 7}}]
+    )
+    def test_recorded_headers_without_a_string_mapping_are_ignored(self, call_details: Mapping[str, object]) -> None:
+        assert get_recorded_rate_limit_headers(call_details) is None
 
     def test_headers_never_leak_into_a_sibling_response(self):
         recorded = TranscriptionResponse()
