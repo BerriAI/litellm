@@ -6735,6 +6735,7 @@ def _bedrock_tools_pt(
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_resolves_tool_schema_defs,
         bedrock_converse_supports_strict_tools,
+        get_bedrock_base_model,
         normalize_json_schema_custom_types_to_object,
     )
 
@@ -6813,6 +6814,7 @@ def _bedrock_tools_pt(
                 parameters=parameters,
                 strict=tool.get("function", {}).get("strict", None),
                 supports_strict_tools=supports_strict_tools,
+                is_anthropic_model=bool(model) and get_bedrock_base_model(model).startswith(("anthropic", "claude")),
             ),
         )
         tool_block_list.append(tool_block)

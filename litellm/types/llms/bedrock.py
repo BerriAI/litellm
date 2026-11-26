@@ -326,20 +326,23 @@ class BedrockToolSpec(dict):
         parameters: dict,
         strict: bool | None,
         supports_strict_tools: bool,
+        is_anthropic_model: bool = False,
     ) -> None:
         additional_properties: Final = parameters.get("additionalProperties")
         defs: Final = parameters.get("$defs")
-        strict_fields: Final[ToolJsonSchemaBlock] = (
+        required: Final = parameters.get("required")
+        required_fields: Final[ToolJsonSchemaBlock] = {"required": required} if required is not None else {}
+        additional_properties_fields: Final[ToolJsonSchemaBlock] = (
             {"additionalProperties": additional_properties}
-            if supports_strict_tools and additional_properties is not None
+            if is_anthropic_model and additional_properties is not None
             else {}
         )
         defs_fields: Final[ToolJsonSchemaBlock] = {"$defs": defs} if isinstance(defs, dict) else {}
         json_schema: Final[ToolJsonSchemaBlock] = {
             "type": parameters["type"],
             "properties": parameters.get("properties", {}),
-            "required": parameters.get("required", []),
-            **strict_fields,
+            **required_fields,
+            **additional_properties_fields,
             **defs_fields,
         }
 

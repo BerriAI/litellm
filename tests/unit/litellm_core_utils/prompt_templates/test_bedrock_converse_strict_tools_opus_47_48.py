@@ -72,15 +72,19 @@ _NON_STRICT_TOOL = [
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
+    """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict.
+
+    Only the ``strict`` key is rejected: #31582 shows removing ``strict: true``
+    alone makes the same request succeed, with ``additionalProperties: false``
+    still in the input schema. The schema key therefore keeps forwarding while
+    ``strict`` is dropped, so the Bedrock leg matches the Vertex/Anthropic legs.
+    """
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
-    assert (
-        "strict" not in tool_spec
-    ), f"strict leaked into toolSpec for {model_id}: {tool_spec}"
-    assert (
-        "additionalProperties" not in tool_spec["inputSchema"]["json"]
-    ), f"additionalProperties leaked into toolSpec for {model_id}: {tool_spec}"
+    assert "strict" not in tool_spec, f"strict leaked into toolSpec for {model_id}: {tool_spec}"
+    assert tool_spec["inputSchema"]["json"]["additionalProperties"] is False, (
+        f"additionalProperties dropped from toolSpec for {model_id}: {tool_spec}"
+    )
 
 
 @pytest.mark.parametrize(
