@@ -8,6 +8,7 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+import time_machine
 from prometheus_client import REGISTRY
 from pydantic import TypeAdapter
 
@@ -18,7 +19,6 @@ from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.spend_tracking.team_member_budget import hours_until
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters.types import team_member_counter
 from litellm.types.proxy.carried_budget_state import TeamMemberBudgetSnapshot
@@ -129,15 +129,12 @@ async def test_member_gauge_spend_equals_the_enforcement_counter_plus_cost(monke
     logger: Final = PrometheusLogger()
     carried: Final = TeamMemberBudgetSnapshot(max_budget=10.0, spend=3.0, budget_reset_at=MEMBER_RESET_AT)
 
-    before: Final = datetime.now(timezone.utc)
-    await _log_alice_request(logger, carried.metadata_entries(), response_cost=0.5)
-    after: Final = datetime.now(timezone.utc)
+    with time_machine.travel(NOW, tick=False):
+        await _log_alice_request(logger, carried.metadata_entries(), response_cost=0.5)
 
     assert _sample(MAX_METRIC, ALICE_IN_SEARCH) == 10.0
     assert _sample(REMAINING_METRIC, ALICE_IN_SEARCH) == 6.5
-    hours: Final = _sample(HOURS_METRIC, ALICE_IN_SEARCH)
-    assert hours is not None
-    assert hours_until(MEMBER_RESET_AT, after) <= hours <= hours_until(MEMBER_RESET_AT, before)
+    assert _sample(HOURS_METRIC, ALICE_IN_SEARCH) == pytest.approx(12.0)
 
 
 @pytest.mark.asyncio
@@ -274,18 +271,25 @@ async def test_sweep_emits_one_series_per_team_and_omits_unbudgeted(db_connected
             _member("bob", "t-search", spend=1.0),
             _member("carol", "t-search", spend=0.5),
             _member("carol", "t-ads", spend=0.25),
+            _member("alice", "t-ads", spend=1.5, own_budget=7.0),
         )
     )
 
     await PrometheusLogger()._sweep_team_member_budget_metrics(directory.sweep_io(), now=NOW)
 
-    assert _series(MAX_METRIC) == {("t-search", "alice"): 20.0, ("t-search", "bob"): 5.0, ("t-search", "carol"): 5.0}
+    assert _series(MAX_METRIC) == {
+        ("t-search", "alice"): 20.0,
+        ("t-search", "bob"): 5.0,
+        ("t-search", "carol"): 5.0,
+        ("t-ads", "alice"): 7.0,
+    }
     assert _series(REMAINING_METRIC) == {
         ("t-search", "alice"): 18.0,
         ("t-search", "bob"): 4.0,
         ("t-search", "carol"): 4.5,
+        ("t-ads", "alice"): 5.5,
     }
-    assert _series(HOURS_METRIC) == {("t-search", "alice"): pytest.approx(3.0)}
+    assert _series(HOURS_METRIC) == {("t-search", "alice"): pytest.approx(3.0), ("t-ads", "alice"): pytest.approx(3.0)}
     assert _sample(MAX_METRIC, _labels("bob", "t-search", "search")) == 5.0
 
 

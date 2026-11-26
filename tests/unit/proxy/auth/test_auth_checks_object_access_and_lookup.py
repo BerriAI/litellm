@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+import time_machine
 from fastapi import Request, status
 from prisma.errors import DataError
 
@@ -13082,6 +13083,7 @@ async def test_one_rows_skipped_email_does_not_hold_back_another_rows_fill() -> 
     assert third is not None and third.user_email == "owner@example.com"
 
 
+_MEMBER_CHECK_AT: Final = datetime(2029, 12, 1, tzinfo=timezone.utc)
 _MEMBER_RESET_AT: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
 _TEAM_MEMBER_COUNTER: Final = "spend:team_member:test-user:test-team"
 
@@ -13091,7 +13093,7 @@ def _member_budget_row(max_budget: float | None, temp_budget_increase: float | N
         budget_id="member-budget",
         max_budget=max_budget,
         temp_budget_increase=temp_budget_increase,
-        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(days=1) if temp_budget_increase else None,
+        temp_budget_expiry=_MEMBER_CHECK_AT + timedelta(days=1) if temp_budget_increase else None,
         budget_reset_at=_MEMBER_RESET_AT,
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
@@ -13110,8 +13112,11 @@ async def _token_after_member_budget_check(
     async def counter_then_fallback(counter_key: str, fallback_spend: float, max_budget=None, **kwargs) -> float:
         return counter_spend if counter_key == _TEAM_MEMBER_COUNTER else fallback_spend
 
-    with patch(  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
-        "litellm.proxy.proxy_server.get_current_spend", counter_then_fallback
+    with (
+        patch(  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+            "litellm.proxy.proxy_server.get_current_spend", counter_then_fallback
+        ),
+        time_machine.travel(_MEMBER_CHECK_AT, tick=False),
     ):
         await _check_team_member_budget(
             team_object=LiteLLM_TeamTable(team_id="test-team", metadata={"team_member_budget_id": "default-budget-1"}),
