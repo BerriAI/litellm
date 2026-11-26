@@ -26,7 +26,12 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError, UnresolvablePreviousResponseError
+from litellm.exceptions import (
+    MidStreamFallbackError,
+    MissingMessageRoleError,
+    PreviousResponseNotReplayableError,
+    UnresolvablePreviousResponseError,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -448,7 +453,10 @@ def _should_run_cooldown_logic(
         )
         return False
 
-    if isinstance(original_exception, (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError)):
+    if isinstance(
+        original_exception,
+        (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError, PreviousResponseNotReplayableError),
+    ):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )

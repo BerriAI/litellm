@@ -17,7 +17,6 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from redis import Redis
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 INPUT: Final = "private-input-redaction-canary"
@@ -370,7 +369,7 @@ def _drained(wire: Wire, count: int) -> tuple[Request, ...]:
     return eventually(observed, lambda values: len(values) >= count, seconds=30)
 
 
-def test_redacted_responses_follow_up_replays_neither_instructions_nor_the_sentinel(
+def test_redacted_responses_follow_up_is_refused_before_reaching_the_provider(
     redaction_proxy: tuple[Gateway, Wire, Wire],
 ) -> None:
     proxy, provider, sink = redaction_proxy
@@ -394,6 +393,7 @@ def test_redacted_responses_follow_up_replays_neither_instructions_nor_the_senti
         seconds=70,
     )
     assert len(_drained(provider, 1)) == 1
+    assert len(_drained(sink, 1)) == 1
     follow_up: Final = proxy.request(
         "POST",
         "/v1/responses",
@@ -406,13 +406,9 @@ def test_redacted_responses_follow_up_replays_neither_instructions_nor_the_senti
         },
         headers=REDACT,
     )
-    assert follow_up.status_code == 200, follow_up.text
-    sent: Final = tuple(json.loads(request.body) for request in _drained(provider, 1))
-    assert len(_drained(sink, 2)) == 2
-    assert len(sent) == 1, sent
-    assert len(sent[0]["messages"]) == 3, sent[0]
-    system: Final = json.dumps(sent[0].get("system"))
-    assert INSTRUCTIONS not in system and REDACTED_BY_LITELLM not in system, sent[0]
+    assert follow_up.status_code == 400, follow_up.text
+    assert follow_up.json()["error"]["param"] == "previous_response_id", follow_up.text
+    assert provider.drain() == ()
 
 
 def test_redacted_router_usage_is_counted_once(redaction_proxy: tuple[Gateway, Wire, Wire]) -> None:

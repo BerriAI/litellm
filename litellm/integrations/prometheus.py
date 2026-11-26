@@ -34,6 +34,7 @@ from litellm.exceptions import (
     CallerCredentialAuthenticationError,
     DeploymentCredentialAuthenticationError,
     MalformedRequestFieldError,
+    PreviousResponseNotReplayableError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -3562,7 +3563,7 @@ class PrometheusLogger(CustomLogger):
             deployment_selected: Final = (
                 bool(model_id)
                 and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
-                and not isinstance(exception, MalformedRequestFieldError)
+                and not isinstance(exception, (MalformedRequestFieldError, PreviousResponseNotReplayableError))
             )
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name

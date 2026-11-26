@@ -544,6 +544,17 @@ def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str,
     return None if latest == REDACTED_BY_LITELLM else latest
 
 
+_REDACTED_REQUEST_FIELDS: Final = MappingProxyType(
+    {"messages": [{"role": "user", "content": REDACTED_BY_LITELLM}], "prompt": "", "input": ""}
+)
+
+
+def _is_redacted_request(proxy_server_request: Mapping[str, object] | None) -> bool:
+    return proxy_server_request is not None and all(
+        proxy_server_request.get(field) == value for field, value in _REDACTED_REQUEST_FIELDS.items()
+    )
+
+
 _STORED_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_IDS_ADAPTER: Final = TypeAdapter(list[str])
 
@@ -677,6 +688,7 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
             instructions=_latest_replayable_instructions(proxy_server_requests),
+            replays_redacted_turns=any(map(_is_redacted_request, proxy_server_requests[start.index : replayed_turns])),
             previous_response_ids=tuple(
                 _REQUEST_IDS_ADAPTER.validate_python(
                     [spend_log["request_id"] for spend_log in all_spend_logs[:replayed_turns]]

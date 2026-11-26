@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
-from litellm.exceptions import GuardrailRaisedException, MalformedRequestFieldError
+from litellm.exceptions import GuardrailRaisedException, MalformedRequestFieldError, PreviousResponseNotReplayableError
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.proxy._types import ProxyException
@@ -107,11 +107,20 @@ def test_failure_after_routing_still_marks_deployment_partial_outage(failure: Ex
     assert logger.litellm_deployment_success_responses._metrics == {}
 
 
-def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> None:
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        MalformedRequestFieldError(
+            message="tools: Input should be a valid list", model="internal-model", llm_provider="openai"
+        ),
+        PreviousResponseNotReplayableError(
+            message="previous_response_id turns were stored redacted", model="internal-model", llm_provider="openai"
+        ),
+    ],
+    ids=["malformed_field", "redacted_previous_response"],
+)
+def test_pre_call_rejection_after_routing_leaves_deployment_healthy(rejection: Exception) -> None:
     logger: Final = PrometheusLogger()
-    rejection: Final = MalformedRequestFieldError(
-        message="tools: Input should be a valid list", model="internal-model", llm_provider="openai"
-    )
 
     logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(rejection, rejected_before_routing=False))
 

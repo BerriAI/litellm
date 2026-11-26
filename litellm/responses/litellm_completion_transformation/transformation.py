@@ -41,7 +41,12 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
-from litellm.exceptions import BadRequestError, UnknownPreviousResponseError, UnresolvablePreviousResponseError
+from litellm.exceptions import (
+    BadRequestError,
+    PreviousResponseNotReplayableError,
+    UnknownPreviousResponseError,
+    UnresolvablePreviousResponseError,
+)
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     block_with_cache_control,
@@ -1201,12 +1206,34 @@ class ChatCompletionSession(TypedDict, total=False):
     messages: list[SessionMessage]
     litellm_session_id: object
     instructions: ReadOnly[str | None]
+    replays_redacted_turns: ReadOnly[bool]
     previous_response_ids: ReadOnly[tuple[str, ...]]
     """Spend log request ids of the replayed turns, root first, stored on the new turn so a follow-up or a fork
     rebuilds exactly this path instead of the whole session."""
 
 
 ########### End of Initialize Classes used for Responses API  ###########
+
+
+def _redacted_history_error(
+    previous_response_id: str, model: str, provider: str | None
+) -> PreviousResponseNotReplayableError:
+    message: Final = (
+        f"Previous response with id '{previous_response_id}' cannot be replayed. LiteLLM stored the earlier turns "
+        "of this conversation redacted because message logging is turned off, so it no longer has their content. "
+        "Send the earlier turns in input instead of previous_response_id."
+    )
+    return PreviousResponseNotReplayableError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+        },
+    )
 
 
 def _chain_session_metadata(chain_session: object, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -1854,6 +1881,8 @@ class LiteLLMCompletionResponsesConfig:
             if previous_response_id
             else ChatCompletionSession(messages=[], litellm_session_id=None)
         )
+        if chat_completion_session.get("replays_redacted_turns") and not input_replaces_history:
+            raise _redacted_history_error((previous_response_id, *previous_response_client_ids)[-1], model, provider)
         _messages: Final = litellm_completion_request.get("messages") or []
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
         session_history: Final = chat_completion_session.get("messages") or []

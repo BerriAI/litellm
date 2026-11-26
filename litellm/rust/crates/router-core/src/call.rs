@@ -916,8 +916,9 @@ impl<H: RouterHost> Call<'_, H> {
     }
 
     /// `async_function_with_fallbacks_common_utils` raises before looking for any fallback:
-    /// fallbacks are off, the error is a guardrail's or an unresolvable follow-up's, a bad request
-    /// without `fallback_on_unsupported_params`, or no fallback serves the error at all.
+    /// fallbacks are off, the error is a guardrail's, an unresolvable follow-up's, or a stored
+    /// conversation litellm cannot replay, a bad request without `fallback_on_unsupported_params`,
+    /// or no fallback serves the error at all.
     fn raises_without_fallback(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -934,6 +935,7 @@ impl<H: RouterHost> Call<'_, H> {
             failure.kind == FailureKind::GuardrailIntervention
                 || failure.create_may_exist
                 || failure.queue_rejected()
+                || failure.is_a("PreviousResponseNotReplayableError")
                 || failure.is_unknown_follow_up()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
