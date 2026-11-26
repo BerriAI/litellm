@@ -1,7 +1,11 @@
 import urllib.parse
+from typing import Final
 from unittest.mock import patch
 
+import pytest
+
 import litellm
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.azure.image_edit.transformation import AzureImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -292,3 +296,28 @@ def test_v1_api_version_replaces_deployment_scoped_api_base(monkeypatch):
 
     assert urllib.parse.urlparse(url).path == "/openai/v1/images/edits"
     assert _query_params(url) == {"api-version": "preview"}
+
+
+def test_azure_image_edit_drops_markup_when_drop_params_is_set():
+    """Azure rejects markup, so drop_params removes it before the request is built."""
+    params: Final = ImageEditRequestUtils.get_optional_params_image_edit(
+        model="gpt-image-2.5-flare",
+        image_edit_provider_config=AzureImageEditConfig(),
+        image_edit_optional_params={"markup": b"\x89PNG\r\n\x1a\n", "quality": "high"},
+        drop_params=True,
+    )
+
+    assert params == {"quality": "high"}
+
+
+def test_azure_image_edit_rejects_markup_without_drop_params(monkeypatch):
+    """Without drop_params, markup on Azure fails locally as an unsupported param instead of reaching Azure."""
+    monkeypatch.setattr(litellm, "drop_params", None)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="markup"):
+        ImageEditRequestUtils.get_optional_params_image_edit(
+            model="gpt-image-2.5-flare",
+            image_edit_provider_config=AzureImageEditConfig(),
+            image_edit_optional_params={"markup": b"\x89PNG\r\n\x1a\n"},
+            drop_params=False,
+        )

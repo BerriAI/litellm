@@ -49,7 +49,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
-import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { UserSpendCard } from "./UserSpendCard";
 
 interface UserInfoViewProps {
   userId: string;
@@ -74,6 +74,9 @@ interface TeamOption {
   team_id: string;
   team_alias: string;
 }
+
+const shouldRefreshBudget = (user: UserInfoV2Response, changes: Record<string, unknown>) =>
+  user.rollover_max_budget != null || changes.rollover_max_budget !== undefined;
 
 export default function UserInfoView({
   userId,
@@ -117,7 +120,6 @@ export default function UserInfoView({
   const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("user");
-  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const { data: allMcpServers = [] } = useMCPServers();
   const { data: allMcpToolsets = [] } = useMCPToolsets();
 
@@ -173,7 +175,6 @@ export default function UserInfoView({
 
   const fetchAllTeams = async () => {
     if (!accessToken) return;
-    setIsLoadingTeams(true);
     try {
       const teams = await teamListCall(accessToken, null);
       setAllTeams(
@@ -184,8 +185,6 @@ export default function UserInfoView({
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
-    } finally {
-      setIsLoadingTeams(false);
     }
   };
 
@@ -340,23 +339,26 @@ export default function UserInfoView({
       );
 
       // Update local state with new values
-      setUserData({
-        ...userData,
-        user_email: formValues.user_email ?? userData.user_email,
-        user_alias: formValues.user_alias ?? userData.user_alias,
-        user_role: formValues.user_role ?? userData.user_role,
-        models: formValues.models ?? userData.models,
-        max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
-        tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
-        budget_duration:
-          formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
-        metadata: formValues.metadata ?? userData.metadata,
-        model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
-        object_permission: objectPermission
-          ? { ...userData.object_permission, ...objectPermission }
-          : userData.object_permission,
-      });
+      if (shouldRefreshBudget(userData, formValues)) {
+        setUserData(await userGetInfoV2(accessToken, userData.user_id));
+      } else
+        setUserData({
+          ...userData,
+          user_email: formValues.user_email ?? userData.user_email,
+          user_alias: formValues.user_alias ?? userData.user_alias,
+          user_role: formValues.user_role ?? userData.user_role,
+          models: formValues.models ?? userData.models,
+          max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+          tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
+          rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
+          budget_duration:
+            formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
+          metadata: formValues.metadata ?? userData.metadata,
+          model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
+          object_permission: objectPermission
+            ? { ...userData.object_permission, ...objectPermission }
+            : userData.object_permission,
+        });
 
       toast.success(t("users.userInfo.toasts.updated"));
       setIsEditing(false);
@@ -368,7 +370,7 @@ export default function UserInfoView({
 
   if (isLoading) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -380,7 +382,7 @@ export default function UserInfoView({
 
   if (!userData) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -402,7 +404,6 @@ export default function UserInfoView({
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
   const unlimited = t("users.userInfo.unlimited");
-  const budgetLimit = userData.max_budget === null ? unlimited : `$${formatNumberWithCommas(userData.max_budget, 2)}`;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -414,6 +415,7 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      rollover_max_budget: userData.rollover_max_budget,
       tpm_limit: userData.tpm_limit,
       rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
@@ -427,7 +429,7 @@ export default function UserInfoView({
 
   const roleId = userData.user_role;
   return (
-    <div className="p-4">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -529,21 +531,7 @@ export default function UserInfoView({
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <Card className="block p-6">
-              <p>
-                {t("users.userInfo.overview.spend")}
-                <BudgetPeriodTooltip
-                  spend={userData.spend}
-                  maxBudget={userData.max_budget}
-                  budgetDuration={userData.budget_duration}
-                  budgetResetAt={userData.budget_reset_at}
-                />
-              </p>
-              <div className="mt-2">
-                <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
-                <p>{t("users.userInfo.overview.budgetOf", { budget: budgetLimit })}</p>
-              </div>
-            </Card>
+            <UserSpendCard user={userData} />
 
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-2">

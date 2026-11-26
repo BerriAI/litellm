@@ -9,6 +9,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.llms.vertex_ai.responses.transformation import MUSE_CHAT_PARAMS, is_vertex_muse_model
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionResponse
 from litellm.types.utils import (
     Delta,
@@ -72,6 +73,8 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> list[str]:
+        if is_vertex_muse_model(model):
+            return list(MUSE_CHAT_PARAMS)
         unsupported_params: Final = (
             VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
             if is_vertex_self_deployed_openai_compatible_endpoint(model)
@@ -81,8 +84,8 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ):
@@ -113,10 +116,10 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -167,12 +170,17 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     the final chunk has finish_reason but no role.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse | None,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> None:
+        super().__init__(streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode)
         self.sent_role = False
         self._pending_chunk: ModelResponseStream | None = None
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
         result: Final = super().chunk_parser(chunk)
         if not self.sent_role and result.choices:
             delta: Final = result.choices[0].delta

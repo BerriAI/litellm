@@ -28,9 +28,18 @@ impl Resources {
         Self::over(config, Arc::new(ProcessEnvironment))
     }
 
-    pub(crate) fn over(
+    /// The resources of `config` over `process` as the process environment.
+    pub fn over(config: &Config, process: Arc<dyn Lookup + Send + Sync>) -> Result<Self, Error> {
+        let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+        Self::sharing(config, process, CoreResources::new(pool))
+    }
+
+    /// The resources of `config` over `process`, sharing the client pool and provider auth of
+    /// `core`, which another config's resources made, so a new config reuses their connections.
+    pub(crate) fn sharing(
         config: &Config,
         process: Arc<dyn Lookup + Send + Sync>,
+        core: CoreResources,
     ) -> Result<Self, Error> {
         let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(ConfigEnvironment::new(
             environment_values(&config.environment_variables)?,
@@ -58,14 +67,13 @@ impl Resources {
             },
         ]);
         let http = Resolution::from(&http_settings).config;
-        let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-        let client = pool.client(&http, ClientVariant::Provider)?;
+        let client = core.pool.client(&http, ClientVariant::Provider)?;
         let secrets = Arc::new(crate::environment_secrets(environment.clone(), client));
         Ok(Self {
             environment,
             secrets,
             http,
-            core: CoreResources::new(pool),
+            core,
         })
     }
 }

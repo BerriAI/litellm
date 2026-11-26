@@ -24,6 +24,12 @@ pub fn is_latin1(text: &str) -> bool {
     text.chars().all(|character| u32::from(character) < 0x100)
 }
 
+/// `bytes.decode("latin-1")`, which maps each byte to the character with its value, as Starlette
+/// decodes a header.
+pub fn decode_latin1(bytes: &[u8]) -> String {
+    bytes.iter().copied().map(char::from).collect()
+}
+
 /// `unicodedata.category(c)`: the two-letter Unicode general category of a character, from the
 /// Unicode tables this crate is built with, which may be newer or older than the host Python's.
 pub fn category(c: char) -> &'static str {

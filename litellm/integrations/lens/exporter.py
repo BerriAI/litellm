@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
 from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.policy import lens_logging_enabled_for_call
 
 if TYPE_CHECKING:
     from prometheus_client import Counter as PrometheusCounter
@@ -27,6 +28,7 @@ MAX_BUFFER_EVENTS: Final = 1000
 MAX_BATCH_BYTES: Final = 4 * 1024 * 1024
 SHUTDOWN_SECONDS: Final = 3.0
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
+_EXPORTED_FIELDS: Final = frozenset(SpendLogPayload.__annotations__) - {"messages", "response"}
 
 
 class ExportFailure(Enum):
@@ -92,6 +94,25 @@ def encode_record(value: Mapping[str, object]) -> bytes | ExportFailure:
             return output.getvalue()
     except (ValueError, TypeError, OverflowError, RecursionError):
         return ExportFailure.INVALID
+
+
+def _encoded(raw: object, kwargs: Mapping[str, object]) -> bytes | ExportFailure | None:
+    """The request record ready to send, why it cannot be sent, or None for a call that is not an LLM request."""
+    checked: Final = _check_size(raw, MAX_EVENT_BYTES)
+    if isinstance(checked, ExportFailure):
+        return checked
+    payload: Final = _PAYLOAD.validate_python(raw)
+    if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
+        return None
+    return encode_record(spend_log_row_from_payload(payload, kwargs))
+
+
+def _exported_fields(raw: object) -> object:
+    """Only what the cost record is built from: Lens reads the conversation from the trace, and nothing else in the
+    logging payload is sent, so none of it may outgrow the export budget and cost a request its cost record."""
+    if not _is_mapping(raw):
+        return raw
+    return {key: raw[key] for key in _EXPORTED_FIELDS if key in raw} | {"messages": None, "response": None}
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,22 +207,15 @@ class LensExporter(CustomLogger):
 
     def _log(self, kwargs: Mapping[str, object]) -> None:
         raw: Final = kwargs.get("standard_logging_object")
-        if raw is None or self.closed:
+        if raw is None or self.closed or not lens_logging_enabled_for_call(kwargs):
             return
         if self.buffered_events >= MAX_BUFFER_EVENTS or self.buffered_bytes >= MAX_BUFFER_BYTES:
             self._drop(1)
             return
         try:
-            checked: Final = _check_size(raw, MAX_EVENT_BYTES)
-            if isinstance(checked, ExportFailure):
-                self._drop(1)
-                self._log_failure(checked.value)
+            record: Final = _encoded(_exported_fields(raw), kwargs)
+            if record is None:
                 return
-            payload: Final = _PAYLOAD.validate_python(raw)
-            if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
-                return
-            row: Final = spend_log_row_from_payload(payload, kwargs)
-            record: Final = encode_record(row)
             if isinstance(record, ExportFailure):
                 self._drop(1)
                 self._log_failure(record.value)

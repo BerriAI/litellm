@@ -3,15 +3,17 @@ use std::{fmt, sync::Arc, time::Duration};
 use litellm_config::LitellmRole;
 use litellm_coroutine::{Co, Reply};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Refreshed, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
-            ModelAccess, Org, RegisteredAgent, TeamRead, UserLookup, UserRead,
+            ModelAccess, Org, RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -21,11 +23,15 @@ use serde_json::Value;
 
 /// A Python record the core carries without reading it: a `UserAPIKeyAuth`, a team, a user.
 #[derive(Clone)]
-pub(crate) struct PyRow(Arc<Py<PyAny>>);
+pub(crate) struct PyRow(Arc<Py<PyAny>>, Option<Arc<Py<PyAny>>>);
 
 impl PyRow {
     pub(crate) fn new(row: Py<PyAny>) -> Self {
-        Self(Arc::new(row))
+        Self(Arc::new(row), None)
+    }
+
+    pub(crate) fn team(row: Py<PyAny>, roster: Option<Py<PyAny>>) -> Self {
+        Self(Arc::new(row), roster.map(Arc::new))
     }
 
     pub(crate) fn object(&self, py: Python<'_>) -> Py<PyAny> {
@@ -160,7 +166,7 @@ pub(crate) enum Ask {
     },
     CachedTeam {
         team_id: String,
-        reply: Reply<Option<CachedTeam<PyRow>>>,
+        reply: Reply<Option<Refreshed<PyRow>>>,
     },
     WithTeam {
         key: PyRow,
@@ -266,6 +272,12 @@ pub(crate) enum Ask {
     },
     GrantingTeam {
         team_id: String,
+        reply: Reply<TeamRead<PyRow>>,
+    },
+    BindTeamMember {
+        team: PyRow,
+        roster: Arc<Py<PyAny>>,
+        user_id: String,
         reply: Reply<TeamRead<PyRow>>,
     },
     LoadTeamMembership {
@@ -420,13 +432,18 @@ impl AuthHost for PythonAuthHost {
         let hash = hash.clone();
         self.ask(|reply| Ask::EvictKey { hash, reply }).await
     }
-    async fn cached_team(&self, team_id: &str) -> Result<Option<CachedTeam<PyRow>>, Error> {
+    async fn cached_team(&self, team_id: &str) -> Result<Option<Refreshed<PyRow>>, Error> {
         let team_id = team_id.to_owned();
         self.ask(|reply| Ask::CachedTeam { team_id, reply }).await
     }
     async fn with_team(&self, key: &PyRow, team: &PyRow) -> Result<PyRow, Error> {
         let (key, team) = (key.clone(), team.clone());
         self.ask(|reply| Ask::WithTeam { key, team, reply }).await
+    }
+    // TODO: declined until Python's request body check calls the Rust one, which asks Python's
+    // CredentialAccessor through a `RustAuthStep` added in that change
+    async fn credential(&self, _: &str) -> Result<Option<Params>, Error> {
+        Err(Error::HostDeclined)
     }
     async fn db_key(
         &self,
@@ -575,6 +592,24 @@ impl AuthHost for PythonAuthHost {
     async fn granting_team(&self, team_id: &str) -> Result<TeamRead<PyRow>, Error> {
         let team_id = team_id.to_owned();
         self.ask(|reply| Ask::GrantingTeam { team_id, reply }).await
+    }
+    async fn bind_team_member(
+        &self,
+        team: Team<PyRow>,
+        user_id: &str,
+    ) -> Result<Team<PyRow>, Error> {
+        let Some(roster) = team.row.1.clone() else {
+            return Ok(team);
+        };
+        let read = self
+            .ask(|reply| Ask::BindTeamMember {
+                team: team.row,
+                roster,
+                user_id: user_id.to_owned(),
+                reply,
+            })
+            .await?;
+        read.or_not_found(&team.team_id).map_err(Into::into)
     }
     async fn load_team_membership(
         &self,

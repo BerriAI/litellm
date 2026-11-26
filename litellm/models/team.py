@@ -8,10 +8,11 @@ budget-window value types and the team-model alias table). Re-exported from
 
 import json
 from datetime import datetime
-from typing import Final, Literal, Optional
+from typing import Final, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from litellm.models.budget import BudgetLimit
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -28,7 +29,7 @@ class MemberBase(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def check_user_info(cls, values):
+    def check_user_info(cls, values: object):
         if not isinstance(values, dict):
             raise ValueError("input needs to be a dictionary")
         if values.get("user_id") is None and values.get("user_email") is None:
@@ -42,13 +43,7 @@ class Member(MemberBase):
     )
 
 
-class BudgetLimitEntry(LiteLLMPydanticObjectBase):
-    """A single budget window with its own limit and independent reset schedule."""
-
-    budget_duration: str
-    max_budget: float
-    reset_at: datetime | None = None
-    window_start: datetime | None = Field(default=None, description="Server-managed start of the current spend window.")
+BudgetLimitEntry: TypeAlias = BudgetLimit
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):

@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import time
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +13,10 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponse
 
@@ -172,6 +176,58 @@ def test_hosted_vllm_supports_thinking():
         drop_params=False,
     )
     assert optional_params["reasoning_effort"] == "low"
+
+
+def _vllm_chunk(choice: dict[str, object], **top_level: object) -> str:
+    return "data: " + json.dumps(
+        {"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [choice], **top_level}
+    )
+
+
+PROMPT_FIELDS: Final = frozenset({"prompt_token_ids", "prompt_text"})
+
+
+def _hosted_vllm_stream(**prompt_fields: object) -> CustomStreamWrapper:
+    sse_lines: Final = (
+        _vllm_chunk({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}, **prompt_fields),
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None, "token_ids": [9707]}),
+        _vllm_chunk({"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}),
+        "data: [DONE]",
+    )
+    logging_obj: Final = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    return CustomStreamWrapper(
+        completion_stream=HostedVLLMChatConfig().get_model_response_iterator(
+            streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
+        ),
+        model="m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+
+def test_hosted_vllm_stream_keeps_prompt_fields_on_the_chunk_vllm_sent_them_on_and_in_the_built_response():
+    prompt_fields: Final = {"prompt_token_ids": [151644, 872, 198, 151645], "prompt_text": "<|im_start|>user\nhi<|im_end|>"}
+
+    chunks: Final = list(_hosted_vllm_stream(**prompt_fields))
+    built: Final = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert tuple(chunk.model_dump(include=PROMPT_FIELDS) for chunk in chunks) == (prompt_fields, {}, {})
+    assert built is not None
+    assert built.model_dump(include=PROMPT_FIELDS) == prompt_fields
+
+
+def test_hosted_vllm_stream_leaves_out_the_null_prompt_fields_vllm_sends_when_they_were_not_asked_for():
+    chunks: Final = list(_hosted_vllm_stream(prompt_token_ids=None, prompt_text=None))
+
+    assert tuple(chunk.model_dump(include=PROMPT_FIELDS) for chunk in chunks) == ({}, {}, {})
 
 
 def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
@@ -395,6 +451,57 @@ def test_hosted_vllm_assistant_tool_use_does_not_duplicate_existing_tool_calls()
             },
         }
     ]
+
+
+def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched() -> None:
+    video_url: Final = "https://example.com/clip.mp4"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Where was this clip filmed, and what is the weather there?"},
+                {"type": "file", "file": {"file_id": video_url, "format": "video/mp4"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "It was filmed in Boston. Checking the weather."},
+                {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Boston"}},
+            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "The skyline is Boston.", "signature": "sig1"}],
+            "reasoning_content": [{"type": "text", "text": "The skyline is Boston."}],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
+    ]
+    snapshot: Final = copy.deepcopy(messages)
+
+    transformed: Final = HostedVLLMChatConfig().transform_request(
+        model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert transformed["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Where was this clip filmed, and what is the weather there?"},
+                {"type": "video_url", "video_url": {"url": video_url}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "It was filmed in Boston. Checking the weather.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": json.dumps({"city": "Boston"})},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
+    ]
+    assert messages == snapshot
 
 
 def test_hosted_vllm_custom_tools_are_converted_to_function_tools():

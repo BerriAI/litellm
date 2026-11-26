@@ -51,11 +51,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
+    float_of,
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
+    keyword_arguments,
     require_attributes,
 )
+from litellm.litellm_core_utils.harness_context import CODEX_MARKERS as _CODEX_REMINDER_MARKERS
+from litellm.litellm_core_utils.harness_context import OPENCODE_MARKERS as _OPENCODE_REMINDER_MARKERS
+from litellm.litellm_core_utils.harness_context import SYSTEM_REMINDER_MARKERS as _DEFAULT_REMINDER_MARKERS
+from litellm.litellm_core_utils.harness_context import strip_marked_blocks as _strip_reminder_blocks
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -195,6 +201,14 @@ class _SupportsGet(Protocol):
 def _declared_vision_support(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
     return require_attributes(model_info, _SupportsGet, "get").get("supports_vision") if model_info else None
+
+
+class _AdaptiveRouterPreferencesFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _deployment_model_info(deployment: DeploymentTypedDict) -> Mapping[str, object]:
+    return deployment.get("model_info") or {}
 
 
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
@@ -513,20 +527,6 @@ def _log_rejected_classifier_verdict(
     verbose_router_logger.warning("ComplexityRouter: classifier verdict rejected (%s); %s", problems, reply)
 
 
-_REMINDER_OPEN: Final = "<system-reminder>"
-_REMINDER_CLOSE: Final = "</system-reminder>"
-_DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
-_CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
-    ("<environment_context>", "</environment_context>"),
-    ("<recommended_plugins>", "</recommended_plugins>"),
-    ("<user_instructions>", "</user_instructions>"),
-    ("<environments_instructions>", "</environments_instructions>"),
-    ("# agents.md instructions for ", "</instructions>"),
-)
-_OPENCODE_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
-    ("<task_result>", "</task_result>"),
-    ("<subagent ", "</subagent>"),
-)
 _OPENCODE_USER_AGENT_PREFIX: Final = "opencode/"
 
 _TRUNCATION_MARKER: Final = "..."
@@ -575,52 +575,6 @@ def _conversation_text_lengths(content: object) -> Iterator[int]:
 
 def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
     return sum(sum(_conversation_text_lengths(message.get("content"))) // 4 for message in messages or ())
-
-
-def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
-    """Span of each complete reminder block for one marker pair, left to right.
-
-    Literal `str.find`, not a regex: the delimiters are fixed strings, and `<system-reminder>.*?`
-    retried its lazy quantifier from every opening tag, so repeated unclosed tags were quadratic
-    (272KB took 7.6s) on a pre-routing path any keyholder can reach. The cursor only moves forward
-    and an unclosed tag ends the scan, so this is linear without bounding the input.
-    """
-    cursor = 0
-    while (start := lowered.find(open_marker, cursor)) != -1:
-        end = lowered.find(close_marker, start + len(open_marker))
-        if end == -1:
-            return
-        cursor = end + len(close_marker)
-        yield start, cursor
-
-
-def _strip_reminder_blocks(text: str, marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS) -> str:
-    """Remove every complete reminder block from text, keeping everything written around them.
-
-    Blocks from different pairs can nest or overlap, which the gap construction below would
-    otherwise mishandle: an inner block's end would resume the kept text partway through the outer
-    block, leaking the rest of that block into the classified ask. Running the block ends through a
-    maximum resumes each gap past the furthest block seen so far, which collapses nested and
-    overlapping spans without a separate merge pass. A single pair's ends already increase, so the
-    maximum is the identity there and the default path is byte-identical to a plain scan.
-
-    Deliberately linear in both the text and the block count. This runs pre-routing on input any
-    keyholder controls, and both a regex scan and a fold that rebuilds a growing tuple of merged
-    spans go quadratic on inputs that are cheap to send.
-    """
-    lowered: Final = text.lower()
-    spans: Final = tuple(
-        sorted(
-            span
-            for open_marker, close_marker in marker_pairs
-            for span in _reminder_block_spans(lowered, open_marker, close_marker)
-        )
-    )
-    if not spans:
-        return text.strip()
-    keep_from: Final = (0, *accumulate((end for _, end in spans), max))
-    keep_to: Final = (*(start for start, _ in spans), len(text))
-    return " ".join(kept for a, b in zip(keep_from, keep_to) if (kept := text[a:b].strip()))
 
 
 def _inline_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
@@ -1343,7 +1297,7 @@ class _ClassifierCircuitBreaker:
         self._clock = clock
         self._state = self.CLOSED
         self._opened_at: float | None = None
-        self._generation = 0
+        self._generation: int = 0
         self._lock = Lock()
 
     def acquire_permit(self) -> int | None:
@@ -3180,7 +3134,7 @@ class ComplexityRouter(CustomLogger):
     ) -> Mapping[str, object]:
         entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ()) if tier is not None else ()
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
-        explicit: Final = entry.litellm_params if entry is not None else MappingProxyType({})
+        explicit: Final[Mapping[str, object]] = entry.litellm_params if entry is not None else MappingProxyType({})
         if not self.config.max_tokens_from_tier_model or not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(explicit):
             return explicit
         ceiling: Final = self._group_output_ceiling(model)
@@ -3252,8 +3206,8 @@ class ComplexityRouter(CustomLogger):
         self,
         tier: ComplexityTier | str,
         raw_messages: list[dict[str, object]] | None,
-        resolved_messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict[str, object],
         allowed_models: tuple[str, ...] | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> str:
@@ -3335,10 +3289,12 @@ class ComplexityRouter(CustomLogger):
                 model_to_cost[name] = 0.0
                 continue
             deployment = deployments[0]
-            mi_dict: dict[str, Any] = deployment.get("model_info") or {}
+            mi_dict = _deployment_model_info(deployment)
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
-                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                model_to_prefs[name] = AdaptiveRouterPreferences.model_validate(
+                    _AdaptiveRouterPreferencesFields(**keyword_arguments(prefs_raw, AdaptiveRouterPreferences))
+                )
             else:
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
@@ -3346,7 +3302,7 @@ class ComplexityRouter(CustomLogger):
             cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
-            model_to_cost[name] = float(cost) if cost is not None else 0.0
+            model_to_cost[name] = float_of(cost) if cost is not None else 0.0
 
         self.adaptive_router = AdaptiveRouter(
             router_name=self.model_name,
@@ -4060,7 +4016,7 @@ class ComplexityRouter(CustomLogger):
     async def _model_group_can_serve(
         self,
         model_name: str,
-        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
+        messages: Sequence[Mapping[str, object]] | None,
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
     ) -> bool:
@@ -4361,7 +4317,9 @@ class ComplexityRouter(CustomLogger):
                 routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
             return routelayer
 
-    async def _semantic_tier_override(self, user_message: str, request_kwargs: dict) -> ComplexityTier | str | None:
+    async def _semantic_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> ComplexityTier | str | None:
         """Match the prompt against keyword_tier_rules by embedding similarity.
 
         Embeds the query ourselves (instead of letting SemanticRouter.acall embed it
@@ -4411,7 +4369,9 @@ class ComplexityRouter(CustomLogger):
             return None
         return self.config.resolve_classified_tier(route_choice.name)
 
-    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> KeywordOverride | None:
+    async def _resolve_keyword_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> KeywordOverride | None:
         """Resolve a keyword_tier_rule override, semantically or lexically per config.
 
         Returns None (no override -> fall through to the scorer) not only when no rule
@@ -4442,7 +4402,7 @@ class ComplexityRouter(CustomLogger):
     def _resolve_messages(
         self,
         messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
     ) -> list[dict[str, object]] | None:
         """
         Resolve messages from the request, converting from other formats if needed.
@@ -4563,7 +4523,7 @@ class ComplexityRouter(CustomLogger):
         return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict[str, object]) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
         client-supplied OpenAI `user` param, which isn't authenticated)."""
@@ -4573,7 +4533,7 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> TierSessionPin:
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict[str, object]) -> TierSessionPin:
         return TierSessionPin(
             router=self.model_name,
             caller=(
@@ -4624,7 +4584,7 @@ class ComplexityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -4956,7 +4916,7 @@ class ComplexityRouter(CustomLogger):
         model: str,
         request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
         conversation_continuing: bool = True,
         resolved_messages: Sequence[Mapping[str, object]] | None = None,

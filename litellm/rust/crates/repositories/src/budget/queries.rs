@@ -12,34 +12,36 @@ use crate::RawJson;
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Deserialize, Serialize)]
 pub struct Budget {
-    pub(crate) budget_id: String,
-    pub(crate) name: Option<String>,
-    pub(crate) max_budget: Option<f64>,
-    pub(crate) soft_budget: Option<f64>,
-    pub(crate) max_parallel_requests: Option<i32>,
-    pub(crate) tpm_limit: Option<i64>,
-    pub(crate) rpm_limit: Option<i64>,
-    pub(crate) tpd_limit: Option<i64>,
-    pub(crate) model_max_budget: Option<RawJson>,
-    pub(crate) model_tpm_limit: Option<RawJson>,
-    pub(crate) model_rpm_limit: Option<RawJson>,
-    pub(crate) budget_duration: Option<String>,
-    pub(crate) budget_limits: Option<RawJson>,
-    pub(crate) cap_policy: Option<String>,
-    #[serde(serialize_with = "crate::utc_timestamp::option::serialize")]
-    pub(crate) budget_reset_at: Option<NaiveDateTime>,
-    pub(crate) budget_reset_count: i32,
+    pub budget_id: String,
+    pub name: Option<String>,
+    pub max_budget: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) allowed_models: Option<Vec<String>>,
-    pub(crate) temp_budget_increase: Option<f64>,
+    pub rollover_max_budget: Option<f64>,
+    pub soft_budget: Option<f64>,
+    pub max_parallel_requests: Option<i32>,
+    pub tpm_limit: Option<i64>,
+    pub rpm_limit: Option<i64>,
+    pub tpd_limit: Option<i64>,
+    pub model_max_budget: Option<RawJson>,
+    pub model_tpm_limit: Option<RawJson>,
+    pub model_rpm_limit: Option<RawJson>,
+    pub budget_duration: Option<String>,
+    pub budget_limits: Option<RawJson>,
+    pub cap_policy: Option<String>,
     #[serde(serialize_with = "crate::utc_timestamp::option::serialize")]
-    pub(crate) temp_budget_expiry: Option<NaiveDateTime>,
+    pub budget_reset_at: Option<NaiveDateTime>,
+    pub budget_reset_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_models: Option<Vec<String>>,
+    pub temp_budget_increase: Option<f64>,
+    #[serde(serialize_with = "crate::utc_timestamp::option::serialize")]
+    pub temp_budget_expiry: Option<NaiveDateTime>,
     #[serde(serialize_with = "crate::utc_timestamp::serialize")]
-    pub(crate) created_at: NaiveDateTime,
-    pub(crate) created_by: String,
+    pub created_at: NaiveDateTime,
+    pub created_by: String,
     #[serde(serialize_with = "crate::utc_timestamp::serialize")]
-    pub(crate) updated_at: NaiveDateTime,
-    pub(crate) updated_by: String,
+    pub updated_at: NaiveDateTime,
+    pub updated_by: String,
 }
 
 pub(super) async fn find_budget(

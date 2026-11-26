@@ -183,6 +183,12 @@ def normalize_budget_window_start(moment: datetime) -> datetime:
     return moment.replace(microsecond=moment.microsecond // 1000 * 1000)
 
 
+def rolled_budget_window_start(scheduled_start: datetime, previous_reset: datetime) -> datetime:
+    return normalize_budget_window_start(
+        max(scheduled_start.astimezone(timezone.utc), previous_reset.astimezone(timezone.utc))
+    )
+
+
 def get_annual_budget_window_start(reset_at: datetime, timezone_str: str) -> datetime:
     return get_budget_window_start("12mo", reset_at, timezone_str).astimezone(timezone.utc)
 

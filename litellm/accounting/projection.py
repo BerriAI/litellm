@@ -137,25 +137,41 @@ def _app_contributions(
     customer: Mapping[str, str | None],
     spend: float,
 ) -> tuple[Contribution, ...]:
-    app_id: Final = entities.get("app_id")
-    if not isinstance(app_id, str) or not app_id:
+    return (
+        *_app_scope_contributions(
+            entities.get("app_id"),
+            "app_id",
+            "LiteLLM_AppTable",
+            (
+                ("LiteLLM_AppCustomerOrgTable", "customer_org_id", customer["customer_org_id"]),
+                ("LiteLLM_AppCustomerMemberTable", "customer_member_id", customer["customer_member_id"]),
+            ),
+            spend,
+        ),
+        *_app_scope_contributions(
+            entities.get("app_group_id"),
+            "app_group_id",
+            "LiteLLM_AppGroupTable",
+            (("LiteLLM_AppGroupCustomerOrgTable", "customer_org_id", customer["customer_org_id"]),),
+            spend,
+        ),
+    )
+
+
+def _app_scope_contributions(
+    parent_id: object,
+    parent_column: str,
+    parent_table: str,
+    associations: tuple[tuple[str, str, str | None], ...],
+    spend: float,
+) -> tuple[Contribution, ...]:
+    if not isinstance(parent_id, str) or not parent_id:
         return ()
     return (
-        _spend("LiteLLM_AppTable", (("app_id", app_id),), spend),
+        _spend(parent_table, ((parent_column, parent_id),), spend),
         *(
-            _spend(table, (("app_id", app_id), (column, identity)), spend)
-            for table, column, identity in (
-                (
-                    "LiteLLM_AppCustomerOrgTable",
-                    "customer_org_id",
-                    customer["customer_org_id"],
-                ),
-                (
-                    "LiteLLM_AppCustomerMemberTable",
-                    "customer_member_id",
-                    customer["customer_member_id"],
-                ),
-            )
+            _spend(table, ((parent_column, parent_id), (column, identity)), spend)
+            for table, column, identity in associations
             if identity is not None
         ),
     )
@@ -232,6 +248,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
         "organization_id": entities.get("organization_id"),
         "customer_org_id": customer["customer_org_id"],
         **({"app_id": entities["app_id"]} if isinstance(entities.get("app_id"), str) else {}),
+        **({"app_group_id": entities["app_group_id"]} if isinstance(entities.get("app_group_id"), str) else {}),
         **{key: customer[key] or "" for key in ("customer_team_id", "customer_member_id")},
     }
     usage: Final = _fields(metadata.get("usage_object"))
@@ -268,7 +285,7 @@ def _daily_rows(
                     *(
                         (column, _text(row.get(column)))
                         for column in table.parent_id_columns
-                        if column != "app_id" or row.get(column)
+                        if column not in ("app_id", "app_group_id") or row.get(column)
                     ),
                     *daily_key,
                     *((("model_group", _text(row.get("model_group"))),) if table.hashed_identity else ()),

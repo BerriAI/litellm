@@ -2,11 +2,13 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
 
 from litellm._internal_context import internal_sub_call
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
     from litellm import LiteLLMLoggingObj
@@ -16,11 +18,11 @@ if TYPE_CHECKING:
 class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     input: str
-    voice: str | dict | None
-    optional_params: dict
-    litellm_params: dict
+    voice: str | Mapping[str, object] | None
+    optional_params: dict[str, object]
+    litellm_params: dict[str, object]
     logging_obj: "LiteLLMLoggingObj"
-    headers: dict
+    headers: dict[str, object]
     custom_llm_provider: str
 
 
@@ -31,7 +33,7 @@ class SpeechToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = SpeechToCompletionBridgeTransformationHandler()
 
-    def validate_input_kwargs(self, kwargs: dict) -> SpeechToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: Mapping[str, object]) -> SpeechToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
 
         model: Final = kwargs.get("model")
@@ -66,10 +68,11 @@ class SpeechToCompletionBridgeHandler:
         if logging_obj is None or not isinstance(logging_obj, LiteLLMLoggingObj):
             raise ValueError("logging_obj is required")
 
+        voice: Final = kwargs.get("voice")
         return SpeechToCompletionBridgeHandlerInputKwargs(
             model=model,
             input=input,
-            voice=kwargs.get("voice"),
+            voice=voice if isinstance(voice, str) else as_str_mapping(voice),
             optional_params=optional_params,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
@@ -81,10 +84,10 @@ class SpeechToCompletionBridgeHandler:
         self,
         model: str,
         input: str,
-        voice: str | dict | None,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        voice: str | Mapping[str, object] | None,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
     ) -> "HttpxBinaryResponseContent":

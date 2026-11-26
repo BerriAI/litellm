@@ -37,11 +37,11 @@ def custom_github_app_hint() -> str | None:
 class GithubCopilotError(BaseLLMException):
     def __init__(
         self,
-        status_code,
-        message,
+        status_code: int,
+        message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
-        headers: httpx.Headers | dict | None = None,
+        headers: httpx.Headers | dict[str, str] | None = None,
         body: dict | None = None,
     ):
         super().__init__(

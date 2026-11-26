@@ -14,7 +14,7 @@ from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
 from pydantic import ValidationError
 from litellm.repositories import rust_database
-from litellm.repositories.table_repositories import SpendLogOwner, SpendLogsRepository
+from litellm.repositories.spend_logs_repository import SpendLogOwner, SpendLogsRepository
 from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 from litellm.models.base import DomainModel
@@ -2266,7 +2266,7 @@ class TestPrismaTableRepository:
         assert agents.table._actions is not policy.table._actions
 
     def test_table_access_raises_without_db(self):
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         repo = SpendLogsRepository(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):

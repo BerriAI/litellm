@@ -59,6 +59,7 @@ _ACCOUNTING_FIELDS: Final = frozenset(
         "customer_team_id",
         "customer_org_id",
         "app_id",
+        "app_group_id",
         "agent_id",
         "request_tags",
         "status",

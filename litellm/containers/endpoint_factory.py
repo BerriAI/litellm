@@ -8,19 +8,21 @@ that use the generic container handler.
 import asyncio
 import contextvars
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Final, Literal
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.containers.utils import decode_managed_container_id_for_request
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
-from litellm.llms.custom_httpx.container_handler import generic_container_handler
+from litellm.llms.custom_httpx.container_handler import EndpointConfig, generic_container_handler
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerFileObject,
@@ -30,13 +32,20 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 # Response type mapping
-RESPONSE_TYPES: Final[dict[str, type]] = {
+RESPONSE_TYPES: Final[
+    Mapping[str, type[ContainerFileListResponse | ContainerFileObject | DeleteContainerFileResponse]]
+] = {
     "ContainerFileListResponse": ContainerFileListResponse,
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
 _ENDPOINTS_DOCUMENT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _ENDPOINT_RESULT: Final = TypeAdapter(object)
+_ENDPOINT_KWARGS: Final = TypeAdapter(Mapping[str, object])
+
+
+class _ContainerResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _load_endpoints_config() -> dict:
@@ -46,7 +55,7 @@ def _load_endpoints_config() -> dict:
         return _ENDPOINTS_DOCUMENT.validate_python(json.load(f))
 
 
-def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
+def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable[..., object]:
     """
     Create a sync SDK function from endpoint config.
 
@@ -75,11 +84,14 @@ def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
             # Check for mock response
             mock_response = kwargs.get("mock_response")
             if mock_response is not None:
-                if isinstance(mock_response, str):
-                    mock_response = json.loads(mock_response)
+                mock_result: Final = _ENDPOINT_RESULT.validate_python(
+                    json.loads(mock_response) if isinstance(mock_response, str) else mock_response
+                )
                 if response_type:
-                    return response_type(**mock_response)
-                return mock_response
+                    return response_type.model_validate(
+                        _ContainerResponseFields(**keyword_arguments(mock_result, response_type))
+                    )
+                return mock_result
 
             # Get provider config
             litellm_params = GenericLiteLLMParams(**kwargs)
@@ -103,11 +115,13 @@ def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
                 raise ValueError(f"Container provider config not found for: {resolved_custom_llm_provider}")
 
             # Build optional params for logging
-            optional_params: Final = {k: kwargs.get(k) for k in path_params if k in kwargs}
+            optional_params: Final[dict[str, object]] = {  # mutable-ok: kept as the logging object's own dict
+                k: kwargs.get(k) for k in path_params if k in kwargs
+            }
 
             # Pre-call logging
             litellm_logging_obj.update_from_kwargs(
-                kwargs=kwargs,
+                kwargs=_ENDPOINT_KWARGS.validate_python(kwargs),
                 model="",
                 optional_params=optional_params,
                 litellm_params={"litellm_call_id": litellm_call_id},
@@ -140,9 +154,9 @@ def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
 
 
 def create_async_endpoint_function(
-    sync_func: Callable,
-    endpoint_config: dict,
-) -> Callable:
+    sync_func: Callable[..., object],
+    endpoint_config: Mapping[str, object],
+) -> Callable[..., object]:
     """Create an async SDK function that wraps the sync function."""
 
     @client
@@ -152,7 +166,7 @@ def create_async_endpoint_function(
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         local_vars: Final = locals()
         try:
@@ -191,14 +205,14 @@ def create_async_endpoint_function(
     return async_endpoint_func
 
 
-def generate_container_endpoints() -> dict[str, Callable]:
+def generate_container_endpoints() -> dict[str, Callable[..., object]]:
     """
     Generate all container endpoint functions from the JSON config.
 
     Returns a dict mapping function names to their implementations.
     """
     config: Final = _load_endpoints_config()
-    endpoints: Final = {}
+    endpoints: Final[dict[str, Callable[..., object]]] = {}
 
     for endpoint_config in config["endpoints"]:
         # Create sync function
@@ -215,7 +229,7 @@ def generate_container_endpoints() -> dict[str, Callable]:
 def get_all_endpoint_names() -> list[str]:
     """Get all endpoint names (sync and async) from config."""
     config: Final = _load_endpoints_config()
-    names: Final = []
+    names: Final[list[str]] = []
     for endpoint in config["endpoints"]:
         names.append(endpoint["name"])
         names.append(endpoint["async_name"])

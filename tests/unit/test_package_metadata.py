@@ -145,3 +145,14 @@ def test_declared_anyio_floor_is_at_or_above_stranded_lock_waiter_fix() -> None:
         specifier.operator == ">=" and Version(specifier.version) >= ANYIO_STRANDED_LOCK_WAITER_FIX
         for specifier in declared[0].specifier
     ), ANYIO_STRANDED_LOCK_WAITER_SOURCE
+
+
+def test_semantic_cache_supported_redisvl_range_matches_the_declared_proxy_extra() -> None:
+    from litellm.caching.redis_semantic_cache import SUPPORTED_REDISVL_VERSIONS
+
+    declared: Final = tuple(
+        Requirement(requirement).specifier
+        for requirement in OPTIONAL_DEPENDENCIES["extra_proxy"]
+        if canonicalize_name(Requirement(requirement).name) == "redisvl"
+    )
+    assert declared == (SpecifierSet(SUPPORTED_REDISVL_VERSIONS),)
