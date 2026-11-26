@@ -1,6 +1,4 @@
-use litellm_python_compat::Value;
-
-use super::record::{Field, record, required};
+use super::record::{Literal, record, required};
 
 /// The two roles `Member` takes.
 #[derive(
@@ -12,18 +10,7 @@ pub enum MemberRole {
     User,
 }
 
-impl Field for MemberRole {
-    fn read(value: &Value) -> Option<Self> {
-        match value {
-            Value::Str(role) => role.parse().ok(),
-            _ => None,
-        }
-    }
-
-    fn write(self) -> Value {
-        Value::from(<&'static str>::from(self))
-    }
-}
+impl Literal for MemberRole {}
 
 record! {
     /// A team member as `Member` dumps it, in a team's roster and nested in a key's entry.

@@ -7,7 +7,7 @@ Database reads for `gateway-auth-core`'s store ports. Each `*Database` reads one
 - No decision lives here. The core decides who may call what, and this crate only reads. A caller that must refuse on what a read found, such as a writer read whose object permission row is gone, gets the facts back and refuses itself
 - No cache is touched here. The value is the family's typed record in `redis-store/src/auth_cache/types/`, and reading, writing and evicting the cache stay with the host
 - No query is written here. A row comes from its repository
-- It covers only objects the core asks a host for. The object permission is read here because a cached key and a cached team nest it
+- It covers only objects the core asks a host for. The object permission is read here because a cached key, a cached team and a cached end user nest it
 - Concrete structs, never a trait. A test drives them against real Postgres
 - No cache key or byte format is defined here. `AuthObject` and each entry's `IntoValue`/`FromValue` live in `redis-store`, and a read returns the entry itself, so the host caches it with no conversion. `FromValue` is used here only on a JSON column already stored in an entry's shape, such as `members_with_roles`
 - A row is refused only where the Python model that dumps its entry would refuse it, as `Error::Row` naming the column. Every other check belongs to the core
@@ -48,6 +48,14 @@ Each object has one entry here, in the same form, and a later object adds its ow
 - Nested: the budget, as `LiteLLM_BudgetTableFull` dumps it (`BudgetFullEntry`, the `BudgetEntry` with `budget_reset_at` and `created_at` after it). The model types it `LiteLLM_BudgetTableFull | LiteLLM_BudgetTable`, and pydantic reads every budget row as the full one since none lacks a `created_at`. It is refused for what the project's budget is refused for
 - Not read: the user and the team the membership names
 
+### End user
+
+- Query: `EndUserDatabase::end_user`, the end user's row with its budget and object permission (`find_with_budget_and_object_permission`), one query
+- Entry: `EndUserEntry` under `AuthObject::EndUser`, the `LiteLLM_EndUserTable` dump
+- Nested: the budget, as `LiteLLM_BudgetTable` dumps it (`BudgetEntry`), refused for what the project's budget is refused for, and the object permission, as `LiteLLM_ObjectPermissionTable` dumps it (`ObjectPermissionEntry`). The query nests the permission row with `to_jsonb`, read as the same `ObjectPermission` a key's or a team's permission read returns, so a NULL array column is an empty list on every path and one shaper in `object_permission.rs` serves them all
+- Not read: the proxy-wide default end-user budget, which the host merges in for an end user with no budget of its own
+- Host: `get_end_user_object` turns every failure into no end user, so a host serving Python's behavior maps `Error::Row` and `Error::Database` to "no end user" rather than failing the request
+
 ## The cached shape
 
 - What the database gives is not what the cache holds. Python's entry is `Model(**row).model_dump(mode="json")`, so each shaper converts its row field by field into the entry, and the entry dumps to the bytes Python writes for the same row
@@ -59,6 +67,7 @@ Each object has one entry here, in the same form, and a later object adds its ow
 
 ## Other writers
 
-- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, `get_project_object` does the same for a project, and the team member budget check and `get_team_membership` do it for a membership. So no host reads a team, a project or a membership through this crate yet. All of them write the bytes this crate shapes for the same row
+- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, `get_project_object` does the same for a project, the team member budget check and `get_team_membership` do it for a membership, and `get_end_user_object` does it for an end user. So no host reads a team, a project, a membership or an end user through this crate yet. All of them write the bytes this crate shapes for the same row
 - A writer whose bytes differ from this crate's is listed here with the difference, and is left alone on purpose
+  - `get_end_user_object` caches an end user with no budget of its own with the proxy-wide default end-user budget (`litellm.max_end_user_budget_id`) in `litellm_budget_table` and `budget_id` still unset, so the budget it caches is not always the one the row names. `EndUserEntry` carries either budget, and the merge stays with the host
   - The auth prefetch (`auth_object_prefetch.py`) writes `project_id:{id}`, `{team_id}_{user_id}` and `team_membership:{user_id}:{team_id}` from the key owners row instead, with budget times without a `Z` and `[]` for a NULL budget `allowed_models`, and the project's object permission nested, so its bytes differ from this shape for the same row

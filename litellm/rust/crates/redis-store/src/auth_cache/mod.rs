@@ -12,9 +12,9 @@ use parking_lot::Mutex;
 pub use self::keys::AuthObject;
 pub use self::local::TeamRoster;
 pub use self::types::{
-    Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, Dict, ExcludedIfNone, Ints, KeyEntry,
-    Lists, MemberEntry, MemberRole, ModelAliases, ModelTableEntry, ObjectPermissionEntry,
-    ProjectEntry, Settings, TeamEntry, TeamMembershipEntry,
+    Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, Dict, EndUserEntry, ExcludedIfNone, Ints,
+    KeyEntry, Lists, MemberEntry, MemberRole, ModelAliases, ModelRegion, ModelTableEntry,
+    ObjectPermissionEntry, ProjectEntry, Settings, TeamEntry, TeamMembershipEntry,
 };
 use crate::{
     Error, IntoValue, Number, Pending, RequestRedis, Send, codec,
