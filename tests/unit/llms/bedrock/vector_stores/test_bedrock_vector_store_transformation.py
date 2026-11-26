@@ -277,13 +277,13 @@ S3_VECTORS_METADATA: Final = {
         (
             {"type": "S3", "s3Location": {"uri": "s3://kb-docs/reports/Q1#draft?.txt"}},
             S3_VECTORS_METADATA,
-            "Q1",
+            "Q1#draft?.txt",
             "s3://kb-docs/reports/Q1#draft?.txt",
         ),
         (
             {"type": "S3", "s3Location": {"uri": "s3://kb-docs/?summary.txt"}},
             S3_VECTORS_METADATA,
-            "kb-docs",
+            "?summary.txt",
             "s3://kb-docs/?summary.txt",
         ),
         (
@@ -295,12 +295,18 @@ S3_VECTORS_METADATA: Final = {
         (
             {"type": "WEB", "webLocation": {"url": "https://docs.example.com/guide/setup/"}},
             S3_VECTORS_METADATA,
-            "docs.example.com",
+            "setup",
             "https://docs.example.com/guide/setup/",
         ),
         ({"type": "S3", "s3Location": {"uri": "s3://kb-docs/"}}, S3_VECTORS_METADATA, "kb-docs", "s3://kb-docs/"),
         (
-            {"type": "KENDRA", "kendraDocumentLocation": {"uri": "faq/"}},
+            {"type": "S3", "s3Location": {"uri": "s3://kb-docs/reports/"}},
+            S3_VECTORS_METADATA,
+            "reports",
+            "s3://kb-docs/reports/",
+        ),
+        (
+            {"type": "S3", "s3Location": {"uri": "s3:///"}},
             S3_VECTORS_METADATA,
             "bedrock-kb-document-CYQOANZ7OJ",
             "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
@@ -328,6 +334,12 @@ S3_VECTORS_METADATA: Final = {
             {**S3_VECTORS_METADATA, "x-amz-bedrock-kb-source-uri": "s3://kb-docs/reports/Q1#draft?.txt"},
             "Q1",
             "s3://kb-docs/reports/Q1#draft?.txt",
+        ),
+        (
+            None,
+            {**S3_VECTORS_METADATA, "x-amz-bedrock-kb-source-uri": "https://docs.example.com/guide/setup/"},
+            "docs.example.com",
+            "https://docs.example.com/guide/setup/",
         ),
         (None, {**S3_VECTORS_METADATA, "x-amz-bedrock-kb-source-uri": "s3://kb-docs"}, "kb-docs", "s3://kb-docs"),
         (
