@@ -419,6 +419,61 @@ async fn every_billed_refusal_of_a_fallback_chain_counts_toward_project_itpm_und
 }
 
 #[rstest]
+#[case::fits(300, false)]
+#[case::over_the_limit(500, true)]
+#[tokio::test]
+async fn nested_tool_calls_are_checked_against_tpm_and_leave_the_requests_reservation_to_settle_at_its_end(
+    #[case] tool_call_tokens: i64,
+    #[case] refused: bool,
+) {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(tpm.clone(), Some(600)), None)
+            .await,
+        None
+    );
+    for _ in 0..2 {
+        let tool_call = PreCallFacts {
+            call_id: None,
+            nested_tool_call: true,
+            ..facts(tpm.clone(), Some(tool_call_tokens))
+        };
+        assert_eq!(
+            limiter.pre_call(&state, tool_call, None).await.is_some(),
+            refused
+        );
+    }
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(600)))
+    );
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 15,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(15)))
+    );
+}
+
+#[rstest]
 #[case::no_window_open(None, 1092)]
 #[case::window_open(Some(600), 500)]
 #[tokio::test]
@@ -852,6 +907,34 @@ fn key_tokens(store: &RateLimits) -> Option<f64> {
         Local::Number(number) => Some(number.as_f64()),
         _ => None,
     }
+}
+
+#[rstest]
+#[case::no_slot(json!({"tokens_per_unit": 10000}))]
+#[case::reused_slot(json!({"tokens_per_unit": 10000, "max_parallel_requests": 1}))]
+#[tokio::test]
+async fn a_tool_call_inside_the_request_keeps_the_requests_rate_limit_headers(
+    #[case] limits: serde_json::Value,
+) {
+    let (limiter, _, _) = limiter(true);
+    let limited = descriptors(json!([{"key": "api_key", "value": "k", "rate_limit": limits}]));
+    let state = Arc::new(LimiterState::default());
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(limited.clone(), Some(52)), None)
+            .await,
+        None
+    );
+    let tool_call = PreCallFacts {
+        call_id: None,
+        nested_tool_call: true,
+        reuses_request_slot: state.snapshot().parallel_slot.is_some(),
+        ..facts(limited, Some(1026))
+    };
+    assert_eq!(limiter.pre_call(&state, tool_call, None).await, None);
+    let response = state.snapshot().rate_limit_response.unwrap();
+    let headers = litellm_callbacks_parallel_request_limiter::header_map(&response.statuses);
+    assert_eq!(headers["x-ratelimit-api_key-remaining-tokens"], json!(9948));
 }
 
 #[rstest]

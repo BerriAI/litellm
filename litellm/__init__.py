@@ -1540,6 +1540,7 @@ from .exceptions import (
     CallerCredentialRateLimitError as CallerCredentialRateLimitError,
     InvalidRequestError,
     BadRequestError,
+    DocumentFetchError as DocumentFetchError,
     ImageFetchError,
     MalformedRequestFieldError as MalformedRequestFieldError,
     MissingMessageRoleError as MissingMessageRoleError,

@@ -17,11 +17,11 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use litellm_config::{Config, LitellmRole};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey, KeyAuthenticator, SystemClock};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks,
+    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks, Refreshed,
     RouteGroups, Rows, Settings, Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
     body::Params,
     identity::{
@@ -269,7 +269,7 @@ impl AuthHost for NativeAuthHost {
         declined("resolve_user_identity")
     }
 
-    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<TeamRecord>>, Error> {
+    async fn cached_team(&self, _: &str) -> Result<Option<Refreshed<TeamRecord>>, Error> {
         declined("cached_team")
     }
 

@@ -3,10 +3,11 @@ use std::{fmt, sync::Arc, time::Duration};
 use litellm_config::LitellmRole;
 use litellm_coroutine::{Co, Reply};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Refreshed, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
     body::Params,
     identity::{
@@ -165,7 +166,7 @@ pub(crate) enum Ask {
     },
     CachedTeam {
         team_id: String,
-        reply: Reply<Option<CachedTeam<PyRow>>>,
+        reply: Reply<Option<Refreshed<PyRow>>>,
     },
     WithTeam {
         key: PyRow,
@@ -431,7 +432,7 @@ impl AuthHost for PythonAuthHost {
         let hash = hash.clone();
         self.ask(|reply| Ask::EvictKey { hash, reply }).await
     }
-    async fn cached_team(&self, team_id: &str) -> Result<Option<CachedTeam<PyRow>>, Error> {
+    async fn cached_team(&self, team_id: &str) -> Result<Option<Refreshed<PyRow>>, Error> {
         let team_id = team_id.to_owned();
         self.ask(|reply| Ask::CachedTeam { team_id, reply }).await
     }
