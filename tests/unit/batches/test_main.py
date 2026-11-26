@@ -1699,11 +1699,6 @@ def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
     assert forwarded["batch_id"] == "la6"
 
 
-# =========================================================================== #
-# a `model` kwarg that is not a string is treated as absent
-# =========================================================================== #
-
-
 def test_create__model_that_is_not_a_string_skips_provider_inference(seams: Seams) -> None:
     with patch.object(bm, "get_llm_provider") as provider_inference:
         result: Final = bm.create_batch(**CREATE_KW, custom_llm_provider="openai", model=123)

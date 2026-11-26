@@ -433,7 +433,7 @@ def file_retrieve(
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
-                raw_logging_obj = kwargs.get("litellm_logging_obj")
+                raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
                 logging_obj = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
@@ -609,7 +609,7 @@ def file_delete(
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
-                raw_logging_obj = kwargs.get("litellm_logging_obj")
+                raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
                 logging_obj = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
@@ -742,7 +742,7 @@ def file_list(
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
 
-            raw_logging_obj = kwargs.get("litellm_logging_obj")
+            raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
             logging_obj = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
             if logging_obj is None:
                 from litellm.litellm_core_utils.litellm_logging import (

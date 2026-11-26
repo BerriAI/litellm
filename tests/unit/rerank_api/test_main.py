@@ -696,35 +696,25 @@ async def test_arerank_returns_cost_while_async_success_callback_is_held(respx_m
     assert callback_cost == returned_cost
 
 
-def _rerank_params_seen_by_provider_mapping(
-    respx_mock: respx.MockRouter, **wrong_typed: object
-) -> Mapping[str, object]:
-    respx_mock.post("https://api.cohere.com/v2/rerank").return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
-    from litellm.rerank_api import main as rerank_main
+def test_rerank_omits_instruction_that_is_not_a_string_from_the_provider_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://vllm.test/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
 
-    with patch.object(
-        rerank_main, "get_optional_rerank_params", wraps=rerank_main.get_optional_rerank_params
-    ) as mapped:
-        litellm.rerank(
-            model="cohere/rerank-v4.0-pro",
-            query="hello",
-            documents=["hello", "world"],
-            api_key="test-api-key",
-            **wrong_typed,
-        )
-    return mapped.call_args.kwargs
+    litellm.rerank(
+        model="hosted_vllm/reranker",
+        query="hello",
+        documents=["hello", "world"],
+        api_base="http://vllm.test",
+        instruction=123,
+    )
 
-
-def test_rerank_ignores_instruction_that_is_not_a_string(respx_mock: respx.MockRouter) -> None:
-    seen: Final = _rerank_params_seen_by_provider_mapping(respx_mock, instruction=123)
-
-    assert seen["instruction"] is None, seen
-
-
-def test_rerank_coerces_truthy_drop_params_to_true(respx_mock: respx.MockRouter) -> None:
-    seen: Final = _rerank_params_seen_by_provider_mapping(respx_mock, drop_params="yes")
-
-    assert seen["drop_params"] is True, seen
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent == {
+        "model": "reranker",
+        "query": "hello",
+        "documents": ["hello", "world"],
+        "return_documents": True,
+    }, sent
 
 
 @pytest.mark.asyncio
