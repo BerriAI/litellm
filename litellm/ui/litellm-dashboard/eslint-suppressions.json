@@ -1569,9 +1569,6 @@
   "src/components/email_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/key_info_utils.tsx": {
