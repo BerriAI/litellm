@@ -2014,7 +2014,7 @@ def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 
 
 def _callers_tool_use_id(tool_use_id: str) -> str:
-    return tool_use_id
+    return tool_use_id or _TOOL_USE_ID_FALLBACK
 
 
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:

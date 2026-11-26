@@ -4948,6 +4948,32 @@ def test_anthropic_chat_renames_tool_call_ids_only_for_an_upstream_that_enforces
     assert _sent_tool_use_ids(route.calls.last.request) == (sent_id, sent_id)
 
 
+def test_anthropic_chat_sends_an_empty_tool_call_id_as_the_fallback_id_to_a_backend_that_keeps_ids(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    route: Final = respx_mock.post("http://vllm.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=_DONE_MESSAGE)
+    )
+    assistant, tool_result = _KIMI_TOOL_ROUND[1:3]
+    empty_id_round: Final = [
+        _KIMI_TOOL_ROUND[0],
+        {**assistant, "tool_calls": [{**assistant["tool_calls"][0], "id": ""}]},
+        {**tool_result, "tool_call_id": ""},
+    ]
+
+    litellm.completion(
+        model="anthropic/kimi-k2",
+        messages=empty_id_round,
+        tools=[_BASH_TOOL],
+        api_base="http://vllm.test",
+        api_key="sk-test",
+    )
+
+    assert _sent_tool_use_ids(route.calls.last.request) == ("tool_use_id", "tool_use_id")
+
+
 def test_anthropic_chat_keeps_tool_call_ids_when_the_global_api_base_points_at_another_backend(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:

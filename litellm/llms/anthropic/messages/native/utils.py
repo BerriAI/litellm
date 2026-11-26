@@ -12,7 +12,9 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupp
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
+    fill_empty_tool_use_id,
     flatten_unencrypted_web_search_results_in_anthropic_messages,
+    normalize_anthropic_tool_use_id,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
@@ -271,8 +273,9 @@ def normalize_native_messages(
 ) -> list[dict[str, object]]:
     """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
     stripped: Final = strip_empty_content_blocks_from_anthropic_messages(messages)
+    rename: Final = normalize_anthropic_tool_use_id if rewrites_tool_use_ids else fill_empty_tool_use_id
     return flatten_unencrypted_web_search_results_in_anthropic_messages(
-        sanitize_tool_use_ids_in_anthropic_messages(stripped) if rewrites_tool_use_ids else stripped
+        sanitize_tool_use_ids_in_anthropic_messages(stripped, rename)
     )
 
 

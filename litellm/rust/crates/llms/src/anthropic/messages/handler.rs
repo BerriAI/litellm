@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::{
     Error, ErrorDetail,
     anthropic::common_utils::{
+        fill_empty_raw_tool_use_ids, fill_empty_tool_use_ids,
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
         map_messages, non_string_system_text_path, non_string_user_text_path,
         sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
@@ -95,7 +96,7 @@ fn sanitize_anthropic_messages(
     let identified = if rewrites_tool_use_ids {
         sanitize_tool_use_ids(stripped)
     } else {
-        stripped
+        fill_empty_tool_use_ids(stripped)
     };
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(identified))
 }
@@ -106,7 +107,7 @@ fn sanitize_raw_anthropic_message(message: Value, rewrites_tool_use_ids: bool) -
             if rewrites_tool_use_ids {
                 sanitize_raw_tool_use_ids(stripped)
             } else {
-                Some(stripped)
+                fill_empty_raw_tool_use_ids(stripped)
             }
         })
         .and_then(flatten_unencrypted_raw_web_search_results)
@@ -441,24 +442,35 @@ mod tests {
     type Shaping = fn(MessagesRequest, MessagesShapeOptions) -> Result<MessagesRequest, Error>;
 
     #[rstest]
-    #[case::shared_shaping_rewrites(shape_anthropic_messages_request, "functions_Bash_0")]
+    #[case::shared_shaping_rewrites(
+        shape_anthropic_messages_request,
+        "functions.Bash:0",
+        "functions_Bash_0"
+    )]
     #[case::keeping_shaping_keeps(
         shape_anthropic_messages_request_keeping_tool_use_ids,
+        "functions.Bash:0",
         "functions.Bash:0"
     )]
-    fn only_the_keeping_shaping_sends_tool_use_ids_unchanged(
+    #[case::keeping_shaping_fills_an_empty_id(
+        shape_anthropic_messages_request_keeping_tool_use_ids,
+        "",
+        "tool_use_id"
+    )]
+    fn only_the_keeping_shaping_sends_non_empty_tool_use_ids_unchanged(
         #[case] shape: Shaping,
+        #[case] sent: &str,
         #[case] id: &str,
     ) {
         let shaped = shape(
             request(json!({"model": "kimi-k2", "messages": [
                 {"role": "assistant", "content": [
                     {"type": "text", "text": ""},
-                    {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}}
+                    {"type": "tool_use", "id": sent, "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}}
                 ]},
                 {"role": "user", "content": [
                     {"type": "text", "text": "Note.", "id": 5},
-                    {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+                    {"type": "tool_result", "tool_use_id": sent, "content": "ok"}
                 ]}
             ]})),
             MessagesShapeOptions {

@@ -2596,29 +2596,35 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     """
     base_id = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in raw_id else raw_id
     sanitized: Final = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
-    return sanitized or "tool_use_id"
+    return fill_empty_tool_use_id(sanitized)
 
 
-def _sanitize_tool_use_id_content_block(block: object) -> object:
+def fill_empty_tool_use_id(raw_id: str) -> str:
+    return raw_id or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: object, rename: Callable[[str], str]) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> Sequence[object]:
+def sanitize_tool_use_ids_in_anthropic_messages(
+    messages: Sequence[object], rename: Callable[[str], str] = normalize_anthropic_tool_use_id
+) -> Sequence[object]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -2629,14 +2635,14 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> S
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    return [_sanitize_tool_use_ids_in_message(message) for message in messages]
+    return [_sanitize_tool_use_ids_in_message(message, rename) for message in messages]
 
 
-def _sanitize_tool_use_ids_in_message(message: object) -> object:
+def _sanitize_tool_use_ids_in_message(message: object, rename: Callable[[str], str]) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
     content: Final = message["content"]
-    new_content: Final = [_sanitize_tool_use_id_content_block(block) for block in content]
+    new_content: Final = [_sanitize_tool_use_id_content_block(block, rename) for block in content]
     return message if new_content == content else {**message, "content": new_content}
 
 

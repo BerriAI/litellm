@@ -453,6 +453,29 @@ async def test_replayed_tool_use_ids_are_rewritten_only_for_an_upstream_that_enf
 
 
 @pytest.mark.asyncio
+async def test_an_empty_replayed_tool_use_id_reaches_a_backend_that_keeps_ids_as_the_fallback_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=r"/v1/messages").mock(
+            return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+        )
+        await python_messages.anthropic_messages(
+            max_tokens=16,
+            messages=_replayed_tool_round(""),
+            model="anthropic/kimi-k2",
+            api_base="http://kimi.test",
+            api_key="sk-test",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == _replayed_tool_round("tool_use_id")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "token_dir_env"),
     [("github_copilot/gpt-5.4", "GITHUB_COPILOT_TOKEN_DIR"), ("chatgpt/gpt-5.4", "CHATGPT_TOKEN_DIR")],
