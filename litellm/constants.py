@@ -1163,6 +1163,10 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
     "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
+    "https://api.uplinkswitch.com/v1",
+    "https://api.relayswitch.io/v1",
+    "https://api.uncensoredllm.ai/v1",
+    "https://api.pentestllm.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1255,6 +1259,10 @@ openai_compatible_providers: Final[list[str]] = [
     "streamlake",
     "wally",
     "huawei_maas",
+    "uplinkswitch",
+    "relayswitch",
+    "uncensoredllm",
+    "pentestllm",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
