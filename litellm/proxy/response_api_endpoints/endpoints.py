@@ -2405,7 +2405,14 @@ _RejectedFrameBiller: TypeAlias = Callable[
 
 
 class _FailedTurnRecorder(Protocol):
-    def __call__(self, failure: Exception, request_body: Mapping[str, object], *, started_at: datetime) -> None: ...
+    def __call__(
+        self,
+        failure: Exception,
+        request_body: Mapping[str, object],
+        *,
+        guardrail_information: tuple[Mapping[str, object], ...],
+        started_at: datetime,
+    ) -> None: ...
 
 
 def _responses_ws_frame_guard(
@@ -2536,7 +2543,7 @@ def _responses_ws_frame_guard(
             bill_refusal=partial(bill_refusal, guarded_data, guardrail_information, started_at),
             record_failed_turn=None
             if record_failed_turn is None
-            else partial(record_failed_turn, started_at=started_at),
+            else partial(record_failed_turn, guardrail_information=guardrail_information, started_at=started_at),
         )
 
     return guard

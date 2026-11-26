@@ -4592,6 +4592,7 @@ class TestResponsesWSFirstFrameModelAuth:
         spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
         spend_logger = ProxyDBLogger(spend_writer=lambda: spend_writer)
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses")
+        record = {"guardrail_name": "presidio", "guardrail_status": "success"}
 
         def route_request(data, **kwargs):
             async def relay():
@@ -4605,6 +4606,12 @@ class TestResponsesWSFirstFrameModelAuth:
 
             return relay()
 
+        def run_guardrail(user_api_key_dict, data, **kwargs):
+            return {
+                **data,
+                "litellm_metadata": {**data["litellm_metadata"], "standard_logging_guardrail_information": [record]},
+            }
+
         failure_hooks = ProxyLogging(user_api_key_cache=DualCache())
         failure_hooks.alert_types = []
 
@@ -4612,7 +4619,7 @@ class TestResponsesWSFirstFrameModelAuth:
             await failure_hooks.post_call_failure_hook(**kwargs)
 
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
-        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, **kwargs: data)
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=run_guardrail)
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=run_failure_hooks)
         proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
 
@@ -4649,6 +4656,9 @@ class TestResponsesWSFirstFrameModelAuth:
         assert write["completion_response"] is (turn_failure if closed_by_the_failed_turn else other_failure)
         assert json.loads(row["proxy_server_request"]) == (
             {"input": "beta", "user": "end-user-1"} if closed_by_the_failed_turn else {"user": "end-user-1"}
+        )
+        assert json.loads(row["metadata"]).get("guardrail_information") == (
+            [record] if closed_by_the_failed_turn else None
         )
         if not closed_by_the_failed_turn:
             assert write["start_time"] == socket_opened_at
