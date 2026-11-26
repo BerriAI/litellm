@@ -234,6 +234,24 @@ class TestBedrockFilesTransformation:
         assert "service_tier" not in json.dumps(model_input)
         assert "serviceTier" not in model_input
 
+    def test_claude_row_drop_params_decides_whether_a_malformed_thinking_blocks_fails_the_file(self):
+        messages: Final = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello", "thinking_blocks": "abc"},
+            {"role": "user", "content": "Go on"},
+        ]
+        model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+        with pytest.raises(Exception, match=r"messages\[1\]\.thinking_blocks"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(model=model, body_params={"messages": messages, "max_tokens": 10})]
+            )
+
+        dropped: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model=model, body_params={"messages": messages, "max_tokens": 10, "drop_params": True})]
+        )
+        assert dropped[0]["modelInput"]["messages"][1]["content"] == [{"type": "text", "text": "Hello"}]
+
     @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
     def test_claude_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(

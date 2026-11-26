@@ -47,6 +47,7 @@ def _routes_nowhere(_model_name: str) -> bool:
 class FileListModelScope:
     model_mapping_keys: frozenset[str]
     routes_stored_model_name: Callable[[str], bool] = _routes_nowhere
+    routes_uploaded_model_name: Callable[[str], bool] | None = None
 
     def holds(self, model_mapping_keys: Iterable[str], stored: bool) -> bool:
         mapped_keys: Final = frozenset(model_mapping_keys)
@@ -269,7 +270,7 @@ class BaseFileEndpoints(ABC):
         create_file_request: CreateFileRequest,
         llm_router: Router,
         target_model_names_list: list[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         pass
@@ -313,6 +314,6 @@ class BaseFileEndpoints(ABC):
         file_id: str,
         litellm_parent_otel_span: Span | None,
         llm_router: Router,
-        **data: dict,
+        **data: object,
     ) -> "HttpxBinaryResponseContent":
         pass

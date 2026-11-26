@@ -112,7 +112,7 @@
     (list "/azure_ai" "/azure_speech") (list "/aws" "/bedrock") (list "/transcribe" "/comprehendmedical")
     (list "/cohere" "/gemini") (list "/google" "/gigachat") (list "/vertex_ai" "/vertex-ai")
     (list "/assemblyai" "/eu.assemblyai") (list "/fal_ai" "/deepgram") (list "/vllm" "/langfuse")
-    (list "/mistral" "/typesafe") (list "/openrouter" "/nvidia_nim") (list "/groq" "/voyage")
+    (list "/mistral" "/openrouter") (list "/nvidia_nim") (list "/groq" "/voyage")
     (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/watsonx")
     (list "/health" "/metrics")
 -}}

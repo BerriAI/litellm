@@ -17,7 +17,7 @@ import os
 import posixpath
 import re
 import sys
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
 from types import MappingProxyType
@@ -28,7 +28,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -53,7 +53,6 @@ from litellm.constants import (
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
     PASS_THROUGH_HEADER_PREFIX,
-    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import (
     AuthenticationError,
@@ -70,7 +69,6 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     require_get,
 )
-from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -540,6 +538,61 @@ class _ProviderFileAccessGuard(Protocol):
     async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
 
 
+@runtime_checkable
+class _ProviderFileListGuard(Protocol):
+    async def provider_file_ids_denied_to(
+        self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Sequence[str]: ...
+
+
+_GEMINI_FILE_LIST_PATH: Final = re.compile(r"(?:^|/)files/?$")
+
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _decoded_json(raw: bytes) -> JsonValue:
+    try:
+        return _JSON_VALUE.validate_json(raw)
+    except ValidationError:
+        return None
+
+
+def _listed_file_ids(listed: JsonValue) -> tuple[str, ...]:
+    if not isinstance(listed, dict):
+        return ()
+    return tuple(value for value in (listed.get("name"), listed.get("uri")) if isinstance(value, str))
+
+
+def _iter_listed_file_ids(files: Sequence[JsonValue]) -> Iterator[str]:
+    for listed in files:
+        yield from _listed_file_ids(listed)
+
+
+async def _without_files_denied_to_caller(
+    response: object, guard: _ProviderFileListGuard, user_api_key_dict: UserAPIKeyAuth
+) -> object:
+    """A file the response gives no id for cannot be checked, so it is left out"""
+    if not isinstance(response, Response) or response.status_code != 200:
+        return response
+    listing: Final = None if isinstance(response, StreamingResponse) else _decoded_json(bytes(response.body))
+    if not isinstance(listing, dict):
+        raise HTTPException(status_code=502, detail="The provider returned a file list that is not a JSON object")
+    files: Final = listing.get("files")
+    if not isinstance(files, list):
+        return response
+    denied: Final = frozenset(
+        await guard.provider_file_ids_denied_to(tuple(_iter_listed_file_ids(files)), user_api_key_dict)
+    )
+    visible: Final = [listed for listed in files if (ids := _listed_file_ids(listed)) and denied.isdisjoint(ids)]
+    if len(visible) == len(files):
+        return response
+    return Response(
+        content=json.dumps({**listing, "files": visible}),
+        status_code=response.status_code,
+        headers={name: value for name, value in response.headers.items() if name.lower() != "content-length"},
+    )
+
+
 _METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
 
 
@@ -551,9 +604,12 @@ def _fully_decoded_path(path: str) -> str | None:
     return decoded if unquote(decoded) == decoded else None
 
 
+def _gemini_methods(method: str, headers: Mapping[str, str]) -> frozenset[str]:
+    return frozenset((method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)))
+
+
 def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
-    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
-    return not methods.isdisjoint(("GET", "DELETE"))
+    return not _gemini_methods(method, headers).isdisjoint(("GET", "DELETE"))
 
 
 def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
@@ -561,22 +617,31 @@ def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
     return single_file.group(1) if single_file is not None else None
 
 
+def _is_gemini_file_list(decoded_path: str) -> bool:
+    normalized: Final = posixpath.normpath(f"/{decoded_path}".replace("\\", "/"))
+    return _GEMINI_FILE_LIST_PATH.search(normalized) is not None
+
+
 async def _enforce_gemini_passthrough_file_ownership(
     request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
-) -> None:
-    if not _is_gemini_get_or_delete(request.method, request.headers):
-        return
-    decoded_path: Final = _fully_decoded_path(path)
-    if decoded_path is None:
-        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
-    file_id: Final = _gemini_passthrough_file_id(decoded_path)
-    if file_id is None:
-        return
+) -> _ProviderFileListGuard | None:
+    """Refuse a file the caller does not own, and return the guard to filter the response with when it lists files"""
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-    if isinstance(hook, _ProviderFileAccessGuard):
+    decoded_path: Final = _fully_decoded_path(path)
+    is_single_file_method: Final = _is_gemini_get_or_delete(request.method, request.headers)
+    if decoded_path is None:
+        if is_single_file_method:
+            raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+        return None
+    file_id: Final = _gemini_passthrough_file_id(decoded_path) if is_single_file_method else None
+    if file_id is not None and isinstance(hook, _ProviderFileAccessGuard):
         await hook.enforce_provider_file_access(file_id, user_api_key_dict)
+    lists_files: Final = "GET" in _gemini_methods(request.method, request.headers) and _is_gemini_file_list(
+        decoded_path
+    )
+    return hook if isinstance(hook, _ProviderFileListGuard) and lists_files else None
 
 
 @router.api_route(
@@ -610,7 +675,9 @@ async def gemini_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
-    await _enforce_gemini_passthrough_file_ownership(request, updated_url.path, user_api_key_dict)
+    file_list_guard: Final = await _enforce_gemini_passthrough_file_ownership(
+        request, updated_url.path, user_api_key_dict
+    )
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(
@@ -644,7 +711,9 @@ async def gemini_proxy_route(
         user_api_key_dict,
     )
 
-    return received_value
+    if file_list_guard is None:
+        return received_value
+    return await _without_files_denied_to_caller(received_value, file_list_guard, user_api_key_dict)
 
 
 @router.api_route(
@@ -895,62 +964,6 @@ async def mistral_proxy_route(
     )
 
     return received_value
-
-
-@router.api_route(
-    "/typesafe/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["TypeSafe AI Pass-through", "pass-through"],
-)
-async def typesafe_proxy_route(
-    endpoint: str,
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-):
-    """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
-    base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
-    encoded_endpoint: Final = httpx.URL(endpoint).path
-    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
-    base_url: Final = httpx.URL(base_target_url)
-    updated_url: Final = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
-    )
-    typesafe_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="typesafe",
-        region_name=None,
-    )
-    danger_zone_headers: Final = {
-        name: value
-        for name, value in request.headers.items()
-        if name.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
-    }
-    endpoint_func: Final = create_pass_through_route(
-        endpoint=endpoint,
-        target=str(updated_url),
-        custom_headers={
-            **danger_zone_headers,
-            "Authorization": f"Bearer {typesafe_api_key}",
-            "Content-Type": "application/json",
-        },
-        custom_llm_provider="typesafe",
-        is_streaming_request=False,
-    )
-    return await endpoint_func(request, fastapi_response, user_api_key_dict)
-
-
-_COST_MAP_ENTRIES: Final = TypeAdapter(Mapping[str, object])
-
-
-def typesafe_allowlist_model_names() -> tuple[str, ...]:
-    if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
-        return ()
-    cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
-    priced_names: Final = (name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/"))
-    jev_models_typesafe_serves: Final = sorted(
-        name for name in priced_names if match_routing_generalization(name) == "typesafe"
-    )
-    return ("typesafe/*", *jev_models_typesafe_serves)
 
 
 _EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
@@ -3973,11 +3986,11 @@ def openai_api_key_headers(api_key: str | None) -> Mapping[str, str]:
 
 
 async def openai_passthrough_poll_headers(base_target_url: str) -> Mapping[str, str] | None:
-    api_key: Final = await _openai_passthrough_credential(base_target_url)
+    api_key: Final = await openai_passthrough_credential(base_target_url)
     return None if api_key is None else openai_api_key_headers(api_key)
 
 
-async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+async def openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
             custom_llm_provider=litellm.LlmProviders.OPENAI.value,
@@ -4024,7 +4037,7 @@ async def openai_proxy_route(
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url: Final = openai_passthrough_base_url()
-    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
@@ -4260,7 +4273,7 @@ async def openai_websocket_proxy_route(
 
     base_target_url: Final = openai_passthrough_base_url()
     try:
-        openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+        openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
         verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
         await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)
@@ -5121,7 +5134,7 @@ def create_vertex_ai_live_websocket_endpoint():
 def create_generic_websocket_passthrough_endpoint(
     provider: str,
     target_url: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     forward_headers: bool = False,
     cost_per_request: float | None = None,
 ):
@@ -5258,7 +5271,7 @@ async def handle_gigachat_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: dict[str, object],
     fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,

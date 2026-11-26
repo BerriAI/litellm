@@ -1,10 +1,10 @@
 import asyncio
 import copy
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from queue import Queue
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, cast
 
 import httpx
@@ -448,6 +448,9 @@ class _ImageRouterHandler(litellm.CustomLLM):
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.billed_before_failure: tuple[litellm.Usage, float] | None = None
+        self.owed_after_failure: tuple[litellm.Usage, float] | None = None
+        self.served_cost: float | None = None
+        self.refusal: litellm.ContentPolicyViolationError | None = None
 
     async def aimage_generation(
         self,
@@ -465,10 +468,34 @@ class _ImageRouterHandler(litellm.CustomLLM):
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.pre_call(input=prompt, api_key=api_key)
         if model.endswith("failing"):
+            if self.refusal is not None:
+                raise self.refusal
             if self.billed_before_failure is not None and isinstance(logging_obj, LiteLLMLoggingObj):
                 logging_obj.record_partial_usage_for_failure(*self.billed_before_failure)
+            if self.owed_after_failure is not None and isinstance(logging_obj, LiteLLMLoggingObj):
+                logging_obj.record_served_rounds_for_failure((self.owed_after_failure,))
             raise litellm.RateLimitError(message="primary failed", llm_provider="image-regression", model=model)
-        return ImageResponse(created=1, data=[ImageObject(url="https://images.example/generated.png")])
+        served: Final = ImageResponse(created=1, data=[ImageObject(url="https://images.example/generated.png")])
+        if self.served_cost is not None:
+            served._hidden_params = {"response_cost": self.served_cost}
+        return served
+
+    async def aimage_edit(
+        self,
+        model: str,
+        image: object,
+        prompt: str | None,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        return await self.aimage_generation(
+            model, prompt or "", model_response, api_key, api_base, optional_params, logging_obj
+        )
 
 
 def _image_generation_client(
@@ -782,7 +809,25 @@ def test_failed_image_generation_spend_row_records_aimage_generation(monkeypatch
     assert (payload["status"], payload["call_type"]) == ("failure", "aimage_generation")
 
 
-def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkeypatch: pytest.MonkeyPatch) -> None:
+def _send_generation(client: TestClient) -> httpx.Response:
+    return client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+
+def _send_edit(client: TestClient) -> httpx.Response:
+    return client.post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "A", "prompt": "add a hat"},
+    )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_failed_image_request_bills_what_the_provider_served_in_its_spend_row_and_cost_header(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
@@ -794,12 +839,13 @@ def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkey
     handler.billed_before_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=2240, total_tokens=2256), 0.25)
     try:
         with client:
-            response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+            response: Final = send(client)
     finally:
         ProxyLogging._callback_capabilities_cache.clear()
 
     assert response.status_code == 429, response.text
     db_call: Final = spend_writer.update_database.call_args.kwargs
+    assert float(response.headers["x-litellm-response-cost"]) == db_call["response_cost"]
     payload: Final = get_logging_payload(
         kwargs=db_call["kwargs"],
         response_obj=db_call["completion_response"],
@@ -813,6 +859,143 @@ def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkey
         2240,
         2256,
     )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_refused_image_request_returns_the_refusal_details_to_the_client(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError
+
+    details: Final = {"finish_reason": "IMAGE_SAFETY", "finish_message": "try another prompt"}
+    monkeypatch.setattr(litellm, "callbacks", [])
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth(api_key="sk-test"))
+    handler.refusal = ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="image-regression/failing",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://google.invalid")),
+        provider_specific_fields=details,
+        billed_answer=None,
+    )
+    try:
+        with client:
+            response: Final = send(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["provider_specific_fields"] == details
+
+
+def test_failed_image_generation_that_billed_nothing_sends_no_cost_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    client, _ = _image_generation_client(monkeypatch, UserAPIKeyAuth(api_key="sk-test"))
+    try:
+        with client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 429, response.text
+    assert "x-litellm-call-id" in response.headers
+    assert "x-litellm-response-cost" not in response.headers
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+@pytest.mark.parametrize(
+    ("served_cost", "billed"),
+    (pytest.param(0.5, 0.75, id="priced_fallback"), pytest.param(None, 0.25, id="unpriced_fallback")),
+)
+def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+    send: Callable[[TestClient], httpx.Response],
+    served_cost: float | None,
+    billed: float,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    client, handler = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test", router_settings={"fallbacks": [{"A": ["B"]}]})
+    )
+    handler.owed_after_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=0, total_tokens=16), 0.25)
+    handler.served_cost = served_cost
+    try:
+        with client:
+            response: Final = send(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert handler.calls == ["failing", "working"]
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(billed)
+
+
+def test_image_edit_json_body_with_image_references_reaches_openai_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """regression: a JSON edit request with image and mask references reaches OpenAI as the same JSON body."""
+    from litellm.proxy import proxy_server
+
+    images: Final = [
+        {"image_url": "https://images.example/tree.png"},
+        {"image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},
+    ]
+    mask: Final = {"image_url": "https://images.example/mask.png"}
+    cache: Final = UserApiKeyCache()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-1",
+                "litellm_params": {
+                    "model": "openai/gpt-image-1",
+                    "api_key": "sk-upstream",
+                    "api_base": "https://edit.example/v1",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_alias_map", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", ProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "version", "test-version")
+    app: Final = FastAPI()
+    app.include_router(endpoints.router)
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post("https://edit.example/v1/images/edits").mock(
+            return_value=httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "ZWRpdGVk"}]})
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post(
+                "/v1/images/edits",
+                json={"model": "gpt-image-1", "prompt": "add a hat", "images": images, "mask": mask},
+            )
+
+    assert [call.request.headers["content-type"].split(";")[0] for call in upstream.calls] == ["application/json"], (
+        response.status_code,
+        response.text,
+        [call.request.content for call in upstream.calls],
+    )
+    assert orjson.loads(upstream.calls.last.request.content) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": images,
+        "mask": mask,
+    }
+    assert response.status_code == 200, response.text
+    assert [image["b64_json"] for image in response.json()["data"]] == ["ZWRpdGVk"]
 
 
 _STREAMED_IMAGE: Final = "RklOQUw="
@@ -1023,6 +1206,65 @@ def test_streamed_image_request_answered_with_json_gets_every_image_as_a_complet
     assert [payload["b64_json"] for _, payload in events] == ["Rklyc3Q=", _STREAMED_IMAGE]
     assert ["usage" in payload for _, payload in events] == [False, True]
     assert events[-1][1]["usage"]["total_tokens"] == _STREAMED_USAGE["total_tokens"]
+
+
+_OPENAI_STREAMING_BACKUP: Final = MappingProxyType(
+    {"model": "openai/gpt-image-1", "api_key": "test", "api_base": "https://openai.test/v1"}
+)
+
+
+@pytest.mark.parametrize("kind", ["generation", "edit"])
+@pytest.mark.parametrize(
+    ("backup", "cost_header"),
+    (
+        pytest.param(MappingProxyType({}), 0.75, id="backup_answers_one_image"),
+        pytest.param(_OPENAI_STREAMING_BACKUP, None, id="backup_streams_events"),
+    ),
+)
+def test_streamed_image_cost_header_after_a_fallback_is_the_whole_bill_or_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    kind: str,
+    backup: Mapping[str, object],
+    cost_header: float | None,
+) -> None:
+    path, prefix = _STREAM_ROUTES[kind]
+    respx_mock.post(f"https://openai.test/v1/images/{path}").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_image_event(f"{prefix}.completed", b64_json=_STREAMED_IMAGE, usage=_STREAMED_USAGE),
+        )
+    )
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test", router_settings={"fallbacks": [{"A": ["B"]}]}),
+        working_params=backup,
+    )
+    handler.owed_after_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=0, total_tokens=16), 0.25)
+    handler.served_cost = 0.5
+    try:
+        with client:
+            response: Final = (
+                client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree", "stream": True})
+                if kind == "generation"
+                else client.post(
+                    "/v1/images/edits",
+                    data={"model": "A", "prompt": "make it blue", "stream": "true"},
+                    files={"image": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png")},
+                )
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert handler.calls[0] == "failing"
+    sent_cost: Final = response.headers.get("x-litellm-response-cost")
+    assert (None if sent_cost is None else float(sent_cost)) == cost_header
 
 
 class _StreamFlagRecorder(CustomLogger):

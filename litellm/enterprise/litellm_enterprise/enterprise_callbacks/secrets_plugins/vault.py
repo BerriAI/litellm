@@ -11,7 +11,7 @@ class VaultDetector(RegexBasedDetector):
         return "Vault Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Vault Batch Token
             re.compile(

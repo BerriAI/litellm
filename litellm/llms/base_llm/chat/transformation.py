@@ -273,7 +273,7 @@ class BaseConfig(ABC):
         value: dict,
         is_response_format_supported: bool,
         enforce_tool_choice: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Follow similar approach to anthropic - translate to a single tool call.
 
@@ -406,7 +406,7 @@ class BaseConfig(ABC):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> dict:
         """
@@ -483,8 +483,8 @@ class BaseConfig(ABC):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         messages: list,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
@@ -501,8 +501,8 @@ class BaseConfig(ABC):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,

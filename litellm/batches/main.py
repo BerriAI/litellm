@@ -331,9 +331,9 @@ def create_batch(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")
 
@@ -366,7 +366,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
-                custom_endpoint=optional_params.get("custom_endpoint"),
+                custom_endpoint=bool(optional_params.get("custom_endpoint")),
                 litellm_params=litellm_params,
             )
         else:
@@ -843,9 +843,9 @@ def list_batches(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")
 
@@ -1042,9 +1042,9 @@ def cancel_batch(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")
 
@@ -1099,7 +1099,9 @@ def cancel_batch(
         raise e
 
 
-def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+def _handle_async_invoke_status(
+    batch_id: str, aws_region_name: str, logging_obj: LiteLLMLoggingObj | None = None, **kwargs: object
+) -> "LiteLLMBatch":
     """
     Handle async invoke status check for AWS Bedrock.
 

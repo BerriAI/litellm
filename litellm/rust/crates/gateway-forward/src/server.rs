@@ -1,6 +1,11 @@
 use std::{convert::Infallible, future::ready, io, pin::pin, time::Duration};
 
-use axum::{Extension, body::Body, extract::Request, response::Response};
+use axum::{
+    Extension,
+    body::Body,
+    extract::{ConnectInfo, Request},
+    response::Response,
+};
 use futures_util::{Stream, StreamExt, stream};
 use hyper::{body::Incoming, server::conn::http1};
 use hyper_util::{
@@ -14,7 +19,8 @@ use crate::{client::ClientSocket, connections::Connections, forward::MAX_HEADERS
 
 /// Serves each public connection with hyper directly, because `axum::serve` cannot configure
 /// the connection timeouts uvicorn applied to the same clients. Every request reaches `app` with
-/// its `ClientSocket` in the extensions. The listener closes once `shutdown` resolves, before
+/// its `ClientSocket` in the extensions, and its peer as axum's `ConnectInfo`, which the native
+/// app reads it from in both modes. The listener closes once `shutdown` resolves, before
 /// the drain starts.
 pub(crate) async fn serve<S>(
     app: S,
@@ -90,6 +96,7 @@ async fn exchange<S>(
     let per_connection = ServiceBuilder::new()
         .map_request(|request: Request<Incoming>| request.map(Body::new))
         .layer(Extension(socket))
+        .layer(Extension(ConnectInfo(socket.peer)))
         .service(app);
     let connection = http
         .serve_connection(

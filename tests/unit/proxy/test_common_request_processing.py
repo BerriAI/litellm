@@ -78,6 +78,7 @@ from litellm.proxy.common_request_processing import (
     _override_openai_response_model,
     _parse_event_data_for_error,
     _sse_error_frames,
+    _anthropic_messages_cache_key_header,
     _UpstreamClosingStreamingResponse,
     attach_guardrail_information,
     await_llm_call_cancelling_on_disconnect,
@@ -5142,7 +5143,7 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
 
 
 class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
-    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float:
+    async def _error_response_cost(self, serve_the_first_call: bool) -> float:
         from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
         from litellm.types.utils import ModelResponse, Usage
 
@@ -5168,20 +5169,19 @@ class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
         async def failing_follow_up() -> ModelResponse:
             raise follow_up_error
 
-        with pytest.raises(litellm.RateLimitError):
-            await bill_first_round_on_failure(
-                failing_follow_up(),
-                logging_obj=logging_obj,
-                response=ModelResponse(
-                    model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
-                ),
-                stream=False,
-            )
+        if serve_the_first_call:
+            with pytest.raises(litellm.RateLimitError):
+                await bill_first_round_on_failure(
+                    failing_follow_up(),
+                    logging_obj=logging_obj,
+                    response=ModelResponse(
+                        model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+                    ),
+                    stream=False,
+                )
         with pytest.raises(ProxyException) as raised:
             await processing_obj.handle_llm_api_exception(
-                e=follow_up_error
-                if raise_the_follow_up_error
-                else litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o"),
+                e=follow_up_error,
                 user_api_key_dict=caller,
                 proxy_logging_obj=proxy_logging,
             )
@@ -5191,10 +5191,10 @@ class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
     async def test_the_error_response_reports_the_served_first_call_its_failure_row_bills(self) -> None:
         price: Final = litellm.model_cost["gpt-4o"]
 
-        assert await self._error_response_cost(raise_the_follow_up_error=True) == pytest.approx(
+        assert await self._error_response_cost(serve_the_first_call=True) == pytest.approx(
             559 * price["input_cost_per_token"] + 113 * price["output_cost_per_token"]
         )
-        assert await self._error_response_cost(raise_the_follow_up_error=False) == 0
+        assert await self._error_response_cost(serve_the_first_call=False) == 0
 
 
 @pytest.mark.asyncio
@@ -5843,6 +5843,40 @@ class TestStreamCloseOnDisconnect:
                 timeout=5,
             )
         assert closed.is_set()
+
+
+_BILLED_FAILURE: Final = {
+    "response_cost": 0.25,
+    "combined_usage_object": litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+}
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected_cost_header"),
+    (
+        pytest.param({"call_type": "aimage_generation"}, "0", id="unbilled_image"),
+        pytest.param({"call_type": "aimage_generation", **_BILLED_FAILURE}, "0.25", id="billed_image"),
+        pytest.param({"call_type": "aimage_edit", **_BILLED_FAILURE}, "0.25", id="billed_edit"),
+        pytest.param({"call_type": "acompletion", **_BILLED_FAILURE}, "0", id="billed_chat_timeout"),
+    ),
+)
+async def test_failed_request_reports_its_billed_cost_in_the_cost_header(
+    request_fields: Mapping[str, object], expected_cost_header: str
+) -> None:
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as raised:
+        await ProxyBaseLLMRequestProcessing(data=dict(request_fields))._handle_llm_api_exception(
+            e=ValueError("upstream failure"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert raised.value.headers["x-litellm-response-cost"] == expected_cost_header
 
 
 class TestHandleLLMApiExceptionRetryAfter:
@@ -16171,6 +16205,56 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+_CONFIRMED_HIT: Final = CachingDetails(cache_hit=True, cache_duration_ms=1.0)
+
+
+@pytest.mark.parametrize(
+    ("response_cache_key", "call_type", "caching_details", "preset_cache_key", "expected"),
+    [
+        ("from-response", "anthropic_messages", _CONFIRMED_HIT, "looked-up", "from-response"),
+        ("", "anthropic_messages", _CONFIRMED_HIT, "looked-up", "looked-up"),
+        ("", "aanthropic_messages", _CONFIRMED_HIT, "looked-up", "looked-up"),
+        ("", "anthropic_messages", None, "looked-up", ""),
+        ("", "anthropic_messages", CachingDetails(cache_hit=False, cache_duration_ms=1.0), "looked-up", ""),
+        ("", "anthropic_messages", _CONFIRMED_HIT, None, ""),
+        ("", "anthropic_messages", _CONFIRMED_HIT, 42, ""),
+        ("", "acompletion", _CONFIRMED_HIT, "looked-up", ""),
+        ("", "aresponses", _CONFIRMED_HIT, "looked-up", ""),
+    ],
+    ids=[
+        "response_key_wins",
+        "messages_hit",
+        "async_messages_hit",
+        "no_cache_lookup",
+        "cache_miss",
+        "no_recorded_key",
+        "non_string_recorded_key",
+        "chat_completions_unchanged",
+        "responses_unchanged",
+    ],
+)
+def test_messages_cache_key_header_falls_back_to_the_key_a_confirmed_hit_looked_up(
+    response_cache_key: str,
+    call_type: str,
+    caching_details: CachingDetails | None,
+    preset_cache_key: object,
+    expected: str,
+) -> None:
+    logging_obj: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="cache-key-header",
+        function_id="cache-key-header",
+    )
+    logging_obj.caching_details = caching_details
+    logging_obj.litellm_params = {"preset_cache_key": preset_cache_key}
+
+    assert _anthropic_messages_cache_key_header(response_cache_key, logging_obj) == expected
 
 
 @pytest.mark.asyncio

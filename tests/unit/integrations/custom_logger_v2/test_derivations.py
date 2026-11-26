@@ -1334,6 +1334,13 @@ _MODEL_GROUP_REQUESTS: Final = (
     pytest.param({"litellm_params": {"metadata": "g"}}, id="metadata_not_a_mapping"),
     pytest.param({"litellm_params": {"metadata": []}}, id="falsy_metadata"),
     pytest.param({}, id="no_params"),
+    pytest.param(
+        {
+            "call_type": "_arealtime",
+            "litellm_params": {"metadata": {"user_api_key": "k"}, "litellm_metadata": {"model_group": "lg"}},
+        },
+        id="realtime_session",
+    ),
 )
 
 

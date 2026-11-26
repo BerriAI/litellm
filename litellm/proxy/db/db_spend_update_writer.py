@@ -894,7 +894,7 @@ class DBSpendUpdateWriter:
         team_id: str | None,
         org_id: str | None,
         # Completion object fields
-        kwargs: dict | None,
+        kwargs: dict[str, object] | None,
         completion_response: object,
         start_time: datetime,
         end_time: datetime,

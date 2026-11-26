@@ -197,8 +197,8 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         api_key: str | None = None,

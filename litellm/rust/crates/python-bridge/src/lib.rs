@@ -32,6 +32,16 @@ mod spend_log_rows;
 mod spend_log_writer;
 mod tokenizer;
 
+#[cfg(feature = "fips")]
+fn crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::default_fips_provider()
+}
+
+#[cfg(not(feature = "fips"))]
+fn crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::aws_lc_rs::default_provider()
+}
+
 #[pymodule(gil_used = true)]
 mod _native {
     #[pymodule_export]
@@ -71,9 +81,10 @@ mod _native {
     use crate::db_repository::{
         RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
         RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
-        RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
-        RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
-        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+        RustKeyOwnersRepository, RustKeyRepository, RustModelAccessGroupRepository,
+        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
+        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
+        RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -86,9 +97,10 @@ mod _native {
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
     use crate::model_cost::{
-        NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
-        NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
-        NativeRejected, NativeTableSwapped,
+        CostMapKept, CostMapRefreshStop, CostMapRefreshed, NativeCostMapSource, NativeFetchFailed,
+        NativeFetchPolicy, NativeFetched, NativeInstalled, NativeModelCostMap,
+        NativeModelCostMapState, NativeProvenance, NativeRegistered, NativeRejected,
+        NativeTableSwapped,
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
@@ -173,7 +185,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = crate::crypto_provider().install_default();
         let _ = crate::logger::process().install_global();
         module.add(
             "JWT_ID_JAG_TYP",
@@ -270,6 +282,7 @@ mod tests {
                 "NativeDatabase",
                 "NativeDatabaseFailure",
                 "RustKeyRepository",
+                "RustKeyOwnersRepository",
                 "RustJwtKeyMappingRepository",
                 "RustModelAccessGroupRepository",
                 "RustBudgetRepository",
@@ -306,6 +319,9 @@ mod tests {
                 "NativeFetchPolicy",
                 "NativeFetched",
                 "NativeFetchFailed",
+                "CostMapRefreshed",
+                "CostMapRefreshStop",
+                "CostMapKept",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",
@@ -370,7 +386,7 @@ mod tests {
         });
     }
     #[rstest::rstest]
-    fn module_import_installs_ring_as_the_process_crypto_provider() {
+    fn module_import_installs_the_build_crypto_provider() {
         Python::initialize();
         Python::attach(|py| {
             native_module(py);
@@ -380,7 +396,7 @@ mod tests {
             .expect("importing _native should install a process crypto provider");
         assert_eq!(
             format!("{installed:?}"),
-            format!("{:?}", rustls::crypto::ring::default_provider())
+            format!("{:?}", crate::crypto_provider())
         );
     }
 }
