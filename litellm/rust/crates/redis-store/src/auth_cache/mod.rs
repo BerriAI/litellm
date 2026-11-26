@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 pub use self::keys::AuthObject;
 pub use self::local::TeamRoster;
 pub use self::types::{
-    Bag, CachedKey, CachedMember, CachedObjectPermission, Lists, MemberRole, Settings,
+    Bag, KeyEntry, Lists, MemberEntry, MemberRole, ObjectPermissionEntry, Settings,
 };
 use crate::{
     Error, IntoValue, Number, Pending, RequestRedis, Send, codec,

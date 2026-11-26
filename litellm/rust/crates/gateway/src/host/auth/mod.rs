@@ -33,7 +33,7 @@ use litellm_gateway_auth_core::{
     },
     record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
 };
-use litellm_redis_store::auth_cache::CachedKey;
+use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
 pub use key::Key;
@@ -85,7 +85,7 @@ fn declined<T>(step: &'static str) -> Result<T, Error> {
     Err(Error::HostDeclined)
 }
 
-fn keyed(key: &CachedKey) -> Result<Option<Keyed<Key>>, Error> {
+fn keyed(key: &KeyEntry) -> Result<Option<Keyed<Key>>, Error> {
     match key::read(key) {
         Ok(key) => Ok(Some(key)),
         Err(field) => declined(field),

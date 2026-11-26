@@ -7,7 +7,7 @@ record! {
     /// `LiteLLM_ObjectPermissionTable.model_dump(mode="json")`, the value under
     /// [`AuthObject::ObjectPermission`](crate::auth_cache::AuthObject::ObjectPermission) and
     /// nested in a cached key.
-    pub struct CachedObjectPermission {
+    pub struct ObjectPermissionEntry {
         object_permission_id: String = required!("object_permission_id"),
         mcp_servers: Option<Vec<String>> = Some(Vec::new()),
         mcp_access_groups: Option<Vec<String>> = Some(Vec::new()),

@@ -27,7 +27,7 @@ impl Field for MemberRole {
 
 record! {
     /// A team member as `Member` dumps it inside a cached key.
-    pub struct CachedMember {
+    pub struct MemberEntry {
         user_id: Option<String>,
         user_email: Option<String>,
         role: MemberRole = required!("role"),
@@ -39,16 +39,16 @@ mod tests {
     use litellm_python_compat::json;
     use rstest::rstest;
 
-    use super::CachedMember;
-    use crate::{FromValue, IntoValue, auth_cache::CachedObjectPermission};
+    use super::MemberEntry;
+    use crate::{FromValue, IntoValue, auth_cache::ObjectPermissionEntry};
 
     #[rstest]
     fn a_member_and_a_permission_keep_what_they_do_not_name() {
-        let member = CachedMember::from_value(
+        let member = MemberEntry::from_value(
             &json::loads(r#"{"user_id": "u", "role": "user", "joined": "2026"}"#).unwrap(),
         )
         .unwrap();
-        let permission = CachedObjectPermission::from_value(
+        let permission = ObjectPermissionEntry::from_value(
             &json::loads(r#"{"object_permission_id": "p", "later": [1]}"#).unwrap(),
         )
         .unwrap();

@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use chrono::SecondsFormat;
 use litellm_gateway_auth_core::KeyHash;
-use litellm_redis_store::auth_cache::{CachedKey, CachedObjectPermission};
+use litellm_redis_store::auth_cache::{KeyEntry, ObjectPermissionEntry};
 use litellm_repositories::{KeyRepository, KeyView, ObjectPermissionRepository, Side};
 
 use crate::{
     Error,
     column::{column, nullable, time},
     member::member,
-    object_permission::cached_object_permission,
+    object_permission::object_permission_entry,
 };
 
 /// The key as the database holds it, in the shape the auth cache holds it: the `combined_view`
@@ -37,11 +37,11 @@ impl KeyDatabase {
     /// The key whose hash is `hash` with nothing nested, or `None` when no key has it. A hash
     /// rotated away from a key within its grace period answers with the active key. One query,
     /// so a host bounds it alone and reads the object permission under a bound of its own.
-    pub async fn key(&self, hash: &KeyHash, side: Side) -> Result<Option<CachedKey>, Error> {
+    pub async fn key(&self, hash: &KeyHash, side: Side) -> Result<Option<KeyEntry>, Error> {
         let Some(found) = self.keys.find(hash.as_str(), side).await? else {
             return Ok(None);
         };
-        cached_key(found.view(), None, found.last_refreshed_at).map(Some)
+        key_entry(found.view(), None, found.last_refreshed_at).map(Some)
     }
 
     /// [`Self::key`] with the object permission it points at, for a host with no bound of its
@@ -50,7 +50,7 @@ impl KeyDatabase {
     /// A permission row that cannot be read, or that the model would refuse, leaves a replica
     /// read without it, as `get_key_object` did, and fails a writer read. One that is gone leaves
     /// `object_permission` empty on either side, for the caller to refuse.
-    pub async fn read(&self, hash: &KeyHash, side: Side) -> Result<Option<CachedKey>, Error> {
+    pub async fn read(&self, hash: &KeyHash, side: Side) -> Result<Option<KeyEntry>, Error> {
         let Some(key) = self.key(hash, side).await? else {
             return Ok(None);
         };
@@ -73,7 +73,7 @@ impl KeyDatabase {
                     })
             }
         };
-        Ok(Some(CachedKey {
+        Ok(Some(KeyEntry {
             object_permission,
             ..key
         }))
@@ -83,11 +83,11 @@ impl KeyDatabase {
         &self,
         id: &str,
         side: Side,
-    ) -> Result<Option<CachedObjectPermission>, Error> {
+    ) -> Result<Option<ObjectPermissionEntry>, Error> {
         self.object_permissions
             .find_by_object_permission_id(id, side)
             .await?
-            .map(cached_object_permission)
+            .map(object_permission_entry)
             .transpose()
     }
 }
@@ -102,11 +102,11 @@ impl KeyDatabase {
 /// `allowed_routes`, `rotation_count` and `auto_rotate`. `expires` is the text the repository hands
 /// Python, since the model keeps a string there. The team member is what `Member` dumps. Fields
 /// only a cache entry carries are unset.
-fn cached_key(
+fn key_entry(
     view: &KeyView,
-    object_permission: Option<CachedObjectPermission>,
+    object_permission: Option<ObjectPermissionEntry>,
     last_refreshed_at: f64,
-) -> Result<CachedKey, Error> {
+) -> Result<KeyEntry, Error> {
     let KeyView {
         token,
         key_name,
@@ -180,7 +180,7 @@ fn cached_key(
         organization_metadata,
         project_alias,
     } = view;
-    Ok(CachedKey {
+    Ok(KeyEntry {
         key_id: None,
         token: Some(token.clone()),
         key_name: key_name.clone(),
