@@ -1,4 +1,4 @@
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type APIResponse, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { deleteMcpServerByName } from "../../helpers/mcp";
 import { navigateToPage } from "../../helpers/navigation";
@@ -6,6 +6,30 @@ import { masterKey, rootPath, uniqueSuffix } from "../../helpers/traffic";
 import { Page } from "../../fixtures/pages";
 
 const localServerUrl = process.env.MOCK_LLM_URL ?? "http://127.0.0.1:8090/v1";
+const generalSettings = "**/config/list?config_type=general_settings";
+
+async function waitForBrowserRules(page: PlaywrightPage, rules: string[]) {
+  await page.unroute(generalSettings);
+  await page.route(generalSettings, async (route) => {
+    const headers = { ...(await route.request().allHeaders()), Connection: "close" };
+    let response: APIResponse | undefined;
+    try {
+      await expect.poll(async () => {
+        await response?.dispose();
+        response = await route.fetch({ headers });
+        if (!response.ok()) return response.status();
+        const settings: { field_name: string; field_value: unknown }[] = await response.json();
+        return settings.find((row) => row.field_name === "mcp_required_fields")?.field_value;
+      }, { timeout: 30_000 }).toEqual(rules);
+      await route.fulfill({ response });
+    } catch (error) {
+      await route.abort();
+      throw error;
+    } finally {
+      await response?.dispose();
+    }
+  });
+}
 
 interface Fixtures {
   adminHeaders: { Authorization: string; "Content-Type": string };
@@ -36,6 +60,7 @@ const test = base.extend<Fixtures>({
     });
     expect(rulesResponse.status(), await rulesResponse.text()).toBe(200);
 
+    await waitForBrowserRules(page, rules);
     await use(rules);
 
     const restoreResponse = Array.isArray(previousRules)
@@ -95,6 +120,7 @@ const test = base.extend<Fixtures>({
 });
 
 test.use({ storageState: ADMIN_STORAGE_PATH });
+test.describe.configure({ mode: "default" });
 
 test("Submission Rules panel shows saved rules, preloads the editor, and save keeps existing rules", async ({ page, adminHeaders, submissionRules, submittedServerName }) => {
   await navigateToPage(page, Page.McpServers);
@@ -128,6 +154,7 @@ test("Submission Rules panel shows saved rules, preloads the editor, and save ke
     )
     .toEqual([...submissionRules, "auth_type"]);
 
+  await waitForBrowserRules(page, [...submissionRules, "auth_type"]);
   await page.reload();
   await page.getByRole("tab", { name: "Submitted MCPs" }).click();
   const submittedCard = page
@@ -137,4 +164,33 @@ test("Submission Rules panel shows saved rules, preloads the editor, and save ke
     .last();
   await expect(submittedCard.getByRole("heading", { name: submittedServerName, exact: true })).toBeVisible();
   await expect(submittedCard.getByText("3 passing, 1 failing", { exact: true })).toBeVisible();
+});
+
+test("rejects a submission and records the final review notes after cancel and reopen", async ({ page, submittedServerName }) => {
+  await navigateToPage(page, Page.McpServers);
+  await page.getByRole("tab", { name: "Submitted MCPs", exact: true }).click();
+  await page.getByPlaceholder("Search MCP servers...").fill(submittedServerName);
+  await expect(page.getByRole("heading", { name: submittedServerName, exact: true })).toBeVisible();
+  const reject = page.getByRole("button", { name: "Reject", exact: true });
+  const dialog = page.getByRole("heading", { name: "Reject MCP Server", exact: true }).locator("..");
+  const input = dialog.getByPlaceholder("Reason for rejection (optional)");
+  await reject.click();
+  await input.fill("Discard this draft");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await reject.click();
+  await expect(input).toHaveValue("");
+
+  const review_notes = "  Please document the connector permissions  ";
+  await input.fill(review_notes);
+  const [response] = await Promise.all([
+    page.waitForResponse((res) => res.request().method() === "PUT" &&
+      new URL(res.url()).pathname.startsWith(`${rootPath()}/v1/mcp/server/`) &&
+      new URL(res.url()).pathname.endsWith("/reject")),
+    dialog.getByRole("button", { name: "Reject", exact: true }).click(),
+  ]);
+  expect(response.request().postDataJSON()).toEqual({ review_notes });
+  expect(response.ok()).toBe(true);
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("button", { name: "Re-approve", exact: true })).toBeVisible();
+  await expect(page.getByText("Rejection reason: Please document the connector permissions", { exact: true })).toBeVisible();
 });

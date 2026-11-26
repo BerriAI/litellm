@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useController } from "react-hook-form";
 import type { ParseKeys } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import {
@@ -22,8 +23,13 @@ import {
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
 import type { generalSettingsItem } from "@/app/(dashboard)/router-settings/_components/general_settings";
-import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { toReviewNotes } from "./ConfirmDialog/mapper";
+import { rejectionSchema } from "./ConfirmDialog/schema";
+import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
+import { toSubmissionRulesValues, toggleRequiredField } from "./SubmissionRulesPanel/mapper";
+import { submissionRulesSchema } from "./SubmissionRulesPanel/schema";
 
 const DEFAULT_TRANSPORT = "sse";
 
@@ -87,11 +93,20 @@ type ConfirmDialogProps = {
 
 function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCancel }: ConfirmDialogProps) {
   const { t } = useTranslation();
-  const [reviewNotes, setReviewNotes] = useState("");
+  const { control, getValues } = useZodForm(rejectionSchema, { defaultValues: { reviewNotes: "" } });
+  const { field: reviewNotes } = useController({ control, name: "reviewNotes" });
   const isApprove = action === "approve";
   const rejectBody = isCurrentlyActive
     ? t("mcpServers.submissionsTab.confirmDialog.rejectBodyLive")
     : t("mcpServers.submissionsTab.confirmDialog.rejectBody");
+  const handleConfirm = () => {
+    if (isApprove) {
+      onConfirm();
+      return;
+    }
+    const draft = rejectionSchema.safeParse(getValues());
+    if (draft.success) onConfirm(toReviewNotes(draft.data));
+  };
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-overlay">
       <div className="bg-card rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
@@ -125,8 +140,8 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
         {!isApprove && (
           <textarea
             placeholder={t("mcpServers.submissionsTab.confirmDialog.reasonPlaceholder")}
-            value={reviewNotes}
-            onChange={(e) => setReviewNotes(e.target.value)}
+            value={reviewNotes.value}
+            onChange={(e) => reviewNotes.onChange(e.target.value)}
             className="w-full border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring mb-4 resize-none"
             rows={3}
           />
@@ -141,7 +156,7 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(isApprove ? undefined : reviewNotes || undefined)}
+            onClick={handleConfirm}
             className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${
               isApprove
                 ? "bg-success text-success-foreground hover:bg-success/80"
@@ -172,7 +187,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving, disa
   const activeLabels = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key));
 
   const toggle = (key: string) => {
-    onChange(requiredFields.includes(key) ? requiredFields.filter((k) => k !== key) : [...requiredFields, key]);
+    onChange(toggleRequiredField(requiredFields, key));
   };
 
   return (
@@ -529,7 +544,11 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [requiredFields, setRequiredFields] = useState<string[]>([]);
+  const { control, getValues, reset } = useZodForm(submissionRulesSchema, {
+    defaultValues: toSubmissionRulesValues([]),
+  });
+  const { field: requiredFieldsField } = useController({ control, name: "requiredFields" });
+  const requiredFields = requiredFieldsField.value;
   const [isSavingRules, setIsSavingRules] = useState(false);
 
   const fetchData = useCallback(async () => {
@@ -551,7 +570,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       if (Array.isArray(settings)) {
         const row = settings.find((r: generalSettingsItem) => r.field_name === SETTINGS_KEY);
         if (row && Array.isArray(row.field_value)) {
-          setRequiredFields(row.field_value as string[]);
+          reset(toSubmissionRulesValues(row.field_value as string[]));
         }
       }
     } catch (err) {
@@ -559,7 +578,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, t]);
+  }, [accessToken, reset, t]);
 
   useEffect(() => {
     fetchData();
@@ -567,9 +586,11 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
 
   const handleSaveRules = async () => {
     if (!accessToken) return;
+    const draft = submissionRulesSchema.safeParse(getValues());
+    if (!draft.success) return;
     setIsSavingRules(true);
     try {
-      await updateConfigFieldSetting(accessToken, SETTINGS_KEY, requiredFields);
+      await updateConfigFieldSetting(accessToken, SETTINGS_KEY, draft.data.requiredFields);
       toast.success(t("mcpServers.submissionsTab.toasts.rulesSaved"));
     } catch {
       toast.fromError(t("mcpServers.submissionsTab.toasts.rulesSaveFailed"));
@@ -621,7 +642,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     <div className="p-6">
       <SubmissionRulesPanel
         requiredFields={requiredFields}
-        onChange={setRequiredFields}
+        onChange={requiredFieldsField.onChange}
         onSave={handleSaveRules}
         isSaving={isSavingRules}
         disabled={isLoading}

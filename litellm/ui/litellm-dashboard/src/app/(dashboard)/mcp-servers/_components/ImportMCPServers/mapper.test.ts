@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConnectorConfig } from "./importConnectorConfig";
+import { parseConnectorConfig } from "./mapper";
 
 describe("parseConnectorConfig", () => {
   it("accepts a Claude Desktop mcpServers mapping", () => {

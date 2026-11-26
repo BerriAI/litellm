@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useId } from "react";
+import { useController } from "react-hook-form";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Save, Plus, X } from "lucide-react";
@@ -17,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import {
   getGeneralSettingsCall,
@@ -24,6 +26,25 @@ import {
   deleteConfigFieldSetting,
   fetchMCPClientIp,
 } from "@/components/networking";
+import {
+  ABSENT,
+  clientsUnchangedSinceLoad,
+  headerUnchangedSinceLoad,
+  isIncomplete,
+  parseDisabledCapabilities,
+  parseStoredClients,
+  toAllowedClients,
+  trimClient,
+  unchangedSinceLoad,
+  type AllowedClient,
+  type StoredAllowlist,
+} from "./MCPNetworkSettings/mapper";
+import {
+  defaultNetworkSettings,
+  mcpNetworkSettingsSchema,
+  type ClientDraft,
+  type DisableableCapability,
+} from "./MCPNetworkSettings/schema";
 
 interface MCPNetworkSettingsProps {
   accessToken: string | null;
@@ -38,68 +59,12 @@ function ipToSlash24(ip: string): string {
   return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
 }
 
-export interface AllowedClient {
-  readonly alias: string;
-  readonly value: string;
-}
-
 interface AllowedClientRow extends AllowedClient {
   readonly key: string;
 }
 
-interface ClientDraft extends AllowedClient {
-  readonly key: string | null;
-}
-
-const isAllowedClient = (entry: unknown): entry is AllowedClient => {
-  if (typeof entry !== "object" || entry === null) return false;
-  const { alias, value } = entry as Partial<Record<keyof AllowedClient, unknown>>;
-  return typeof alias === "string" && typeof value === "string" && !isIncomplete({ alias, value });
-};
-
-type StoredAllowlist =
-  | { readonly kind: "absent" }
-  | { readonly kind: "clients"; readonly clients: AllowedClient[] }
-  | { readonly kind: "malformed" };
-
-const ABSENT: StoredAllowlist = { kind: "absent" };
-
-const parseStoredClients = (fieldValue: unknown): StoredAllowlist => {
-  if (fieldValue === null || fieldValue === undefined) return ABSENT;
-  if (Array.isArray(fieldValue) && fieldValue.every(isAllowedClient)) {
-    return { kind: "clients", clients: fieldValue.map(({ alias, value }) => ({ alias, value })) };
-  }
-  return { kind: "malformed" };
-};
-
 let nextRowKey = 0;
 const newRow = (client: AllowedClient): AllowedClientRow => ({ ...client, key: `client-${nextRowKey++}` });
-
-const trimClient = ({ alias, value }: AllowedClient): AllowedClient => ({ alias: alias.trim(), value: value.trim() });
-
-const isIncomplete = ({ alias, value }: AllowedClient) => alias === "" || value === "";
-
-const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
-
-const sameClients = (a: AllowedClient[], b: AllowedClient[]) =>
-  a.length === b.length && a.every((client, i) => client.alias === b[i].alias && client.value === b[i].value);
-
-const unchangedSinceLoad = (value: string[], stored: string[] | null) =>
-  stored === null ? value.length === 0 : value.length > 0 && sameList(value, stored);
-
-const clientsUnchangedSinceLoad = (value: AllowedClient[], stored: StoredAllowlist) => {
-  switch (stored.kind) {
-    case "absent":
-      return value.length === 0;
-    case "clients":
-      return value.length > 0 && sameClients(value, stored.clients);
-    case "malformed":
-      return false;
-  }
-};
-
-const headerUnchangedSinceLoad = (value: string, stored: string | null) =>
-  stored === null ? value === "" : value !== "" && value === stored;
 
 interface AllowedClientDialogProps {
   readonly draft: ClientDraft | null;
@@ -166,8 +131,6 @@ const AllowedClientDialog: React.FC<AllowedClientDialogProps> = ({ draft, onChan
   );
 };
 
-type DisableableCapability = "prompts" | "resources";
-
 const CAPABILITY_TOGGLES: { capability: DisableableCapability; labelKey: ParseKeys; descriptionKey: ParseKeys }[] = [
   {
     capability: "prompts",
@@ -181,26 +144,34 @@ const CAPABILITY_TOGGLES: { capability: DisableableCapability; labelKey: ParseKe
   },
 ];
 
-const parseDisabledCapabilities = (value: unknown): DisableableCapability[] =>
-  Array.isArray(value)
-    ? value.filter((name): name is DisableableCapability => name === "prompts" || name === "resources")
-    : [];
-
 const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) => {
   const { t } = useTranslation();
+  const { control, getValues } = useZodForm(mcpNetworkSettingsSchema, { defaultValues: defaultNetworkSettings });
+  const {
+    field: { value: privateRanges, onChange: setPrivateRanges },
+  } = useController({ control, name: "privateRanges" });
+  const {
+    field: { value: allowedClients, onChange: setAllowedClients },
+  } = useController({ control, name: "allowedClients" });
+  const {
+    field: { value: clientIdHeader, onChange: setClientIdHeader },
+  } = useController({ control, name: "clientIdHeader" });
+  const {
+    field: { value: disabledCapabilities, onChange: setDisabledCapabilities },
+  } = useController({ control, name: "disabledCapabilities" });
+  const {
+    field: { value: rangeDraft, onChange: setRangeDraft },
+  } = useController({ control, name: "rangeDraft" });
+  const {
+    field: { value: clientDraft, onChange: setClientDraft },
+  } = useController({ control, name: "clientDraft" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [privateRanges, setPrivateRanges] = useState<string[]>([]);
-  const [allowedClients, setAllowedClients] = useState<AllowedClientRow[]>([]);
-  const [clientIdHeader, setClientIdHeader] = useState("");
   const [storedRanges, setStoredRanges] = useState<string[] | null>(null);
   const [storedClients, setStoredClients] = useState<StoredAllowlist>(ABSENT);
   const [storedClientIdHeader, setStoredClientIdHeader] = useState<string | null>(null);
-  const [disabledCapabilities, setDisabledCapabilities] = useState<DisableableCapability[]>([]);
   const [storedDisabledCapabilities, setStoredDisabledCapabilities] = useState<DisableableCapability[] | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
-  const [rangeDraft, setRangeDraft] = useState("");
-  const [clientDraft, setClientDraft] = useState<ClientDraft | null>(null);
   const capabilityToggleId = useId();
 
   useEffect(() => {
@@ -248,7 +219,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     }
   };
 
-  const persistRanges = async (token: string) => {
+  const persistRanges = async (token: string, privateRanges: string[]) => {
     if (unchangedSinceLoad(privateRanges, storedRanges)) return;
     if (privateRanges.length > 0) {
       await updateConfigFieldSetting(token, "mcp_internal_ip_ranges", privateRanges);
@@ -259,8 +230,8 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setStoredRanges(null);
   };
 
-  const persistAllowedClients = async (token: string) => {
-    const clients = allowedClients.map(({ alias, value }) => ({ alias, value }));
+  const persistAllowedClients = async (token: string, allowedClients: AllowedClientRow[]) => {
+    const clients = toAllowedClients(allowedClients);
     if (clientsUnchangedSinceLoad(clients, storedClients)) return;
     if (clients.length > 0) {
       await updateConfigFieldSetting(token, "mcp_allowed_clients", clients);
@@ -271,7 +242,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setStoredClients(ABSENT);
   };
 
-  const persistClientIdHeader = async (token: string) => {
+  const persistClientIdHeader = async (token: string, clientIdHeader: string) => {
     const value = clientIdHeader.trim();
     if (headerUnchangedSinceLoad(value, storedClientIdHeader)) return;
     if (value !== "") {
@@ -283,7 +254,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setStoredClientIdHeader(null);
   };
 
-  const persistDisabledCapabilities = async (token: string) => {
+  const persistDisabledCapabilities = async (token: string, disabledCapabilities: DisableableCapability[]) => {
     if (unchangedSinceLoad(disabledCapabilities, storedDisabledCapabilities)) return;
     if (disabledCapabilities.length > 0) {
       await updateConfigFieldSetting(token, "mcp_disabled_capabilities", disabledCapabilities);
@@ -304,11 +275,15 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
 
   const handleSave = async () => {
     if (!accessToken) return;
+    const draft = mcpNetworkSettingsSchema.safeParse(getValues());
+    if (!draft.success) return;
     setSaving(true);
-    const [rangeResult] = await Promise.allSettled([persistRanges(accessToken)]);
-    const [clientResult] = await Promise.allSettled([persistAllowedClients(accessToken)]);
-    const [headerResult] = await Promise.allSettled([persistClientIdHeader(accessToken)]);
-    const [capabilityResult] = await Promise.allSettled([persistDisabledCapabilities(accessToken)]);
+    const [rangeResult] = await Promise.allSettled([persistRanges(accessToken, draft.data.privateRanges)]);
+    const [clientResult] = await Promise.allSettled([persistAllowedClients(accessToken, draft.data.allowedClients)]);
+    const [headerResult] = await Promise.allSettled([persistClientIdHeader(accessToken, draft.data.clientIdHeader)]);
+    const [capabilityResult] = await Promise.allSettled([
+      persistDisabledCapabilities(accessToken, draft.data.disabledCapabilities),
+    ]);
     setSaving(false);
     const failures = [rangeResult, clientResult, headerResult, capabilityResult].filter(
       (result): result is PromiseRejectedResult => result.status === "rejected",
