@@ -104,7 +104,7 @@ class _VertexCredentialsObject(Protocol):
 
 
 _VertexCredentialCacheKey = tuple[str | None, str | None]
-_HeaderValue = TypeVar("_HeaderValue")  # rebind-ok: a TypeVar cannot be Final
+_HeaderValue = TypeVar("_HeaderValue")
 _KEY_FILE_VERSION_SEPARATOR: Final = "\0"
 
 

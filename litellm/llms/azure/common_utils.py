@@ -707,7 +707,7 @@ def get_azure_ad_token(
     return azure_ad_token
 
 
-_AzureHeaders = TypeVar("_AzureHeaders", bound="dict[str, str] | dict[str, object]")  # rebind-ok: a TypeVar cannot be Final
+_AzureHeaders = TypeVar("_AzureHeaders", bound="dict[str, str] | dict[str, object]")
 _AZURE_AUTH_HEADER_NAMES: Final = frozenset(("api-key", "authorization"))
 _REDACTED_AZURE_HEADER_VALUE: Final = "***REDACTED***"
 
