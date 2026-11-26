@@ -13,17 +13,17 @@ use crate::{RawJson, budget::Budget};
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Serialize)]
 pub struct Organization {
-    organization_id: String,
-    organization_alias: String,
-    budget_id: String,
-    metadata: RawJson,
-    models: Vec<String>,
-    spend: f64,
-    model_spend: RawJson,
-    object_permission_id: Option<String>,
-    created_by: String,
-    updated_by: String,
-    litellm_budget_table: Option<Json<Budget>>,
+    pub organization_id: String,
+    pub organization_alias: String,
+    pub budget_id: String,
+    pub metadata: RawJson,
+    pub models: Vec<String>,
+    pub spend: f64,
+    pub model_spend: RawJson,
+    pub object_permission_id: Option<String>,
+    pub created_by: String,
+    pub updated_by: String,
+    pub litellm_budget_table: Option<Json<Budget>>,
 }
 
 /// The organization `organization_id`, joined to its budget when `include_budget_table` is set, or `None` when no row has
