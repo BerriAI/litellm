@@ -916,12 +916,10 @@ async def _serve_latest_alias_from_versioned_model_group(
     for value in metadata:
         value.pop(LATEST_ALIAS_REQUESTED_MODEL_GROUP_METADATA_KEY, None)
         value.pop(LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY, None)
-    if (
-        llm_router is None
-        or not isinstance(requested, str)
-        or data.get("user_config") is not None
-        or route_type in _ROUTE_TYPES_ADMITTING_EVERY_TURN_ON_ONE_DEPLOYMENT
-    ):
+    served_by_shared_router: Final = (
+        data.get("user_config") is None and route_type not in _ROUTE_TYPES_ADMITTING_EVERY_TURN_ON_ONE_DEPLOYMENT
+    )
+    if llm_router is None or not isinstance(requested, str) or not served_by_shared_router:
         return
     target: Final = latest_alias_versioned_model_group(requested, llm_router)
     if target is None:
