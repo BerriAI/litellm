@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 
-use litellm_python_compat::{Value, datetime::IsoDateTime, pydantic::lax_datetime};
+use litellm_python_compat::{
+    Value,
+    datetime::IsoDateTime,
+    pydantic::{lax_bool, lax_datetime, lax_float, lax_int},
+};
 
-use crate::{DecodeError, Number, codec::python_value};
+use crate::{DecodeError, codec::python_value};
 
 pub(in crate::auth_cache) fn decode(raw: Option<Vec<u8>>) -> Result<Option<Value>, DecodeError> {
     raw.as_deref().map(python_value).transpose()
@@ -13,6 +17,35 @@ pub(in crate::auth_cache) fn decode(raw: Option<Vec<u8>>) -> Result<Option<Value
 pub(super) trait Field: Sized {
     fn read(value: &Value) -> Option<Self>;
     fn write(self) -> Value;
+
+    /// The value the model dumps for this field, or `None` when it leaves the field out.
+    fn dump(self) -> Option<Value> {
+        Some(self.write())
+    }
+}
+
+/// A field the model leaves out of its dump while it is `None`, as `exclude_if=_is_none` does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExcludedIfNone<T>(pub Option<T>);
+
+impl<T> Default for ExcludedIfNone<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<T: Field> Field for ExcludedIfNone<T> {
+    fn read(value: &Value) -> Option<Self> {
+        <Option<T> as Field>::read(value).map(Self)
+    }
+
+    fn write(self) -> Value {
+        self.0.write()
+    }
+
+    fn dump(self) -> Option<Value> {
+        self.0.map(T::write)
+    }
 }
 
 impl Field for Value {
@@ -38,12 +71,10 @@ impl Field for String {
     }
 }
 
+/// A `bool` field, read as pydantic's lax `bool` reads it, so `"true"`, `"yes"` and `1` are true.
 impl Field for bool {
     fn read(value: &Value) -> Option<Self> {
-        match value {
-            Value::Bool(flag) => Some(*flag),
-            _ => None,
-        }
+        lax_bool(value)
     }
 
     fn write(self) -> Value {
@@ -51,12 +82,10 @@ impl Field for bool {
     }
 }
 
+/// An `int` field, read as pydantic's lax `int` reads it, so `3.0` and `"3"` are `3`.
 impl Field for i64 {
     fn read(value: &Value) -> Option<Self> {
-        match value {
-            Value::Int(number) => i64::try_from(number).ok(),
-            _ => None,
-        }
+        i64::try_from(lax_int(value)?).ok()
     }
 
     fn write(self) -> Value {
@@ -64,13 +93,10 @@ impl Field for i64 {
     }
 }
 
-/// A `float` field also takes the JSON integer pydantic accepts for it.
+/// A `float` field, read as pydantic's lax `float` reads it, so `1` and `"1.5"` are floats.
 impl Field for f64 {
     fn read(value: &Value) -> Option<Self> {
-        match Number::from_value(value)? {
-            Number::Float(number) => Some(number),
-            Number::Int(number) => Some(number as f64),
-        }
+        lax_float(value)
     }
 
     fn write(self) -> Value {
@@ -137,12 +163,13 @@ macro_rules! required {
 pub(super) use required;
 
 /// A record the auth cache holds as a pydantic model's JSON dump. The fields are that model's,
-/// in its order, which is the order they are written in, and each takes only the shapes the
-/// model takes, so nothing the model would refuse decodes or is written. A field the entry lacks
-/// takes the model's default, and one this build does not name is kept in `unread` and written
-/// after the named ones, so an entry a newer pod wrote loses nothing when it is read. A record
-/// with `refuse_unless check;` is refused as a whole where the model's own validator refuses it.
-/// A field held as plain data may hold credentials, so `Debug` redacts it.
+/// in its order, which is the order they are written in, less an [`ExcludedIfNone`] one that is
+/// `None`. Each takes only the shapes the model takes, so nothing the model would refuse decodes
+/// or is written. A field the entry lacks takes the model's default, and one this build does not
+/// name is kept in `unread` and written after the named ones, so an entry a newer pod wrote loses
+/// nothing when it is read. A record with `refuse_unless check;` is refused as a whole where the
+/// model's own validator refuses it. A field held as plain data may hold credentials, so `Debug`
+/// redacts it.
 macro_rules! record {
     (
         $(#[$meta:meta])*
@@ -193,8 +220,9 @@ macro_rules! record {
         impl $crate::IntoValue for $name {
             fn into_value(self) -> ::litellm_python_compat::Value {
                 ::litellm_python_compat::Value::Dict(
-                    [$((stringify!($field).to_owned(), $crate::auth_cache::types::record::Field::write(self.$field)),)+]
+                    [$((stringify!($field), $crate::auth_cache::types::record::Field::dump(self.$field)),)+]
                         .into_iter()
+                        .filter_map(|(name, value)| Some((name.to_owned(), value?)))
                         .chain(self.unread)
                         .map(|(name, value)| (::litellm_python_compat::Value::Str(name), value))
                         .collect(),

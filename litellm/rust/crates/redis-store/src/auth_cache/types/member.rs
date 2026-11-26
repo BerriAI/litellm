@@ -26,7 +26,7 @@ impl Field for MemberRole {
 }
 
 record! {
-    /// A team member as `Member` dumps it inside a cached key.
+    /// A team member as `Member` dumps it, in a team's roster and nested in a key's entry.
     pub struct MemberEntry {
         user_id: Option<String>,
         user_email: Option<String>,

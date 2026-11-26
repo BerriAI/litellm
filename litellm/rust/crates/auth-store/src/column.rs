@@ -20,12 +20,37 @@ pub(crate) fn nullable<V: FromValue>(
     name: &'static str,
     raw: Option<&RawJson>,
 ) -> Result<Option<V>, Error> {
-    match raw.map(|raw| json::loads(raw.get())) {
-        None | Some(Ok(Value::None)) => Ok(None),
-        Some(Ok(value)) => V::from_value(&value)
+    unset_or(name, parsed(name, raw)?)
+}
+
+/// [`nullable`] for a field the model's `set_model_info` validator runs `json.loads` on when it
+/// holds a string, since older writers stored `json.dumps` text in the column.
+pub(crate) fn nullable_or_text<V: FromValue>(
+    name: &'static str,
+    raw: Option<&RawJson>,
+) -> Result<Option<V>, Error> {
+    unset_or(name, unquoted(name, parsed(name, raw)?)?)
+}
+
+fn parsed(name: &'static str, raw: Option<&RawJson>) -> Result<Value, Error> {
+    raw.map_or(Ok(Value::None), |raw| {
+        json::loads(raw.get()).map_err(|_| Error::row(name))
+    })
+}
+
+fn unquoted(name: &'static str, value: Value) -> Result<Value, Error> {
+    match value {
+        Value::Str(text) => json::loads(&text).map_err(|_| Error::row(name)),
+        value => Ok(value),
+    }
+}
+
+fn unset_or<V: FromValue>(name: &'static str, value: Value) -> Result<Option<V>, Error> {
+    match value {
+        Value::None => Ok(None),
+        value => V::from_value(&value)
             .map(Some)
             .map_err(|_| Error::row(name)),
-        Some(Err(_)) => Err(Error::row(name)),
     }
 }
 

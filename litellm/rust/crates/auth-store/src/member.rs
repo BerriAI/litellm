@@ -1,4 +1,4 @@
-//! A roster entry as the auth cache holds it, nested in a cached key.
+//! A roster entry as the auth cache holds it, in a team's roster and nested in a key's entry.
 
 use litellm_python_compat::{Value, json};
 use litellm_redis_store::{DecodeError, FromValue, auth_cache::MemberEntry};
