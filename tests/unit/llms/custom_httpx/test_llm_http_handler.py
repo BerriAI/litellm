@@ -2160,7 +2160,9 @@ def test_resolve_anthropic_messages_timeout(monkeypatch, litellm_params_kwargs, 
 
 
 @pytest.mark.parametrize("wrong", [["12"], {"read": 12}, b"12"])
-def test_resolve_anthropic_messages_timeout_reads_a_wrong_typed_model_timeout_as_unset(monkeypatch, wrong):
+def test_resolve_anthropic_messages_timeout_reads_a_wrong_typed_model_timeout_as_unset(
+    monkeypatch: pytest.MonkeyPatch, wrong: object
+) -> None:
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
     monkeypatch.setattr("litellm.request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS), raising=False)

@@ -178,13 +178,15 @@ def test_create__vertex_ai_forwards_custom_endpoint(seams):
 
 
 @pytest.mark.parametrize(("sent", "forwarded"), [("yes", True), (1, True), ("", False), (0, False)])
-def test_create__vertex_ai_forwards_a_non_bool_custom_endpoint_as_its_truthiness(seams, sent, forwarded):
+def test_create__vertex_ai_forwards_a_non_bool_custom_endpoint_as_its_truthiness(
+    seams: Seams, sent: object, forwarded: bool
+) -> None:
     bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai", custom_endpoint=sent)
 
     assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is forwarded
 
 
-def test_create__vertex_ai_forwards_an_absent_custom_endpoint_as_false(seams):
+def test_create__vertex_ai_forwards_an_absent_custom_endpoint_as_false(seams: Seams) -> None:
     bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai")
 
     assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is False
