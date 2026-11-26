@@ -10658,6 +10658,18 @@ class TestLitellmReceivedAtStamping:
         assert first == second
         assert request.state.litellm_received_at == first
 
+    def test_does_not_overwrite_an_earlier_stamp(self):
+        """Body-parse failures must not shorten the measured window: a value
+        already on request.state (stamped earlier) must win."""
+        request = MagicMock()
+        earlier = datetime(2020, 1, 1)
+        request.state = SimpleNamespace(litellm_received_at=earlier)
+
+        result = _ensure_litellm_received_at_on_request_state(request)
+
+        assert result == earlier
+        assert request.state.litellm_received_at == earlier
+
 
 @pytest.mark.asyncio
 async def test_auth_resolves_scheduled_budgets_at_the_instant_the_request_arrived(
@@ -10687,18 +10699,6 @@ async def test_auth_resolves_scheduled_budgets_at_the_instant_the_request_arrive
     await user_api_key_auth(request=request, api_key="Bearer external-token")
 
     assert seen == [arrived]
-
-    def test_does_not_overwrite_an_earlier_stamp(self):
-        """Body-parse failures must not shorten the measured window: a value
-        already on request.state (stamped earlier) must win."""
-        request = MagicMock()
-        earlier = datetime(2020, 1, 1)
-        request.state = SimpleNamespace(litellm_received_at=earlier)
-
-        result = _ensure_litellm_received_at_on_request_state(request)
-
-        assert result == earlier
-        assert request.state.litellm_received_at == earlier
 
 
 class _RequestSpanLogger:
