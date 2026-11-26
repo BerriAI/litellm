@@ -83,6 +83,10 @@ def _sdk_max_retries(max_retries: object, is_router_call: bool) -> int:
     return openai.DEFAULT_MAX_RETRIES if max_retries is None else _MAX_RETRIES.validate_python(max_retries)
 
 
+def _supplied_openai_client(client: object) -> openai.OpenAI | openai.AsyncOpenAI | None:
+    return client if isinstance(client, openai.OpenAI | openai.AsyncOpenAI) else None
+
+
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
 
@@ -436,16 +440,23 @@ def image_generation(
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
+            supplied_openai_client: Final = (
+                _supplied_openai_client(call_kwargs.get("client"))
+                if custom_llm_provider == litellm.LlmProviders.VOLCENGINE
+                else None
+            )
             # Resolve api_base from litellm.api_base if not explicitly provided
             _api_base: Final = (
-                requested_api_base
+                str(supplied_openai_client.base_url)
+                if supplied_openai_client is not None
+                else requested_api_base
                 if custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE
                 else api_base or litellm.api_base
             )
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
-                api_key=api_key,
+                api_key=api_key if supplied_openai_client is None else supplied_openai_client.api_key,
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,
