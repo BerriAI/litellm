@@ -12,8 +12,8 @@ use futures_util::{StreamExt, stream};
 use litellm_config::LitellmRole;
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Rows, StoredKey,
-    authz::{self, Denied, Layer, ModelAsk},
+    AuthzDenial, Rows, StoredKey,
+    authz::{self, Layer, ModelAsk},
 };
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -28,7 +28,7 @@ use crate::{
     error::{Ended, NoDeployments},
     headers::Routing,
     hooks::CallHooks,
-    record,
+    record::{self, AttemptRecord, ServedDeployment},
     stream_event::{Counts, Read},
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
@@ -40,7 +40,7 @@ pub type RouteChunks = Chunks<litellm_host_http::Error<InferenceError>>;
 /// The host the routes are served through. It answers router-core's hostcalls and the callback
 /// hooks for one call, and the gateway crate attaches the native one.
 pub trait Host: Send + Sync + Sized + 'static {
-    type RouterHost<'a, A: RouteAttempt + 'a>: RouterHost<Response = A::Outcome, Failure = Error>
+    type RouterHost<'a, A: RouteAttempt + 'a>: RouterHost<Response = Attempted<A::Output>, Failure = Error>
     where
         Self: 'a;
 
@@ -69,17 +69,22 @@ pub trait Host: Send + Sync + Sized + 'static {
     ) -> Self::RouterHost<'a, A>;
 }
 
-/// What one route does for one attempt: build its call for the picked deployment, run it, and
-/// return its typed outcome. [`attempt`] tells the router what that outcome used.
-pub trait RouteAttempt: Send + Sync {
-    type Outcome: Send;
+/// What an attempt hands the router: the route's output and what the attempt recorded of its
+/// provider.
+pub type Attempted<T> = (T, AttemptRecord);
 
-    fn run(&self, attempt: &Attempt) -> impl Future<Output = Result<Self::Outcome, Error>> + Send;
+/// What one route does for one attempt: build its call for the picked deployment, run it, and
+/// return its typed output. [`attempt`] runs it under its own [`AttemptRecord`] and tells the
+/// router what that output used.
+pub trait RouteAttempt: Send + Sync {
+    type Output: Send;
+
+    fn run(&self, attempt: &Attempt) -> impl Future<Output = Result<Self::Output, Error>> + Send;
 
     /// What a complete outcome counted, which the router counts against the deployment. A
     /// stream's counts are read from its events.
     /// Required, so a new route says what it counts rather than counting nothing by default.
-    fn counts(outcome: &Self::Outcome) -> Option<Counts>;
+    fn counts(output: &Self::Output) -> Option<Counts>;
 
     /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
     /// route's calls to no context window, so each route says so itself.
@@ -88,8 +93,8 @@ pub trait RouteAttempt: Send + Sync {
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
     /// content. `None` for a complete answer.
-    fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
-        let _ = outcome;
+    fn held(output: &mut Self::Output) -> Option<(&mut RouteChunks, Read)> {
+        let _ = output;
         None
     }
 }
@@ -112,20 +117,18 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
     gateway: &Gateway<H>,
     route: &A,
     attempt: &Attempt,
-) -> Result<Served<A::Outcome>, AttemptFailure<Error>> {
-    let mut outcome = route
-        .run(attempt)
-        .await
-        .map_err(|error| attempt_failure(attempt, error))?;
-    let Some((chunks, read)) = A::held(&mut outcome) else {
-        let total_tokens = A::counts(&outcome).map_or(0, Counts::total);
-        return Ok(Served::new(outcome, total_tokens));
+) -> Result<Served<Attempted<A::Output>>, AttemptFailure<Error>> {
+    let (output, recorded) = record::attempt(route.run(attempt)).await;
+    let mut output = output.map_err(|error| attempt_failure(attempt, error))?;
+    let Some((chunks, read)) = A::held(&mut output) else {
+        let total_tokens = A::counts(&output).map_or(0, Counts::total);
+        return Ok(Served::new((output, recorded), total_tokens));
     };
     let unreported = std::mem::replace(chunks, stream::empty().boxed());
     *chunks = stream_outcome::reporting_outcome(gateway, &attempt.deployment, unreported, read);
     Ok(Served {
         deferred: true,
-        ..Served::new(outcome, 0)
+        ..Served::new((output, recorded), 0)
     })
 }
 
@@ -148,7 +151,7 @@ fn authorize<H: Host>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
     name: &str,
-) -> Result<(), Denied> {
+) -> Result<(), AuthzDenial> {
     let registry = gateway.router.registry();
     let access_groups: Vec<String> = resolve::model_access_groups(&registry, name, None)
         .into_iter()
@@ -261,7 +264,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     path: &'static str,
     model: &str,
     route: &A,
-) -> Result<RouterResponse<A::Outcome>, Ended> {
+) -> Result<RouterResponse<Attempted<A::Output>>, Ended> {
     let request = caller_request(identity, gateway.host.layers(identity), model);
     if !known(gateway, &request) {
         return Err(Error::UnknownModel {
@@ -297,6 +300,7 @@ async fn answered<H: Host, O>(
         } => Ended {
             error: Box::new(raised.failure),
             routing: raised.deployment_id.as_deref().map(Routing::failed_on),
+            raised_on: raised.deployment_id,
         },
         CallError {
             error: litellm_router_core::Error::UnknownModel { model },
@@ -306,12 +310,14 @@ async fn answered<H: Host, O>(
             error: litellm_router_core::Error::NoHealthyDeployments { model, .. },
             ..
         } => no_deployments(gateway, model).await.into(),
-        CallError { error, .. } => Ended {
-            routing: error
-                .refused()
-                .map(|refused| Routing::failed_on(&refused.deployment_id)),
-            error: Box::new(Error::Routing(error)),
-        },
+        CallError { error, .. } => {
+            let refused_on = error.refused().map(|refused| refused.deployment_id.clone());
+            Ended {
+                routing: refused_on.as_deref().map(Routing::failed_on),
+                raised_on: refused_on,
+                error: Box::new(Error::Routing(error)),
+            }
+        }
     })
 }
 
@@ -327,21 +333,23 @@ async fn answered<H: Host, O>(
 /// - no attempt may answer and the stream broke: the call ends on that failure, since nothing
 ///   reached the client yet
 ///
-/// A call that ends on an error carries the routing headers of the stream that failed.
+/// A stream closed there goes into the call's `failed_attempts`.
+/// A call that ends on an error carries the routing headers of the stream that failed, and the
+/// timeout of the attempt that raised the error.
 async fn taken_over_while_held<A, RH>(
     router: &Router,
     host: &RH,
     op: &Op,
     request: &RouterRequest,
-    routed: RouterResponse<A::Outcome>,
-) -> Result<RouterResponse<A::Outcome>, Ended>
+    routed: RouterResponse<Attempted<A::Output>>,
+) -> Result<RouterResponse<Attempted<A::Output>>, Ended>
 where
     A: RouteAttempt,
-    RH: RouterHost<Response = A::Outcome, Failure = Error>,
+    RH: RouterHost<Response = Attempted<A::Output>, Failure = Error>,
 {
     let mut routed = routed;
     loop {
-        let Some((chunks, read)) = A::held(&mut routed.output.response) else {
+        let Some((chunks, read)) = A::held(&mut routed.output.response.0) else {
             return Ok(routed);
         };
         if !router.may_take_over(request, &routed.origin) {
@@ -351,7 +359,7 @@ where
         let failed = match stream_hold::hold(unsent, read, stream_hold::HELD).await {
             Held::Committed(sent, first_event) => {
                 if let Some(at) = first_event {
-                    record::write(|entries| entries.see_first_event(at));
+                    record::write(|entries| entries.first_event = Some(at));
                 }
                 *chunks = sent;
                 return Ok(routed);
@@ -365,6 +373,8 @@ where
         }
         // Python closes the attempt a take-over supersedes before the take-over runs.
         let own = ended_on(failed.closed());
+        let closed = std::mem::take(&mut routed.output.response.1);
+        record::write(|entries| entries.failed_attempts.push(closed));
         let routing = Some(Routing::served(&routed));
         let answered = match take_over {
             Some(take_over) => take_over.run(host, op.clone()).await,
@@ -373,9 +383,14 @@ where
         match answered {
             Ok(answer) => routed = answer,
             Err(Unanswered { raised }) => {
+                let (error, raised_on) = match raised {
+                    Some(raised) => (raised.failure, raised.deployment_id),
+                    None => (own, Some(routed.deployment_id.clone())),
+                };
                 return Err(Ended {
-                    error: Box::new(raised.unwrap_or(own)),
+                    error: Box::new(error),
                     routing,
+                    raised_on,
                 });
             }
         }
@@ -455,27 +470,49 @@ pub(crate) fn streamed(body: &Map<String, Value>) -> bool {
 
 /// `resolve_llm_passthrough_timeout` over the settings the gateway reads: a streamed call's
 /// `stream_timeout` on the deployment, then the deployment's `timeout` and `request_timeout`, then
-/// the router's, then `configured`, the process `request_timeout`. As the Python router does, a
+/// `router`'s, then `configured`, the process `request_timeout`. As the Python router does, a
 /// `configured` timeout stands in for the router's own, and a stream reads it right after the
 /// deployment's `stream_timeout`.
 pub(crate) fn timeout(
-    attempt: &Attempt,
+    deployment: &Deployment,
+    router: Option<Duration>,
     streamed: bool,
     configured: Option<Duration>,
 ) -> Option<Duration> {
     let seconds =
         |written: &Option<Spelled<f64>>| Duration::try_from_secs_f64(written.as_ref()?.lax()?).ok();
-    let params = &attempt.deployment.params;
+    let params = &deployment.params;
     let request_timeout = || {
         let seconds = params.extra.get("request_timeout")?.as_f64()?;
         Duration::try_from_secs_f64(seconds).ok()
     };
     streamed
-        .then(|| seconds(&params.stream_timeout).or(attempt.timeout.and(configured)))
+        .then(|| seconds(&params.stream_timeout).or(router.and(configured)))
         .flatten()
         .or_else(|| seconds(&params.timeout))
         .or_else(request_timeout)
-        .or(configured.or(attempt.timeout))
+        .or(configured.or(router))
+}
+
+/// The deployment `deployment_id` names in the router's registry, with the timeout its attempt
+/// ran under, `configured` being the process `request_timeout` its route reads.
+pub(crate) fn served_deployment<H: Host>(
+    gateway: &Gateway<H>,
+    deployment_id: &str,
+    streamed: bool,
+    configured: Option<Duration>,
+) -> Option<ServedDeployment> {
+    let deployment = gateway.router.registry().deployment(deployment_id)?;
+    Some(ServedDeployment {
+        model: deployment.params.model.clone(),
+        api_base: deployment.params.api_base.clone(),
+        timeout: timeout(
+            &deployment,
+            gateway.router.settings().timeout,
+            streamed,
+            configured,
+        ),
+    })
 }
 
 pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
@@ -576,7 +613,12 @@ mod tests {
         #[case] expected: Option<u64>,
     ) {
         assert_eq!(
-            timeout(&attempt(params, router_timeout), streamed, None),
+            timeout(
+                &attempt(params, router_timeout).deployment,
+                router_timeout.map(Duration::from_secs),
+                streamed,
+                None
+            ),
             expected.map(Duration::from_secs)
         );
     }
@@ -606,7 +648,8 @@ mod tests {
     ) {
         assert_eq!(
             timeout(
-                &attempt(params, router_timeout),
+                &attempt(params, router_timeout).deployment,
+                router_timeout.map(Duration::from_secs),
                 streamed,
                 Some(Duration::from_secs(2))
             ),
@@ -628,7 +671,7 @@ mod tests {
     }
 
     impl RouteAttempt for Failing {
-        type Outcome = RouteChunks;
+        type Output = RouteChunks;
 
         async fn run(&self, _attempt: &Attempt) -> Result<RouteChunks, Error> {
             self.open_at_each_run
@@ -661,25 +704,25 @@ mod tests {
         }
     }
 
-    struct RouteHost<'a> {
-        route: &'a Failing,
+    struct RouteHost<'a, A> {
+        route: &'a A,
         cache: litellm_router_core::InMemoryRouterCache,
     }
 
-    impl RouterHost for RouteHost<'_> {
-        type Response = RouteChunks;
+    impl<A: RouteAttempt> RouterHost for RouteHost<'_, A> {
+        type Response = Attempted<A::Output>;
         type Failure = Error;
         type Cache = litellm_router_core::InMemoryRouterCache;
 
         async fn attempt(
             &self,
             attempt: &Attempt,
-        ) -> Result<Served<RouteChunks>, AttemptFailure<Error>> {
-            let sent = self
-                .route
-                .run(attempt)
-                .await
-                .map_err(|error| attempt_failure(attempt, error))?;
+        ) -> Result<Served<Attempted<A::Output>>, AttemptFailure<Error>> {
+            let (sent, recorded) = record::attempt(self.route.run(attempt)).await;
+            let sent = (
+                sent.map_err(|error| attempt_failure(attempt, error))?,
+                recorded,
+            );
             Ok(Served {
                 deferred: true,
                 ..Served::new(sent, 0)
@@ -727,11 +770,11 @@ mod tests {
     }
 
     /// How a stream of `route` that `router` served for `primary` was answered once it failed
-    /// before content.
+    /// before content, and how many failed attempts the call's record kept.
     async fn answered_after_failing(
         router: &Router,
         route: &Failing,
-    ) -> Result<RouterResponse<RouteChunks>, Ended> {
+    ) -> (Result<RouterResponse<Attempted<RouteChunks>>, Ended>, usize) {
         let host = RouteHost {
             route,
             cache: litellm_router_core::InMemoryRouterCache::default(),
@@ -745,7 +788,12 @@ mod tests {
             .call(&host, op.clone(), request.clone())
             .await
             .unwrap();
-        let held = taken_over_while_held::<Failing, _>(router, &host, &op, &request, first);
+        let held = async {
+            let answered =
+                taken_over_while_held::<Failing, _>(router, &host, &op, &request, first).await;
+            let failed = record::read(|state| state.failed_attempts.len());
+            (answered, failed.unwrap_or_default())
+        };
         record::scope(record::CallRecord::new(), held).await
     }
 
@@ -756,7 +804,7 @@ mod tests {
         let router = lone_primary(json!(null), 2);
         let route = Failing::default();
 
-        let last = answered_after_failing(&router, &route).await.unwrap();
+        let last = answered_after_failing(&router, &route).await.0.unwrap();
 
         assert_eq!(
             (
@@ -777,7 +825,7 @@ mod tests {
             ..Failing::default()
         };
 
-        let ended = answered_after_failing(&router, &route).await;
+        let (ended, _) = answered_after_failing(&router, &route).await;
 
         assert_eq!(
             (
@@ -787,6 +835,124 @@ mod tests {
             (
                 Some(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
                 [0].as_slice()
+            )
+        );
+    }
+
+    /// A held stream closed because it failed before content is a failed attempt, whether a
+    /// retry takes it over or the call ends on its break. The last of the retried streams goes
+    /// out with its error event, so it is the served attempt.
+    #[rstest]
+    #[case::taken_over(lone_primary(json!(null), 2), false, 2)]
+    #[case::ending_the_call(lone_primary(json!({"RateLimitErrorRetries": 2}), 0), true, 1)]
+    #[tokio::test]
+    async fn a_held_stream_that_failed_is_a_failed_attempt(
+        #[case] router: Router,
+        #[case] breaks: bool,
+        #[case] expected: usize,
+    ) {
+        let route = Failing {
+            breaks,
+            ..Failing::default()
+        };
+
+        let (_, failed) = answered_after_failing(&router, &route).await;
+
+        assert_eq!(failed, expected);
+    }
+
+    /// A route whose first attempt fails on the provider after it called it, and whose next one
+    /// serves the call. Each attempt calls a URL of its own.
+    #[derive(Default)]
+    struct FailsOnce {
+        runs: parking_lot::Mutex<u32>,
+    }
+
+    impl RouteAttempt for FailsOnce {
+        type Output = ();
+
+        async fn run(&self, _attempt: &Attempt) -> Result<(), Error> {
+            let run = {
+                let mut runs = self.runs.lock();
+                *runs += 1;
+                *runs
+            };
+            let wire = litellm_host::interceptors::WireRequest {
+                url: format!("https://provider.test/{run}"),
+                headers: Vec::new(),
+                body: json!({}),
+            };
+            let context = litellm_host::interceptors::RequestContext {
+                model: "test-model".to_owned(),
+                custom_llm_provider: "anthropic".to_owned(),
+                optional_params: json!({}),
+                secret_fields: Vec::new(),
+                api_key: None,
+                host_transport: false,
+            };
+            litellm_host::interceptors::Interceptors::<InferenceError>::before_provider_request(
+                &crate::record::Recorder,
+                wire,
+                context,
+            )
+            .await?;
+            match run {
+                1 => Err(Error::Route(
+                    litellm_http::Error::upstream(529, "overloaded".to_owned()).into(),
+                )),
+                _ => Ok(()),
+            }
+        }
+
+        fn counts(_output: &()) -> Option<Counts> {
+            None
+        }
+
+        fn prompt(&self) -> Option<Prompt<'_>> {
+            None
+        }
+    }
+
+    #[rstest]
+    #[case::retried(lone_primary(json!(null), 1))]
+    #[tokio::test]
+    async fn the_served_attempt_and_each_failed_one_reach_the_record(#[case] router: Router) {
+        let route = FailsOnce::default();
+        let host = RouteHost {
+            route: &route,
+            cache: litellm_router_core::InMemoryRouterCache::default(),
+        };
+        let request = RouterRequest {
+            model: "primary".to_owned(),
+            ..RouterRequest::default()
+        };
+        let record = crate::record::CallRecord::new();
+        let urls = crate::record::scope(record, async {
+            let routed = router
+                .call(&host, Op::ANTHROPIC_MESSAGES, request)
+                .await
+                .unwrap();
+            let routing = Routing::served(&routed);
+            let ((), served) = routed.output.response;
+            crate::record::write(|state| state.routed(routing, None, served));
+            crate::record::read(|state| {
+                let url = |attempt: &crate::record::AttemptRecord| attempt.url.clone();
+                (
+                    state.attempt.as_ref().and_then(url),
+                    state.failed_attempts.iter().map(url).collect::<Vec<_>>(),
+                )
+            })
+        })
+        .await;
+
+        assert_eq!(
+            (urls, *route.runs.lock()),
+            (
+                Some((
+                    Some("https://provider.test/2".to_owned()),
+                    vec![Some("https://provider.test/1".to_owned())],
+                )),
+                2
             )
         );
     }

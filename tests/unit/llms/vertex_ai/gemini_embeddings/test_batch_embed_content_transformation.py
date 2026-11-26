@@ -624,9 +624,7 @@ class TestFileContentBlocks:
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )
-    def test_malformed_block_answers_400_naming_the_field(
-        self, block: dict[str, object], named_in_error: str
-    ) -> None:
+    def test_malformed_block_answers_400_naming_the_field(self, block: dict[str, object], named_in_error: str) -> None:
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
 
@@ -654,9 +652,18 @@ class TestFileContentBlocks:
             ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
-            ({"start_offset": "0s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(0s\)"),
-            ({"start_offset": "10s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(10s\)"),
-            ({"start_offset": "-0s", "end_offset": "-1s"}, r": end_offset \(-1s\) must be later than the window start \(0s\)"),
+            (
+                {"start_offset": "0s", "end_offset": "0s"},
+                r": end_offset \(0s\) must be later than the window start \(0s\)",
+            ),
+            (
+                {"start_offset": "10s", "end_offset": "0s"},
+                r": end_offset \(0s\) must be later than the window start \(10s\)",
+            ),
+            (
+                {"start_offset": "-0s", "end_offset": "-1s"},
+                r": end_offset \(-1s\) must be later than the window start \(0s\)",
+            ),
             ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
             ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
             ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
@@ -752,6 +759,23 @@ class TestFileContentBlocks:
         block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
         request: Final = transform(input=[block], model=self.MODEL, optional_params=optional_params)
         assert parts_of(request)[0]["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    def test_audio_track_extraction_set_in_one_extra_body_request_applies_to_that_input_only(self) -> None:
+        video_metadata: Final = {"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
+        extra_body: Final = {"requests": [{"embedContentConfig": {"audioTrackExtraction": True}}]}
+
+        request: Final = transform_openai_input_gemini_content(
+            input=[block], model=self.MODEL, optional_params={"extra_body": extra_body}
+        )
+
+        assert request["requests"][0]["content"]["parts"][0]["video_metadata"] == gemini_video_metadata_from_openai(
+            video_metadata
+        )
+        with pytest.raises(BadRequestError, match="rounds to 0 frames"):
+            transform_openai_input_gemini_content(
+                input=["text", block], model=self.MODEL, optional_params={"extra_body": extra_body}
+            )
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
@@ -876,6 +900,121 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_merges_extra_body_requests_into_the_request_for_the_same_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello", "world"],
+        dimensions=128,
+        api_key="gemini-test-key",
+        extra_body={
+            "title": "greeting",
+            "taskType": "SEMANTIC_SIMILARITY",
+            "requests": [
+                {
+                    "content": {"parts": [{"text": "text the guardrails never saw"}]},
+                    "taskType": "RETRIEVAL_QUERY",
+                    "outputDimensionality": 256,
+                }
+            ],
+        },
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "hello"}]},
+                "taskType": "RETRIEVAL_QUERY",
+                "outputDimensionality": 128,
+                "title": "greeting",
+            },
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "world"}]},
+                "taskType": "SEMANTIC_SIMILARITY",
+                "outputDimensionality": 128,
+                "title": "greeting",
+            },
+        ]
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_keeps_a_shared_extra_body_config_beside_the_config_of_one_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-2",
+        input=["hello", "world"],
+        api_key="gemini-test-key",
+        extra_body={
+            "embedContentConfig": {"autoTruncate": False, "documentOcr": False},
+            "requests": [{"embedContentConfig": {"documentOcr": True}}],
+        },
+    )
+
+    assert [request["embedContentConfig"] for request in json.loads(route.calls.last.request.content)["requests"]] == [
+        {"autoTruncate": False, "documentOcr": True},
+        {"autoTruncate": False, "documentOcr": False},
+    ]
+
+
+def test_a_named_config_param_leaves_the_config_field_one_request_sets_over_the_shared_one() -> None:
+    body: Final = transform_openai_input_gemini_content(
+        input=["first", "second"],
+        model="gemini-embedding-2",
+        optional_params={
+            "auto_truncate": False,
+            "extra_body": {
+                "embedContentConfig": {"documentOcr": False},
+                "requests": [{"embedContentConfig": {"documentOcr": True, "autoTruncate": True}}],
+            },
+        },
+    )
+
+    assert [request["embedContentConfig"] for request in body["requests"]] == [
+        {"documentOcr": True, "autoTruncate": False},
+        {"documentOcr": False, "autoTruncate": False},
+    ]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_still_sends_an_extra_body_requests_field_that_is_not_a_list(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello"],
+        api_key="gemini-test-key",
+        extra_body={"requests": {"taskType": "RETRIEVAL_QUERY"}},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "hello"}]},
+                "requests": {"taskType": "RETRIEVAL_QUERY"},
+            }
+        ]
+    }
 
 
 @pytest.mark.parametrize(
@@ -1084,10 +1223,13 @@ def test_gemini_batch_embedding_gives_each_input_a_non_negative_share(
         _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": dict(usage_metadata)},
     )
 
-    assert tuple(
-        (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
-        for usage in response.item_usage
-    ) == expected
+    assert (
+        tuple(
+            (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+            for usage in response.item_usage
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -1220,17 +1362,20 @@ async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality
     )
 
     assert calls == 1
-    assert tuple(
-        (
-            item,
+    assert (
+        tuple(
             (
-                hit.usage.prompt_tokens,
-                hit.usage.prompt_tokens_details.text_tokens,
-                hit.usage.prompt_tokens_details.image_tokens,
-            ),
+                item,
+                (
+                    hit.usage.prompt_tokens,
+                    hit.usage.prompt_tokens_details.text_tokens,
+                    hit.usage.prompt_tokens_details.image_tokens,
+                ),
+            )
+            for (item, _), hit in zip(expected_hits, hits, strict=True)
         )
-        for (item, _), hit in zip(expected_hits, hits, strict=True)
-    ) == expected_hits
+        == expected_hits
+    )
 
 
 @pytest.mark.asyncio
@@ -1385,7 +1530,8 @@ def test_gemini_batch_embedding_sends_an_embed_content_config_with_non_string_ke
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
     ).mock(
         return_value=httpx.Response(
-            400, json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}}
+            400,
+            json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}},
         )
     )
 

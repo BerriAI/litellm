@@ -319,11 +319,20 @@ async fn routed(config: &str, model: &str) -> axum::response::Response {
     app(config).await.oneshot(asking(&body)).await.unwrap()
 }
 
+/// The headers that tell what the router did for a call.
+const ROUTING_HEADERS: [&str; 5] = [
+    "x-litellm-model-id",
+    "x-litellm-model-group",
+    "x-litellm-attempted-retries",
+    "x-litellm-attempted-fallbacks",
+    "x-litellm-max-retries",
+];
+
 fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
     response
         .headers()
         .iter()
-        .filter(|(name, _)| name.as_str().starts_with("x-litellm-") && *name != "x-litellm-call-id")
+        .filter(|(name, _)| ROUTING_HEADERS.contains(&name.as_str()))
         .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
         .collect()
 }

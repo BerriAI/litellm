@@ -22,7 +22,12 @@ from litellm.types.utils import (
 )
 from litellm.utils import count_characters, is_base64_encoded
 
-from ...base_llm.embedding.transformation import BaseEmbeddingConfig, extra_body_fields
+from ...base_llm.embedding.transformation import (
+    BaseEmbeddingConfig,
+    extra_body_fields,
+    over_extra_body_items,
+    split_request_extra_body,
+)
 from ..common_utils import VertexAIError, pop_vertex_request_labels
 from ..request_labels import vertex_request_label_fields
 
@@ -197,11 +202,17 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
             request_data["instances"] = [vertex_request_instance]
 
-        extra_body: Final = extra_body_fields(optional_params)
+        extra_instances, extra_parameters = split_request_extra_body(
+            extra_body_fields(optional_params), "instances", "parameters"
+        )
+        request_data["instances"] = cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+            list[Instance],
+            over_extra_body_items(extra_instances, request_data["instances"]),
+        )
         if "outputDimensionality" in optional_params:
-            request_data["parameters"] = {**extra_body, "dimension": optional_params["outputDimensionality"]}
-        elif extra_body:
-            request_data["parameters"] = dict(extra_body)
+            request_data["parameters"] = {**extra_parameters, "dimension": optional_params["outputDimensionality"]}
+        elif extra_parameters:
+            request_data["parameters"] = dict(extra_parameters)
 
         return {**request_data, "labels": labels} if labels else {**request_data}
 

@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
+    TokenTypeCostBreakdown,
     calculate_cache_writing_cost,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -1894,6 +1895,88 @@ def _adjusted_stored_cost(
     return adjusted.cost
 
 
+class _ImageCostItemization:
+    def __init__(self) -> None:
+        self.input_cost = 0.0
+        self.output_cost: float | None = None
+        self.token_breakdown: TokenTypeCostBreakdown | None = None
+
+    def record_token_cost(
+        self, input_cost: float, output_cost: float, breakdown: TokenTypeCostBreakdown | None
+    ) -> None:
+        self.input_cost += input_cost
+        self.output_cost = (self.output_cost or 0.0) + output_cost
+        if breakdown is not None:
+            self.token_breakdown = breakdown
+
+    def store(
+        self,
+        logging_obj: LitellmLoggingObject | None,
+        total_cost: float,
+        service_tier: str | None,
+        vertex_location: str | None,
+        has_svg_authoring: bool,
+    ) -> None:
+        output_cost: Final = self.output_cost
+        token_breakdown: Final = self.token_breakdown
+        remainder: Final = 0.0 if output_cost is None else total_cost - (self.input_cost + output_cost)
+        _store_cost_breakdown_in_logging_obj(
+            litellm_logging_obj=logging_obj,
+            prompt_tokens_cost_usd_dollar=self.input_cost,
+            completion_tokens_cost_usd_dollar=(
+                total_cost
+                if output_cost is None
+                else total_cost - self.input_cost
+                if has_svg_authoring
+                else output_cost
+            ),
+            cost_for_built_in_tools_cost_usd_dollar=(
+                None if has_svg_authoring or math.isclose(remainder, 0.0, abs_tol=1e-15) else remainder
+            ),
+            total_cost_usd_dollar=total_cost,
+            cache_read_cost=None if token_breakdown is None else token_breakdown.cache_read_cost,
+            cache_creation_cost=None if token_breakdown is None else token_breakdown.cache_creation_cost,
+            reasoning_cost=None if token_breakdown is None else token_breakdown.reasoning_cost,
+            service_tier=service_tier,
+            vertex_location=vertex_location,
+            billed_token_rates=None if token_breakdown is None else token_breakdown.rates,
+        )
+
+
+def _image_response_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    completion_response: ImageResponse,
+    quality: str | None,
+    n: int | None,
+    size: str | None,
+    optional_params: Mapping[str, object] | None,
+    call_type: str,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+    service_tier: str | None,
+    logging_obj: LitellmLoggingObject | None,
+) -> float:
+    itemization: Final = _ImageCostItemization() if logging_obj is not None else None
+    total: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        completion_response=completion_response,
+        quality=quality,
+        n=n,
+        size=size,
+        optional_params=optional_params,
+        call_type=call_type,
+        model_info=model_info,
+        vertex_location=vertex_location,
+        service_tier=service_tier,
+        report_token_cost=None if itemization is None else itemization.record_token_cost,
+    )
+    if itemization is not None:
+        itemization.store(logging_obj, total, service_tier, vertex_location, completion_response.svg_usage is not None)
+    return total
+
+
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -2366,8 +2449,7 @@ def completion_cost(
                 if CostCalculatorUtils.call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
                 ):
-                    ### IMAGE GENERATION COST CALCULATION ###
-                    return CostCalculatorUtils.route_image_generation_cost_calculator(
+                    return _image_response_cost(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         completion_response=completion_response,
@@ -2379,6 +2461,7 @@ def completion_cost(
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
                         service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
+                        logging_obj=litellm_logging_obj,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###

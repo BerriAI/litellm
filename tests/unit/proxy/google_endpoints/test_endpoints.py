@@ -128,6 +128,16 @@ _NO_SYSTEM_PARTS: Final = {"systemInstruction": {"parts": []}}
 _TOOLS: Final = {"tools": [{"functionDeclarations": [_DECLARATION]}]}
 _TURN: Final = {"role": "user", "parts": [{"text": "Count this request"}]}
 _CONTENTS: Final = {"contents": [_TURN]}
+_PART_METADATA: Final = (
+    ("videoMetadata", {"fps": 1}),
+    ("video_metadata", {"fps": 1}),
+    ("mediaResolution", {"level": "MEDIA_RESOLUTION_LOW"}),
+    ("media_resolution", {"level": "MEDIA_RESOLUTION_LOW"}),
+    ("mediaProcessing", {"fps": 1}),
+    ("media_processing", {"fps": 1}),
+    ("speechMetadata", {"speaker": "narrator"}),
+    ("speech_metadata", {"speaker": "narrator"}),
+)
 
 
 @pytest.mark.parametrize(
@@ -185,12 +195,33 @@ def test_google_count_tokens_rejects_a_scalar_where_google_expects_an_object_or_
         _google_count_tokens_request("counted", {"contents": [_TURN], **malformed})
 
 
+_NON_TEXT_PART_DATA: Final[tuple[tuple[str, JsonValue], ...]] = (
+    ("inlineData", {"mimeType": "image/png", "data": "aGVsbG8="}),
+    ("inline_data", {"mime_type": "image/png", "data": "aGVsbG8="}),
+    ("fileData", {"fileUri": "gs://bucket/rules.pdf"}),
+    ("file_data", {"file_uri": "gs://bucket/rules.pdf"}),
+    ("functionCall", {"name": "lookup", "args": {}}),
+    ("function_call", {"name": "lookup", "args": {}}),
+    ("functionResponse", {"name": "lookup", "response": {}}),
+    ("function_response", {"name": "lookup", "response": {}}),
+    ("executableCode", {"language": "PYTHON", "code": "print(1)"}),
+    ("executable_code", {"language": "PYTHON", "code": "print(1)"}),
+    ("codeExecutionResult", {"outcome": "OUTCOME_OK", "output": "1"}),
+    ("code_execution_result", {"outcome": "OUTCOME_OK", "output": "1"}),
+    ("toolCall", {"id": "call-1", "toolType": "GOOGLE_SEARCH_WEB"}),
+    ("toolResponse", {"id": "call-1", "toolType": "GOOGLE_SEARCH_WEB"}),
+    ("unknownFuturePartData", {"value": 1}),
+)
+
+
 @pytest.mark.parametrize(
     "parts",
     (
-        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
+        *({field: data} for field, data in _NON_TEXT_PART_DATA),
+        *({"text": None, field: data} for field, data in _NON_TEXT_PART_DATA),
+        *({field: metadata} for field, metadata in _PART_METADATA),
+        *({"text": None, field: metadata} for field, metadata in _PART_METADATA),
         [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}],
-        {"text": None, "inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
         [{"text": "Follow these rules"}, {"text": None, "fileData": {"fileUri": "gs://bucket/rules.pdf"}}],
     ),
 )

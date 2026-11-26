@@ -1,6 +1,7 @@
-//! The fields of `datetime.fromtimestamp(seconds, timezone.utc)`, and `datetime.fromisoformat(text)`.
+//! The fields of `datetime.fromtimestamp(seconds, timezone.utc)`, `datetime.fromisoformat(text)`,
+//! and the milliseconds Python takes between two `datetime`s.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A UTC `datetime`'s fields, as Python's `datetime` exposes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,4 +373,43 @@ fn iso_week_date(year: i64, week: u32, weekday: u32) -> Option<(i64, u32, u32)> 
     Some(civil_from_days(
         week_one_monday + i64::from((week - 1) * 7 + weekday - 1),
     ))
+}
+
+/// `(end.timestamp() - start.timestamp()) * 1000` for `elapsed`, the time from `start` to `end`:
+/// its milliseconds, held to the microsecond a `datetime` keeps.
+pub fn milliseconds(elapsed: Duration) -> f64 {
+    let micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a call's duration in microseconds is far below 2^53"
+    )]
+    let micros = micros as f64;
+    micros / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{number::round, repr::float_repr};
+
+    #[rstest]
+    #[case::whole_milliseconds(Duration::from_millis(1500), "1500.0")]
+    #[case::a_fraction(Duration::from_micros(1_250_500), "1250.5")]
+    #[case::nanoseconds_a_datetime_does_not_keep(Duration::from_nanos(1_250_500_999), "1250.5")]
+    fn a_duration_is_pythons_str_of_its_milliseconds(
+        #[case] elapsed: Duration,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(float_repr(milliseconds(elapsed)), expected);
+    }
+
+    #[rstest]
+    #[case::kept_to_four_places(12.345_678, "12.3457")]
+    #[case::whole(3.0, "3.0")]
+    #[case::none_spent(0.0, "0.0")]
+    fn a_rounded_duration_keeps_four_places(#[case] ms: f64, #[case] expected: &str) {
+        assert_eq!(float_repr(round(ms, 4)), expected);
+    }
 }
