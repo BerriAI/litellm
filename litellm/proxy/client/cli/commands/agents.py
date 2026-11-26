@@ -911,7 +911,9 @@ def _opencode_help(
             encoding="utf-8",
             timeout=_OPENCODE_HELP_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+    except subprocess.TimeoutExpired:
+        return _OpencodeHelpFailed(f"timed out after {_OPENCODE_HELP_TIMEOUT_SECONDS:g} seconds")
+    except (OSError, UnicodeError) as error:
         return _OpencodeHelpFailed(str(error) or type(error).__name__)
     if completed.returncode != 0:
         return _OpencodeHelpFailed(f"exit code {completed.returncode}")

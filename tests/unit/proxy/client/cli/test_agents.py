@@ -5,9 +5,9 @@ import os
 import stat
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 from unittest.mock import patch
 
 import click
@@ -796,7 +796,7 @@ Options:
 """
 
 
-def _opencode_2_help(command, standalone):
+def _opencode_2_help(command: tuple[str, ...], standalone: bool) -> str:
     usage = " ".join(("opencode", *command)) if command else "opencode <subcommand>"
     flag = "  --standalone      Run with a private server instead of the background service\n" if standalone else ""
     return (
@@ -806,14 +806,20 @@ def _opencode_2_help(command, standalone):
 
 
 class _FakeOpencode:
-    def __init__(self, takes_standalone=_OPENCODE_2_4_STANDALONE, stdout=None, returncode=0, error=None):
+    def __init__(
+        self,
+        takes_standalone: frozenset[tuple[str, ...]] = _OPENCODE_2_4_STANDALONE,
+        stdout: str | None = None,
+        returncode: int = 0,
+        error: Exception | None = None,
+    ) -> None:
         self.takes_standalone = takes_standalone | {()}
         self.stdout = stdout
         self.returncode = returncode
         self.error = error
-        self.calls = []
+        self.calls: list[tuple[Sequence[str], dict[str, object]]] = []
 
-    def __call__(self, command, **kwargs):
+    def __call__(self, command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         self.calls.append((command, kwargs))
         if self.error is not None:
             raise self.error
@@ -823,7 +829,11 @@ class _FakeOpencode:
         return subprocess.CompletedProcess(command, self.returncode, stdout, "")
 
 
-def _private_server(args, run=None, warn=None):
+def _private_server(
+    args: Sequence[str],
+    run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> tuple[str, ...]:
     return with_opencode_private_server(
         "/usr/local/bin/opencode",
         args,
@@ -833,7 +843,7 @@ def _private_server(args, run=None, warn=None):
     )
 
 
-def _unexpected_warning(message):
+def _unexpected_warning(message: str) -> NoReturn:
     raise AssertionError(f"unexpected warning: {message}")
 
 
@@ -941,6 +951,16 @@ class TestOpencodePrivateServer:
         assert len(warnings) == 1
         assert "--standalone" in warnings[0]
         assert reason in warnings[0]
+
+    def test_a_probe_timeout_keeps_the_typed_prompt_out_of_the_warning(self) -> None:
+        def time_out(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            raise subprocess.TimeoutExpired(command, 10)
+
+        warnings: list[str] = []
+        launched = _private_server(["run", "ship the q3 numbers"], run=time_out, warn=warnings.append)
+        assert launched == ("run", "ship the q3 numbers")
+        assert len(warnings) == 1
+        assert "ship the q3 numbers" not in warnings[0]
 
     def test_the_probe_runs_with_the_launch_env(self):
         run = _FakeOpencode()
