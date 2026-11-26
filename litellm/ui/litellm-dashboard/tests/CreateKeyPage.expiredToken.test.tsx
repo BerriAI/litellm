@@ -76,6 +76,7 @@ vi.mock("@/components/networking", () => {
     getUiSettings: vi.fn().mockResolvedValue({ values: {}, field_schema: {} }),
     // Used to build the redirect URL
     proxyBaseUrl: "https://example.com",
+    getProxyBaseUrl: vi.fn(() => "https://example.com"),
     getRuntimeBackendBaseUrl: vi.fn(() => null),
     getUiPageUrl: (url: string) => url,
     // Called when decoding a valid token
@@ -126,7 +127,10 @@ vi.mock("@/components/model_hub_table", () => ({ default: stub("model-hub-table"
 vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
-vi.mock("@/components/LeftNav", () => ({ default: stub("sidebar") }));
+vi.mock("@/components/LeftNav", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/LeftNav")>()),
+  default: stub("sidebar"),
+}));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
 vi.mock("@/app/(dashboard)/guardrails/_components", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));
