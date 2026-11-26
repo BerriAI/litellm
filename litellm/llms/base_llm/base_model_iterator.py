@@ -1,8 +1,11 @@
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 import litellm
 from litellm.litellm_core_utils.core_helpers import loads_json_object
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
 if TYPE_CHECKING:
@@ -72,6 +75,36 @@ def convert_model_response_to_streaming(
         raise ValueError(f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}")
 
 
+UPSTREAM_ABORT_MESSAGE: Final = "Upstream generation aborted (finish_reason=abort)"
+
+
+class _StreamedChoice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    finish_reason: object = None
+
+
+class _StreamedChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    choices: tuple[_StreamedChoice, ...] | None = None
+
+
+class UpstreamAbortError(BaseLLMException):
+    pass
+
+
+def upstream_abort_error() -> UpstreamAbortError:
+    return UpstreamAbortError(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
+
+
+def raise_on_upstream_abort(chunk: object) -> None:
+    try:
+        choices: Final = _StreamedChunk.model_validate(chunk).choices or ()
+    except ValidationError:
+        return
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise upstream_abort_error()
+
+
 class BaseModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
@@ -134,7 +167,10 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
-            return self.chunk_parser(chunk=stripped_json_chunk)
+            parsed_chunk: Final = self.chunk_parser(chunk=stripped_json_chunk)
+            if '"abort"' in str_line:
+                raise_on_upstream_abort(stripped_json_chunk)
+            return parsed_chunk
         else:
             return GenericStreamingChunk(
                 text="",
