@@ -3890,7 +3890,8 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
     threshold: float | None
 
 
-# The `guardrail_action` a run logs when it acted while its status reads as success: it changed the
+# The `guardrail_action` a run logs, with `general_settings.guardrail_log_skip_passed` on, when it
+# acted while its status reads as success: it changed the
 # content and let the request through, its pre_call hook returned a rejection message, or it detected
 # a violation and let the request through. Spend-log redaction keeps `guardrail_action`, so such a
 # run stays recognizable when prompts are not stored.

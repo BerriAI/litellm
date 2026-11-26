@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    acting_runs_are_logged,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -448,7 +449,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                 event_type=event_type,
                 tracing_detail=(
                     {"guardrail_action": GUARDRAIL_ACTION_FLAG}
-                    if lakera_response is not None and lakera_response.get("flagged") is True
+                    if lakera_response is not None
+                    and lakera_response.get("flagged") is True
+                    and acting_runs_are_logged()
                     else None
                 ),
             )
@@ -793,11 +796,13 @@ class LakeraAIGuardrail(CustomGuardrail):
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
 
         # Call Lakera guardrail
-        lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
+        lakera_guardrail_response, logged_entity_count = await self.call_v2_guard(
             messages=post_call_messages,
             request_data=data,
             event_type=GuardrailEventHooks.post_call,
         )
+        # The logged run counts the entities masked here only with guardrail_log_skip_passed on.
+        masked_entity_count: Final[dict[str, int]] = logged_entity_count if acting_runs_are_logged() else {}
 
         # Handle flagged content
         if lakera_guardrail_response.get("flagged") is True:

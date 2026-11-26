@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
@@ -106,6 +107,17 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
+
+
+def acting_runs_are_logged() -> bool:
+    """True when ``general_settings.guardrail_log_skip_passed`` is on. Only then does a run that
+    acted with a success status log a ``guardrail_action``, which keeps its request log row."""
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return False
+    from litellm.proxy.proxy_server import current_general_settings
+
+    return current_general_settings().get("guardrail_log_skip_passed") is True
+
 
 # The run the current hook last logged, so a guardrail that logs its verdict and then rejects
 # the request can mark that run as blocking.
@@ -1777,8 +1789,11 @@ class CustomGuardrail(CustomLogger):
 
     def mark_logged_run_as_blocking(self) -> None:
         """Set ``guardrail_action`` to block on the run this guardrail just logged, for a guardrail
-        that logs its verdict with a success status and then rejects the request."""
+        that logs its verdict with a success status and then rejects the request. Does nothing with
+        ``general_settings.guardrail_log_skip_passed`` off."""
         run: Final = _last_logged_run.get()
+        if not acting_runs_are_logged():
+            return
         if run is not None and "guardrail_name" in run and run["guardrail_name"] == self.guardrail_name:
             run["guardrail_action"] = GUARDRAIL_ACTION_BLOCK
 
@@ -1857,7 +1872,9 @@ class CustomGuardrail(CustomLogger):
     ) -> GuardrailTracingDetail | None:
         """The ``guardrail_action`` of a run that acted while its status reads as success: a pre_call
         hook that returned its rejection message, which the proxy turns into a 400, or a hook that
-        changed the content."""
+        changed the content. Logged only with ``general_settings.guardrail_log_skip_passed`` on."""
+        if not acting_runs_are_logged():
+            return None
         if returned_text:
             return {"guardrail_action": GUARDRAIL_ACTION_BLOCK} if event_type == GuardrailEventHooks.pre_call else None
         return {"guardrail_action": GUARDRAIL_ACTION_MASK} if changed_content else None

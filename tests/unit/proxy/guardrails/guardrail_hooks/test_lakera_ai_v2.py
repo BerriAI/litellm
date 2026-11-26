@@ -5,7 +5,7 @@ PR checklist requires at least one test in tests/test_litellm/.
 Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
-import importlib, logging, os
+import contextlib, importlib, logging, os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -421,6 +421,36 @@ _EVERY_HOOK: Final = pytest.mark.parametrize(
 class TestLoggedRunKeepsItsRequestLogRow:
     """``general_settings.guardrail_log_skip_passed`` drops a run that reads as passed, so a Lakera
     run that blocked or masked has to say so in what it logs."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_passed_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", True)
+
+    @_EVERY_HOOK
+    @pytest.mark.parametrize("on_flagged", ["block", "monitor"])
+    async def test_flagged_run_logs_no_action_with_the_setting_off(
+        self, monkeypatch: pytest.MonkeyPatch, run_hook: _RunHook, new_request: _NewRequest, on_flagged: str
+    ):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", False)
+        data: Final = new_request()
+        guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged)
+        with contextlib.suppress(HTTPException):
+            await run_hook(guardrail, PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, data)
+        assert _logged_run(data).get("guardrail_action") is None
+
+    async def test_post_call_masked_run_logs_no_entity_count_with_the_setting_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", False)
+        data: Final = _request_without_messages()
+        await _run_post_call(LakeraAIGuardrail(api_key="test_key", on_flagged="mask"), PII_ONLY_LAKERA_RESPONSE, data)
+        assert _logged_run(data)["masked_entity_count"] == {}
 
     @_EVERY_HOOK
     async def test_blocked_run_logs_a_blocking_action(self, run_hook: _RunHook, new_request: _NewRequest):

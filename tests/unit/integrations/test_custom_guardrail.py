@@ -3481,6 +3481,13 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
     """Regression for LIT-6935: a pre_call hook returning the request payload leaked the prompt
     into ``guardrail_response`` and from there onto OTEL guardrail spans."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_passed_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run logs its ``guardrail_action`` only with ``guardrail_log_skip_passed`` on."""
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", True)
+
     @staticmethod
     def _logged_response(request_data: dict[str, object]) -> object:
         metadata = request_data["litellm_metadata"]
@@ -3546,6 +3553,33 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
         assert self._logged_response(data) == "mask"
         assert self._logged_action(data) == "mask"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("returned", ["[MASKED]", None], ids=["masks", "rejects"])
+    async def test_a_run_that_acted_logs_no_action_with_the_setting_off(
+        self, monkeypatch: pytest.MonkeyPatch, returned: str | None
+    ):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", False)
+
+        class ActingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object] | str:
+                return "rejected" if returned is None else {**data, "input": returned}
+
+        data: Final = self._request()
+        await ActingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_action(data) is None
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_mutating_request_in_place_logs_mask(self):
