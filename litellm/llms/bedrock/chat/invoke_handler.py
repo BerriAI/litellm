@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, TypeVar
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -185,14 +185,47 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
-_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
+
+
+class _InvocationTokenCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int = Field(alias="inputTokenCount")
+    output_tokens: int = Field(alias="outputTokenCount")
+
+
+def _invocation_token_counts(metrics: object) -> _InvocationTokenCounts | None:
+    try:
+        return _InvocationTokenCounts.model_validate(metrics)
+    except ValidationError:
+        return None
+
+
+def invocation_metrics_usage(event: Mapping[str, object]) -> Usage | None:
+    counts: Final = _invocation_token_counts(event.get(_INVOCATION_METRICS_FIELD))
+    if counts is None:
+        return None
+    return Usage(
+        prompt_tokens=counts.input_tokens,
+        completion_tokens=counts.output_tokens,
+        total_tokens=counts.input_tokens + counts.output_tokens,
+    )
+
+
+def _with_invocation_metrics_usage(chunk_data: Mapping[str, object]) -> Mapping[str, object]:
+    if chunk_data.get("usage") is not None:
+        return chunk_data
+    usage: Final = invocation_metrics_usage(chunk_data)
+    return chunk_data if usage is None else {**chunk_data, "usage": usage}
 
 
 def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
     if not json_mode:
         return None
     try:
-        body: Final = _REQUEST_BODY.validate_python(json.loads(data))
+        body: Final = _JSON_OBJECT.validate_python(json.loads(data))
     except (json.JSONDecodeError, ValidationError):
         return None
     return JsonModeRequest.model_validate(body).tool_schema()
@@ -216,7 +249,7 @@ def _stream_decoder(
     if bedrock_invoke_provider == "deepseek_r1":
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
     if bedrock_invoke_provider == "moonshot":
-        return AmazonOpenAICompatibleStreamDecoder(model=model, sync_stream=sync_stream)
+        return AmazonOpenAICompatibleStreamDecoder(model=model)
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
@@ -444,6 +477,9 @@ class AWSEventStreamDecoder:
         self._thinking_block_index = -1
         self._thinking_content_block_index: int | None = None
         self._provider_reasoning_tokens: int | None = None
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+
+        self._openai_chunk_parser = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -735,6 +771,8 @@ class AWSEventStreamDecoder:
         finish_reason = ""
         if "outputText" in chunk_data:
             text = chunk_data["outputText"]
+        elif "choices" in chunk_data:
+            return self._openai_chunk(_JSON_OBJECT.validate_python(chunk_data))
         # ai21 mapping
         elif "ai21" in self.model:  # fake ai21 streaming
             text = chunk_data["completions"][0]["data"]["text"]
@@ -789,6 +827,9 @@ class AWSEventStreamDecoder:
         chunk_data: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> GChunk | ModelResponseStream | dict[str, object]:  # mutable-ok: mirrors override contract
         return self._chunk_parser(chunk_data)
+
+    def _openai_chunk(self, chunk_data: Mapping[str, object]) -> ModelResponseStream:
+        return self._openai_chunk_parser.chunk_parser(chunk=dict(_with_invocation_metrics_usage(chunk_data)))
 
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
@@ -949,18 +990,5 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
 
 
 class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
-    def __init__(
-        self,
-        model: str,
-        sync_stream: bool,
-    ) -> None:
-        super().__init__(model=model)
-        from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
-
-        self.openai_model_response_iterator = OpenAIChatCompletionStreamingHandler(
-            streaming_response=None,
-            sync_stream=sync_stream,
-        )
-
     def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
-        return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
+        return self._openai_chunk(chunk_data)
