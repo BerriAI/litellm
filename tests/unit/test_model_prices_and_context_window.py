@@ -45,7 +45,7 @@ def test_qwen3_asr_is_available_for_openai_compatible_transcription(local_model_
     assert litellm.supports_audio_input(model)
 
 
-@pytest.mark.parametrize("model", ("hy4-flash", "inkling-2-small", "qwen4-max", "rune"))
+@pytest.mark.parametrize("model", ("hy4-flash", "inkling-2-mini", "inkling-2-small", "qwen4-max", "rune"))
 def test_fireworks_serverless_model_resolves_to_its_registry_row(
     local_model_cost_map: None, prices: CostMap, model: str
 ) -> None:
