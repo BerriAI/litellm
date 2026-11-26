@@ -4748,5 +4748,117 @@
       }
     ],
     "default_model_placeholder": "vispark/vision-medium"
+  },
+  {
+    "provider": "UPLINKSWITCH",
+    "provider_display_name": "UplinkSwitch",
+    "litellm_provider": "uplinkswitch",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.uplinkswitch.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "uplinkswitch/gpt-5.6-luna"
+  },
+  {
+    "provider": "RELAYSWITCH",
+    "provider_display_name": "RelaySwitch",
+    "litellm_provider": "relayswitch",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.relayswitch.io/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "relayswitch/gpt-5.6-luna"
+  },
+  {
+    "provider": "UNCENSOREDLLM",
+    "provider_display_name": "UncensoredLLM",
+    "litellm_provider": "uncensoredllm",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.uncensoredllm.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "uncensoredllm/no-filter-ai"
+  },
+  {
+    "provider": "PENTESTLLM",
+    "provider_display_name": "PentestLLM",
+    "litellm_provider": "pentestllm",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.pentestllm.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "pentestllm/orca-zero-1.5-cybersecurity"
   }
 ]
