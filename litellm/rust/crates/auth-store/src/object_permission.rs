@@ -3,7 +3,7 @@
 use litellm_redis_store::auth_cache::CachedObjectPermission;
 use litellm_repositories::ObjectPermission;
 
-use crate::{Error, key::nullable};
+use crate::{Error, column::nullable};
 
 /// What `LiteLLM_ObjectPermissionTable.model_dump(mode="json")` holds for `row`, or the column the
 /// model would refuse the row for. The table has no `apps` column, so the model's default stands.

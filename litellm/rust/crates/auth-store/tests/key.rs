@@ -2,17 +2,18 @@
 //! ones `tests/unit/redis/stores/test_auth_cache_key.py` runs Python's own models and key writer
 //! on, so this crate and Python are pinned to the same bytes. Change both together.
 
-use std::{str::FromStr, sync::Arc};
+mod support;
+
+use std::sync::Arc;
 
 use litellm_auth_store::KeyDatabase;
-use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_db_testing::MigratedPostgres;
 use litellm_gateway_auth_core::KeyHash;
-use litellm_redis_store::IntoValue;
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository, Side};
-use litellm_secret_value::SecretValue;
+use litellm_repositories::{KeyRepository, ObjectPermissionRepository, Side};
 use rstest::rstest;
-use sqlx::{PgPool, postgres::PgConnectOptions};
+use sqlx::PgPool;
+
+use support::{database, dumped, execute};
 
 const BARE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TEAM_KEY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -247,56 +248,11 @@ const FULL_PERMISSION_ENTRY: &str = concat!(
     r#" "apps": null}"#,
 );
 
-struct NoEvents;
-
-impl Observer for NoEvents {
-    fn record(&self, _event: QueryEvent) {}
-}
-
-fn database(postgres: &MigratedPostgres) -> Database {
-    let options = PgConnectOptions::from_str(postgres.url()).unwrap();
-    let endpoint = Endpoint {
-        host: options.get_host().to_owned(),
-        port: options.get_port(),
-        socket: None,
-        username: "postgres".to_owned(),
-        password: Some(SecretValue::new("postgres")),
-        database: "postgres".to_owned(),
-        ssl_mode: SslMode::Disable,
-        ssl_root_cert: None,
-        ssl_client: None,
-        application_name: None,
-        options: Vec::new(),
-        statement_cache_capacity: 100,
-        pool: PoolLimits {
-            max_connections: 2,
-            acquire_timeout_seconds: Some(10.0),
-            idle_timeout_seconds: None,
-            socket_timeout_seconds: None,
-        },
-    };
-    Database::new(
-        Pools::new(&endpoint, None).unwrap(),
-        Arc::new(NoEvents),
-        None,
-        endpoint.names_statements(),
-    )
-}
-
 fn key_database(postgres: &MigratedPostgres) -> KeyDatabase {
     KeyDatabase::new(
         Arc::new(KeyRepository::new(database(postgres))),
         Arc::new(ObjectPermissionRepository::new(database(postgres))),
     )
-}
-
-async fn execute(pool: &PgPool, sql: &'static str) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "Fixture statements are outside the compile-checked query set"
-    )]
-    let statement = sqlx::query(sql);
-    statement.execute(pool).await.unwrap();
 }
 
 /// A key as `/key/generate` stores it when asked for nothing.
@@ -444,10 +400,6 @@ fn stamped(json: &str) -> String {
         .find([',', '}'])
         .map_or(json.len(), |end| value + end);
     format!("{}{STAMP}{}", &json[..value], &json[end..])
-}
-
-fn dumped(value: impl IntoValue) -> String {
-    litellm_python_compat::json::dumps(&value.into_value()).unwrap()
 }
 
 #[rstest]
