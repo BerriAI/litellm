@@ -862,3 +862,19 @@ async def test_scope_step_up_denial_still_ignores_an_unauthorized_response() -> 
     await asyncio.wait_for(started, 1)
 
     assert [call.args[0]["status"] for call in send.await_args_list] == [200]
+
+@pytest.mark.asyncio
+async def test_managed_reauth_denial_replaces_the_pending_tool_response_with_the_gateway_challenge() -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp")
+    started: Final = await _pending_listing_response(gate, send)
+
+    gate.deny(MCPUpstreamAuthError(401, None, "docs", managed_reauth=True))
+    await asyncio.wait_for(started, 1)
+
+    start, body = [call.args[0] for call in send.await_args_list]
+    assert start["status"] == 401
+    assert dict(start["headers"])[b"www-authenticate"].decode() == (
+        'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/docs/mcp"'
+    )
+    assert body["body"] == b'{"detail":"Unauthorized"}'

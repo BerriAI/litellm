@@ -48,6 +48,7 @@ class MCPUpstreamAuthError(Exception):
         required_scope: str | None = None,
         server_id: str | None = None,
         public_detail: object = None,
+        managed_reauth: bool = False,
     ) -> None:
         self.status_code = status_code
         self.www_authenticate = www_authenticate
@@ -55,6 +56,7 @@ class MCPUpstreamAuthError(Exception):
         self.required_scope = required_scope
         self.server_id = server_id
         self.public_detail = TOKEN_EXCHANGE_SUBJECT_ERROR if public_detail == TOKEN_EXCHANGE_SUBJECT_ERROR else None
+        self.managed_reauth = managed_reauth
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
     def to_http_exception(

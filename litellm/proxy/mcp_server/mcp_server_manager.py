@@ -7161,6 +7161,8 @@ class MCPServerManager:
                                         status_code=401,
                                         www_authenticate=www_authenticate,
                                         server_name=server_label,
+                                        server_id=mcp_server.server_id,
+                                        managed_reauth=True,
                                     ) from e
                                 raise_public(oauth_error)
                             case _:

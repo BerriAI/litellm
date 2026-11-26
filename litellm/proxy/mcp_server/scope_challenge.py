@@ -57,7 +57,9 @@ class OAuthScopeResponse:
         self._ready.set()
 
     def deny(self, error: MCPUpstreamAuthError) -> None:
-        if error.status_code == 403 and error.required_scope is not None:
+        if (error.status_code == 401 and error.managed_reauth) or (
+            error.status_code == 403 and error.required_scope is not None
+        ):
             self._refuse(error)
 
     def deny_reauth(self) -> None:
