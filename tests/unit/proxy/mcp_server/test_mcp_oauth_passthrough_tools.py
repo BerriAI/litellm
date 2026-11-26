@@ -244,6 +244,20 @@ def test_to_http_exception_preserves_upstream_www_authenticate(public_detail: ob
     }
 
 
+def test_managed_reauth_replaces_an_upstream_challenge_with_the_gateway_challenge():
+    err = MCPUpstreamAuthError(
+        status_code=401,
+        www_authenticate='Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+        server_name="sample_docs",
+        managed_reauth=True,
+    )
+
+    http_exc = err.to_http_exception(base_url="https://gateway.example.com/")
+    assert http_exc.headers == {
+        "www-authenticate": 'Bearer resource_metadata="https://gateway.example.com/.well-known/oauth-protected-resource/mcp/sample_docs"'
+    }
+
+
 def test_to_http_exception_skips_fabrication_when_base_url_missing():
     """Without ``base_url`` we cannot build an RFC 9728 §3.2-compliant absolute
     URI, so we omit the fabricated ``WWW-Authenticate`` challenge entirely
@@ -869,7 +883,14 @@ async def test_managed_reauth_denial_replaces_the_pending_tool_response_with_the
     gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp")
     started: Final = await _pending_listing_response(gate, send)
 
-    gate.deny(MCPUpstreamAuthError(401, None, "docs", managed_reauth=True))
+    gate.deny(
+        MCPUpstreamAuthError(
+            401,
+            'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+            "docs",
+            managed_reauth=True,
+        )
+    )
     await asyncio.wait_for(started, 1)
 
     start, body = [call.args[0] for call in send.await_args_list]

@@ -1990,8 +1990,9 @@ async def get_user_oauth_credential(
     server_id: str,
     *,
     use_writer: bool = False,
+    include_invalidated: bool = False,
 ) -> OAuthCredentialPayload | None:
-    """Return the decoded OAuth2 payload dict for a user+server pair, or None."""
+    """Return the decoded OAuth2 payload for a user+server pair, hiding invalidated grants by default."""
 
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=use_writer)
     if row is None:
@@ -1999,7 +2000,10 @@ async def get_user_oauth_credential(
     decoded: Final = _decode_user_credential(row.credential_b64)
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
-    return _parse_oauth_payload(decoded)
+    payload: Final = _parse_oauth_payload(decoded)
+    if payload is not None and not include_invalidated and not payload.get("access_token"):
+        return None
+    return payload
 
 
 async def invalidate_user_oauth_credential_if_grant_matches(
@@ -2068,8 +2072,10 @@ async def _record_oauth_scope_refusal(
 
 def _server_user_credential_item(
     row: "prisma_db_models.LiteLLM_MCPUserCredentials",
-) -> MCPServerUserCredentialListItem:
+) -> MCPServerUserCredentialListItem | None:
     oauth_payload: Final = decode_oauth_payload(row.credential_b64)
+    if oauth_payload is not None and not oauth_payload.get("access_token"):
+        return None
     if oauth_payload is None:
         return MCPServerUserCredentialListItem(
             user_id=row.user_id,
@@ -2094,7 +2100,7 @@ async def list_server_user_credentials(
         prisma_client,
         {"server_id": server_id},
     )
-    return tuple(_server_user_credential_item(row) for row in rows)
+    return tuple(item for row in rows if (item := _server_user_credential_item(row)) is not None)
 
 
 async def list_user_oauth_credentials(
@@ -2110,7 +2116,7 @@ async def list_user_oauth_credentials(
         if decoded is None:
             _warn_undecryptable_credential(user_id, row.server_id)
         payload = _parse_oauth_payload(decoded)
-        if payload is None:
+        if payload is None or not payload.get("access_token"):
             continue
         payload["server_id"] = row.server_id
         results.append(payload)

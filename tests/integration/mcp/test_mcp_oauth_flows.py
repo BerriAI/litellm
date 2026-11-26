@@ -2571,7 +2571,13 @@ def _live_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpP
             if body.get("method") == "tools/call":
                 token: Final = request.headers.get("authorization", "").removeprefix("Bearer ")
                 if not auth.is_live(token):
-                    return Reply(status=401, body=b'{"error":"invalid token"}', headers={"WWW-Authenticate": "Bearer"})
+                    return Reply(
+                        status=401,
+                        body=b'{"error":"invalid token"}',
+                        headers={
+                            "WWW-Authenticate": 'Bearer resource_metadata="http://upstream.example/.well-known/oauth-protected-resource"'
+                        },
+                    )
             forwarded: Final = httpx.request(
                 request.method, inner.url, content=request.body, headers=dict(request.headers)
             )
@@ -2730,9 +2736,19 @@ def test_rejected_access_with_dead_refresh_grant_is_invalidated_and_challenges_f
         with auth.lock:
             auth.revoked.add(_issued_token(issued))
             auth.refresh_tokens.clear()
-        outcome: Final = McpCaller(gateway, key, "server_mcp", alias).call(f"{alias}-add", ADD)
-        assert outcome.status == 401, outcome.raw
+        response: Final = McpCaller(gateway, key, "server_mcp", alias).rpc(
+            "tools/call", {"name": f"{alias}-add", "arguments": ADD}
+        )
+        assert response.status_code == 401, response.text
+        assert response.headers.get("www-authenticate") == (
+            f'Bearer resource_metadata="{_base(gateway)}/.well-known/oauth-protected-resource/{alias}/mcp"'
+        )
         assert _user_credential_row_count(user_id, identity) == 1
+        status: Final = gateway.request("GET", f"/v1/mcp/server/{identity}/oauth-user-credential/status", key=key)
+        assert status.status_code == 200 and status.json()["has_credential"] is False, status.text
+        credentials: Final = gateway.request("GET", "/v1/mcp/user-credentials", key=key)
+        assert credentials.status_code == 200, credentials.text
+        assert all(item.get("server_id") != identity for item in credentials.json())
         assert tool_calls(peer.drain()) == ()
         assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
 

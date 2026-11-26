@@ -101,18 +101,29 @@ class MCPUpstreamAuthError(Exception):
             if aggregate_step_up and self.required_scope
             else self.required_scope
         )
-        challenge: str | None = self.www_authenticate
-        if challenge is None and (self.status_code == 401 or self.required_scope is not None) and base_url:
-            prefix: Final = base_url.rstrip("/")
-            name: Final = quote(self.server_name, safe="/:@!$&'()*+,;=")
-            resource_metadata_url: Final = (
+        prefix: Final = base_url.rstrip("/") if base_url else None
+        name: Final = quote(self.server_name, safe="/:@!$&'()*+,;=")
+        resource_metadata_url: Final = (
+            (
                 f"{prefix}/.well-known/oauth-protected-resource"
                 if aggregate_step_up
                 else f"{prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{name}/mcp"
                 if request_path and request_path.startswith(f"/{self.server_name}/mcp")
                 else f"{prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{name}"
             )
-            challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
+            if prefix and (self.status_code == 401 or self.required_scope is not None)
+            else None
+        )
+        gateway_challenge: Final = (
+            f'Bearer resource_metadata="{resource_metadata_url}"' if resource_metadata_url else None
+        )
+        challenge: Final = (
+            gateway_challenge
+            if self.managed_reauth
+            else self.www_authenticate
+            if self.www_authenticate is not None
+            else gateway_challenge
+        )
         scoped_challenge: Final = (
             (f'{challenge}, error="insufficient_scope"' if challenge else 'Bearer error="insufficient_scope"')
             + (f', scope="{requested_scope}"' if requested_scope else "")
