@@ -79,7 +79,8 @@ pub struct RefreshingCredentials {
 impl RefreshingCredentials {
     pub fn new(source: impl CredentialSource) -> Self {
         let (sender, latest) = watch::channel(Latest::Pending);
-        let start: Start = Box::new(move || drop(tokio::spawn(refresh(source, sender))));
+        let start: Start =
+            Box::new(move || drop(litellm_call_scope::spawn_detached(refresh(source, sender))));
         Self {
             latest,
             start: Arc::new(Mutex::new(Some(start))),

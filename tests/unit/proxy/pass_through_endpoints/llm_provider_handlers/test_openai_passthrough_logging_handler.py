@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, List
@@ -573,6 +573,8 @@ class TestOpenAIPassthroughLoggingHandler:
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
+            custom_pricing=False,
+            router_model_id=None,
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
@@ -645,6 +647,8 @@ class TestOpenAIPassthroughLoggingHandler:
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
+            custom_pricing=False,
+            router_model_id=None,
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload")
@@ -703,6 +707,8 @@ class TestOpenAIPassthroughLoggingHandler:
             model="gpt-4o-mini",
             custom_llm_provider="openai",
             call_type="responses",
+            custom_pricing=False,
+            router_model_id=None,
         )
 
     @patch(f"{OpenAIPassthroughLoggingHandler.__module__}.get_standard_logging_object_payload", return_value=None)
@@ -1667,6 +1673,7 @@ class TestOpenAIPassthroughIntegration:
             n=1,
             size="1024x1024",
             optional_params=request_body,
+            model_info=None,
         )
 
     @patch("litellm.cost_calculator.default_image_cost_calculator")
@@ -1706,6 +1713,7 @@ class TestOpenAIPassthroughIntegration:
             n=1,
             size="1024x1024",
             optional_params=request_body,
+            model_info=None,
         )
 
     def test_cost_calculation_preservation(self):
@@ -3848,9 +3856,7 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert streamed_read.spend_row["spend"] > 0
 
     @pytest.mark.asyncio
-    async def test_a_poll_claim_the_database_drops_is_retried_and_bills_the_creator_once(
-        self, local_model_cost_map
-    ):
+    async def test_a_poll_claim_the_database_drops_is_retried_and_bills_the_creator_once(self, local_model_cost_map):
         rows: Final = _DispatchedSpendRows()
         creators: Final = _CreatorTable()
         fetch: Final = _ScriptedFetch()
@@ -4529,9 +4535,7 @@ class TestOpenAIPassthroughDecisionsSpendLog:
     ):
         decisions_rates: Final = litellm.model_cost[DECISIONS_MODEL]
 
-        spend_log_row: Final = await self._spend_row(
-            "POST", url_route, {**DECISIONS_REQUEST, "model": requested_model}
-        )
+        spend_log_row: Final = await self._spend_row("POST", url_route, {**DECISIONS_REQUEST, "model": requested_model})
 
         assert spend_log_row["prompt_tokens"] == DECISIONS_INPUT_TOKENS
         assert spend_log_row["completion_tokens"] == DECISIONS_OUTPUT_TOKENS
@@ -4616,3 +4620,321 @@ def test_count_relayed_prompt_tokens_charges_an_uppercase_scheme_remote_high_det
     assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
         litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
     )
+
+
+PRICED_MODEL: Final = "gpt-5.1"
+PRICED_TOKENS: Final = 1_000
+PASS_THROUGH_KEY: Final = "sk-pass-through"
+OPENAI_URL: Final = "https://api.openai.com"
+DEPLOYMENT_INPUT_COST: Final = 3e-7
+DEPLOYMENT_OUTPUT_COST: Final = 7e-7
+DEPLOYMENT_COST: Final = PRICED_TOKENS * (DEPLOYMENT_INPUT_COST + DEPLOYMENT_OUTPUT_COST)
+
+
+def _priced_deployment(
+    deployment_id: str,
+    model_name: str = PRICED_MODEL,
+    model: str = f"openai/{PRICED_MODEL}",
+    api_key: str | None = PASS_THROUGH_KEY,
+    api_base: str | None = None,
+    input_cost: float = DEPLOYMENT_INPUT_COST,
+    team_id: str | None = None,
+    use_in_pass_through: bool = False,
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            **({"api_key": api_key} if api_key is not None else {}),
+            **({"api_base": api_base} if api_base is not None else {}),
+            **({"use_in_pass_through": True} if use_in_pass_through else {}),
+        },
+        "model_info": {
+            "id": deployment_id,
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": DEPLOYMENT_OUTPUT_COST,
+            **({"team_id": team_id} if team_id is not None else {}),
+        },
+    }
+
+
+def _chat_usage() -> dict[str, int]:
+    return {"prompt_tokens": PRICED_TOKENS, "completion_tokens": PRICED_TOKENS, "total_tokens": 2 * PRICED_TOKENS}
+
+
+def _pass_through_logging_obj(stream: bool, declared_provider: str | None) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=DISPATCH_TIME,
+        litellm_call_id="3f1c9d27-8a4e-4b60-9d15-7e2a6c0b4f83",
+        function_id="1234",
+    )
+    logging_obj.update_environment_variables(
+        model="unknown", user="unknown", optional_params={}, litellm_params={}, call_type="pass_through_endpoint"
+    )
+    if declared_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = declared_provider
+    return logging_obj
+
+
+def _buffered_pass_through_cost(
+    path: str,
+    request_body: dict[str, object],
+    response_body: dict[str, object],
+    declared_provider: str | None = "openai",
+) -> float:
+    result: Final = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+        httpx_response=httpx.Response(200, json=response_body, request=httpx.Request("POST", OPENAI_URL + path)),
+        response_body=response_body,
+        logging_obj=_pass_through_logging_obj(stream=False, declared_provider=declared_provider),
+        url_route=OPENAI_URL + path,
+        result="success",
+        start_time=DISPATCH_TIME,
+        end_time=DISPATCH_TIME,
+        cache_hit=False,
+        request_body=request_body,
+        litellm_params={},
+    )
+    return result["kwargs"]["response_cost"]
+
+
+def _chat_pass_through_cost(declared_provider: str | None = "openai") -> float:
+    return _buffered_pass_through_cost(
+        "/v1/chat/completions",
+        {"model": PRICED_MODEL, "messages": []},
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": PRICED_MODEL,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": _chat_usage(),
+        },
+        declared_provider,
+    )
+
+
+def _responses_pass_through_cost() -> float:
+    return _buffered_pass_through_cost(
+        "/v1/responses",
+        {"model": PRICED_MODEL, "input": "hi"},
+        {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": PRICED_MODEL,
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {
+                "input_tokens": PRICED_TOKENS,
+                "output_tokens": PRICED_TOKENS,
+                "total_tokens": 2 * PRICED_TOKENS,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    )
+
+
+STREAMED_CHAT_CHUNK: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": PRICED_MODEL,
+    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+}
+
+
+def _streamed_chat_events() -> tuple[dict[str, object], ...]:
+    return (STREAMED_CHAT_CHUNK, {**STREAMED_CHAT_CHUNK, "choices": [], "usage": _chat_usage()})
+
+
+def _streamed_chat_pass_through_cost() -> float:
+    result: Final = OpenAIPassthroughLoggingHandler.handle_logging_openai_collected_chunks(
+        litellm_logging_obj=_pass_through_logging_obj(stream=True, declared_provider="openai"),
+        passthrough_success_handler_obj=PassThroughEndpointLogging(),
+        url_route=OPENAI_URL + "/v1/chat/completions",
+        request_body={"model": PRICED_MODEL, "stream": True},
+        endpoint_type=EndpointType.OPENAI,
+        start_time=DISPATCH_TIME,
+        all_chunks=[f"data: {json.dumps(event)}" for event in _streamed_chat_events()],
+        end_time=DISPATCH_TIME,
+    )
+    return result["kwargs"]["response_cost"]
+
+
+_Register = Callable[..., None]
+
+
+class TestOpenAIPassthroughDeploymentPricing:
+    @pytest.fixture
+    def register_deployments(self, monkeypatch: pytest.MonkeyPatch) -> _Register:
+        monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+        monkeypatch.setattr(litellm, "api_base", None)
+        monkeypatch.setenv("OPENAI_API_KEY", PASS_THROUGH_KEY)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+
+        def register(*deployments: dict[str, object]) -> None:
+            monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=list(deployments)))
+
+        return register
+
+    @pytest.fixture
+    def cost_map_price(self, register_deployments: _Register) -> float:
+        return _chat_pass_through_cost()
+
+    @pytest.mark.parametrize(
+        "pass_through_cost",
+        [_chat_pass_through_cost, _responses_pass_through_cost, _streamed_chat_pass_through_cost],
+    )
+    def test_every_token_priced_route_bills_the_deployment_price(
+        self, register_deployments: _Register, pass_through_cost: Callable[[], float]
+    ) -> None:
+        register_deployments(_priced_deployment("priced"))
+
+        assert pass_through_cost() == pytest.approx(DEPLOYMENT_COST)
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_chat_spend_row_keeps_the_deployment_price(self, register_deployments: _Register) -> None:
+        register_deployments(_priced_deployment("priced"))
+        recorder: Final = _SpendRowRecorder()
+        logging_obj: Final = _pass_through_logging_obj(stream=True, declared_provider="openai")
+        logging_obj.dynamic_async_success_callbacks = [recorder]
+
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=PassThroughEndpointLogging(),
+            url_route=OPENAI_URL + "/v1/chat/completions",
+            request_body={"model": PRICED_MODEL, "stream": True},
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            raw_bytes=[f"data: {json.dumps(event)}\n\n".encode() for event in _streamed_chat_events()],
+            end_time=DISPATCH_TIME,
+        )
+        logged: Final = await asyncio.wait_for(recorder.call, timeout=5)
+
+        assert logged.spend_row["spend"] == pytest.approx(DEPLOYMENT_COST)
+
+    def test_embeddings_bill_the_deployment_price(self, register_deployments: _Register) -> None:
+        register_deployments(_priced_deployment("priced"))
+
+        cost: Final = _buffered_pass_through_cost(
+            "/v1/embeddings",
+            {"model": PRICED_MODEL, "input": "hi"},
+            {
+                "object": "list",
+                "model": PRICED_MODEL,
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "usage": {"prompt_tokens": PRICED_TOKENS, "total_tokens": PRICED_TOKENS},
+            },
+        )
+
+        assert cost == pytest.approx(PRICED_TOKENS * DEPLOYMENT_INPUT_COST)
+
+    def test_image_generation_bills_the_deployment_price(self, register_deployments: _Register) -> None:
+        deployment: Final = _priced_deployment("priced")
+        register_deployments({**deployment, "model_info": {"id": "priced", "input_cost_per_image": 0.5}})
+
+        cost: Final = _buffered_pass_through_cost(
+            "/v1/images/generations",
+            {"model": PRICED_MODEL, "prompt": "a cat", "n": 2},
+            {"created": 1, "data": [{"url": "https://example.com/1.png"}, {"url": "https://example.com/2.png"}]},
+        )
+
+        assert cost == pytest.approx(1.0)
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            pytest.param((_priced_deployment("priced", model_name="team-alias"),), id="group named by an alias"),
+            pytest.param(
+                (_priced_deployment("priced", api_base="https://api.openai.com/v1"),), id="explicit OpenAI base"
+            ),
+            pytest.param((_priced_deployment("priced", api_key=None),), id="deployment key read from the environment"),
+            pytest.param(
+                (_priced_deployment("first"), _priced_deployment("second")), id="two deployments at one price"
+            ),
+            pytest.param(
+                (_priced_deployment("priced"), _priced_deployment("team", input_cost=9e-7, team_id="team-1")),
+                id="a team deployment at another price is ignored",
+            ),
+            pytest.param(
+                (
+                    _priced_deployment("priced", use_in_pass_through=True),
+                    _priced_deployment("other-account", api_key="sk-other", input_cost=9e-7),
+                ),
+                id="the deployment that supplies the pass-through key wins over another account",
+            ),
+        ],
+    )
+    def test_an_unambiguous_deployment_price_is_billed(
+        self, register_deployments: _Register, deployments: tuple[dict[str, object], ...]
+    ) -> None:
+        register_deployments(*deployments)
+
+        assert _chat_pass_through_cost() == pytest.approx(DEPLOYMENT_COST)
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            pytest.param((), id="no deployments"),
+            pytest.param(
+                (_priced_deployment("priced", model=f"openai/{PRICED_MODEL}-mini"),),
+                id="group named like the model but serving another model",
+            ),
+            pytest.param((_priced_deployment("priced", api_key="sk-other"),), id="another account's key"),
+            pytest.param(
+                (_priced_deployment("priced", api_base="https://gateway.example.com/v1"),), id="another base URL"
+            ),
+            pytest.param((_priced_deployment("priced", team_id="team-1"),), id="team deployment"),
+            pytest.param(
+                (_priced_deployment("priced", model=f"azure/{PRICED_MODEL}", api_base="https://api.openai.com"),),
+                id="another provider",
+            ),
+            pytest.param(
+                (_priced_deployment("cheap"), _priced_deployment("dear", input_cost=9e-7)),
+                id="deployments that disagree on price",
+            ),
+            pytest.param(
+                (
+                    _priced_deployment("priced"),
+                    {
+                        "model_name": PRICED_MODEL,
+                        "litellm_params": {"model": f"openai/{PRICED_MODEL}", "api_key": PASS_THROUGH_KEY},
+                    },
+                ),
+                id="a priced deployment beside one on the cost map",
+            ),
+        ],
+    )
+    def test_the_cost_map_price_is_kept_when_no_single_deployment_price_fits(
+        self, register_deployments: _Register, cost_map_price: float, deployments: tuple[dict[str, object], ...]
+    ) -> None:
+        register_deployments(*deployments)
+
+        assert cost_map_price != pytest.approx(DEPLOYMENT_COST)
+        assert _chat_pass_through_cost() == pytest.approx(cost_map_price)
+
+    def test_a_configured_route_that_forwards_its_own_key_keeps_the_cost_map_price(
+        self, register_deployments: _Register, cost_map_price: float
+    ) -> None:
+        register_deployments(_priced_deployment("priced"))
+
+        assert _chat_pass_through_cost(declared_provider=None) == pytest.approx(cost_map_price)
+
+    @pytest.mark.parametrize("key_reference", ["os.environ/DEPLOYMENT_OPENAI_KEY", "oidc/env/DEPLOYMENT_OPENAI_KEY"])
+    def test_a_deployment_key_stored_as_a_secret_reference_bills_the_deployment_price(
+        self, register_deployments: _Register, monkeypatch: pytest.MonkeyPatch, key_reference: str
+    ) -> None:
+        monkeypatch.setenv("DEPLOYMENT_OPENAI_KEY", PASS_THROUGH_KEY)
+        register_deployments(_priced_deployment("priced", api_key=key_reference))
+
+        assert _chat_pass_through_cost() == pytest.approx(DEPLOYMENT_COST)

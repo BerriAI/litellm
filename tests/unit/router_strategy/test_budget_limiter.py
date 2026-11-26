@@ -12,11 +12,14 @@ from functools import partial
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import litellm
 import pytest
+import respx
 
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -827,3 +830,145 @@ async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirma
     await second._push_in_memory_increments_to_redis()
     assert float(await client.get("provider_spend:openai:1d")) == 0.5
     await client.aclose()
+
+
+_IMAGE_USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+_SERVED_IMAGE: Final = {
+    "candidates": [{"finishReason": "STOP", "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
+    "usageMetadata": _IMAGE_USAGE,
+}
+_BILLED_REFUSAL: Final = {
+    "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+    "usageMetadata": _IMAGE_USAGE,
+}
+
+
+class _ServedImageCost(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cost: float | None = None
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.cost = kwargs["standard_logging_object"]["response_cost"]
+        self.logged.set()
+
+
+_IMAGE_GROUPS: Final = ("primary", "backup", "last")
+
+
+def _upstream_answer(answer: Mapping[str, object], request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=answer)
+
+
+async def _billed_image_request(
+    router: Router,
+    served: _ServedImageCost,
+    call_id: str,
+    answers: tuple[Mapping[str, object], ...],
+    request_fields: Mapping[str, object] = MappingProxyType({}),
+) -> float | None:
+    served.logged.clear()
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="a single small red dot",
+        litellm_call_id=call_id,
+        **request_fields,
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        for group, answer in zip(_IMAGE_GROUPS, answers, strict=False):
+            upstream.post(url__startswith=f"https://{group}.invalid/").mock(side_effect=partial(_upstream_answer, answer))
+        try:
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+        except litellm.ContentPolicyViolationError:
+            return None
+        await asyncio.wait_for(served.logged.wait(), 10)
+    return served.cost
+
+
+def _budgeted_image_router(monkeypatch, deployments: int = 2) -> tuple[Router, _ServedImageCost, RouterBudgetLimiting]:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    groups: Final = _IMAGE_GROUPS[:deployments]
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+            }
+            for group in groups
+        ],
+        fallbacks=[{groups[0]: list(groups[1:])}],
+        num_retries=0,
+        provider_budget_config={"gemini": {"budget_limit": 100, "time_period": "1d"}},
+    )
+    served: Final = _ServedImageCost()
+    litellm.logging_callback_manager.add_litellm_callback(served)
+    limiter: Final = router.get_router_deployment_budget_limiter()
+    assert limiter is not None
+    return router, served, limiter
+
+
+@pytest.mark.asyncio
+async def test_billed_image_refusals_count_toward_router_budgets_once_each(disable_budget_sync, monkeypatch):
+    router, served, limiter = _budgeted_image_router(monkeypatch)
+
+    served_alone: Final = await _billed_image_request(router, served, "served", (_SERVED_IMAGE, _SERVED_IMAGE))
+    through_fallback: Final = await _billed_image_request(router, served, "fallback", (_BILLED_REFUSAL, _SERVED_IMAGE))
+    refused_twice: Final = await _billed_image_request(router, served, "refused", (_BILLED_REFUSAL, _BILLED_REFUSAL))
+
+    assert served_alone is not None and through_fallback is not None and refused_twice is None
+    refusal: Final = through_fallback - served_alone
+    assert refusal > 0
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(
+        served_alone + through_fallback + 2 * refusal
+    )
+
+
+@pytest.mark.asyncio
+async def test_each_refusal_before_a_served_fallback_counts_once_toward_router_budgets(disable_budget_sync, monkeypatch):
+    router, served, limiter = _budgeted_image_router(monkeypatch, deployments=3)
+
+    served_alone: Final = await _billed_image_request(router, served, "served", (_SERVED_IMAGE,) * 3)
+    after_one_refusal: Final = await _billed_image_request(
+        router, served, "one-refusal", (_BILLED_REFUSAL, _SERVED_IMAGE, _SERVED_IMAGE)
+    )
+    after_two_refusals: Final = await _billed_image_request(
+        router, served, "two-refusals", (_BILLED_REFUSAL, _BILLED_REFUSAL, _SERVED_IMAGE)
+    )
+
+    assert served_alone is not None and after_one_refusal is not None and after_two_refusals is not None
+    refusal: Final = after_one_refusal - served_alone
+    assert refusal > 0
+    assert after_two_refusals == pytest.approx(served_alone + 2 * refusal)
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(
+        served_alone + after_one_refusal + after_two_refusals
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billed_attempts", ([["usage", 1000.0]], "junk"))
+async def test_a_request_cannot_change_its_router_budget_charge_by_naming_a_billing_field(
+    disable_budget_sync, monkeypatch, billed_attempts
+):
+    router, served, limiter = _budgeted_image_router(monkeypatch)
+
+    await _billed_image_request(router, served, "honest", (_SERVED_IMAGE, _SERVED_IMAGE))
+    honest: Final = await limiter._get_current_provider_spend("gemini")
+    await _billed_image_request(
+        router,
+        served,
+        "spoofed",
+        (_SERVED_IMAGE, _SERVED_IMAGE),
+        request_fields={"failed_attempts_billed_on_success": billed_attempts},
+    )
+
+    assert honest is not None and honest > 0
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(2 * honest)

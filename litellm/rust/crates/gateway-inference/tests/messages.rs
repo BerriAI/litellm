@@ -866,3 +866,153 @@ async fn the_body_is_read_as_json_whatever_the_content_type(
         .unwrap();
     assert_eq!(response.status(), 200);
 }
+
+/// The custom headers a served `/v1/messages` response carries: the deployment's model, and for a
+/// stream, whose response Python builds from the stream's hidden params, the api base and the
+/// provider's headers.
+#[rstest]
+#[case::complete(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn a_served_response_carries_the_custom_headers_python_sends_for_it(#[case] streaming: bool) {
+    let upstream = MockServer::start().await;
+    let template = if streaming {
+        ResponseTemplate::new(200).set_body_raw(MESSAGE_SSE, "text/event-stream")
+    } else {
+        ResponseTemplate::new(200).set_body_json(json!({"id": "msg_test", "type": "message",
+            "role": "assistant", "model": "test-model", "content": [], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    };
+    Mock::given(method("POST"))
+        .respond_with(template.insert_header("x-request-id", "req_up"))
+        .mount(&upstream)
+        .await;
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        "/v1/messages",
+        json!({"model": "public/model", "max_tokens": 16, "stream": streaming,
+            "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    let sent = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_owned())
+    };
+    let api_base = streaming.then(|| upstream.uri());
+    let provider = streaming.then(|| "req_up".to_owned());
+    assert_eq!(
+        (
+            sent("x-litellm-model-name"),
+            sent("x-litellm-model-api-base"),
+            sent("llm_provider-x-request-id"),
+            sent("request-id"),
+            sent("x-litellm-response-duration-ms").map(|ms| ms.parse::<f64>().is_ok()),
+        ),
+        (
+            Some("anthropic/test-model".to_owned()),
+            api_base,
+            provider.clone(),
+            provider,
+            Some(true),
+        )
+    );
+}
+
+/// A `/v1/messages` call the provider fails carries the zero cost and the attempt's timeout the
+/// proxy's handler adds, and none of the provider's headers.
+#[tokio::test]
+async fn a_provider_error_carries_the_proxys_error_headers() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(json!({"type": "error", "error": {"type": "invalid_request_error", "message": "no"}}))
+                .insert_header("x-request-id", "req_up"),
+        )
+        .mount(&upstream)
+        .await;
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        "/v1/messages",
+        json!({"model": "public/model", "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    let sent = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_owned())
+    };
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            sent("x-litellm-response-cost"),
+            sent("x-litellm-timeout"),
+            sent("llm_provider-x-request-id"),
+        ),
+        (400, Some("0".to_owned()), Some("5.0".to_owned()), None)
+    );
+}
+
+/// A stream that fails before content and is taken over by the group's next `order`, whose own
+/// error ends the call, answers with the timeout of that deployment, which raised the error, as
+/// Python's handler reads the `timeout` `utils.client` stamped on it, and keeps the routing of the
+/// stream that failed.
+#[tokio::test]
+async fn a_take_over_that_ends_on_its_own_error_names_the_timeout_of_the_deployment_that_raised_it()
+{
+    let streamed = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"boom\"}}\n\n",
+            "text/event-stream",
+        ))
+        .mount(&streamed)
+        .await;
+    let next = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(
+            json!({"type": "error", "error": {"type": "api_error", "message": "down"}}),
+        ))
+        .mount(&next)
+        .await;
+    let deployment = |id: &str, api_base: String, order: u32, timeout: u32| {
+        json!({"model_name": "public/model", "model_info": {"id": id},
+            "litellm_params": {"model": "anthropic/test-model", "api_base": api_base,
+                "api_key": "test-key", "order": order, "timeout": timeout}})
+    };
+    let app = support::app_with_models(
+        json!([
+            deployment("streamed", streamed.uri(), 1, 5),
+            deployment("next", next.uri(), 2, 7),
+        ]),
+        json!({"num_retries": 0}),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        json!({"model": "public/model", "max_tokens": 16, "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+
+    let sent = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_owned())
+    };
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            sent("x-litellm-timeout"),
+            sent("x-litellm-model-id"),
+            next.received_requests().await.unwrap().len(),
+        ),
+        (500, Some("7.0".to_owned()), Some("streamed".to_owned()), 1)
+    );
+}

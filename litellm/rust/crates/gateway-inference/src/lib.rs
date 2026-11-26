@@ -130,11 +130,11 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
-        .layer(headers::layer())
         .layer(axum::middleware::from_fn_with_state(
             gateway.clone(),
             group_usage::told::<H>,
         ))
+        .layer(axum::middleware::from_fn(headers::render_response_headers))
         .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }

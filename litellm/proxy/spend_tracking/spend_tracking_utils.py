@@ -3,14 +3,14 @@ import ipaddress
 import os
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from datetime import datetime as dt
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -1179,9 +1179,9 @@ def _sanitize_guardrail_information_for_spend_logs(
     no_log: bool = False,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
-    When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
+    When ``store_prompts_in_spend_logs`` is False, blank prompt-carrying fields
     (``guardrail_request``, ``guardrail_response``, ``match_details``,
-    ``classification``) before they land in ``LiteLLM_SpendLogs.metadata``.
+    ``classification``) to ``None`` before they land in ``LiteLLM_SpendLogs.metadata``.
 
     Guardrail hooks may echo the LLM request payload back into
     ``guardrail_response``, and two first-party hooks
@@ -1203,11 +1203,47 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
+def _holds_nothing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, list, tuple, dict)):
+        return len(value) == 0  # pyright: ignore[reportUnknownArgumentType]  # only its length is read
+    return False
+
+
+def _has_text_key(keys: Iterable[object]) -> bool:
+    return any(isinstance(key, str) for key in keys)
+
+
+def _stored_prompt_field(value: object) -> object:
+    """What a prompt-carrying field is stored as when prompts are not stored: the value itself when its
+    JSON form holds nothing, otherwise ``None``.
+
+    The native row builder makes the same choice on the JSON form of the value, where a string of NUL
+    bytes is ``""``, an empty set is ``[]``, and a dict with no string key or a pydantic model with no
+    field is ``{}``. Only those shapes can have an empty form, so only they are checked: a large value
+    is never walked, and a dict stops at its first string key.
+    """
+    if _holds_nothing(value):
+        return value
+    if isinstance(value, str):
+        return None if strip_null_bytes(value) else ""
+    if isinstance(value, set):
+        return None if value else []
+    text_keyed: Final = as_str_mapping(value)
+    if isinstance(value, dict) and text_keyed is not None:
+        return None if _has_text_key(text_keyed) else {}
+    if isinstance(value, BaseModel) and not type(value).model_fields and not value.model_extra:
+        return {}
+    return None
+
+
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
     """
-    Replace prompt-carrying fields with the redaction marker. Purely numeric
+    Store ``None`` in place of every prompt-carrying field that holds a value. A field whose JSON
+    form is ``None`` or an empty string, list or dict is stored as that empty form. Purely numeric
     compression stats inside ``guardrail_response`` (e.g. Headroom's
     ``tokens_saved``) cannot carry prompt content, so they are preserved as a
     stats-only dict; spend aggregation reads them via
@@ -1216,7 +1252,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = numeric_compression_stats(entry)
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+        **{key: _stored_prompt_field(value) for key, value in entry.items() if key in PROMPT_CARRYING_GUARDRAIL_FIELDS},
     }
     if preserved_stats is None:
         return redacted

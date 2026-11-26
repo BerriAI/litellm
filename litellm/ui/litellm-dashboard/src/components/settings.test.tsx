@@ -91,6 +91,40 @@ describe("Settings", () => {
     expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("saves a cleared Slack webhook alongside the inherited default and selected alerts", async () => {
+    const fallback = "https://example.invalid/default";
+    const custom = "https://example.invalid/exceptions";
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [],
+      available_callbacks: {},
+      alerts: [
+        {
+          name: "slack",
+          variables: { SLACK_WEBHOOK_URL: fallback },
+          alerts_to_webhook: { llm_exceptions: custom },
+          active_alerts: ["llm_exceptions"],
+        },
+      ],
+    });
+    renderWithProviders(<Settings {...defaultProps} />, { searchParams: { tab: "alerting-types" } });
+
+    const exceptions = await screen.findByDisplayValue(custom);
+    fireEvent.input(exceptions, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(defaultProps.accessToken, {
+        general_settings: {
+          alert_to_webhook_url: expect.objectContaining({
+            llm_exceptions: "",
+            llm_too_slow: fallback,
+          }),
+          alert_types: ["llm_exceptions"],
+        },
+      }),
+    );
+  });
+
   it("opens callback creation from inside the Logging Callbacks tab only", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Settings {...defaultProps} />);
@@ -263,6 +297,12 @@ describe("Settings", () => {
             options: ["http/protobuf", "http/json"],
             required: false,
           },
+          LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS: {
+            type: "boolean",
+            ui_name: "Emit Background Service Spans",
+            default: "true",
+            required: false,
+          },
         },
       },
     ]);
@@ -275,6 +315,24 @@ describe("Settings", () => {
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
   };
+
+  it("shows the background service span toggle on by default and saves it off", async () => {
+    const envVar = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS";
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318", [envVar]: null });
+    const user = await openOtelEditModal();
+
+    const toggle = await screen.findByRole("switch", { name: "Emit Background Service Spans" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({ environment_variables: expect.objectContaining({ [envVar]: "false" }) }),
+      );
+    });
+  });
 
   it("should post the chosen export protocol when a select dynamic param is saved", async () => {
     mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318" });

@@ -180,6 +180,7 @@ impl Sent {
 #[case::router_host_steps("router_host_steps")]
 #[case::callers("callers")]
 #[case::virtual_key_models("virtual_key_models")]
+#[case::user_api_key_cache_settings("user_api_key_cache_settings")]
 #[case::virtual_key_token_limits("virtual_key_token_limits")]
 #[case::dynamic_rate_limiter("dynamic_rate_limiter")]
 #[case::dynamic_rate_limiter_borrowing("dynamic_rate_limiter_borrowing")]

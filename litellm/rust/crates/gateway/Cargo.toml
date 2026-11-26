@@ -11,6 +11,7 @@ fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips"]
 
 [dependencies]
 litellm-at-rest.workspace = true
+litellm-call-scope.workspace = true
 litellm-python-compat.workspace = true
 litellm-env.workspace = true
 litellm-secret-value.workspace = true
@@ -73,6 +74,7 @@ uuid.workspace = true
 [dev-dependencies]
 chrono.workspace = true
 litellm-gateway = { workspace = true, features = ["test-support"] }
+litellm-gateway-inference = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 litellm-db-testing.workspace = true
 sqlx.workspace = true
