@@ -1,6 +1,6 @@
 "use client";
 
-import HomePage from "@/app/(dashboard)/home/_components/HomePage";
+import HomeLanding from "@/app/(dashboard)/home/_components/HomeLanding";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { getRuntimeBackendBaseUrl, getUiPageUrl, proxyBaseUrl } from "@/components/networking";
 import { useAuth } from "@/contexts/AuthContext";
@@ -84,7 +84,7 @@ function CreateKeyPageContent() {
     return <LoadingScreen />;
   }
 
-  return <HomePage />;
+  return <HomeLanding />;
 }
 
 export default function CreateKeyPage() {

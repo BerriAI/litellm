@@ -12,6 +12,7 @@ const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
     userRole: "Internal User",
     keys: [] as KeyRow[],
     returnUrl: null as string | null,
+    enabledPagesInternalUsers: null as string[] | null,
   };
   return {
     state,
@@ -37,6 +38,17 @@ vi.mock("@/contexts/AuthContext", () => ({
   }),
 }));
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({ useKeys: mockUseKeys }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ isLoading: false, userId: "user-1", userRole: state.userRole, isViewOnly: false }),
+}));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => ({
+    isLoading: false,
+    data: { values: { enabled_ui_pages_internal_users: state.enabledPagesInternalUsers } },
+  }),
+}));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({ default: () => false }));
 vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
   default: () => <div data-testid="home-page" />,
 }));
@@ -83,6 +95,7 @@ describe("dashboard landing", () => {
     state.userRole = "Internal User";
     state.keys = [];
     state.returnUrl = null;
+    state.enabledPagesInternalUsers = null;
     mockReplace.mockClear();
     mockUseKeys.mockClear();
     mockUiHref.mockClear();
@@ -103,6 +116,28 @@ describe("dashboard landing", () => {
 
   it("lands a user who already owns a key on the keys dashboard", () => {
     state.keys = [{ token: "sk-abc" }];
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("sends an internal user to their first visible page when Home is hidden from them", () => {
+    state.enabledPagesInternalUsers = ["api-keys"];
+    render(<CreateKeyPage />);
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/api-keys");
+    expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
+  });
+
+  it("keeps an internal user on Home when the page allowlist includes it", () => {
+    state.enabledPagesInternalUsers = ["home", "api-keys"];
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("keeps an admin on Home despite the internal-user page allowlist", () => {
+    state.userRole = "Admin";
+    state.enabledPagesInternalUsers = ["api-keys"];
     render(<CreateKeyPage />);
     expect(screen.getByTestId("home-page")).toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
