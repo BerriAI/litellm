@@ -83,3 +83,16 @@ def test_session_jwt_minted_when_admin_ui_enabled():
         token = encode_ui_session_jwt({"user_id": "u", "key": "sk-x"}, "master")
 
     assert isinstance(token, str) and token.count(".") == 2
+
+
+@pytest.mark.asyncio
+async def test_onboarding_blocked_when_admin_ui_disabled():
+    """Onboarding mints a UI session with jwt.encode directly, so the issuance choke point
+    never sees it and the route needs its own guard."""
+    from litellm.proxy.proxy_server import onboarding
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}):
+        response = await onboarding(invite_link="abc", request=SimpleNamespace())
+
+    assert response.status_code == 200
+    assert "Admin UI is Disabled" in response.body.decode()
