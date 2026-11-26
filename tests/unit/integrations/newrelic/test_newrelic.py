@@ -23,6 +23,7 @@ sys.modules["newrelic.agent"] = _mock_newrelic_agent
 import litellm
 import litellm.integrations.newrelic.newrelic as nr_module
 from litellm.integrations.newrelic.newrelic import NewRelicLogger
+from litellm.types.utils import ModelResponse
 
 
 def _rendered_log_message(call):
@@ -1392,3 +1393,22 @@ class TestStandardLoggingPayloadPreference:
 
         response = next(m for m in messages if m.get("is_response"))
         assert response["timestamp"] == int(2_000_001.5 * 1000.0)  # SLO endTime
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    (
+        (ModelResponse(id="chatcmpl-1", choices=[{"finish_reason": "length", "message": {"content": "hi"}}]), "length"),
+        ({"choices": [{"finish_reason": "stop"}]}, "stop"),
+        ({"choices": [{"finish_reason": None}]}, "unknown"),
+        ({}, "unknown"),
+    ),
+)
+def test_newrelic_finish_reason_reads_models_and_dicts_alike(response: object, expected: str) -> None:
+    assert NewRelicLogger.__new__(NewRelicLogger)._get_finish_reason(response) == expected
+
+
+def test_newrelic_completion_id_prefers_the_response_id() -> None:
+    logger: Final = NewRelicLogger.__new__(NewRelicLogger)
+    assert logger._extract_completion_id({"litellm_call_id": "call"}, ModelResponse(id="chatcmpl-1")) == "chatcmpl-1"
+    assert logger._extract_completion_id({"litellm_call_id": "call"}, {"id": None}) == "call"

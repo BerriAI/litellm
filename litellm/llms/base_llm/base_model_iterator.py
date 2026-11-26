@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import TypedDict
 
 import litellm
-from litellm.constants import STREAM_SSE_DONE_STRING
-from litellm.litellm_core_utils.core_helpers import loads_json_object
+from litellm.constants import STREAM_SSE_DONE_STRING, VLLM_STREAM_PROMPT_FIELDS
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, loads_json_object
 from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
 from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
@@ -88,6 +88,12 @@ def convert_model_response_to_streaming(
             model=model_response.model,
             system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
+        ).model_copy(
+            update={
+                field: value
+                for field in VLLM_STREAM_PROMPT_FIELDS
+                if (value := attribute_or_none(model_response, field)) is not None
+            }
         )
         service_tier: Final = stored_attribute(model_response, "service_tier")
         if service_tier is not None:

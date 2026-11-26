@@ -12,7 +12,7 @@ import httpx
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import require_attributes, str_param
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.gemini.common_utils import (
@@ -134,7 +134,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         if litellm_params:
-            api_key: Final = litellm_params.get("api_key") or get_api_key_from_env()
+            api_key: Final = str_param(litellm_params, "api_key") or get_api_key_from_env()
             if api_key:
                 self._cached_api_key = api_key
                 headers["x-goog-api-key"] = api_key

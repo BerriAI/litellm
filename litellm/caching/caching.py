@@ -57,7 +57,14 @@ RESPONSE_CACHE_TARGET: Final = "llm_response"
 _IN_MEMORY_TIER_CACHE_TYPES: Final = (LiteLLMCacheType.LOCAL, LiteLLMCacheType.REDIS)
 _REQUEST_TTL_TYPES: Final = (int, float, str)
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset(
-    {"continuation_token", "return_token_ids", "responseFormat", "generationConfig", "generation_config"}
+    {
+        "continuation_token",
+        "return_prompt_text",
+        "return_token_ids",
+        "responseFormat",
+        "generationConfig",
+        "generation_config",
+    }
 )
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
