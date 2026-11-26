@@ -957,7 +957,6 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
     "functions",
     "function_call",
     "temperature",
-    "temperature",
     "top_p",
     "n",
     "stream",
