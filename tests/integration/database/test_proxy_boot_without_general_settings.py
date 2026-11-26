@@ -1,6 +1,12 @@
+import contextlib
+import socket
+import tempfile
+import threading
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import pytest
@@ -12,7 +18,7 @@ from integration._support.process import DB_PUSH, LEGACY_MIGRATE_DEPLOY, MIGRATE
 pytestmark: Final = pytest.mark.timeout(300)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+MIGRATIONS_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras" / "migrations"
 SHIPPED_MIGRATIONS: Final = frozenset(path.name for path in MIGRATIONS_DIR.iterdir() if path.is_dir())
 CANNED_REPLY: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
 PROVIDER_KEY: Final = "integration-provider-key"
@@ -26,6 +32,35 @@ def _config_without_general_settings(directory: Path) -> Path:
     config: Final = directory / "no_general_settings.yaml"
     config.write_text("model_list: []\n")
     return config
+
+
+def _pump(source: socket.socket, sink: socket.socket) -> None:
+    with contextlib.suppress(OSError):
+        while chunk := source.recv(65536):
+            sink.sendall(chunk)
+    with contextlib.suppress(OSError):
+        sink.shutdown(socket.SHUT_WR)
+
+
+def _relay_to(listener: socket.socket, address: tuple[str, int]) -> None:
+    with contextlib.suppress(OSError):
+        while True:
+            client, _ = listener.accept()
+            upstream: Final = socket.create_connection(address)
+            threading.Thread(target=_pump, args=(client, upstream), daemon=True).start()
+            threading.Thread(target=_pump, args=(upstream, client), daemon=True).start()
+
+
+@contextlib.contextmanager
+def _unix_socket_url(database_url: str) -> Iterator[str]:
+    parts: Final = urlsplit(database_url)
+    with tempfile.TemporaryDirectory(prefix="pgsock") as directory, socket.socket(socket.AF_UNIX) as listener:
+        listener.bind(f"{directory}/.s.PGSQL.{parts.port}")
+        listener.listen()
+        threading.Thread(target=_relay_to, args=(listener, (parts.hostname, parts.port)), daemon=True).start()
+        netloc: Final = parts.netloc.replace(f"@{parts.hostname}", "@nothing-listens.invalid", 1)
+        query: Final = "&".join(filter(None, (parts.query, f"host={directory}")))
+        yield urlunsplit(parts._replace(netloc=netloc, query=query))
 
 
 def _upstream_requests(proxy: Gateway) -> tuple[dict[str, JsonValue], ...]:
@@ -114,4 +149,20 @@ def test_migration_resolver_applies_every_shipped_migration_and_serves_a_stored_
         )
         assert frozenset(string_value(row["migration_name"]) for row in ledger) == SHIPPED_MIGRATIONS
         assert all(row["finished"] is True and row["live"] is True for row in ledger)
+        _serves_a_completion_through_a_stored_key(owned.gateway, database_url)
+
+
+def test_v2_resolver_boots_on_a_unix_socket_database_url(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        scratch_database() as database_url,
+        _unix_socket_url(database_url) as socket_url,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": socket_url},
+            config=_config_without_general_settings(tmp_path),
+            remove_environment=SCRATCH_ONLY,
+            database_setup=MIGRATE_DEPLOY,
+        ) as owned,
+    ):
         _serves_a_completion_through_a_stored_key(owned.gateway, database_url)

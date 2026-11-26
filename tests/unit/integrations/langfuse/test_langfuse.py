@@ -15,7 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.integrations.langfuse.langfuse import LangFuseLogger, _chat_usage, _extract_cache_read_input_tokens
 from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
 from litellm.integrations.langfuse.langfuse_sdk import (
     flush_langfuse_tracing,
@@ -97,7 +97,9 @@ def _comparable(span: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _expected_generation(route: respx.Route, fixture_name: str, trace_id: str) -> dict[str, object]:
+def _expected_generation(
+    route: respx.Route, fixture_name: str, trace_id: str, cost_total: float | None = None
+) -> dict[str, object]:
     otel_trace_id: Final = resolve_trace_id(trace_id)
     generations: Final = tuple(
         span
@@ -108,7 +110,14 @@ def _expected_generation(route: respx.Route, fixture_name: str, trace_id: str) -
     )
     assert len(generations) == 1
     expected_path: Final = Path(__file__).with_name("langfuse_expected_request_body") / fixture_name
-    expected: Final = TypeAdapter(dict[str, object]).validate_python(json.loads(expected_path.read_text()))
+    fixture: Final = TypeAdapter(dict[str, object]).validate_python(json.loads(expected_path.read_text()))
+    fixture_attributes: Final = TypeAdapter(dict[str, object]).validate_python(fixture["attributes"])
+    priced_attributes: Final = (
+        fixture_attributes
+        if cost_total is None
+        else {**fixture_attributes, "langfuse.observation.cost_details": {"total": cost_total}}
+    )
+    expected: Final = {**fixture, "attributes": priced_attributes}
     actual: Final = _comparable(generations[0])
     expected_comparable: Final = _comparable(expected)
     assert actual == expected_comparable, json.dumps(
@@ -355,6 +364,12 @@ async def test_langfuse_logging_completion_with_bedrock_llm_response(
     langfuse_export: tuple[respx.Route, str],
 ) -> None:
     route, trace_id = langfuse_export
+    profile: Final = litellm.get_model_info(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0", custom_llm_provider="bedrock"
+    )
+    input_rate: Final = profile["input_cost_per_token"]
+    output_rate: Final = profile["output_cost_per_token"]
+    assert isinstance(input_rate, float) and isinstance(output_rate, float)
     response: Final = litellm.ModelResponse(
         choices=[],
         usage=litellm.Usage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
@@ -373,7 +388,9 @@ async def test_langfuse_logging_completion_with_bedrock_llm_response(
     )
     await _flush_langfuse()
     assert route.call_count == 1
-    _expected_generation(route, "completion_with_bedrock_call.json", trace_id)
+    _expected_generation(
+        route, "completion_with_bedrock_call.json", trace_id, cost_total=10 * input_rate + 10 * output_rate
+    )
 
 
 @pytest.mark.asyncio
@@ -478,3 +495,12 @@ async def test_langfuse_e2e_sync(langfuse_export: tuple[respx.Route, str]) -> No
     assert route.call_count == 1
     assert str(route.calls[0].request.url).endswith("/api/public/otel/v1/traces")
     assert _exported_spans(route)
+
+
+def test_langfuse_chat_usage_keeps_cache_token_reads() -> None:
+    usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12, cache_read_input_tokens=4)
+    assert _chat_usage(usage) is usage
+    assert _extract_cache_read_input_tokens(usage) == 4
+    converted: Final = _chat_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    assert isinstance(converted, litellm.Usage)
+    assert converted.get("cache_creation_input_tokens") in (None, 0)

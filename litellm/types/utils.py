@@ -91,6 +91,7 @@ from .llms.openai import (
     AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionAudioDelta,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
@@ -206,6 +207,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
     supports_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_openai_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_bedrock_converse_cache_point: ReadOnly[bool | None]
     supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
@@ -214,6 +217,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
+    supports_part_media_resolution: ReadOnly[bool | None]
+    supports_media_in_tool_response: ReadOnly[bool | None]
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
     supports_bedrock_native_structured_output: ReadOnly[bool | None]
@@ -228,6 +233,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     thinking_on_by_default: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_per_turn_control: ReadOnly[bool | None]
+    supports_server_side_fallback: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_continuation: ReadOnly[bool | None]
@@ -357,6 +363,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_audio_token_cost_flex: ReadOnly[float | None]
     cache_read_input_audio_token_cost_priority: ReadOnly[float | None]
     cache_read_input_image_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost_priority: ReadOnly[float | None]
     explicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
@@ -405,6 +412,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
+    input_cost_per_image_token_priority: ReadOnly[float | None]
     input_cost_per_video_token: float | None  # for gemini omni models with video input
     input_cost_per_audio_per_second: float | None  # only for vertex ai models
     input_cost_per_video_per_second: float | None  # only for vertex ai models
@@ -458,12 +466,15 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_image_token_priority: ReadOnly[float | None]
+    output_cost_per_image_token_flex: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
     output_cost_per_reasoning_token_flex: float | None
     output_cost_per_reasoning_token_priority: float | None
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_video_per_second: float | None  # only for vertex ai models
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
     output_cost_per_second_1080p: (
@@ -479,6 +490,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_1536: ReadOnly[float | None]
     output_cost_per_image_1K: ReadOnly[float | None]
     output_cost_per_image_2K: ReadOnly[float | None]
+    output_cost_per_billable_unit: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -1274,15 +1286,15 @@ class ChatCompletionTokenLogprob(OpenAIObject):
             return []
         return v
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1295,15 +1307,15 @@ class ChoiceLogprobs(OpenAIObject):
 
     refusal: Sequence[ChatCompletionTokenLogprob] | None = None
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1336,7 +1348,7 @@ class Function(OpenAIObject):
         self,
         arguments: dict | str | None = None,
         name: str | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if arguments is None:
             if params.get("parameters", None) is not None and isinstance(params["parameters"], dict):
@@ -1356,19 +1368,19 @@ class Function(OpenAIObject):
 
         super().__init__(**data)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1379,34 +1391,34 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     type: str | None = None
     index: int
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
 
 class _CustomToolCallAccess(OpenAIObject):
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         setattr(self, key, value)
 
 
@@ -1457,19 +1469,19 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         else:
             self.type = "function"
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1506,19 +1518,19 @@ class ChatCompletionAudioResponse(ChatCompletionAudio):
             id = f"{uuid.uuid4()}"
         super().__init__(data=data, expires_at=expires_at, transcript=transcript, id=id, **params)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1636,19 +1648,19 @@ class Message(SafeAttributeModel, OpenAIObject):
 
         add_provider_specific_fields(self, provider_specific_fields)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -1666,7 +1678,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         role: str | None
         function_call: FunctionCall | None
         tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        audio: ChatCompletionAudioResponse | None
+        audio: ChatCompletionAudioResponse | ChatCompletionAudioDelta | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
 
@@ -1681,7 +1693,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         role=None,
         function_call=None,
         tool_calls=None,
-        audio: ChatCompletionAudioResponse | None = None,
+        audio: ChatCompletionAudioResponse | ChatCompletionAudioDelta | None = None,
         images: list[ImageURLListItem] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None,
@@ -1776,19 +1788,19 @@ class Delta(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "reasoning_items"):
                 del self.reasoning_items
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1809,7 +1821,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
         logprobs: ChoiceLogprobs | dict | Any | None = None,
         enhancements=None,
         provider_specific_fields: dict[str, Any] | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if finish_reason is not None:
             mapped: Final = map_finish_reason(finish_reason)
@@ -1853,19 +1865,19 @@ class Choices(SafeAttributeModel, OpenAIObject):
         if self.provider_specific_fields is None:
             del self.provider_specific_fields
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1882,6 +1894,8 @@ def text_tokens_without_nested_reasoning(
 
 
 class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for older openai versions
+    model_config = ConfigDict(defer_build=False)
+
     text_tokens: int | None = None
     """Text tokens generated by the model."""
 
@@ -1899,9 +1913,20 @@ class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_12h_input_tokens: int | None = None
 
 
+def _nested_cache_creation_token_details(nested: object) -> CacheCreationTokenDetails | None:
+    if not isinstance(nested, Mapping):
+        return None
+    try:
+        return CacheCreationTokenDetails.model_validate(nested)
+    except ValidationError:
+        return None
+
+
 class PromptTokensDetailsWrapper(
     SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
+    model_config = ConfigDict(defer_build=False)
+
     text_tokens: int | None = None
     """Text tokens sent to the model."""
 
@@ -1964,7 +1989,7 @@ class PromptTokensDetailsWrapper(
         elif name == "cache_creation_tokens":
             super().__setattr__("cache_write_tokens", value)
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         extra_fields: Final = self.model_extra
         nested_cache_creation_input_tokens: Final = (
@@ -1981,6 +2006,8 @@ class PromptTokensDetailsWrapper(
                 )
             )
         )
+        if self.cache_creation_token_details is None and extra_fields is not None:
+            self.cache_creation_token_details = _nested_cache_creation_token_details(extra_fields.get("cache_creation"))
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -2034,6 +2061,8 @@ def _carries_non_finite_number(cost: object) -> bool:
 
 
 class Usage(SafeAttributeModel, CompletionUsage):
+    model_config = ConfigDict(defer_build=False)
+
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
@@ -2061,7 +2090,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: CompletionTokensDetailsWrapper | dict | None = None,
         server_tool_use: ServerToolUse | dict | None = None,
         cost: float | None = None,
-        **params,
+        **params: object,
     ) -> None:
         # handle reasoning_tokens
         _completion_tokens_details: CompletionTokensDetailsWrapper | None = None
@@ -2175,19 +2204,19 @@ class Usage(SafeAttributeModel, CompletionUsage):
     def dropped_non_finite_cost(usage: "Usage") -> bool:
         return usage._dropped_non_finite_cost
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2211,7 +2240,7 @@ class StreamingChoices(OpenAIObject):
         delta: Delta | None = None,
         logprobs=None,
         enhancements=None,
-        **params,
+        **params: object,
     ) -> None:
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
@@ -2234,19 +2263,19 @@ class StreamingChoices(OpenAIObject):
         else:
             set_extra_attribute(self, "logprobs", logprobs)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2301,7 +2330,7 @@ class ModelResponseBase(OpenAIObject):
         """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
         self._hidden_params["additional_headers"] = process_response_headers(headers)
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: object):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
         if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
             kwargs["exclude_unset"] = True
@@ -2366,19 +2395,19 @@ class ModelResponseStream(ModelResponseBase):
         if usage_to_set is not None:
             self.usage = usage_to_set
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2475,19 +2504,19 @@ class ModelResponse(ModelResponseBase):
             **params,
         )
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2500,17 +2529,20 @@ class Embedding(OpenAIObject):
     index: int
     object: Literal["embedding"]
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+_ITEM_USAGE: Final = TypeAdapter(tuple[Usage, ...], config=ConfigDict(strict=True))
 
 
 class EmbeddingResponse(OpenAIObject):
@@ -2538,6 +2570,11 @@ class EmbeddingResponse(OpenAIObject):
 
     _response_headers: dict | None = None
     _response_ms: float | None = None
+    _item_usage: tuple[Usage, ...] = ()
+
+    @property
+    def item_usage(self) -> tuple[Usage, ...]:
+        return self._item_usage
 
     def __init__(
         self,
@@ -2547,6 +2584,7 @@ class EmbeddingResponse(OpenAIObject):
         data: list | list[Embedding] | None = None,
         hidden_params=None,
         _response_headers=None,
+        item_usage: tuple[Usage, ...] = (),
         **params,
     ) -> None:
         object: Final = "list"
@@ -2572,24 +2610,32 @@ class EmbeddingResponse(OpenAIObject):
 
         if hidden_params:
             self._hidden_params = hidden_params
+        self._item_usage = EmbeddingResponse._typed_item_usage(item_usage)
 
-    def __contains__(self, key) -> bool:
+    @staticmethod
+    def _typed_item_usage(value: object) -> tuple[Usage, ...]:
+        try:
+            return _ITEM_USAGE.validate_python(value)
+        except ValidationError:
+            return ()
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2624,23 +2670,23 @@ class TextChoices(OpenAIObject):
             else:
                 self.logprobs = logprobs
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2746,19 +2792,19 @@ class TextCompletionResponse(OpenAIObject):
             self._response_ms = None
         self._hidden_params = HiddenParams()
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2796,28 +2842,48 @@ class ImageObject(OpenAIImage):
         if provider_specific_fields:
             self.provider_specific_fields = provider_specific_fields
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class ImageSVGUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
+def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
+    if value is None:
+        return None
+    try:
+        return ImageSVGUsage.model_validate(value)
+    except ValidationError:
+        verbose_logger.debug("Ignoring invalid SVG authoring usage in image response")
+        return None
 
 
 class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -2826,6 +2892,14 @@ class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
     text_tokens: int
     """The number of text tokens in the input prompt."""
+
+    cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
+
+    @field_validator("cached_tokens", mode="before")
+    @classmethod
+    def normalize_null_cached_tokens(cls, value: object) -> object:
+        return 0 if value is None else value
 
 
 class ImageUsage(BaseLiteLLMOpenAIResponseObject):
@@ -2847,6 +2921,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    svg_usage: ImageSVGUsage | None = None
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2902,7 +2977,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: ImageUsage | None = None,
         hidden_params: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         if response_ms:
             _response_ms = response_ms
@@ -2934,7 +3009,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        super().__init__(created=created, data=_data, usage=_usage)
+        svg_usage: Final = _parse_image_svg_usage(kwargs.get("svg_usage"))
+        super().__init__(created=created, data=_data, usage=_usage, svg_usage=svg_usage)
 
         self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
@@ -2942,23 +3018,23 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -3034,23 +3110,27 @@ class TranscriptionResponse(OpenAIObject):
     def set_audio_transcription_duration(self, duration: float) -> None:
         self._hidden_params["audio_transcription_duration"] = duration
 
-    def __contains__(self, key) -> bool:
+    def report_duration_usage_when_provider_sent_none(self, duration: object) -> None:
+        if self.usage is None and isinstance(duration, (int, float)) and duration > 0:
+            self.usage = TranscriptionUsageDurationObject(type="duration", seconds=duration)
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -3125,6 +3205,9 @@ class AdapterCompletionStreamWrapper:
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
     user_api_key_spend: float | None
@@ -3143,6 +3226,14 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: str | None
     user_api_key_team_alias: str | None
     user_api_key_end_user_id: str | None
+    user_api_key_customer_member_id: ReadOnly[str | None]
+    user_api_key_customer_team_id: ReadOnly[str | None]
+    user_api_key_customer_org_id: ReadOnly[str | None]
+    user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_budget_scopes: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_hierarchy: NotRequired[ReadOnly[Mapping[str, object] | None]]
     user_api_key_request_route: str | None
     user_api_key_auth_metadata: dict[str, str] | None
 
@@ -3437,6 +3528,12 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
+class ClaudeSubscriptionUsage(TypedDict):
+    is_overage: ReadOnly[bool]
+    status: ReadOnly[str | None]
+    overage_status: ReadOnly[str | None]
+
+
 class StandardLoggingKubernetesPodRouting(TypedDict):
     service_host: ReadOnly[str]
     pod_ip: ReadOnly[str]
@@ -3524,6 +3621,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_alias: str | None
     team_id: str | None
     used_client_oauth_token: ReadOnly[bool | None]
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool]]
 
 
@@ -3847,6 +3945,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    customer_margin_percent: ReadOnly[float]
+    customer_margin_amount: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]
@@ -3929,7 +4029,8 @@ class StandardBatchLineItem(TypedDict):
 
 class StandardBatchLineItemsPayload(TypedDict):
     """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
-    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines.
+    """
 
     batch_id: ReadOnly[str]
     finished_at: ReadOnly[int]
@@ -4113,6 +4214,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
     signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
 
+    mixpanel_project_token: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    mixpanel_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
@@ -4153,6 +4257,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_text_message: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
+    output_cost_per_video_clip: Mapping[str, Mapping[str, float]] | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
     output_cost_per_second_768p: float | None = None
@@ -4163,6 +4268,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1536: float | None = None
     output_cost_per_image_1K: float | None = None
     output_cost_per_image_2K: float | None = None
+    output_cost_per_billable_unit: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -4207,6 +4313,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_audio_token_cost_flex: float | None = None
     cache_read_input_audio_token_cost_priority: float | None = None
     cache_read_input_image_token_cost: float | None = None
+    cache_read_input_image_token_cost_priority: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_audio_token_flex: float | None = None
@@ -4262,10 +4369,12 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
     output_cost_per_image_token_priority: float | None = None
+    output_cost_per_image_token_flex: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
     output_cost_per_reasoning_token_priority: float | None = None
+    output_cost_per_video: float | None = None
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
@@ -4275,6 +4384,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
     input_cost_per_image_token: float | None = None
+    input_cost_per_image_token_priority: float | None = None
     input_cost_per_video_token: float | None = None
     input_cost_per_token_above_272k_tokens: float | None = None
     input_cost_per_token_above_512k_tokens: float | None = None
@@ -4324,6 +4434,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_bedrock_native_structured_output",
         "supports_bedrock_native_structured_output_by_default",
         "supports_per_turn_control",
+        "supports_server_side_fallback",
         "supports_pdf_input",
         "supports_continuation",
         "reasoning_modes",
@@ -4473,7 +4584,21 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
+provider_oauth_litellm_params: Final = (
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
+)
+github_copilot_oauth_litellm_params: Final = (
+    "github_copilot_auth_type",
+    "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
+)
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
@@ -4582,9 +4707,15 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + provider_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
-secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
+secret_bearing_wif_litellm_params: Final = tuple(
+    sorted(
+        WIF_SECRET_BEARING_KEYS
+        | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key", "oauth_client_secret"}
+    )
+)
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,
@@ -4686,6 +4817,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
+    PERPLEXITY_ORCHESTRATOR = "perplexity_orchestrator"
     TYPESAFE = "typesafe"
     PARALLEL_AI = "parallel_ai"
     NACE = "nace"
@@ -4701,6 +4833,7 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    GNANI = "gnani"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
     NADIR = "nadir"
@@ -4715,6 +4848,7 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
     OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"
@@ -4752,6 +4886,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GRADIUM = "gradium"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
@@ -4806,6 +4941,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"
@@ -4822,6 +4958,8 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    HUAWEI_MAAS = "huawei_maas"
+    SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -4910,6 +5048,11 @@ class LiteLLMLoggingBaseClass:
 
 
 TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class FailureLoggedCost:
+    cost: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -5166,19 +5309,19 @@ class LiteLLMBatch(Batch):
             ),
         }
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -5218,19 +5361,19 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     def _serialize_results(self, results: OpenAIRealtimeStreamList) -> list[dict[str, Any]]:
         return [dict(event) for event in results]
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -5372,6 +5515,37 @@ class PriorityReservationDict(TypedDict, total=False):
     value: float
 
 
+ClassShareEntity: TypeAlias = Literal["team", "key", "customer_organization", "customer_member"]
+
+
+ModelLimitBorrowingEntity: TypeAlias = Literal["team", "key", "customer_organization"]
+
+
+class ModelLimitBorrowingConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    borrow_idle_capacity: tuple[ModelLimitBorrowingEntity, ...] = Field(
+        default=(),
+        description="Entity types whose model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. Each may run past them on capacity other callers are not using while the model is below saturation_threshold, up to its borrow cap when one is set, and is held to them once the model saturates. A customer organization's usage counts across every key its requests use.",
+    )
+    max_borrow_multiple: float | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        allow_inf_nan=False,
+        description="Most a borrower may use on a model while it borrows idle capacity, as a multiple of its model_tpm_limit or model_rpm_limit. It applies to every listed entity type. A team or key that sets model_limit_max_borrow_multiple in its metadata uses that value instead. None lets a borrower without its own value use everything up to the model limit.",
+    )
+
+
+class PriorityClassShareConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    split_equally_among_active: tuple[ClassShareEntity, ...] = Field(
+        default=(),
+        description="Entity types that each take an equal slice of their priority class's share of a model, renormalized over the classes active on the model in the current window. Once the model saturates each is held to its own slice instead of the class pool. A request that matches several listed types counts under one of them: its team first, so customer headers cannot move a team's key off the team's slice, then customer_member, then customer_organization, then key.",
+    )
+
+
 class PriorityReservationSettings(LiteLLMBaseModel):
     """
     Settings for priority-based rate limiting reservation.
@@ -5389,6 +5563,22 @@ class PriorityReservationSettings(LiteLLMBaseModel):
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
+    model_limit_borrowing_config: ModelLimitBorrowingConfig = Field(
+        default_factory=ModelLimitBorrowingConfig,
+        description="Which callers have their per-model limits treated as guaranteed shares that borrow idle capacity.",
+    )
+    priority_class_share_config: PriorityClassShareConfig = Field(
+        default_factory=PriorityClassShareConfig,
+        description="Which callers take their own equal slice of a priority class's share of a model, instead of sharing the class pool.",
+    )
+
+    @property
+    def model_limit_borrowing_entities(self) -> frozenset[ModelLimitBorrowingEntity]:
+        return frozenset(self.model_limit_borrowing_config.borrow_idle_capacity)
+
+    @property
+    def class_share_split_entities(self) -> frozenset[ClassShareEntity]:
+        return frozenset(self.priority_class_share_config.split_equally_among_active)
 
     saturation_check_cache_ttl: int = Field(
         default=60,

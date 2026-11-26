@@ -1,26 +1,46 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import LlmProviders
 from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
-from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from ...custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler, LiteLLMLoggingObj
 from ..vertex_llm_base import VertexBase
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
 base_llm_http_handler = BaseLLMHTTPHandler()
+_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _mapping(source: object) -> Mapping[str, object]:
+    return _PARAMS.validate_python(source) if isinstance(source, Mapping) else {}
+
+
+def _caller_labels(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body_labels: Final = _mapping(optional_params.get("extra_body")).get("labels")
+    return {**_mapping(optional_params.get("labels")), **_mapping(extra_body_labels)}
 
 
 class VertexAIError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
@@ -94,21 +114,21 @@ class VertexAIPartnerModels(VertexBase):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        logging_obj,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer | None",
+        logging_obj: LiteLLMLoggingObj,
         api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: dict | None,
+        headers: dict[str, object] | None,
         timeout: float | httpx.Timeout,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        logger_fn=None,
+        logger_fn: object = None,
         acompletion: bool = False,
-        client=None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         try:
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
@@ -159,6 +179,27 @@ class VertexAIPartnerModels(VertexBase):
                 model=model,
             )
 
+            label_fields: Final = vertex_request_label_fields() if partner == VertexPartnerProvider.mistralai else ()
+            params: Final = _PARAMS.validate_python(optional_params)
+            labels_header: Final = (
+                vertex_partner_labels_header(
+                    label_fields,
+                    _caller_labels(params),
+                    _PARAMS.validate_python(headers or {}),
+                    _PARAMS.validate_python(litellm_params),
+                )
+                if label_fields
+                else None
+            )
+            if label_fields and "labels" in optional_params:
+                del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+            extra_body: Final = _mapping(params.get("extra_body"))
+            if label_fields and "labels" in extra_body:
+                optional_params["extra_body"] = {  # rebind-ok: a copy, so a shared deployment extra_body stays intact
+                    key: value for key, value in extra_body.items() if key != "labels"
+                }
+            vertex_labels_headers: Final = {} if labels_header is None else {VERTEX_LABELS_HEADER: labels_header}
+
             if "codestral" in model or "mistral" in model:
                 model = model.split("@")[0]
 
@@ -180,6 +221,7 @@ class VertexAIPartnerModels(VertexBase):
                     logger_fn=logger_fn,
                     timeout=timeout,
                     encoding=encoding,
+                    headers=vertex_labels_headers,
                 )
             elif "claude" in model:
                 # Build a new dict so we never mutate the shared deployment extra_headers object.
@@ -250,6 +292,9 @@ class VertexAIPartnerModels(VertexBase):
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
                 custom_endpoint=True,
+                headers={"Content-Type": "application/json", **vertex_labels_headers}
+                if vertex_labels_headers
+                else None,
             )
 
         except Exception as e:
@@ -260,13 +305,13 @@ class VertexAIPartnerModels(VertexBase):
     async def count_tokens(
         self,
         model: str,
-        messages: list,
-        litellm_params: dict,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
+        messages: Sequence[Mapping[str, object]],
+        litellm_params: Mapping[str, object],
+        vertex_project: object = None,
+        vertex_location: object = None,
+        vertex_credentials: object = None,
         system: object | None = None,
-        tools: list[dict[str, object]] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         count_options: Mapping[str, object] = MappingProxyType({}),
         context_management: object = None,
     ):
@@ -317,13 +362,18 @@ class VertexAIPartnerModels(VertexBase):
             }
 
             # Prepare litellm_params with credentials
-            _litellm_params: Final = litellm_params.copy()
-            if vertex_project:
-                _litellm_params["vertex_project"] = vertex_project
-            if vertex_location:
-                _litellm_params["vertex_location"] = vertex_location
-            if vertex_credentials:
-                _litellm_params["vertex_credentials"] = vertex_credentials
+            _litellm_params: Final = {
+                **litellm_params,
+                **{
+                    key: value
+                    for key, value in (
+                        ("vertex_project", vertex_project),
+                        ("vertex_location", vertex_location),
+                        ("vertex_credentials", vertex_credentials),
+                    )
+                    if value
+                },
+            }
 
             # Call the token counter
             token_counter: Final = VertexAIPartnerModelsTokenCounter()

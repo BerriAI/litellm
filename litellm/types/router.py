@@ -5,14 +5,16 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import functools
+import hashlib
+import hmac
 import re
+import secrets
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    Any,
     ClassVar,
     Final,
     Generic,
@@ -32,6 +34,7 @@ from pydantic import (
     Field,
     JsonValue,
     StrictInt,
+    TypeAdapter,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
@@ -50,6 +53,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
@@ -76,10 +80,15 @@ from .utils import (
     StandardLoggingRoutingDecision,
 )
 from .utils import (
+    github_copilot_oauth_litellm_params as _github_copilot_oauth_litellm_params,
+)
+from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 
 class SilentExperimentFlag(TypedDict, total=False):
@@ -237,6 +246,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
     fallback_on_unsupported_params: bool | None = None
+    fallback_on_saturation: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -358,7 +368,7 @@ class ModelInfo(MirroredPricingParams):
     # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
     encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
 
-    def __init__(self, id: str | int | None = None, **params) -> None:
+    def __init__(self, id: str | int | None = None, **params: object) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
         elif isinstance(id, int):
@@ -384,19 +394,19 @@ class ModelInfo(MirroredPricingParams):
 
     model_config = ConfigDict(extra="allow")
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None) -> object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -495,6 +505,10 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     token_exchange_profile: str | None = None
     token_exchange_scope: str | None = None
     token_exchange_audience: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
 
 
 def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
@@ -552,7 +566,7 @@ _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 _STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
 
-_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+_StrictlyValidatedParams = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
 
 
 def validate_litellm_params_strictly(
@@ -565,7 +579,7 @@ def _none_when_malformed_outside_strict_validation(
     value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
 ) -> object:
     try:
-        return handler(value)
+        return _OPAQUE_VALUE.validate_python(handler(value))
     except ValidationError:
         if info.context is _STRICT_LITELLM_PARAMS:
             raise
@@ -595,6 +609,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    oauth_client_credentials: bool | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = Field(default=None, repr=False)
+    oauth_scope: str | None = None
     responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
@@ -747,19 +766,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
             verbose_logger.warning("drop_params=%r is not a flag value, treating it as unset", value)
         return None
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None) -> object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -776,19 +795,19 @@ class LiteLLM_Params(GenericLiteLLMParams):
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None) -> object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -869,12 +888,14 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_text_message: ReadOnly[float | None]
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_768p: ReadOnly[float | None]
     output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
@@ -920,7 +941,7 @@ class Deployment(LiteLLMBaseModel):
         model_name: str,
         litellm_params: LiteLLM_Params,
         model_info: ModelInfo | dict | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if model_info is None:
             model_info = ModelInfo()
@@ -946,19 +967,19 @@ class Deployment(LiteLLMBaseModel):
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -967,6 +988,7 @@ class Deployment(LiteLLMBaseModel):
 class DiscoveredDeploymentModelInfo:
     deployment: Mapping[str, object]
     limits: Mapping[str, int]
+    limits_by_model: Mapping[str, Mapping[str, int]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1094,7 +1116,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_endpoints: tuple[str, ...] | None = None
     deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
-    def __init__(self, **data) -> None:
+    def __init__(self, **data: object) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
@@ -1164,7 +1186,7 @@ class GuardrailTypedDict(TypedDict, total=False):
 
     guardrail_name: Required[str]
     litellm_params: Required[GuardrailLiteLLMParams]
-    callback: Any  # The CustomGuardrail instance
+    callback: "CustomGuardrail | None"
     id: str | None  # Unique identifier for the guardrail deployment
 
 
@@ -1257,7 +1279,7 @@ class RouterRateLimitError(ValueError):
         model: str,
         cooldown_time: float,
         enable_pre_call_checks: bool,
-        cooldown_list: list,
+        cooldown_list: Sequence[object],
         model_ids: Sequence[str] = (),
         cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
@@ -1311,13 +1333,6 @@ class RoutingStrategy(enum.Enum):
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
-
-
-class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
-    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
-    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 
 
 class GenericBudgetWindowDetails(LiteLLMBaseModel):
@@ -1422,9 +1437,10 @@ class PreRoutingHookResponse(LiteLLMBaseModel):
     """
 
     model: str
-    messages: list[dict[str, Any]] | None
+    messages: list[dict[str, object]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
     session_affinity_ttl_seconds: int | None = None
+    session_affinity_conversation_id: str | None = None
     litellm_params: Mapping[str, object] | None = None
 
 
@@ -1476,9 +1492,9 @@ class PreRoutingStrategy(Protocol):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict[str, Any],
-        messages: list[dict[str, Any]] | None = None,
-        input: "str | list[Any] | None" = None,
+        request_kwargs: dict[str, object],
+        messages: list[dict[str, object]] | None = None,
+        input: "str | list[object] | None" = None,
         specific_deployment: bool | None = False,
         call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
@@ -1547,7 +1563,7 @@ class AdaptiveRouterWeights(LiteLLMBaseModel):
 
     @field_validator("cost")
     @classmethod
-    def _weights_sum_to_one(cls, v, info):
+    def _weights_sum_to_one(cls, v: float, info):
         q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")
@@ -1592,8 +1608,44 @@ def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:
             raise ValueError(
-                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
-                "parameter "
+                f"Rejected Request: {param} is a server-owned {server_owned_param_kind(param)} parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )
+
+
+def server_owned_param_kind(param: str) -> str:
+    if param in _github_copilot_oauth_litellm_params:
+        return "GitHub Copilot authentication"
+    return "workload identity federation or OAuth token exchange"
+
+
+_FORWARDED_HEADER_DIGEST_KEY: Final = secrets.token_bytes(32)
+
+
+def _forwarded_header_digest(value: object) -> str:
+    return hmac.new(_FORWARDED_HEADER_DIGEST_KEY, str(value).encode(), hashlib.sha256).hexdigest()
+
+
+class ForwardedClientHeaders(BaseModel):
+    """The client headers the proxy copied into a request's ``headers``, stamped on its ``proxy_server_request``
+    as a keyed digest of each value under its lowercased name, so the logged stamp reveals no header value.
+    ``model_group_scoped`` is true when only a model group's ``forward_client_headers_to_llm_api`` scope admitted
+    them, so a fallback group re-checks that scope."""
+
+    model_config = ConfigDict(frozen=True)
+
+    digests: Mapping[str, str]
+    model_group_scoped: bool
+
+    @classmethod
+    def of(cls, headers: Mapping[str, object], *, model_group_scoped: bool) -> "ForwardedClientHeaders":
+        return cls(
+            digests={name.lower(): _forwarded_header_digest(value) for name, value in headers.items()},
+            model_group_scoped=model_group_scoped,
+        )
+
+    def still_forwarded(self, name: str, value: object) -> bool:
+        """Whether ``name`` still holds the value the proxy forwarded, rather than one a later hook set."""
+        stamped: Final = self.digests.get(name.lower())
+        return stamped is not None and hmac.compare_digest(stamped, _forwarded_header_digest(value))

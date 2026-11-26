@@ -1,0 +1,133 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.user_id,\n       e.alias,\n       e.spend,\n       e.allowed_model_region,\n       e.default_model,\n       COALESCE(e.models, '{}') AS \"models!\",\n       e.budget_id,\n       to_jsonb(b) AS \"litellm_budget_table?: Json<Budget>\",\n       e.object_permission_id,\n       to_jsonb(p) AS \"object_permission?: Json<ObjectPermission>\",\n       e.blocked\nFROM \"LiteLLM_EndUserTable\" AS e\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = e.budget_id\nLEFT JOIN \"LiteLLM_ObjectPermissionTable\" AS p ON p.object_permission_id = e.object_permission_id\nWHERE e.user_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "allowed_model_region",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "allowed_model_region"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "default_model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "default_model"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "models!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "litellm_budget_table?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "object_permission_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "object_permission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "object_permission?: Json<ObjectPermission>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "blocked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "blocked"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      null,
+      true,
+      null,
+      true,
+      null,
+      false
+    ]
+  },
+  "hash": "6343afd17b3c19e15e96c15818f5b7ee2cfaa64fe7c35020a6843fef3dd2276f"
+}

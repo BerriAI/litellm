@@ -16,7 +16,14 @@ import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, has_attributes, process_response_headers
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    has_attributes,
+    process_response_headers,
+    str_param,
+    without,
+)
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
@@ -144,15 +151,15 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Google AI Studio uses x-goog-api-key header for authentication."""
         headers = headers or {}
         headers["Content-Type"] = "application/json"
         if litellm_params:
-            api_key: Final = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
+            api_key: Final = GeminiModelInfo.get_api_key(str_param(litellm_params, "api_key"))
             if api_key:
                 headers["x-goog-api-key"] = api_key
 
@@ -186,8 +193,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
         """
         Build request body per OpenAPI spec.
 
@@ -198,11 +205,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         """
         request_body: Final[dict[str, object]] = {}
 
-        # Model or Agent (one required)
-        if model:
-            request_body["model"] = GeminiModelInfo.get_base_model(model) or model
-        elif agent:
+        if agent:
             request_body["agent"] = agent
+        elif model:
+            request_body["model"] = GeminiModelInfo.get_base_model(model) or model
         else:
             raise ValueError("Either 'model' or 'agent' must be provided")
 
@@ -222,10 +228,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "previous_interaction_id",
             "continuation_token",
         ]
-        dropped_keys: Final = (
+        dropped_keys: Final[frozenset[str]] = (
             frozenset({"agent_config"})
             if drops_unsupported_params(litellm_params.get("drop_params"))
-            and (model or not _has_agent_config_type(optional_params.get("agent_config")))
+            and (not agent or not _has_agent_config_type(optional_params.get("agent_config")))
             else frozenset()
         )
         for key in optional_keys:
@@ -254,14 +260,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["response_format"] = response_format
 
         # image_config moves out of generation_config into response_format.
-        generation_config: Mapping[str, object] | None = optional_params.get("generation_config")
+        generation_config: object = optional_params.get("generation_config")
         if generation_config is not None:
             image_config = None
-            if isinstance(generation_config, dict):
-                generation_config = dict(generation_config)  # avoid mutating the caller's dict
-                image_config = generation_config.pop("image_config", None)
-                if not generation_config:
-                    generation_config = None
+            generation_config_mapping: Final = as_str_mapping(generation_config)
+            if isinstance(generation_config_mapping, dict):
+                image_config = generation_config_mapping.get("image_config")
+                generation_config = without(generation_config_mapping, "image_config") or None
 
             if generation_config is not None:
                 request_body["generation_config"] = generation_config
@@ -311,7 +316,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     def transform_streaming_response(
         self,
         model: str | None,
-        parsed_chunk: dict,
+        parsed_chunk: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
         """Parse streaming chunk."""
@@ -325,8 +330,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """GET /{api_version}/interactions/{interaction_id}"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
@@ -365,8 +370,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """DELETE /{api_version}/interactions/{interaction_id}"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
@@ -396,8 +401,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """POST /{api_version}/interactions/{interaction_id}/cancel"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):

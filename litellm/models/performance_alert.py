@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from litellm.models.alert import MAX_ALERT_ID, AlertDetection, AlertType, MetricEvidence
 
@@ -17,14 +17,55 @@ SPEND_MULTIPLIER: Final = 3
 SPEND_MIN_INCREASE_USD: Final = 50
 TRAFFIC_SPIKE_MULTIPLIER: Final = 10
 TRAFFIC_SPIKE_MIN_INCREASE: Final = 1000
-TRAFFIC_DROP_RATIO: Final = 0.2
-TRAFFIC_DROP_MIN_BASELINE: Final = 500
 LATENCY_MULTIPLIER: Final = 3
 LATENCY_MIN_INCREASE_MS: Final = 500
 LATENCY_MIN_TIMED_REQUESTS: Final = 100
 RELIABILITY_MULTIPLIER: Final = 3
 RELIABILITY_MIN_INCREASE: Final = 0.02
 RELIABILITY_MIN_REQUESTS: Final = 500
+
+
+class AlertThreshold(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    multiplier: float = Field(gt=1, allow_inf_nan=False, strict=True, description="Minimum multiple of the baseline.")
+    minimum_increase: float = Field(
+        ge=0,
+        allow_inf_nan=False,
+        strict=True,
+        description="Minimum absolute increase above the baseline, in the metric's unit.",
+    )
+
+
+class PerformanceAlertThresholds(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    spend: AlertThreshold = Field(
+        default=AlertThreshold(multiplier=SPEND_MULTIPLIER, minimum_increase=SPEND_MIN_INCREASE_USD),
+        description="Spend increase in USD over the previous seven-day daily average.",
+    )
+    traffic: AlertThreshold = Field(
+        default=AlertThreshold(multiplier=TRAFFIC_SPIKE_MULTIPLIER, minimum_increase=TRAFFIC_SPIKE_MIN_INCREASE),
+        description="Request increase over the previous seven-day daily average.",
+    )
+    latency: AlertThreshold = Field(
+        default=AlertThreshold(multiplier=LATENCY_MULTIPLIER, minimum_increase=LATENCY_MIN_INCREASE_MS),
+        description="Average response-time increase in milliseconds over the previous seven-day weighted average.",
+    )
+    reliability: AlertThreshold = Field(
+        default=AlertThreshold(multiplier=RELIABILITY_MULTIPLIER, minimum_increase=RELIABILITY_MIN_INCREASE),
+        description="Error-rate increase as a fraction, e.g. 0.02 is two percentage points.",
+    )
+
+    @field_validator("reliability")
+    @classmethod
+    def validate_error_rate(cls, value: AlertThreshold) -> AlertThreshold:
+        if value.minimum_increase > 1:
+            raise ValueError("Error-rate minimum increase cannot exceed 1")
+        return value
+
+
+DEFAULT_THRESHOLDS: Final = PerformanceAlertThresholds()
 
 
 class ResourceWindow(BaseModel):
@@ -45,7 +86,6 @@ class ResourceWindow(BaseModel):
     base_timed: int = Field(ge=0, le=MAX_ALERT_ID)
     active_days: int = Field(ge=0, le=BASELINE_DAYS)
     timed_days: int = Field(ge=0, le=BASELINE_DAYS)
-    exists: bool
 
 
 class SweepState(BaseModel):
@@ -88,9 +128,13 @@ class AlertMonitoring(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = Field(description="Whether performance monitoring is enabled. Defaults to true.")
+    model_deprecations_enabled: bool = Field(default=True, description="Whether model deprecation alerts are enabled.")
     alerts_used: int = Field(ge=0, le=FREE_ALERT_LIMIT, description="Lifetime free allowance consumed, capped at five.")
     alert_limit: int | None = Field(description="Free allowance, or null for Enterprise.")
     disabled_by_config: bool = Field(description="Whether performance_alerts_enabled is false in proxy settings.")
+    thresholds: PerformanceAlertThresholds = Field(
+        default=DEFAULT_THRESHOLDS, description="Effective built-in thresholds. Only Enterprise admins can edit them."
+    )
 
     @property
     def active(self) -> bool:
@@ -103,9 +147,25 @@ class AlertMonitoringUpdate(BaseModel):
     enabled: bool = Field(strict=True, description="Enable or disable performance monitoring for this gateway.")
 
 
+class ModelDeprecationMonitoringUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_deprecations_enabled: bool = Field(strict=True, description="Enable or disable model deprecation alerts.")
+
+
+class AlertThresholdsUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    thresholds: PerformanceAlertThresholds = Field(
+        description="Replace the built-in performance thresholds. Enterprise only."
+    )
+
+
 class AlertMonitoringStore(Protocol):
     async def monitoring(self) -> AlertMonitoring: ...
     async def set_enabled(self, enabled: bool) -> AlertMonitoring: ...
+    async def set_model_deprecations_enabled(self, enabled: bool) -> AlertMonitoring: ...
+    async def set_thresholds(self, thresholds: PerformanceAlertThresholds) -> AlertMonitoring: ...
 
 
 class PerformanceAlertStore(Protocol):
@@ -176,64 +236,65 @@ def _alert(
     )
 
 
-def _spend_spike(window: ResourceWindow) -> tuple[float, float] | None:
+def _spend_spike(window: ResourceWindow, threshold: AlertThreshold) -> tuple[float, float] | None:
     baseline: Final = window.base_spend / BASELINE_DAYS
     triggered: Final = (
         window.active_days >= MIN_ACTIVE_DAYS
         and baseline > 0
-        and window.spend >= SPEND_MULTIPLIER * baseline
-        and window.spend - baseline >= SPEND_MIN_INCREASE_USD
+        and window.spend >= threshold.multiplier * baseline
+        and window.spend - baseline >= threshold.minimum_increase
     )
     return (window.spend, baseline) if triggered else None
 
 
-def _traffic_change(window: ResourceWindow) -> tuple[float, float] | None:
+def _traffic_spike(window: ResourceWindow, threshold: AlertThreshold) -> tuple[float, float] | None:
     baseline: Final = window.base_requests / BASELINE_DAYS
     spike: Final = (
         window.active_days >= MIN_ACTIVE_DAYS
-        and window.requests >= TRAFFIC_SPIKE_MULTIPLIER * baseline
-        and window.requests - baseline >= TRAFFIC_SPIKE_MIN_INCREASE
+        and window.requests > baseline
+        and window.requests >= threshold.multiplier * baseline
+        and window.requests - baseline >= threshold.minimum_increase
     )
-    drop: Final = (
-        window.exists
-        and window.active_days == BASELINE_DAYS
-        and baseline >= TRAFFIC_DROP_MIN_BASELINE
-        and window.requests < TRAFFIC_DROP_RATIO * baseline
-    )
-    return (window.requests, baseline) if spike or drop else None
+    return (window.requests, baseline) if spike else None
 
 
-def _slower_responses(window: ResourceWindow) -> tuple[float, float] | None:
+def _slower_responses(window: ResourceWindow, threshold: AlertThreshold) -> tuple[float, float] | None:
     current: Final = _ratio(window.response_ms, window.timed)
     baseline: Final = _ratio(window.base_response_ms, window.base_timed)
     triggered: Final = (
         window.timed >= LATENCY_MIN_TIMED_REQUESTS
         and window.timed_days >= MIN_ACTIVE_DAYS
         and baseline > 0
-        and current >= LATENCY_MULTIPLIER * baseline
-        and current - baseline >= LATENCY_MIN_INCREASE_MS
+        and current >= threshold.multiplier * baseline
+        and current - baseline >= threshold.minimum_increase
     )
     return (current, baseline) if triggered else None
 
 
-def _more_failures(window: ResourceWindow) -> tuple[float, float] | None:
+def _more_failures(window: ResourceWindow, threshold: AlertThreshold) -> tuple[float, float] | None:
     current: Final = min(1.0, _ratio(window.failed, window.requests))
     baseline: Final = min(1.0, _ratio(window.base_failed, window.base_requests))
     triggered: Final = (
         window.active_days >= MIN_ACTIVE_DAYS
         and window.requests >= RELIABILITY_MIN_REQUESTS
-        and current >= RELIABILITY_MULTIPLIER * baseline
-        and current - baseline >= RELIABILITY_MIN_INCREASE
+        and current > baseline
+        and current >= threshold.multiplier * baseline
+        and current - baseline >= threshold.minimum_increase
     )
     return (current, baseline) if triggered else None
 
 
-def detect(scope: PerformanceScope, window: ResourceWindow, day: date) -> tuple[AlertDetection, ...]:
+def detect(
+    scope: PerformanceScope,
+    window: ResourceWindow,
+    day: date,
+    thresholds: PerformanceAlertThresholds = DEFAULT_THRESHOLDS,
+) -> tuple[AlertDetection, ...]:
     checks: Final[tuple[tuple[AlertType, tuple[float, float] | None, int], ...]] = (
-        ("spend", _spend_spike(window), window.requests),
-        ("traffic", _traffic_change(window), window.requests),
-        ("latency", _slower_responses(window), window.timed),
-        ("reliability", _more_failures(window), window.requests),
+        ("spend", _spend_spike(window, thresholds.spend), window.requests),
+        ("traffic", _traffic_spike(window, thresholds.traffic), window.requests),
+        ("latency", _slower_responses(window, thresholds.latency), window.timed),
+        ("reliability", _more_failures(window, thresholds.reliability), window.requests),
     )
     return tuple(
         _alert(scope, window, day, kind, found[0], found[1], sample_size)

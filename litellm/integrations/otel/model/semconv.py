@@ -255,6 +255,10 @@ class Server:
     PORT: Final = "server.port"
 
 
+class User:
+    ID: Final = "user.id"
+
+
 class DB:
     """Database / cache client-span keys (OTel ``db.*`` semconv).
 
@@ -334,8 +338,6 @@ class LiteLLM:
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     SERVICE_CALLER: Final = "litellm.service.caller"
     SERVICE_TARGET: Final = "litellm.service.target"
-    # The sorted, comma-joined key families one Redis pipeline carried ops for; bounded, unlike the keys.
-    REDIS_FAMILIES: Final = "litellm.redis.families"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
     # The logical name of the MCP server a tool call was routed to. There is no
     # semconv key for an MCP server's *name* (the convention uses ``server.address``
@@ -343,6 +345,8 @@ class LiteLLM:
     MCP_SERVER_NAME: Final = "litellm.mcp.server.name"
     CACHE_HIT: Final = "litellm.cache_hit"
     SAVED_CACHE_COST: Final = "litellm.saved_cache_cost"
+    NAMED_TRACE_ID: Final = "litellm.otel.named_trace_id"
+    TRACE_ID_SKIPPED: Final = "litellm.otel.trace_id_skipped"
 
 
 class Metric:

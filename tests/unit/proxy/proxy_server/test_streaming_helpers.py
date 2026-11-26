@@ -392,6 +392,42 @@ def test_responses_failure_event_reads_a_numeric_status_code_the_way_base_did(st
     assert failure.response.error["code"] == code
 
 
+def test_responses_failure_event_keeps_the_routers_fallback_outcome_over_the_upstream_message() -> None:
+    error: Final = litellm.InternalServerError(
+        message="FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. Fallback to q also failed: Q-ERROR"
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    message: Final = failure.response.error["message"]
+    assert "FLASH-ERROR" in message
+    assert message.endswith("Fallback to q also failed: Q-ERROR")
+
+
+def test_responses_failure_event_keeps_the_upstream_message_when_no_fallback_was_attempted() -> None:
+    error: Final = litellm.InternalServerError(
+        message="litellm wrapped FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. No fallback was attempted."
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["message"] == "FLASH-ERROR"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("guardrail_error", "error_object"),
@@ -908,15 +944,123 @@ def test_serialize_streaming_chunk_simple_payload():
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hi"},
+                "finish_reason": None,
             }
         ],
     }
 
 
+def _stream_chunk(delta: Delta, finish_reason: str | None = None, usage: Usage | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=delta)],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=usage,
+    )
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [
+        pytest.param(Delta(content="hi", role="assistant"), id="text"),
+        pytest.param(
+            Delta(
+                tool_calls=[
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": ""}, "index": 0}
+                ]
+            ),
+            id="tool-call",
+        ),
+        pytest.param(Delta(reasoning_content="plan"), id="reasoning"),
+    ],
+)
+def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_an_in_progress_chunk(delta: Delta) -> None:
+    chunk: Final = _stream_chunk(delta)
+    canonical: Final = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == {
+        **canonical,
+        "choices": [{**canonical["choices"][0], "finish_reason": None}],
+    }
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(None, id="text"),
+        pytest.param(Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5), id="with-usage"),
+    ],
+)
+def test_serialize_streaming_chunk_keeps_the_finish_reason_of_the_final_chunk(usage: Usage | None) -> None:
+    chunk: Final = _stream_chunk(Delta(), finish_reason="stop", usage=usage)
+
+    assert _serialize_streaming_chunk(chunk) == chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["finish_reason"] == "stop"
+
+
+def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_every_choice() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-n",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content="a")),
+            StreamingChoices(index=1, delta=Delta(), finish_reason="stop"),
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    assert [choice["finish_reason"] for choice in json.loads(_serialize_streaming_chunk(chunk))["choices"]] == [
+        None,
+        "stop",
+    ]
+
+
+def _reject_json_constant(constant: str) -> None:
+    raise AssertionError(f"chunk is not strict JSON, it holds {constant}")
+
+
+@pytest.mark.parametrize("content", [pytest.param("hi", id="utf8"), pytest.param("\ud800", id="lone-surrogate")])
+@pytest.mark.parametrize("logprob", [float("-inf"), float("inf"), float("nan")], ids=["-inf", "inf", "nan"])
+def test_serialize_streaming_chunk_sends_a_non_finite_number_as_null(content: str, logprob: float) -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-logprobs",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content),
+                logprobs={"content": [{"token": "hi", "logprob": logprob, "bytes": None, "top_logprobs": []}]},
+            )
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    choice: Final = json.loads(_serialize_streaming_chunk(chunk), parse_constant=_reject_json_constant)["choices"][0]
+
+    assert (choice["logprobs"]["content"][0]["logprob"], choice["finish_reason"]) == (None, None)
+
+
+def test_serialize_streaming_chunk_sends_no_finish_reason_on_a_choiceless_usage_chunk() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-usage",
+        choices=[],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+
+    assert _serialize_streaming_chunk(chunk) == chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
 @pytest.mark.parametrize(
     ("choice_extras", "serialized_extras"),
     [
-        ({"stop_reason": ",5", "token_ids": [20]}, {"stop_reason": ",5", "token_ids": [20]}),
+        ({"stop_reason": ",5", "token_ids": [20]}, {"stop_reason": ",5", "token_ids": [20], "finish_reason": None}),
         ({"finish_reason": "stop", "stop_reason": None}, {"finish_reason": "stop", "stop_reason": None}),
     ],
     ids=["vllm-fields", "natural-stop"],
@@ -1004,8 +1148,13 @@ def test_serialize_streaming_chunk_keeps_streaming_a_null_stop_reason_chunk_with
 
     payload: Final = json.loads(_serialize_streaming_chunk(chunk))
 
-    assert payload["choices"][0]["delta"] == {"content": "a"}
-    assert payload["choices"][0]["token_ids"] == [21]
+    assert payload["choices"][0] == {
+        "index": 0,
+        "delta": {"content": "a"},
+        "finish_reason": None,
+        "stop_reason": None,
+        "token_ids": [21],
+    }
     assert "trace_chunk" not in payload
 
 
@@ -1143,9 +1292,97 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hello"},
+                "finish_reason": None,
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("provider_chunks", "released"), [(0, True), (1, False)], ids=["before_output", "after_output"])
+async def test_async_data_generator_refunds_the_reservation_only_when_the_client_leaves_before_provider_output(
+    monkeypatch: pytest.MonkeyPatch, provider_chunks: int, released: bool
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    waiting_on_provider: Final = asyncio.Event()
+
+    async def provider() -> AsyncIterator[ModelResponseStream]:
+        for _ in range(provider_chunks):
+            yield _simple_chunk(content="partial")
+        waiting_on_provider.set()
+        await asyncio.Event().wait()
+        yield _simple_chunk(content="never sent")
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
+    )
+    generator: Final = async_data_generator(response=provider(), user_api_key_dict=auth, request_data={"model": "gpt-4"})
+    for _ in range(provider_chunks):
+        await generator.__anext__()
+    next_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await waiting_on_provider.wait()
+    next_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await next_frame
+
+    assert auth.budget_reservation is not None
+    assert (auth.budget_reservation.get("finalized") is True) is released
+
+
+class _PartialBillingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.billed_texts: Final[list[str]] = []  # mutable-ok: collects the billing events the stream dispatches
+        self.billed: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.billed_texts.append(litellm.get_response_string(response_obj))
+        self.billed.set()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_a_guardrail_buffered_leaves_its_reservation_to_the_partial_billing_when_the_client_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch, needs_wrap=True)
+    recorder: Final = _PartialBillingRecorder()
+    provider_stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "count"}],
+        mock_response="one two three four five six seven eight",
+        stream=True,
+        api_key="test-key",
+    )
+    provider_stream.logging_obj.dynamic_async_success_callbacks = [recorder]
+    guardrail_holding_chunks: Final = asyncio.Event()
+
+    async def buffering_guardrail(user_api_key_dict, response, request_data) -> AsyncIterator[object]:
+        held: Final = [await response.__anext__() for _ in range(3)]
+        guardrail_holding_chunks.set()
+        await asyncio.Event().wait()
+        for chunk in held:
+            yield chunk
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_iterator_hook", buffering_guardrail)
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.004, "entries": []}
+    )
+    generator: Final = async_data_generator(
+        response=provider_stream,
+        user_api_key_dict=auth,
+        request_data={"model": "gpt-4o-mini", "litellm_logging_obj": provider_stream.logging_obj},
+    )
+    first_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await guardrail_holding_chunks.wait()
+    first_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_frame
+    await asyncio.wait_for(recorder.billed.wait(), timeout=5)
+
+    assert recorder.billed_texts == ["".join(chunk.choices[0].delta.content or "" for chunk in provider_stream.chunks)]
+    assert recorder.billed_texts[0]
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is not True
 
 
 _AZURE_CONTENT_FILTER_RESULTS: Final = {
@@ -1294,6 +1531,7 @@ def test_serialize_streaming_chunk_keeps_lone_surrogates_a_provider_split_across
         delta: Final = json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["delta"]
 
     assert caplog.text == ""
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["finish_reason"] is None
     assert delta["content"] == "Hi \ud83d"
     assert delta["tool_calls"][0]["id"] == "call_1"
     assert delta["tool_calls"][0]["function"] == {"name": "get_weather", "arguments": '{"city": "Par\udc00is"}'}
@@ -1319,8 +1557,12 @@ def test_serialize_streaming_chunk_drops_only_the_nested_value_json_cannot_encod
 
     payload: Final = json.loads(_serialize_streaming_chunk(chunk))
 
-    assert payload["choices"][0]["delta"] == {"content": "a"}
-    assert payload["choices"][1]["delta"] == {"content": "b", "provider_specific_fields": {"citations": ["ok"]}}
+    assert payload["choices"][0] == {"index": 0, "delta": {"content": "a"}, "finish_reason": None}
+    assert payload["choices"][1] == {
+        "index": 1,
+        "delta": {"content": "b", "provider_specific_fields": {"citations": ["ok"]}},
+        "finish_reason": None,
+    }
     assert payload["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
     assert payload["trace_chunk"] == {"keep": 1}
 
@@ -1650,6 +1892,29 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_mid_stream_error_frame_redacts_a_key_from_the_provider_message(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+    secret: Final = "sk-9876543210abcdef9876543210"
+    failure: Final = litellm.BadRequestError(
+        message=f"upstream rejected key {secret}", model="qwen", llm_provider="hosted_vllm"
+    )
+
+    frames: Final = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter_raises(failure), user_api_key_dict=_user_auth(), request_data={}
+        )
+    ]
+
+    error_frame: Final = next(item for item in frames if isinstance(item, str) and item.startswith('data: {"error":'))
+    error: Final = json.loads(error_frame.removeprefix("data: "))["error"]
+    assert secret not in error_frame
+    assert "upstream rejected key" in error["message"]
+    assert error["type"] == "invalid_request_error"
 
 
 _BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"

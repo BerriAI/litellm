@@ -1,11 +1,13 @@
 import itertools
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from httpx import Response
 from pydantic import ConfigDict, ValidationError
 
+import litellm
 import litellm.litellm_core_utils.token_counter as token_counting
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.passthrough.transformation import RelayShape, logged_relay_shape
@@ -22,7 +24,13 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
+
+
+class _ExposesEncoding(Protocol):
+    @property
+    def encoding(self) -> "Encoding": ...
 
 
 RelayedPrompt: TypeAlias = str | Sequence[str] | Sequence[int] | Sequence[Sequence[int]]
@@ -209,7 +217,7 @@ def logged_text_completion_stream(
 def logged_openai_like_response(
     model: str, httpx_response: Response, request_data: Mapping[str, object], logging_obj: Logging, endpoint: str
 ) -> "LoggedRelayResponse | None":
-    from litellm import encoding
+    encoding: Final = require_attributes(litellm, _ExposesEncoding, "encoding").encoding
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
     if "chat/completions" not in endpoint:

@@ -21,7 +21,7 @@ from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessa
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 
 FIXTURE_PATH: Final = (
-    Path(__file__).parents[4] / "litellm-rust/crates/llms/tests/fixtures/anthropic_messages_http_error_retry.json"
+    Path(__file__).parents[4] / "litellm/rust/crates/llms/tests/fixtures/anthropic_messages_http_error_retry.json"
 )
 
 
@@ -82,6 +82,20 @@ class _StrictRetryTable(TypedDict):
     cases: ReadOnly[tuple[_StrictRetryCase, ...]]
 
 
+class _ToolUseIdRetryCase(TypedDict):
+    name: ReadOnly[str]
+    status: ReadOnly[int]
+    error_text: ReadOnly[str]
+    renamable: ReadOnly[bool]
+    retried: ReadOnly[bool]
+
+
+class _ToolUseIdRetryTable(TypedDict):
+    messages: ReadOnly[tuple[Mapping[str, object], ...]]
+    renamed_messages: ReadOnly[tuple[Mapping[str, object], ...]]
+    cases: ReadOnly[tuple[_ToolUseIdRetryCase, ...]]
+
+
 class _Fixture(TypedDict):
     invalid_thinking_block_error: ReadOnly[tuple[_TextCase, ...]]
     thinking_binding_mismatch_error: ReadOnly[tuple[_TextCase, ...]]
@@ -89,11 +103,13 @@ class _Fixture(TypedDict):
     claude_strict_tools_rejection: ReadOnly[tuple[_StrictRejectionCase, ...]]
     tools_without_strict: ReadOnly[tuple[_ToolsWithoutStrictCase, ...]]
     strict_tools_retry: ReadOnly[_StrictRetryTable]
+    tool_use_id_retry: ReadOnly[_ToolUseIdRetryTable]
 
 
 FIXTURE: Final = TypeAdapter(_Fixture).validate_json(FIXTURE_PATH.read_text())
 RETRY: Final = FIXTURE["http_error_retry"]
 STRICT_RETRY: Final = FIXTURE["strict_tools_retry"]
+TOOL_USE_ID_RETRY: Final = FIXTURE["tool_use_id_retry"]
 
 
 @pytest.mark.parametrize(
@@ -128,7 +144,7 @@ def test_tools_without_strict_matches_the_shared_cases(case: _ToolsWithoutStrict
     )
 
 
-def _rejection(case: _RetryCase | _StrictRetryCase) -> httpx.HTTPStatusError:
+def _rejection(case: _RetryCase | _StrictRetryCase | _ToolUseIdRetryCase) -> httpx.HTTPStatusError:
     request: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     return httpx.HTTPStatusError(
         "rejected",
@@ -186,3 +202,28 @@ def test_the_strict_tools_retry_matches_the_shared_cases(
 
     assert retried is case["retried"]
     assert transformed == expected
+
+
+@pytest.mark.parametrize(
+    "config",
+    [AnthropicMessagesConfig(), DeepSeekAnthropicMessagesConfig()],
+    ids=["anthropic", "deepseek"],
+)
+@pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in TOOL_USE_ID_RETRY["cases"]])
+def test_the_tool_use_id_retry_matches_the_shared_cases(
+    config: BaseAnthropicMessagesConfig, case: _ToolUseIdRetryCase
+) -> None:
+    sent_messages: Final = TOOL_USE_ID_RETRY["messages"] if case["renamable"] else TOOL_USE_ID_RETRY["renamed_messages"]
+    body: Final = {**copy.deepcopy(RETRY["request"]), "messages": copy.deepcopy(list(sent_messages))}
+
+    retried: Final = config.should_retry_anthropic_messages_on_http_error(
+        e=_rejection(case), litellm_params={}, request_body=body
+    )
+    transformed: Final = config.transform_anthropic_messages_request_on_http_error(
+        e=_rejection(case), request_data=copy.deepcopy(body)
+    )
+
+    assert retried is case["retried"]
+    assert transformed == (
+        {**body, "messages": list(TOOL_USE_ID_RETRY["renamed_messages"])} if case["retried"] else body
+    )

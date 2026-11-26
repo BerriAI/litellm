@@ -192,8 +192,7 @@ def test_native_content_filter_scope_logs_without_blocking(
                     entry for entry in entries if entry["guardrail_status"] == "guardrail_flagged"
                 )
                 assert len(flagged_entries) == 1, entries
-                assert flagged_entries[0]["guardrail_response"] is not None, entries
-                assert flagged_entries[0]["guardrail_response"] == "REDACTED_BY_LITELM", entries
+                assert flagged_entries[0]["guardrail_response"] is None, entries
     finally:
         delete_scenario(upstream_handle)
 
@@ -473,6 +472,7 @@ def test_F7_guardrail_ui_settings_classify_directional_scope_support(gateway: Ga
     assert unsupported is not None, response
     assert isinstance(unsupported, list), response
     assert set(unsupported) == {
+        "collieai",
         "lakera",
         "lakera_v2",
         "presidio",

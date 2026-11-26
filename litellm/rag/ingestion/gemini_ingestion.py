@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -21,10 +23,27 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.gemini.common_utils import GeminiModelInfo
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.utils import aresolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _GeminiCreatedStore(TypedDict, total=False):
+    name: ReadOnly[str]
+
+
+class _GeminiUploadedFile(TypedDict, total=False):
+    name: ReadOnly[str]
+
+
+class _GeminiUploadResponse(TypedDict, total=False):
+    name: ReadOnly[str]
+    file: ReadOnly[_GeminiUploadedFile]
 
 
 class _WhiteSpaceConfig(LiteLLMBaseModel):
@@ -98,8 +117,17 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         vector_store_config: Final = self.vector_store_config
 
         # Get API credentials
-        api_key: Final = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
-        api_base: Final = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
+        configured_api_base: Final = cast(str | None, vector_store_config.get("api_base"))
+        api_key: Final = (
+            await aresolve_api_key_secret_reference(
+                cast(str | None, vector_store_config.get("api_key")),
+                None,
+                "gemini",
+                {"api_base": configured_api_base},
+            )
+            or GeminiModelInfo.get_api_key()
+        )
+        api_base: Final = configured_api_base or GeminiModelInfo.get_api_base()
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
@@ -171,7 +199,9 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data: Final = response.json()
+        response_data: Final = require_attributes(
+            _DECODED_JSON.validate_python(response.json()), _GeminiCreatedStore, "get"
+        )
         store_name: Final = response_data.get("name", "")
 
         verbose_logger.debug("Created File Search store: %s", store_name)
@@ -333,7 +363,9 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Parse response to get file/document ID
         try:
-            response_data: Final = response.json()
+            response_data: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), _GeminiUploadResponse, "get"
+            )
             # The response should contain the document name or file reference
             file_id: Final = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
             verbose_logger.debug("Upload complete. File ID: %s", file_id)

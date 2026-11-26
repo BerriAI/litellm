@@ -2,8 +2,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
+from pydantic import AfterValidator, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -22,7 +23,7 @@ class LiteLLM_VectorStoreConfig(TypedDict, total=False):
     """Parameters for initializing a vector store on Litellm proxy config.yaml"""
 
     vector_store_name: str
-    litellm_params: dict[str, Any] | None
+    litellm_params: dict[str, object] | None
 
 
 class LiteLLM_ManagedVectorStore(TypedDict, total=False):
@@ -41,7 +42,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     litellm_credential_name: str | None
 
     # litellm_params
-    litellm_params: dict[str, Any] | None
+    litellm_params: dict[str, object] | None
 
     # access control fields
     team_id: str | None
@@ -345,16 +346,64 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
 ]
 
 
+def _require_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    if not items:
+        raise ValueError("must not be empty")
+    return items
+
+
+class OpenAIEqualityFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["eq", "ne"]
+    key: str
+    value: str | bool | int | float
+
+
+class OpenAIRangeFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["gt", "gte", "lt", "lte"]
+    key: str
+    value: StrictInt | StrictFloat
+
+
+class OpenAIMembershipFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["in", "nin"]
+    key: str
+    value: Annotated[
+        tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True), AfterValidator(_require_items)
+    ]
+
+
+OpenAIComparisonFilter: TypeAlias = OpenAIEqualityFilter | OpenAIRangeFilter | OpenAIMembershipFilter
+
+
+class OpenAICompoundFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["and", "or"]
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_items)]
+
+
+OpenAIVectorStoreFilter: TypeAlias = Annotated[
+    OpenAIComparisonFilter | OpenAICompoundFilter,
+    Field(discriminator="type"),
+]
+
+
 @dataclass
 class VectorStoreToolParams:
     """Parameters extracted from a file_search tool definition"""
 
-    filters: dict | None = None
+    filters: Mapping[str, object] | None = None
     max_num_results: int | None = None
-    ranking_options: dict | None = None
+    ranking_options: Mapping[str, object] | None = None
     rewrite_query: bool | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Convert to dict, excluding None values"""
         return {
             k: v

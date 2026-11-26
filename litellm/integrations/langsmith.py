@@ -6,6 +6,7 @@ import os
 import random
 import traceback
 import types
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
@@ -21,6 +22,7 @@ from litellm.integrations.langsmith_mock_client import (
     create_mock_langsmith_client,
     should_use_langsmith_mock,
 )
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -32,11 +34,12 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 _RUN_RESPONSE: Final = TypeAdapter(object)
 
 
-class _DynamicParamsKwargs(TypedDict, total=False):
+class _DynamicParamsKwargs(TypedDict, total=False, extra_items=object):
     standard_callback_dynamic_params: ReadOnly[StandardCallbackDynamicParams | None]
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
-def is_serializable(value):
+def is_serializable(value: object):
     non_serializable_types: Final = (
         types.CoroutineType,
         types.FunctionType,
@@ -132,7 +135,7 @@ class LangsmithLogger(CustomBatchLogger):
             LANGSMITH_TENANT_ID=_credentials_tenant_id,
         )
 
-    def _extract_metadata_fields(self, metadata: dict, credentials: LangsmithCredentialsObject):
+    def _extract_metadata_fields(self, metadata: SupportsGet, credentials: LangsmithCredentialsObject):
         return {
             "project_name": metadata.get("project_name", credentials["LANGSMITH_PROJECT"]),
             "run_name": metadata.get("run_name", self.langsmith_default_run_name),
@@ -143,7 +146,7 @@ class LangsmithLogger(CustomBatchLogger):
             "dotted_order": metadata.get("dotted_order", None),
         }
 
-    def _redact_metadata(self, metadata: dict) -> dict:
+    def _redact_metadata(self, metadata: Mapping[str, object]) -> dict[str, object]:
         # helper is shallow; also scrub nested requester_metadata since
         # LangSmith forwards the whole dict into the run
         redacted: Final = redact_user_api_key_info(metadata=dict(metadata))
@@ -152,7 +155,7 @@ class LangsmithLogger(CustomBatchLogger):
             redacted["requester_metadata"] = redact_user_api_key_info(metadata=nested)
         return redacted
 
-    def _build_extra_metadata(self, metadata: dict):
+    def _build_extra_metadata(self, metadata: Mapping[str, object]):
         extra_metadata: Final = dict(metadata)
         requester_metadata: Final = extra_metadata.get("requester_metadata")
         if requester_metadata and isinstance(requester_metadata, dict):
@@ -177,7 +180,7 @@ class LangsmithLogger(CustomBatchLogger):
         }
         return outputs
 
-    def _ensure_required_ids(self, data: dict, run_id: str | None):
+    def _ensure_required_ids(self, data: dict[str, object], run_id: object):
         resolved_id: Final = run_id or str(uuid.uuid4())
         if "id" not in data or data["id"] is None:
             data["id"] = resolved_id
@@ -195,17 +198,17 @@ class LangsmithLogger(CustomBatchLogger):
 
     def _prepare_log_data(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
+        kwargs: _DynamicParamsKwargs,
+        response_obj: object,
+        start_time: object,
+        end_time: object,
         credentials: LangsmithCredentialsObject,
     ):
         try:
-            _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-            metadata = _litellm_params.get("metadata", {}) or {}
-
-            fields: Final = self._extract_metadata_fields(metadata, credentials)
+            _litellm_params: Final = require_get(kwargs.get("litellm_params", {}) or {})
+            fields: Final = self._extract_metadata_fields(
+                require_get(_litellm_params.get("metadata", {}) or {}), credentials
+            )
             # the proxy header fan-out mirrors one value into both keys, and LangSmith
             # rejects the whole ingest batch when run-body session_id is not an
             # existing tracer-session uuid
@@ -256,7 +259,9 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             raise
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _DynamicParamsKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
             random_sample: Final = random.random()
@@ -293,7 +298,9 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Langsmith Layer Error - log_success_event error")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _DynamicParamsKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             self._ensure_periodic_flush_task()
             sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
@@ -332,7 +339,9 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Langsmith Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _DynamicParamsKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             self._ensure_periodic_flush_task()
             sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
@@ -531,7 +540,7 @@ class LangsmithLogger(CustomBatchLogger):
             # If we can't get an event loop, create a new one
             asyncio.run(self.async_send_batch())
 
-    def get_run_by_id(self, run_id) -> object:
+    def get_run_by_id(self, run_id: object) -> object:
         langsmith_api_key: Final = self.default_credentials["LANGSMITH_API_KEY"]
         langsmith_api_base: Final = self.default_credentials["LANGSMITH_BASE_URL"]
         langsmith_tenant_id: Final = self.default_credentials.get("LANGSMITH_TENANT_ID")
@@ -547,7 +556,7 @@ class LangsmithLogger(CustomBatchLogger):
 
         return _RUN_RESPONSE.validate_python(response.json())
 
-    def make_dot_order(self, run_id: str):
+    def make_dot_order(self, run_id: object):
         st: Final = datetime.now(timezone.utc)
         id_: Final = run_id
         return st.strftime("%Y%m%dT%H%M%S%fZ") + str(id_)

@@ -187,7 +187,8 @@ def test_sync_initial_estimate_fallback_does_not_consume_upstream(
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
     }
-    assert list(wrapper) == []
+    with pytest.raises(RuntimeError, match="upstream failed before its first chunk"):
+        list(wrapper)
 
 
 @pytest.mark.asyncio
