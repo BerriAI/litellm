@@ -1,9 +1,10 @@
+import asyncio
 import base64
 import copy
 import json
 import os
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
@@ -24,7 +25,8 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -6213,6 +6215,141 @@ def test_defs_that_double_at_every_level_reach_native_output_without_being_expan
     assert sent["properties"]["root"] == {"$ref": "#/$defs/Level0"}
 
 
+def _tool(name: str, parameters: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": parameters}}
+
+
+def _completion_with_tools(model: str, tools: Sequence[Mapping[str, object]], client: HTTPHandler) -> None:
+    litellm.completion(
+        model=f"bedrock/converse/{model}",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=tools,
+        aws_access_key_id="AKIATOOLSCHEMAKEY",
+        aws_secret_access_key="tool-schema-secret",
+        aws_region_name="us-west-2",
+        client=client,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "keeps_refs"),
+    [("us.anthropic.claude-sonnet-5-5", True), ("us.amazon.nova-2-lite-v1:0", False)],
+    ids=["claude-resolves-defs", "nova-needs-inlining"],
+)
+def test_shared_tool_defs_stay_references_only_for_models_that_resolve_them(model, keeps_refs):
+    schema: Final = _doubling_defs_schema(8)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Call a tool."}],
+        optional_params={"tools": [_tool("walk_tree", schema)]},
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
+    assert (sent.get("$defs") == schema["$defs"]) is keeps_refs
+    assert (sent["properties"] == schema["properties"]) is keeps_refs
+    assert ("$ref" in _schema_keys(sent)) is keeps_refs
+
+
+@pytest.mark.timeout(30)
+def test_tool_defs_that_double_at_every_level_fail_fast_with_a_400_naming_the_tool():
+    client: Final = HTTPHandler()
+
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'walk_tree'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", [_tool("walk_tree", _doubling_defs_schema(17))], client)
+
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def test_tool_defs_that_inline_to_megabytes_still_reach_models_that_need_inlining():
+    description: Final = "k" * 3_000_000
+    parameters: Final = {
+        "type": "object",
+        "properties": {"key": {"$ref": "#/$defs/Key"}},
+        "$defs": {"Key": {"type": "string", "description": description}},
+    }
+
+    sent: Final = _bedrock_tools_pt([_tool("lookup", parameters)], model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["description"] == description
+
+
+def test_tool_defs_inlining_budget_covers_every_tool_in_the_request():
+    description_bytes: Final = DEFS_MAX_INLINED_BYTES * 2 // 5
+    tools: Final = [
+        _tool(
+            f"lookup_{index}",
+            {
+                "type": "object",
+                "properties": {"key": {"$ref": "#/$defs/Key"}},
+                "$defs": {"Key": {"type": "string", "description": "k" * description_bytes}},
+            },
+        )
+        for index in range(3)
+    ]
+    client: Final = HTTPHandler()
+
+    sent_alone: Final = _bedrock_tools_pt(tools[-1:], model="us.amazon.nova-2-lite-v1:0")
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'lookup_2'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", tools, client)
+
+    assert sent_alone[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["type"] == "string"
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def _legacy_doubling_defs_schema(depth: int) -> Mapping[str, object]:
+    schema: Final = _doubling_defs_schema(depth)
+    return {**{key: value for key, value in schema.items() if key != "$defs"}, "definitions": schema["$defs"]}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("model", "schema"),
+    [
+        ("us.anthropic.claude-sonnet-5-5", _legacy_doubling_defs_schema(17)),
+        ("us.amazon.nova-2-lite-v1:0", _doubling_defs_schema(17)),
+    ],
+    ids=["claude-legacy-definitions", "nova-defs"],
+)
+def test_tool_defs_past_the_inlining_budget_fall_back_through_context_window_fallbacks(model, schema):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-model",
+                "litellm_params": {
+                    "model": f"bedrock/converse/{model}",
+                    "aws_access_key_id": "AKIATOOLSCHEMAKEY",
+                    "aws_secret_access_key": "tool-schema-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-backup", "mock_response": "from backup"},
+            },
+        ],
+        context_window_fallbacks=[{"bedrock-model": ["backup"]}],
+    )
+
+    response: Final = router.completion(
+        model="bedrock-model",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=[_tool("walk_tree", schema)],
+    )
+
+    assert response.choices[0].message.content == "from backup"
+
+
 @pytest.mark.parametrize(
     ("native_key", "forwarded"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
 )
@@ -11736,3 +11873,155 @@ async def test_converse_keeps_tool_use_ids_for_a_model_that_is_not_mistral(use_a
     tool_use_ids, tool_result_ids = await _sent_tool_use_ids("us.anthropic.claude-haiku-5-5", use_async)
 
     assert tool_use_ids == tool_result_ids == list(_REPLAYED_TOOL_CALL_IDS)
+
+
+_CONVERSE_CLAUDE: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
+_CONVERSE_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "The user said hi.", "signature": "sig-1"}
+_CONVERSE_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def _thinking_blocks_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+def _thinking_blocks_tool_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": thinking_blocks,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+    ]
+
+
+def _thinking_blocks_request(
+    messages: list[dict[str, object]],
+    *,
+    drop_params: bool = False,
+    use_async: bool = False,
+    optional_params: dict[str, object] | None = None,
+) -> RequestObject:
+    config: Final = AmazonConverseConfig()
+    params: Final = dict(optional_params or {})
+    if use_async:
+        return asyncio.run(
+            config._async_transform_request(
+                model=_CONVERSE_CLAUDE,
+                messages=messages,
+                optional_params=params,
+                litellm_params={"drop_params": drop_params},
+                headers={},
+            )
+        )
+    return config._transform_request(
+        model=_CONVERSE_CLAUDE,
+        messages=messages,
+        optional_params=params,
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("thinking_blocks", "type_name"),
+    [
+        pytest.param(5, "int", id="integer"),
+        pytest.param(0, "int", id="zero"),
+        pytest.param(False, "bool", id="false"),
+        pytest.param(1.5, "float", id="float"),
+        pytest.param(True, "bool", id="true"),
+    ],
+)
+def test_converse_answers_400_naming_numeric_thinking_blocks(
+    local_model_cost_map, thinking_blocks: object, type_name: str, use_async: bool
+):
+    with pytest.raises(BedrockError) as raised:
+        _thinking_blocks_request(
+            [{"role": "system", "content": "Be terse"}, *_thinking_blocks_turn(thinking_blocks)],
+            use_async=use_async,
+        )
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for 'messages[2].thinking_blocks': expected a list, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("thinking_blocks", [5, 0, 1.5, True, False])
+def test_converse_drops_numeric_thinking_blocks_under_drop_params(
+    local_model_cost_map, thinking_blocks: object, use_async: bool
+):
+    assert _thinking_blocks_request(
+        _thinking_blocks_turn(thinking_blocks), drop_params=True, use_async=use_async
+    ) == _thinking_blocks_request(_thinking_blocks_turn(None), drop_params=True, use_async=use_async)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_converse_drops_thinking_when_a_dropped_number_leaves_a_tool_turn_without_blocks(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, use_async: bool
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    optional_params: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "tools": [_CONVERSE_WEATHER_TOOL],
+    }
+
+    assert _thinking_blocks_request(
+        _thinking_blocks_tool_turn(5), drop_params=True, use_async=use_async, optional_params=optional_params
+    ) == _thinking_blocks_request(
+        _thinking_blocks_tool_turn(None), drop_params=True, use_async=use_async, optional_params=optional_params
+    )
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("thinking_blocks", "equivalent"),
+    [
+        pytest.param("abc", None, id="string"),
+        pytest.param({"a": 1}, None, id="object"),
+        pytest.param(["abc"], None, id="string_block"),
+        pytest.param(
+            [_CONVERSE_REPLAYED_THINKING, "abc"], [_CONVERSE_REPLAYED_THINKING], id="string_after_a_block"
+        ),
+    ],
+)
+def test_converse_keeps_building_thinking_blocks_shapes_that_worked(
+    local_model_cost_map, thinking_blocks: object, equivalent: object, drop_params: bool
+):
+    assert _thinking_blocks_request(
+        _thinking_blocks_turn(thinking_blocks), drop_params=drop_params
+    ) == _thinking_blocks_request(_thinking_blocks_turn(equivalent), drop_params=drop_params)
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi", "thinking_blocks": 5},
+                {"role": "assistant", "content": "Hello", "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+            id="number_on_a_user_turn",
+        ),
+    ],
+)
+def test_converse_never_blames_thinking_blocks_for_another_fields_type_error(
+    local_model_cost_map, messages: list[dict[str, object]]
+):
+    with pytest.raises(TypeError):
+        _thinking_blocks_request(messages, optional_params={"tools": [_CONVERSE_WEATHER_TOOL]})

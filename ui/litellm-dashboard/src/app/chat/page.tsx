@@ -76,6 +76,7 @@ export default function ChatConversationPage() {
   const [modelSearchText, setModelSearchText] = useState("");
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const [resendsHistory, setResendsHistory] = useState(false);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -122,14 +123,22 @@ export default function ChatConversationPage() {
   if (activeConversationId !== prevConversationIdForSessionReset) {
     setPrevConversationIdForSessionReset(activeConversationId);
     setResponsesSessionId(null);
+    setResendsHistory(false);
   }
 
-  const selectModel = useCallback((model: string) => {
-    setSelectedModel(model);
-    localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
-    setModelSelectorOpen(false);
-    setModelSearchText("");
-  }, []);
+  const selectModel = useCallback(
+    (model: string) => {
+      if (model !== selectedModel) {
+        setResponsesSessionId(null);
+        setResendsHistory(false);
+      }
+      setSelectedModel(model);
+      localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
+      setModelSelectorOpen(false);
+      setModelSearchText("");
+    },
+    [selectedModel],
+  );
 
   const handleSend = useCallback(
     async (text: string, historyOverride?: Array<{ role: "user" | "assistant"; content: string }>) => {
@@ -142,6 +151,7 @@ export default function ChatConversationPage() {
       if (!convId) {
         convId = createConversation(model);
         setResponsesSessionId(null); // new conversation starts a fresh session
+        setResendsHistory(false);
         setConversationIdInUrl(convId);
       }
 
@@ -165,22 +175,18 @@ export default function ChatConversationPage() {
       // user message (sending the full history would double-count it).
       //
       // On the very first turn (no session yet), we send the full history.
-      const previousResponseId = historyOverride ? null : responsesSessionId;
+      const previousResponseId = historyOverride || resendsHistory ? null : responsesSessionId;
 
-      const history: Array<{ role: "user" | "assistant"; content: string }> = historyOverride
-        ? [...historyOverride, { role: "user" as const, content: trimmed }]
-        : previousResponseId
-          ? [{ role: "user" as const, content: trimmed }]
-          : [
-              // Explicitly filter to only user/assistant roles — tool messages
-              // lack a required tool_call_id and would cause API errors.
-              ...(activeConversation?.messages ?? [])
-                .filter(
-                  (m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant",
-                )
-                .map((m) => ({ role: m.role, content: m.content })),
-              { role: "user" as const, content: trimmed },
-            ];
+      const fullHistory: Array<{ role: "user" | "assistant"; content: string }> = [
+        ...(historyOverride ??
+          // Explicitly filter to only user/assistant roles — tool messages
+          // lack a required tool_call_id and would cause API errors.
+          (activeConversation?.messages ?? [])
+            .filter((m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content }))),
+        { role: "user" as const, content: trimmed },
+      ];
+      const history = previousResponseId ? [{ role: "user" as const, content: trimmed }] : fullHistory;
 
       let accumulatedContent = "";
       let accumulatedReasoning = "";
@@ -227,6 +233,11 @@ export default function ChatConversationPage() {
           undefined,
           true,
           (totalLatency: number) => updateLastAssistantMessage(convId!, { totalLatency }),
+          undefined,
+          () => {
+            setResendsHistory(true);
+            return fullHistory;
+          },
         );
         streamCompletedCleanly = true;
       } catch (err: unknown) {
@@ -260,6 +271,7 @@ export default function ChatConversationPage() {
       updateLastAssistantMessage,
       isStreaming,
       responsesSessionId,
+      resendsHistory,
       setConversationIdInUrl,
     ],
   );

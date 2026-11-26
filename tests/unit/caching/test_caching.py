@@ -500,6 +500,27 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
 
 
+@pytest.mark.parametrize(
+    "audio_format_ask",
+    [
+        {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}},
+        {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}},
+        {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}},
+    ],
+    ids=["responseFormat", "generationConfig", "generation_config"],
+)
+def test_cache_key_tells_apart_requests_that_name_a_gemini_audio_format(audio_format_ask: dict[str, object]) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash-tts",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "modalities": ["audio"],
+        "audio": {"voice": "Kore"},
+    }
+
+    assert cache.get_cache_key(**request, **audio_format_ask) != cache.get_cache_key(**request)
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 

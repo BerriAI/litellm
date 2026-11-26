@@ -20,6 +20,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.responses_stream_errors import background_failure_error
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus
 
@@ -424,9 +425,5 @@ async def background_streaming_task(
         await polling_handler.update_state(
             polling_id=polling_id,
             status="failed",
-            error={
-                "type": "internal_error",
-                "message": str(e),
-                "code": "background_streaming_error",
-            },
+            error=dict(background_failure_error(e)),
         )

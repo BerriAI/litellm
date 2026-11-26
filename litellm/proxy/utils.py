@@ -58,6 +58,7 @@ from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
+    IMAGE_CALL_TYPES,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -74,6 +75,7 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.proxy._types import (
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -140,6 +142,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     RejectedRequestError,
     SensitiveDataRouteException,
+    UnresolvablePreviousResponseError,
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -571,6 +574,8 @@ class _StreamIteratorHook(Protocol[_T]):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, (*IMAGE_ANSWER_ERRORS, UnresolvablePreviousResponseError)):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
@@ -1101,8 +1106,6 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
         CallTypes.aembedding,
         CallTypes.moderation,
         CallTypes.amoderation,
-        CallTypes.image_generation,
-        CallTypes.aimage_generation,
         CallTypes.speech,
         CallTypes.aspeech,
         CallTypes.rerank,
@@ -1371,7 +1374,16 @@ def _estimated_input_cost(
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
 
-_EMPTY_LIFT: Final = MappingProxyType({})
+_EMPTY_LIFT: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _served_image_call_type(litellm_logging_obj: object) -> str | None:
+    if not isinstance(litellm_logging_obj, Logging) or not litellm_logging_obj.async_success_log_enqueued:
+        return None
+    return next(
+        (call_type for call_type in IMAGE_CALL_TYPES if call_type == litellm_logging_obj.call_type),  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+        None,
+    )
 
 
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
@@ -1589,7 +1601,28 @@ def _proxy_only_error_log_fields(
     )
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def _attribution_to_the_attempt_that_answered_without_an_image(
+    request_data: Mapping[str, object], standard_logging_object: object, logged_exception: object
+) -> Mapping[str, object]:
+    logged: Final = _as_str_mapping(standard_logging_object)
+    answered_id: Final = logged.get("model_id")
+    answered_group: Final = logged.get("model_group")
+    metadata: Final = _as_str_mapping(request_data.get("metadata"))
+    model_info: Final = _as_str_mapping(metadata.get("model_info"))
+    if not isinstance(logged_exception, IMAGE_ANSWER_ERRORS):
+        return _EMPTY_LIFT
+    if not isinstance(answered_id, str) or not isinstance(answered_group, str):
+        return _EMPTY_LIFT
+    if answered_id == model_info.get("id"):
+        return _EMPTY_LIFT
+    return MappingProxyType(
+        {"metadata": {**metadata, "model_group": answered_group, "model_info": {**model_info, "id": answered_id}}}
+    )
+
+
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, answered_without_an_image: bool = False
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1605,14 +1638,20 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
+    if isinstance(_logging_obj, Logging) and not _success_already_logged:
+        _logging_obj.bill_failed_attempts_owed_on_failure()
     _billed: Final = provider_billed and not _success_already_logged
-    _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_model_call_details,
-        request_body=request_data,
-        dispatched=_first_handoff is not None,
-        provider_billed=_billed,
-        deployment_id=_deployment_id,
-        base_model=_base_model,
+    _usage_to_lift: Final = (
+        None
+        if _success_already_logged
+        else _failure_usage_to_lift(
+            model_call_details=_model_call_details,
+            request_body=request_data,
+            dispatched=_first_handoff is not None,
+            provider_billed=_billed,
+            deployment_id=_deployment_id,
+            base_model=_base_model,
+        )
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
@@ -1632,8 +1671,21 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        (
+            "standard_callback_dynamic_params",
+            {"turn_off_message_logging": True}
+            if isinstance(_logging_obj, Logging) and _logging_obj.attempt_turned_off_message_logging
+            else None,
+        ),
     )
-    return MappingProxyType({key: value for key, value in _entries if value is not None})
+    _attribution: Final = (
+        _attribution_to_the_attempt_that_answered_without_an_image(
+            request_data, _model_call_details.get("standard_logging_object"), _model_call_details.get("exception")
+        )
+        if answered_without_an_image
+        else _EMPTY_LIFT
+    )
+    return MappingProxyType({**{key: value for key, value in _entries if value is not None}, **_attribution})
 
 
 @dataclass(frozen=True)
@@ -3876,7 +3928,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                answered_without_an_image=isinstance(original_exception, IMAGE_ANSWER_ERRORS),
             )
         )
 
@@ -3975,13 +4029,14 @@ class ProxyLogging:
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
         request_fields: Final = cast(Mapping[str, object], request_data)  # cast-ok: request bodies are str-keyed JSON
+        served_image_call_type: Final = _served_image_call_type(request_fields.get("litellm_logging_obj"))
         logged_metadata_keys: Final = _proxy_only_error_logged_metadata_keys(
             authenticated=error_type != ProxyErrorTypes.auth_error, past_pre_call=set_up_by_request
         )
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if litellm_logging_obj is None:
+        if litellm_logging_obj is None or served_image_call_type is not None:
             from litellm._uuid import uuid
             from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
             from litellm.proxy.proxy_server import proxy_config
@@ -3989,7 +4044,7 @@ class ProxyLogging:
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=route or "IGNORE_THIS",
+                original_function=route or served_image_call_type or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
@@ -5004,10 +5059,23 @@ class ProxyLogging:
         concurrent releases of the same acquisition would otherwise race and
         double-decrement under the limiter's in-memory fallback.
         """
+        await self.arelease_request_parallel_slot()
+
+    async def arelease_request_parallel_slot(self) -> None:
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+        await limiter.async_release_request_parallel_slot()
+
+    async def arelease_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        match limiter:
+            case PROXY_MaxParallelRequestsHandler_v3():
+                await limiter.async_release_request_parallel_slot()
+            case _PROXY_MaxParallelRequestsHandler():
+                await limiter.async_release_slot_before_logging(logging_obj)
+            case _:
+                return
 
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
 

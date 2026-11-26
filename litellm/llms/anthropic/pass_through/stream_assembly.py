@@ -4,10 +4,13 @@ from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_undecodable_json_object, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -18,6 +21,8 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
@@ -153,9 +158,11 @@ def collapse_pure_text_chunks(
             continue
 
         json_str = ev[idx + len("data:") :].strip()
+        if not json_str.startswith("{"):
+            continue
         try:
             data = json.loads(json_str)
-        except (json.JSONDecodeError, ValueError):
+        except (ValueError, RecursionError):
             return None
 
         etype = data.get("type")
@@ -266,19 +273,24 @@ def build_complete_streaming_response_legacy(
     return complete_streaming_response
 
 
-def extract_sse_data(event_str: str) -> dict | None:
-    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+def _sse_data_payload(event_str: str) -> str | None:
     for line in event_str.splitlines():
         stripped = line.strip()
         if stripped.startswith("data:"):
-            payload = stripped[len("data:") :].strip()
-            if not payload or payload == "[DONE]":
-                return None
-            try:
-                return json.loads(payload)
-            except (ValueError, TypeError):
-                return None
+            return stripped[len("data:") :].strip()
     return None
+
+
+def extract_sse_data(event_str: str) -> dict | None:
+    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+    payload: Final = _sse_data_payload(event_str)
+    if payload is None or not payload.startswith("{"):
+        return None
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except (ValueError, TypeError, RecursionError):
+        return None
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 def build_usage_only_response_from_chunks(
@@ -448,6 +460,33 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
     )
 
 
+def _has_undecodable_object_event(sse_stream: str) -> bool:
+    return any(
+        is_undecodable_json_object(_sse_data_payload(event) or "") for event in split_sse_chunk_into_events(sse_stream)
+    )
+
+
+def _is_json_no_reader_can_take(payload: str) -> bool:
+    try:
+        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    if value is None:
+        return False
+    event: Final = as_str_mapping(value)
+    return event is None or isinstance(event.get("type"), (list, dict))
+
+
+def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
+    """Whether a frame's data is JSON that no reader of these streams can take as an event."""
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    return sse_stream is not None and any(
+        _is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in split_sse_chunk_into_events(sse_stream)
+    )
+
+
 def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     """Whether raw SSE frames are Anthropic Messages events.
 
@@ -473,7 +512,7 @@ def assemble_anthropic_sse_stream(
     freshly built object that is unreachable from caller state until returned.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
+    if sse_stream is None or _has_undecodable_object_event(sse_stream):
         return None
     message_start: Final = _anthropic_message_start(sse_stream)
     if message_start is None:

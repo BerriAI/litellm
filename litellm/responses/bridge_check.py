@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import is_whitespace_user_message
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
+from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -19,6 +19,7 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute, get_vertex_ai_model_route
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ChatCompletionUserMessage, OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
@@ -87,6 +88,10 @@ def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: st
             return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
 
 
+def serves_only_responses(model: str, custom_llm_provider: str) -> bool:
+    return custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model)
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -95,6 +100,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    base_model: str | None = None,
 ) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
 
@@ -123,6 +129,9 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
+    if serves_only_responses(model, custom_llm_provider):
+        model_info["mode"] = "responses"
+
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
@@ -144,12 +153,17 @@ def responses_api_bridge_check(
         (tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)) == "tool_search"
         for tool in (tools or ())
     )
+    series_model: Final = (
+        AzureAIStudioConfig.gpt_5_base_model(model, base_model) or model
+        if custom_llm_provider == LlmProviders.AZURE_AI.value
+        else model
+    )
     requested_effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
     requested_summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, dict) else None
     reasoning_active: Final = (
         requested_effort != "none"
         or requested_summary is not None
-        or _chat_gate_refuses_reasoning_effort_none(model, custom_llm_provider)
+        or _chat_gate_refuses_reasoning_effort_none(series_model, custom_llm_provider)
     )
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
@@ -168,15 +182,15 @@ def responses_api_bridge_check(
         has_function_tool
         and reasoning_active
         and (
-            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            foundry_chat_rejects_function_tools_while_reasoning(series_model, reasoning_effort)
             if on_foundry_openai_endpoint
             else (
-                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(series_model)
                 and (
                     reasoning_effort is not None
                     or (
                         on_constraint_enforcing_endpoint
-                        and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
+                        and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(series_model)
                         and model_info.get("default_reasoning_effort") != "none"
                     )
                 )
@@ -186,8 +200,12 @@ def responses_api_bridge_check(
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
         and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(model)
-        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and (
+            OpenAIGPT5Config.is_openai_gpt_5_model(series_model)
+            if custom_llm_provider == "openai"
+            else OpenAIGPT5Config.is_model_gpt_5_model(series_model)
+        )
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(series_model)
         and (
             (reasoning_effort is not None and reasoning_summary is not None)
             or chat_rejects_function_tools
@@ -208,6 +226,7 @@ def chat_completion_ends_in_responses_api(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    base_model: str | None = None,
 ) -> bool:
     """Whether chat completion for this model is served by a Responses API.
 
@@ -231,6 +250,7 @@ def chat_completion_ends_in_responses_api(
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
         api_base=api_base,
+        base_model=base_model,
     )
     return model_info.get("mode") == "responses"
 

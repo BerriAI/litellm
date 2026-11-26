@@ -27009,6 +27009,12 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Guard Name
              * @description Name of the guardrail in guardrails.ai
              */
@@ -27434,6 +27440,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27445,6 +27455,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27456,6 +27470,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -36534,6 +36552,12 @@ export interface components {
              */
             file_guardrail_timeout?: number | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
              */
@@ -43891,6 +43915,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /**
          * ResponsesAPIRequestParams
          * @description TypedDict for request parameters supported by the responses API.
@@ -43898,6 +43932,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -66326,6 +66361,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -69790,6 +69826,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -80459,6 +80496,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */

@@ -1,8 +1,9 @@
-import json
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import loads_json_object
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
 if TYPE_CHECKING:
     import httpx
@@ -109,16 +110,9 @@ class BaseModelResponseIterator:
 
     @staticmethod
     def _string_to_dict_parser(str_line: str) -> dict | None:
-        stripped_json_chunk: dict | None = None
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
-        return stripped_json_chunk
+        decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
+        return decoded if isinstance(decoded, dict) else None
 
     @classmethod
     def string_to_dict_parser(
@@ -168,10 +162,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -204,10 +197,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point

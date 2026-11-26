@@ -17,6 +17,7 @@ export interface UseChatHistoryReturn {
   setMessageTraceId: React.Dispatch<React.SetStateAction<string | null>>;
   responsesSessionId: string | null;
   setResponsesSessionId: React.Dispatch<React.SetStateAction<string | null>>;
+  previousResponseId: string | null;
   useApiSessionManagement: boolean;
   setUseApiSessionManagement: React.Dispatch<React.SetStateAction<boolean>>;
 
@@ -30,6 +31,8 @@ export interface UseChatHistoryReturn {
   updateSearchResults: (searchResults: any[]) => void;
   handleResponseId: (responseId: string) => void;
   handleToggleSessionManagement: (useApi: boolean) => void;
+  handleModelChange: () => void;
+  handleHistoryResent: () => void;
   handleMCPEvent: (event: MCPEvent) => void;
   updateImageUI: (imageUrl: string, model: string) => void;
   updateEmbeddingsUI: (embeddings: string, model?: string) => void;
@@ -66,6 +69,8 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     const saved = sessionStorage.getItem("useApiSessionManagement");
     return saved ? JSON.parse(saved) : true; // Default to API session management
   });
+  const [resendsHistory, setResendsHistory] = useState(false);
+  const previousResponseId = useApiSessionManagement && !resendsHistory ? responsesSessionId : null;
 
   const persistDebouncer = useDebouncer(
     (history: MessageType[]) => {
@@ -260,8 +265,15 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     }
   };
 
+  const handleModelChange = () => {
+    setMessageTraceId(null);
+    setResponsesSessionId(null);
+    setResendsHistory(false);
+  };
+
   const handleToggleSessionManagement = (useApi: boolean) => {
     setUseApiSessionManagement(useApi);
+    setResendsHistory(false);
     if (!useApi) {
       // Clear API session when switching to UI mode
       setResponsesSessionId(null);
@@ -352,6 +364,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
 
     setMessageTraceId(null);
     setResponsesSessionId(null); // Clear responses session ID
+    setResendsHistory(false);
     setMCPEvents([]); // Clear MCP events
     if (!simplified) {
       sessionStorage.removeItem("chatHistory");
@@ -373,6 +386,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     setMessageTraceId,
     responsesSessionId,
     setResponsesSessionId,
+    previousResponseId,
     useApiSessionManagement,
     setUseApiSessionManagement,
     updateTextUI,
@@ -384,6 +398,8 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     updateSearchResults,
     handleResponseId,
     handleToggleSessionManagement,
+    handleModelChange,
+    handleHistoryResent: () => setResendsHistory(true),
     handleMCPEvent,
     updateImageUI,
     updateEmbeddingsUI,

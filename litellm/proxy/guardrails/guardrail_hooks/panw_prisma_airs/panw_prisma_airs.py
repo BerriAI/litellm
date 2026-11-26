@@ -22,10 +22,12 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import is_undecodable_json_object
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
@@ -893,9 +895,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             line = line.strip()
             if not line.startswith("data: "):
                 continue
+            if is_undecodable_json_object(line[6:]):
+                raise GuardrailRaisedException(
+                    message="PANW Prisma AIRS could not read an event in the upstream stream, so it cannot scan the response",
+                    should_wrap_with_default_message=False,
+                )
             try:
                 data = json.loads(line[6:])
-            except (json.JSONDecodeError, ValueError):
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(data, dict):
                 continue
