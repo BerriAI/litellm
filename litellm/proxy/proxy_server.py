@@ -1623,6 +1623,10 @@ _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchIntercep
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
 
+class _CacheConstructorKwargs(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class _AiohttpConnectorKwargs(TypedDict, total=False):
     keepalive_timeout: float
     ttl_dns_cache: int
@@ -6452,7 +6456,8 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**without(cache_params, "default_redis_ttl"))
+        cache_settings: Final[Mapping[str, object]] = cache_params
+        litellm.cache = Cache(**_CacheConstructorKwargs(**without(cache_settings, "default_redis_ttl")))
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
@@ -10444,7 +10449,7 @@ def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) 
 
 async def _apply_streaming_chunk_hooks(
     *,
-    chunk: Any,
+    chunk: object,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict[str, object],
     str_so_far: str,

@@ -88,7 +88,6 @@ export default function ChatConversationPage() {
   const router = useRouter();
   const {
     accessToken,
-    conversations,
     selectedMCPServers,
     setSelectedMCPServers,
     activeConversationId,
