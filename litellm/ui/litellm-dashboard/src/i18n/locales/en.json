@@ -5539,6 +5539,7 @@
         "google": "Google SSO",
         "microsoft": "Microsoft SSO",
         "okta": "Okta / Auth0 SSO",
+        "cognito": "AWS Cognito SSO",
         "generic": "Generic SSO",
         "saml": "SAML SSO",
         "fallback": "{{name}} SSO"
@@ -5571,12 +5572,17 @@
           "samlIdpMetadataUrl": "IdP Metadata URL",
           "samlIdpMetadataXml": "IdP Metadata XML",
           "samlSpEntityId": "SP Entity ID",
-          "samlAllowUnsolicited": "Allow IdP-initiated (unsolicited) responses"
+          "samlAllowUnsolicited": "Allow IdP-initiated (unsolicited) responses",
+          "cognitoDomain": "Cognito Domain",
+          "cognitoRegion": "AWS Region",
+          "cognitoClientId": "Cognito App Client ID",
+          "cognitoClientSecret": "Cognito App Client Secret"
         },
         "placeholders": {
           "samlIdpMetadataUrl": "https://idp.example.com/metadata (use this or the metadata XML below)",
           "samlIdpMetadataXml": "Paste the IdP metadata XML here if you do not have a metadata URL",
-          "samlSpEntityId": "Defaults to <proxy base url>/sso/saml/metadata"
+          "samlSpEntityId": "Defaults to <proxy base url>/sso/saml/metadata",
+          "cognitoDomain": "my-pool or auth.example.com"
         },
         "defaultRoles": {
           "internalUserViewer": "Internal User Viewer",
@@ -5592,7 +5598,8 @@
           "teamIdsJwtFieldRequired": "Please enter the team IDs JWT field",
           "fieldRequired": "Please enter the {{field}}",
           "urlScheme": "URL must start with http:// or https://",
-          "urlTrailingSlash": "URL must not end with a trailing slash"
+          "urlTrailingSlash": "URL must not end with a trailing slash",
+          "cognitoRegionRequired": "Please enter the AWS region, or enter the full Cognito domain"
         }
       },
       "addModal": {

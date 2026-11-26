@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
+import { detectSSOProvider, parseCognitoDomain, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -47,6 +47,7 @@ export const toSSOFormValues = (values: SSOSettingsValues): SSOSettingsFormValue
     generic_token_endpoint: values.generic_token_endpoint ?? "",
     generic_userinfo_endpoint: values.generic_userinfo_endpoint ?? "",
     generic_scope: values.generic_scope ?? undefined,
+    ...parseCognitoDomain(values.generic_authorization_endpoint),
     saml_idp_metadata_url: values.saml_idp_metadata_url ?? undefined,
     saml_idp_metadata_xml: values.saml_idp_metadata_xml ?? undefined,
     saml_sp_entity_id: values.saml_sp_entity_id ?? undefined,

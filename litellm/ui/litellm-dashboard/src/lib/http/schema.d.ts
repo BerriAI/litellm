@@ -49658,6 +49658,16 @@ export interface components {
              */
             generic_token_endpoint?: string | null;
             /**
+             * Generic User Email Attribute
+             * @description Userinfo claim used as the user email. Defaults to 'email'
+             */
+            generic_user_email_attribute?: string | null;
+            /**
+             * Generic User Id Attribute
+             * @description Userinfo claim used as the LiteLLM user ID, e.g. 'sub'. Defaults to 'preferred_username'
+             */
+            generic_user_id_attribute?: string | null;
+            /**
              * Generic Userinfo Endpoint
              * @description User info endpoint URL for generic OAuth provider
              */

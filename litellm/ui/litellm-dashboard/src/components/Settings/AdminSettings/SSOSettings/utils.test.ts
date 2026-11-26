@@ -1,4 +1,4 @@
-import { detectSSOProvider, diffSSOSettingsPayload, processSSOSettingsPayload } from "./utils";
+import { detectSSOProvider, diffSSOSettingsPayload, parseCognitoDomain, processSSOSettingsPayload } from "./utils";
 import { describe, it, expect } from "vitest";
 import type { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 
@@ -505,5 +505,62 @@ describe("diffSSOSettingsPayload", () => {
     expect(diffSSOSettingsPayload({ saml_allow_unsolicited: "true" }, { saml_allow_unsolicited: "false" })).toEqual({
       saml_allow_unsolicited: "false",
     });
+  });
+});
+
+describe("AWS Cognito", () => {
+  const cognitoForm = {
+    sso_provider: "cognito",
+    cognito_domain: "my-pool",
+    cognito_region: "eu-west-1",
+    generic_client_id: "app-client",
+    generic_client_secret: "app-secret",
+  };
+
+  it("expands a domain prefix and region into the Cognito hosted OAuth endpoints with sub as the user id", () => {
+    expect(processSSOSettingsPayload(cognitoForm)).toEqual({
+      sso_provider: "cognito",
+      generic_client_id: "app-client",
+      generic_client_secret: "app-secret",
+      generic_authorization_endpoint: "https://my-pool.auth.eu-west-1.amazoncognito.com/oauth2/authorize",
+      generic_token_endpoint: "https://my-pool.auth.eu-west-1.amazoncognito.com/oauth2/token",
+      generic_userinfo_endpoint: "https://my-pool.auth.eu-west-1.amazoncognito.com/oauth2/userInfo",
+      generic_scope: "openid email profile",
+      generic_user_id_attribute: "sub",
+      generic_user_email_attribute: "email",
+    });
+  });
+
+  it("uses a full custom domain as is, ignoring the region and any scheme or trailing slash", () => {
+    const result = processSSOSettingsPayload({ ...cognitoForm, cognito_domain: "https://auth.example.com/" });
+    expect(result.generic_authorization_endpoint).toBe("https://auth.example.com/oauth2/authorize");
+    expect(result.generic_token_endpoint).toBe("https://auth.example.com/oauth2/token");
+  });
+
+  it("does not derive Cognito endpoints for another provider", () => {
+    const result = processSSOSettingsPayload({ ...cognitoForm, sso_provider: "generic" });
+    expect(result.generic_authorization_endpoint).toBeUndefined();
+    expect(result.cognito_domain).toBeUndefined();
+  });
+
+  it("reads a saved hosted-domain config back as Cognito with its prefix and region", () => {
+    const saved = processSSOSettingsPayload(cognitoForm);
+    expect(parseCognitoDomain(saved.generic_authorization_endpoint)).toEqual({
+      cognito_domain: "my-pool",
+      cognito_region: "eu-west-1",
+    });
+    expect(detectSSOProvider(saved as unknown as SSOSettingsValues)).toBe("cognito");
+  });
+
+  it("leaves a non-Cognito generic provider detected as generic", () => {
+    expect(parseCognitoDomain("https://idp.example.com/oauth2/authorize")).toBeNull();
+    expect(parseCognitoDomain("https://my-pool.auth.eu-west-1.amazoncognito.com/login")).toBeNull();
+    expect(parseCognitoDomain("not a url")).toBeNull();
+    expect(
+      detectSSOProvider({
+        generic_client_id: "id",
+        generic_authorization_endpoint: "https://idp.example.com/oauth2/authorize",
+      } as unknown as SSOSettingsValues),
+    ).toBe("generic");
   });
 });

@@ -1,5 +1,34 @@
 import { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 
+const COGNITO_HOSTED_DOMAIN = /^(.+)\.auth\.([a-z0-9-]+)\.amazoncognito\.com$/;
+
+export const cognitoBaseUrl = (domain: string, region: string | undefined): string => {
+  const host = domain
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  return host.includes(".") ? `https://${host}` : `https://${host}.auth.${(region ?? "").trim()}.amazoncognito.com`;
+};
+
+export const cognitoEndpoints = (domain: string, region: string | undefined) => {
+  const base = cognitoBaseUrl(domain, region);
+  return {
+    generic_authorization_endpoint: `${base}/oauth2/authorize`,
+    generic_token_endpoint: `${base}/oauth2/token`,
+    generic_userinfo_endpoint: `${base}/oauth2/userInfo`,
+  };
+};
+
+// shortcut: only Cognito hosted domains (*.amazoncognito.com) are recognized, a custom domain reads back as generic
+export const parseCognitoDomain = (
+  authorizationEndpoint: string | null | undefined,
+): { cognito_domain: string; cognito_region: string } | null => {
+  if (!authorizationEndpoint) return null;
+  const url = URL.canParse(authorizationEndpoint) ? new URL(authorizationEndpoint) : null;
+  const match = url?.pathname === "/oauth2/authorize" ? COGNITO_HOSTED_DOMAIN.exec(url.hostname) : null;
+  return match ? { cognito_domain: match[1], cognito_region: match[2] } : null;
+};
+
 /**
  * Processes SSO settings form values and transforms them into the payload format expected by the API
  * Handles role mappings transformation and field extraction
@@ -15,11 +44,21 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     use_role_mappings,
     use_team_mappings,
     team_ids_jwt_field,
+    cognito_domain,
+    cognito_region,
     ...rest
   } = formValues;
 
   const payload: any = {
     ...rest,
+    ...(rest.sso_provider === "cognito" && cognito_domain
+      ? {
+          ...cognitoEndpoints(cognito_domain, cognito_region),
+          generic_scope: "openid email profile",
+          generic_user_id_attribute: "sub",
+          generic_user_email_attribute: "email",
+        }
+      : {}),
   };
 
   if (typeof payload.saml_allow_unsolicited === "boolean") {
@@ -103,6 +142,8 @@ export const CLEARED_SSO_SETTINGS = {
   generic_token_endpoint: null,
   generic_userinfo_endpoint: null,
   generic_scope: null,
+  generic_user_id_attribute: null,
+  generic_user_email_attribute: null,
   saml_idp_metadata_url: null,
   saml_idp_metadata_xml: null,
   saml_sp_entity_id: null,
@@ -119,6 +160,7 @@ export const detectSSOProvider = (values: SSOSettingsValues): string | null => {
   if (values.google_client_id) return "google";
   if (values.microsoft_client_id) return "microsoft";
   if (values.generic_client_id) {
+    if (parseCognitoDomain(values.generic_authorization_endpoint)) return "cognito";
     // Check if it looks like Okta/Auth0 based on endpoints
     if (
       values.generic_authorization_endpoint?.includes("okta") ||

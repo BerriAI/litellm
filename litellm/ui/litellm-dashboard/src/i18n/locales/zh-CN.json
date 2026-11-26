@@ -5269,6 +5269,7 @@
         "google": "Google SSO",
         "microsoft": "Microsoft SSO",
         "okta": "Okta / Auth0 SSO",
+        "cognito": "AWS Cognito SSO",
         "generic": "通用 SSO",
         "saml": "SAML SSO",
         "fallback": "{{name}} SSO"
@@ -5301,12 +5302,17 @@
           "samlIdpMetadataUrl": "IdP 元数据 URL",
           "samlIdpMetadataXml": "IdP 元数据 XML",
           "samlSpEntityId": "SP 实体 ID",
-          "samlAllowUnsolicited": "允许 IdP 发起的（未经请求的）响应"
+          "samlAllowUnsolicited": "允许 IdP 发起的（未经请求的）响应",
+          "cognitoDomain": "Cognito 域",
+          "cognitoRegion": "AWS 区域",
+          "cognitoClientId": "Cognito 应用客户端 ID",
+          "cognitoClientSecret": "Cognito 应用客户端密钥"
         },
         "placeholders": {
           "samlIdpMetadataUrl": "https://idp.example.com/metadata（使用此项或下方的元数据 XML）",
           "samlIdpMetadataXml": "如果您没有元数据 URL，请在此粘贴 IdP 元数据 XML",
-          "samlSpEntityId": "默认为 <proxy base url>/sso/saml/metadata"
+          "samlSpEntityId": "默认为 <proxy base url>/sso/saml/metadata",
+          "cognitoDomain": "my-pool 或 auth.example.com"
         },
         "defaultRoles": {
           "internalUserViewer": "内部用户（只读）",
@@ -5322,7 +5328,8 @@
           "teamIdsJwtFieldRequired": "请输入团队 ID 的 JWT 字段",
           "fieldRequired": "请输入 {{field}}",
           "urlScheme": "URL 必须以 http:// 或 https:// 开头",
-          "urlTrailingSlash": "URL 不能以斜杠结尾"
+          "urlTrailingSlash": "URL 不能以斜杠结尾",
+          "cognitoRegionRequired": "请输入 AWS 区域，或输入完整的 Cognito 域"
         }
       },
       "addModal": {

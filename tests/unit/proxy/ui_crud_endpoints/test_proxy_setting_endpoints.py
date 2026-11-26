@@ -985,6 +985,68 @@ class TestProxySettingEndpoints:
             ):
                 os.environ.pop(var, None)
 
+    def test_update_sso_settings_maps_generic_claim_attributes_to_env_vars(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """The admin UI's AWS Cognito option saves sub as the user ID claim, since Cognito
+        userinfo carries no preferred_username unless the pool sets one. The generic SSO
+        callback reads that claim from GENERIC_USER_ID_ATTRIBUTE."""
+        import json
+        import os
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        env_vars = ("GENERIC_USER_ID_ATTRIBUTE", "GENERIC_USER_EMAIL_ATTRIBUTE")
+        for var in env_vars:
+            monkeypatch.delenv(var, raising=False)
+
+        try:
+            response = client.patch(
+                "/update/sso_settings",
+                json={
+                    "generic_client_id": "app-client",
+                    "generic_authorization_endpoint": "https://pool.auth.us-east-1.amazoncognito.com/oauth2/authorize",
+                    "generic_user_id_attribute": "sub",
+                    "generic_user_email_attribute": "email",
+                },
+            )
+
+            assert response.status_code == 200
+            assert os.environ.get("GENERIC_USER_ID_ATTRIBUTE") == "sub"
+            assert os.environ.get("GENERIC_USER_EMAIL_ATTRIBUTE") == "email"
+
+            stored = json.loads(
+                mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+            )
+            assert stored["generic_user_id_attribute"] == "sub"
+            assert stored["generic_user_email_attribute"] == "email"
+
+            cleared = client.patch("/update/sso_settings", json={"generic_user_id_attribute": None})
+
+            assert cleared.status_code == 200
+            assert "GENERIC_USER_ID_ATTRIBUTE" not in os.environ
+        finally:
+            for var in env_vars:
+                os.environ.pop(var, None)
+
     def test_update_sso_settings_audits_when_env_cleanup_fails(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

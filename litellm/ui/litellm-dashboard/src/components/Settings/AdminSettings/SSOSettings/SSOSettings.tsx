@@ -158,6 +158,35 @@ export default function SSOSettings() {
           : null,
       ],
     },
+    cognito: {
+      providerText: t(ssoProviderDisplayNames.cognito),
+      fields: [
+        {
+          label: t("adminPanel.ssoSettings.details.clientId"),
+          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_id} />,
+        },
+        {
+          label: t("adminPanel.ssoSettings.details.clientSecret"),
+          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_secret} />,
+        },
+        {
+          label: t("adminPanel.ssoSettings.details.authorizationEndpoint"),
+          render: (values: SSOSettingsValues) => <EndpointValue value={values.generic_authorization_endpoint} />,
+        },
+        {
+          label: t("adminPanel.ssoSettings.details.tokenEndpoint"),
+          render: (values: SSOSettingsValues) => <EndpointValue value={values.generic_token_endpoint} />,
+        },
+        {
+          label: t("adminPanel.ssoSettings.details.userInfoEndpoint"),
+          render: (values: SSOSettingsValues) => <EndpointValue value={values.generic_userinfo_endpoint} />,
+        },
+        {
+          label: t("adminPanel.ssoSettings.details.proxyBaseUrl"),
+          render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url),
+        },
+      ],
+    },
     generic: {
       providerText: t(ssoProviderDisplayNames.generic),
       fields: [
