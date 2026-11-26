@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 from sdk_watch.changelog import ChangelogEntry, Release
-from sdk_watch.graph import Exact, OnDay, WatchDeps, run_watch
+from sdk_watch.graph import Exact, OnDay, Recent, WatchDeps, run_watch
 from sdk_watch.implement import Implementation, ImplementationReport, Outcome
 from sdk_watch.report import summary
 from sdk_watch.sources import Candidate, Sdk
@@ -55,7 +55,7 @@ def deps(**overrides: object) -> WatchDeps:
     defaults = {
         "fetch_text": CHANGELOGS.__getitem__,
         "triage": triage_by_release,
-        "already_handled": lambda finding: False,
+        "already_handled": lambda finding: None,
         "implement": implemented,
         "sdks": (OPENAI, ANTHROPIC),
         "selector": OnDay(day=date(2026, 11, 24)),
@@ -92,18 +92,46 @@ def test_an_exact_release_ignores_the_day_and_other_sdks() -> None:
     assert slugs(state.findings) == ["response_field"]
 
 
+@pytest.mark.parametrize(
+    ("until", "expected"),
+    [
+        (date(2026, 11, 25), [("openai", "3.58.0"), ("anthropic", "0.105.0")]),
+        (date(2026, 11, 24), [("openai", "3.58.0")]),
+    ],
+    ids=["window-through-the-24th", "window-ending-before-the-24th"],
+)
+def test_a_recent_window_checks_each_release_in_it_that_no_earlier_run_checked(
+    until: date, expected: list[tuple[str, str]]
+) -> None:
+    window = Recent(since=date(2026, 11, 23), until=until, checked=frozenset({("openai", "3.59.0")}))
+
+    state = run_watch(deps(selector=window))
+
+    assert [(c.sdk.name, c.release.version) for c in state.candidates] == expected
+
+
 def test_changes_already_handled_upstream_are_never_implemented() -> None:
-    state = run_watch(deps(already_handled=lambda finding: finding.change.slug == "healthcare_models"))
+    pr = "https://github.com/BerriAI/litellm/pull/9"
+    state = run_watch(deps(already_handled=lambda finding: pr if finding.change.slug == "healthcare_models" else None))
 
     assert slugs(tuple(impl.finding for impl in state.implementations)) == ["mid_conversation_system"]
-    assert "| openai 3.59.0 | healthcare_models | already handled by an open or recently merged PR |" in summary(state)
+    assert f"| openai 3.59.0 | healthcare_models | already handled by {pr} |" in summary(state)
 
 
 def test_the_run_limit_defers_the_rest_to_a_later_run() -> None:
     state = run_watch(deps(max_implementations=1))
 
     assert slugs(tuple(impl.finding for impl in state.implementations)) == ["healthcare_models"]
+    assert slugs(state.deferred) == ["mid_conversation_system"]
     assert "| anthropic 0.105.0 | mid_conversation_system | deferred to a later run" in summary(state)
+
+
+def test_changes_an_earlier_run_deferred_are_implemented_even_with_no_new_release() -> None:
+    leftover = run_watch(deps(max_implementations=1)).deferred
+
+    state = run_watch(deps(selector=OnDay(day=date(2026, 1, 1)), triage=never, carried=leftover))
+
+    assert slugs(tuple(impl.finding for impl in state.implementations)) == ["mid_conversation_system"]
 
 
 @pytest.mark.parametrize(
@@ -111,7 +139,7 @@ def test_the_run_limit_defers_the_rest_to_a_later_run() -> None:
     [
         {"selector": OnDay(day=date(2026, 1, 1)), "triage": never, "already_handled": never, "implement": never},
         {"triage": lambda candidate: TriageVerdict(changes=()), "already_handled": never, "implement": never},
-        {"already_handled": lambda finding: True, "implement": never},
+        {"already_handled": lambda finding: f"branch {finding.branch}", "implement": never},
     ],
     ids=["no-release-that-day", "nothing-needs-litellm-work", "everything-already-handled"],
 )

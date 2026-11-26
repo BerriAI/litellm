@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -833,6 +833,7 @@ dependencies = [
     { name = "langchain-core" },
     { name = "langgraph" },
     { name = "pydantic" },
+    { name = "typing-extensions" },
 ]
 
 [package.dev-dependencies]
@@ -853,6 +854,7 @@ requires-dist = [
     { name = "langchain-core", specifier = "==1.8.4" },
     { name = "langgraph", specifier = "==1.2.24" },
     { name = "pydantic", specifier = "==2.14.4" },
+    { name = "typing-extensions", specifier = "==4.16.0" },
 ]
 
 [package.metadata.requires-dev]

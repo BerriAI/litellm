@@ -11,6 +11,7 @@ dependencies = [
     "langchain-core==1.8.4",
     "langgraph==1.2.24",
     "pydantic==2.14.4",
+    "typing-extensions==4.16.0",
 ]
 
 [dependency-groups]
@@ -22,3 +23,4 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

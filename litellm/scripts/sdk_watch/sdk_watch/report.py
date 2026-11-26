@@ -47,8 +47,7 @@ def pr_draft(implementation: Implementation) -> PrDraft:
     )
 
 
-def pr_body(draft: PrDraft, verdict: DemoVerdict, gif_url: str, run_url: str) -> str:
-    before: Final = "fail" if verdict.fails_before else "already pass (the tests do not catch the missing change)"
+def pr_body(draft: PrDraft, gif_url: str, run_url: str) -> str:
     return f"""## Handwritten 1-3 sentence description
 
 [insert handwritten description here]
@@ -73,8 +72,8 @@ How it solves it:
 
 ## Screenshots / Proof of Fix
 
-The video runs the PR's tests on main without the fix, then with it. Without the fix they {before}, with it \
-they pass
+The video runs the PR's tests on main without the fix, then with it. Without the fix they fail, with it they \
+pass
 
 ![The PR's tests before and after the fix]({gif_url})
 
@@ -92,9 +91,10 @@ New Feature
 
 
 def _outcome(state: WatchState, finding: Finding) -> str:
+    handled_by: Final = {handled.finding.branch: handled.by for handled in state.handled}
+    if finding.branch in handled_by:
+        return f"already handled by {handled_by[finding.branch]}"
     implemented: Final = {impl.finding.branch: impl for impl in state.implementations}
-    if finding not in state.fresh:
-        return "already handled by an open or recently merged PR"
     implementation: Final = implemented.get(finding.branch)
     if implementation is None:
         return "deferred to a later run (over this run's limit)"

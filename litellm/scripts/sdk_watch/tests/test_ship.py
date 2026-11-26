@@ -16,6 +16,7 @@ from sdk_watch.ship import Opened, Skipped, asset_path, is_allowed, ship
 
 FIX = "def shout(text):\n    return text.upper()\n"
 TEST = "from litellm.shout import shout\n\n\ndef test_shout():\n    assert shout('hi') == 'HI'\n"
+SLOW_TEST = "import time\n\n\ndef test_shout():\n    time.sleep(60)\n"
 
 
 @dataclass
@@ -23,8 +24,8 @@ class FakeGitHub:
     existing_branches: frozenset[str] = frozenset()
     opened: list[dict[str, str]] = field(default_factory=list)
 
-    def count_prs(self, query: str) -> int:
-        return 0
+    def first_pr(self, query: str) -> str | None:
+        return None
 
     def branch_exists(self, branch: str) -> bool:
         return branch in self.existing_branches
@@ -86,6 +87,7 @@ def test_ships_a_verified_patch_as_bot_commits_whose_video_stays_out_of_the_merg
     result = ship(
         repo,
         "BerriAI/litellm",
+        "litellm_release_line",
         base,
         patch,
         draft(),
@@ -106,7 +108,7 @@ def test_ships_a_verified_patch_as_bot_commits_whose_video_stays_out_of_the_merg
         "tests/unit/test_shout.py",
     ]
     [opened] = github.opened
-    assert (opened["head"], opened["base"]) == (draft().branch, "main")
+    assert (opened["head"], opened["base"]) == (draft().branch, "litellm_release_line")
     url = rf"https://github.com/BerriAI/litellm/blob/([0-9a-f]{{40}})/{re.escape(asset_path(draft()))}\?raw=true"
     [recording] = re.findall(url, opened["body"])
     assert git(repo, "merge-base", "--is-ancestor", recording, pushed) == ""
@@ -126,6 +128,7 @@ def test_a_failed_push_keeps_the_token_out_of_the_error(repo: Path, tmp_path: Pa
         ship(
             repo,
             "BerriAI/litellm",
+            "main",
             base,
             patch,
             draft(),
@@ -141,14 +144,25 @@ def test_a_failed_push_keeps_the_token_out_of_the_error(repo: Path, tmp_path: Pa
     assert base64.b64encode(f"x-access-token:{token}".encode()).decode() not in rendered
 
 
-def test_refuses_a_patch_that_touches_a_workflow_and_leaves_main_untouched(repo: Path, tmp_path: Path) -> None:
-    patch = make_patch(repo, tmp_path, {"litellm/shout.py": FIX, ".github/workflows/x.yml": "on: push\n"})
+@pytest.mark.parametrize(
+    ("files", "named"),
+    [
+        ({"litellm/shout.py": FIX, ".github/workflows/x.yml": "on: push\n"}, ".github/workflows/x.yml"),
+        ({"litellm/shout.py": FIX}, "tests/unit/test_shout.py"),
+    ],
+    ids=["touches-a-workflow", "leaves-out-its-tests"],
+)
+def test_refuses_a_patch_that_touches_a_workflow_or_leaves_out_its_tests_and_leaves_main_untouched(
+    repo: Path, tmp_path: Path, files: dict[str, str], named: str
+) -> None:
+    patch = make_patch(repo, tmp_path, files)
     github = FakeGitHub()
     base = git(repo, "rev-parse", "HEAD").strip()
 
     result = ship(
         repo,
         "BerriAI/litellm",
+        "main",
         base,
         patch,
         draft(),
@@ -159,7 +173,7 @@ def test_refuses_a_patch_that_touches_a_workflow_and_leaves_main_untouched(repo:
         "https://run",
     )
 
-    assert isinstance(result, Skipped) and ".github/workflows/x.yml" in result.reason
+    assert isinstance(result, Skipped) and named in result.reason
     assert github.opened == []
     assert git(repo, "status", "--porcelain") == ""
     assert git(repo, "ls-remote", "origin", f"refs/heads/{draft().branch}") == ""
@@ -168,12 +182,13 @@ def test_refuses_a_patch_that_touches_a_workflow_and_leaves_main_untouched(repo:
 @pytest.mark.parametrize(
     ("verdict", "branches"),
     [
+        (DemoVerdict(fails_before=False, passes_after=True), frozenset()),
         (DemoVerdict(fails_before=True, passes_after=False), frozenset()),
         (DemoVerdict(fails_before=True, passes_after=True), frozenset({draft().branch})),
     ],
-    ids=["tests-fail-with-the-fix", "branch-already-exists"],
+    ids=["tests-pass-without-the-fix", "tests-fail-with-the-fix", "branch-already-exists"],
 )
-def test_opens_nothing_for_a_failing_fix_or_a_rerun(
+def test_opens_nothing_for_unproven_tests_a_failing_fix_or_a_rerun(
     repo: Path, tmp_path: Path, verdict: DemoVerdict, branches: frozenset[str]
 ) -> None:
     patch = make_patch(repo, tmp_path, {"litellm/shout.py": FIX, "tests/unit/test_shout.py": TEST})
@@ -182,6 +197,7 @@ def test_opens_nothing_for_a_failing_fix_or_a_rerun(
     result = ship(
         repo,
         "BerriAI/litellm",
+        "main",
         git(repo, "rev-parse", "HEAD").strip(),
         patch,
         draft(),
@@ -196,13 +212,48 @@ def test_opens_nothing_for_a_failing_fix_or_a_rerun(
     assert github.opened == []
 
 
+def test_refuses_to_ship_from_a_checkout_with_local_changes_and_keeps_them(repo: Path, tmp_path: Path) -> None:
+    patch = make_patch(repo, tmp_path, {"litellm/shout.py": FIX, "tests/unit/test_shout.py": TEST})
+    (repo / "notes.txt").write_text("work in progress")
+    github = FakeGitHub()
+
+    result = ship(
+        repo,
+        "BerriAI/litellm",
+        "main",
+        git(repo, "rev-parse", "HEAD").strip(),
+        patch,
+        draft(),
+        DemoVerdict(fails_before=True, passes_after=True),
+        tmp_path / "none.gif",
+        github,
+        "token",
+        "https://run",
+    )
+
+    assert isinstance(result, Skipped)
+    assert github.opened == []
+    assert (repo / "notes.txt").read_text() == "work in progress"
+
+
 def test_the_demo_shows_the_tests_failing_on_main_and_passing_with_the_fix(repo: Path, tmp_path: Path) -> None:
     patch = make_patch(repo, tmp_path, {"litellm/shout.py": FIX, "tests/unit/test_shout.py": TEST})
     lines = []
 
-    verdict = run_demo(repo, patch, draft(), Path(sys.executable), lines.append)
+    verdict = run_demo(repo, patch, draft(), Path(sys.executable), lines.append, 900)
 
     assert verdict == DemoVerdict(fails_before=True, passes_after=True)
     assert lines[-1] == "# Before: failed. After: passed"
     assert git(repo, "status", "--porcelain") == ""
     assert json.loads(verdict.model_dump_json()) == {"fails_before": True, "passes_after": True}
+
+
+def test_a_test_run_that_hangs_counts_as_failed_once_its_time_is_up(repo: Path, tmp_path: Path) -> None:
+    patch = make_patch(repo, tmp_path, {"litellm/shout.py": FIX, "tests/unit/test_shout.py": SLOW_TEST})
+    lines = []
+
+    verdict = run_demo(repo, patch, draft(), Path(sys.executable), lines.append, 2)
+
+    assert verdict == DemoVerdict(fails_before=True, passes_after=False)
+    assert lines.count("# Timed out after 2 s") == 2
+    assert git(repo, "status", "--porcelain") == ""

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       day:
-        description: "Release day to check (YYYY-MM-DD). Empty means yesterday in UTC"
+        description: "Release day to check (YYYY-MM-DD). Empty means the last 7 days"
         required: false
         default: ""
       sdk:
@@ -67,10 +67,30 @@ jobs:
       - name: Run the agent's tests
         run: uv run --no-sync pytest -q -p no:cacheprovider
 
-  watch:
-    name: watch
+  bridge:
+    name: bridge
     needs: test
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      artifact: ${{ steps.bridge.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Build or restore the Rust bridge
+        id: bridge
+        timeout-minutes: 20
+        uses: ./.github/actions/build-rust-bridge
+
+  watch:
+    name: watch
+    needs: bridge
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
@@ -92,18 +112,27 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          save-cache: "false"
 
-      - name: Set up the Rust bridge
+      - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.bridge.outputs.artifact }}
 
       - name: Install LiteLLM with its unit test dependencies
-        run: >-
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev
-          --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml
-          --extra extra_proxy --extra proxy-runtime --extra utils
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev \
+            --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml \
+            --extra extra_proxy --extra proxy-runtime --extra utils \
+            --no-install-project --no-install-package litellm-proxy
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+          rm -rf rust-bridge-dist
 
-      - name: Cache Prisma binaries
+      - name: Restore the Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
+        with:
+          save-cache: "false"
 
       - name: Generate the Prisma client
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
@@ -115,26 +144,27 @@ jobs:
       - name: Start the LiteLLM proxy the agent calls its models through
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROXY_IMAGE: ghcr.io/berriai/litellm@sha256:ce00096d012719d58c52cecfa373f7c6256dd1b0ff08f6fa607e10e9628f1f46
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
             echo "::error::The ANTHROPIC_API_KEY repository secret is not set, so the agent has no model to call"
             exit 1
           fi
-          master_key="sk-$(openssl rand -hex 32)"
-          echo "::add-mask::${master_key}"
-          echo "LITELLM_PROXY_KEY=${master_key}" >> "${GITHUB_ENV}"
-          LITELLM_MASTER_KEY="${master_key}" PYTHONDONTWRITEBYTECODE=1 sudo \
-            --preserve-env=ANTHROPIC_API_KEY,LITELLM_MASTER_KEY,LITELLM_LOCAL_MODEL_COST_MAP,PYTHONDONTWRITEBYTECODE \
-            "${GITHUB_WORKSPACE}/.venv/bin/python" litellm/proxy/proxy_cli.py \
-            --config litellm/scripts/sdk_watch/proxy_config.yaml --port 4000 \
-            > "${RUNNER_TEMP}/proxy.log" 2>&1 &
-          for _ in $(seq 1 90); do
+          LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+          export LITELLM_MASTER_KEY
+          echo "::add-mask::${LITELLM_MASTER_KEY}"
+          echo "LITELLM_PROXY_KEY=${LITELLM_MASTER_KEY}" >> "${GITHUB_ENV}"
+          docker run -d --name sdk-watch-proxy -p 127.0.0.1:4000:4000 \
+            -e ANTHROPIC_API_KEY -e LITELLM_MASTER_KEY -e LITELLM_LOCAL_MODEL_COST_MAP \
+            -v "${GITHUB_WORKSPACE}/litellm/scripts/sdk_watch/proxy_config.yaml:/app/sdk-watch.yaml:ro" \
+            "${PROXY_IMAGE}" --config /app/sdk-watch.yaml --port 4000
+          for _ in $(seq 1 150); do
             if curl -sf http://127.0.0.1:4000/health/liveliness > /dev/null; then
               exit 0
             fi
             sleep 2
           done
-          tail -50 "${RUNNER_TEMP}/proxy.log"
+          docker logs --tail 50 sdk-watch-proxy
           echo "::error::The LiteLLM proxy did not come up"
           exit 1
 
@@ -149,6 +179,14 @@ jobs:
             exit 1
           fi
 
+      - name: Restore the last scheduled run's history
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/sdk-watch-history.json
+          key: sdk-watch-history-${{ github.run_id }}
+          restore-keys: sdk-watch-history-
+
       - name: Run the agent
         id: agent
         working-directory: litellm/scripts/sdk_watch
@@ -159,8 +197,13 @@ jobs:
           INPUT_SDK: ${{ inputs.sdk }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_MAX_IMPLEMENTATIONS: ${{ inputs.max_implementations || '2' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          args=(--repo "${GITHUB_WORKSPACE}" --out "${RUNNER_TEMP}/sdk-watch" --max-implementations "${INPUT_MAX_IMPLEMENTATIONS}")
+          args=(--repo "${GITHUB_WORKSPACE}" --repository "${GITHUB_REPOSITORY}" --out "${RUNNER_TEMP}/sdk-watch"
+            --max-implementations "${INPUT_MAX_IMPLEMENTATIONS}")
+          if [ "${EVENT_NAME}" = schedule ]; then
+            args+=(--history "${RUNNER_TEMP}/sdk-watch-history.json")
+          fi
           if [ -n "${INPUT_DAY}" ]; then
             args+=(--day "${INPUT_DAY}")
           fi
@@ -171,6 +214,13 @@ jobs:
           cat "${RUNNER_TEMP}/sdk-watch/summary.md" >> "${GITHUB_STEP_SUMMARY}"
           drafts="$(find "${RUNNER_TEMP}/sdk-watch" -mindepth 2 -name pr.json -printf '%h\n' | xargs -r -n1 basename | jq -Rnc '[inputs]')"
           echo "drafts=${drafts}" >> "${GITHUB_OUTPUT}"
+
+      - name: Save this run's history for the next scheduled run
+        if: always() && github.event_name == 'schedule'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/sdk-watch-history.json
+          key: sdk-watch-history-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload the PR drafts
         if: steps.agent.outputs.drafts != '[]'
@@ -183,7 +233,7 @@ jobs:
 
   verify:
     name: verify
-    needs: watch
+    needs: [bridge, watch]
     if: needs.watch.outputs.drafts != '[]' && needs.watch.outputs.drafts != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -204,18 +254,27 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          save-cache: "false"
 
-      - name: Set up the Rust bridge
+      - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.bridge.outputs.artifact }}
 
       - name: Install LiteLLM with its unit test dependencies
-        run: >-
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev
-          --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml
-          --extra extra_proxy --extra proxy-runtime --extra utils
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev \
+            --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml \
+            --extra extra_proxy --extra proxy-runtime --extra utils \
+            --no-install-project --no-install-package litellm-proxy
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+          rm -rf rust-bridge-dist
 
-      - name: Cache Prisma binaries
+      - name: Restore the Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
+        with:
+          save-cache: "false"
 
       - name: Generate the Prisma client
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
@@ -249,8 +308,13 @@ jobs:
             mkdir -p "${out}"
             demo="$(printf '%q ' uv run --no-sync python -m sdk_watch demo --repo "${GITHUB_WORKSPACE}" \
               --change "${change}" --python "${GITHUB_WORKSPACE}/.venv/bin/python" --verdict "${out}/verdict.json")"
-            uv run --no-sync asciinema rec --quiet --overwrite --cols 110 --rows 36 -c "${demo}" "${out}/demo.cast" < /dev/null
-            "${RUNNER_TEMP}/agg" --speed 1.5 "${out}/demo.cast" "${out}/demo.gif" 2> /dev/null
+            if ! uv run --no-sync asciinema rec --quiet --overwrite --cols 110 --rows 36 -c "${demo}" "${out}/demo.cast" < /dev/null; then
+              echo "::warning::Recording ${name} failed, so it gets no PR"
+              continue
+            fi
+            if ! "${RUNNER_TEMP}/agg" --speed 1.5 "${out}/demo.cast" "${out}/demo.gif" 2> /dev/null; then
+              echo "::warning::Rendering the video for ${name} failed, so it gets no PR"
+            fi
           done
 
       - name: Upload the recordings
@@ -285,6 +349,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          save-cache: "false"
 
       - name: Install the agent
         working-directory: litellm/scripts/sdk_watch
@@ -309,10 +374,18 @@ jobs:
           SDK_WATCH_SLACK_WEBHOOK_URL: ${{ secrets.SDK_WATCH_SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           BASE_SHA: ${{ github.sha }}
+          BASE_BRANCH: ${{ github.ref_name }}
         run: |
           for change in "${RUNNER_TEMP}"/sdk-watch/*/; do
-            video="${RUNNER_TEMP}/sdk-watch-videos/$(basename "${change}")"
-            uv run --no-sync python -m sdk_watch ship --repo "${GITHUB_WORKSPACE}" --change "${change}" \
-              --verdict "${video}/verdict.json" --gif "${video}/demo.gif" --base-sha "${BASE_SHA}" \
-              | tee -a "${GITHUB_STEP_SUMMARY}"
+            name="$(basename "${change}")"
+            video="${RUNNER_TEMP}/sdk-watch-videos/${name}"
+            if [ ! -f "${video}/verdict.json" ] || [ ! -f "${video}/demo.gif" ]; then
+              echo "::warning::${name} has no recorded verdict or video, so it gets no PR"
+              continue
+            fi
+            if ! uv run --no-sync python -m sdk_watch ship --repo "${GITHUB_WORKSPACE}" --repository "${GITHUB_REPOSITORY}" \
+              --change "${change}" --verdict "${video}/verdict.json" --gif "${video}/demo.gif" \
+              --base "${BASE_BRANCH}" --base-sha "${BASE_SHA}" | tee -a "${GITHUB_STEP_SUMMARY}"; then
+              echo "::warning::Opening a PR for ${name} failed"
+            fi
           done

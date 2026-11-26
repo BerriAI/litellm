@@ -11,23 +11,23 @@ from sdk_watch.triage import Finding
 
 
 class GitHub(Protocol):
-    def count_prs(self, query: str) -> int: ...
+    def first_pr(self, query: str) -> str | None: ...
 
     def branch_exists(self, branch: str) -> bool: ...
 
     def create_pr(self, title: str, head: str, base: str, body: str) -> str: ...
 
 
-class _SearchResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    total_count: int
-
-
 class _PullRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     html_url: str
+
+
+class _SearchResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    items: tuple[_PullRequest, ...]
 
 
 MAX_RATE_LIMIT_WAIT_SECONDS: Final = 90.0
@@ -55,10 +55,11 @@ class RestGitHub:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.time
 
-    def count_prs(self, query: str) -> int:
+    def first_pr(self, query: str) -> str | None:
         response: Final = self._get("/search/issues", {"q": f"repo:{self.repo} is:pr {query}", "per_page": 1})
         response.raise_for_status()
-        return _SearchResult.model_validate_json(response.content).total_count
+        items: Final = _SearchResult.model_validate_json(response.content).items
+        return items[0].html_url if items else None
 
     def branch_exists(self, branch: str) -> bool:
         response: Final = self._get(f"/repos/{self.repo}/branches/{branch}")
@@ -74,14 +75,13 @@ class RestGitHub:
         response.raise_for_status()
         return _PullRequest.model_validate_json(response.content).html_url
 
-    def _get(self, path: str, params: Mapping[str, str | int] | None = None) -> httpx.Response:
-        for _ in range(RATE_LIMIT_RETRIES):
-            response = self.client.get(path, params=params)
-            wait = rate_limit_wait(response, self.clock())
-            if wait is None:
-                return response
-            self.sleep(wait)
-        return self.client.get(path, params=params)
+    def _get(self, path: str, params: Mapping[str, str | int] | None = None, retries: int = 0) -> httpx.Response:
+        response: Final = self.client.get(path, params=params)
+        wait: Final = rate_limit_wait(response, self.clock())
+        if wait is None or retries == RATE_LIMIT_RETRIES:
+            return response
+        self.sleep(wait)
+        return self._get(path, params, retries + 1)
 
 
 def github_client(token: str | None) -> httpx.Client:
@@ -93,15 +93,15 @@ def github_client(token: str | None) -> httpx.Client:
     )
 
 
-def already_handled(github: GitHub, finding: Finding) -> bool:
+def already_handled(github: GitHub, finding: Finding) -> str | None:
     if github.branch_exists(finding.branch):
-        return True
+        return f"branch {finding.branch}"
     merged_since: Final = finding.candidate.release.released.isoformat()
     queries: Final = itertools.chain.from_iterable(
         _pr_queries(term, merged_since) for term in finding.change.search_terms
     )
-    return any(github.count_prs(query) > 0 for query in queries)
+    return next(filter(None, map(github.first_pr, queries)), None)
 
 
 def _pr_queries(term: str, merged_since: str) -> tuple[str, str]:
-    return f'is:open "{term}"', f'is:merged merged:>={merged_since} "{term}"'
+    return f'is:open in:title "{term}"', f'is:merged merged:>={merged_since} in:title "{term}"'

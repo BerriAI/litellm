@@ -9,6 +9,7 @@ from typing import Final
 import httpx
 
 from sdk_watch.github import GitHub
+from sdk_watch.implement import is_clean
 from sdk_watch.report import DemoVerdict, PrDraft, pr_body
 
 ALLOWED_FILES: Final = frozenset({"model_prices_and_context_window.json"})
@@ -48,6 +49,7 @@ def staged_paths(repo: Path) -> tuple[str, ...]:
 def ship(
     repo: Path,
     repository: str,
+    base_branch: str,
     base_sha: str,
     patch: Path,
     draft: PrDraft,
@@ -57,16 +59,25 @@ def ship(
     token: str,
     run_url: str,
 ) -> ShipResult:
+    if not verdict.fails_before:
+        return Skipped(reason="the PR's tests pass without the fix, so they do not prove it")
     if not verdict.passes_after:
         return Skipped(reason="the PR's tests fail with the fix applied")
+    if not is_clean(repo):
+        return Skipped(reason="the checkout has local changes the bot commits would pick up or the reset would erase")
     if github.branch_exists(draft.branch):
         return Skipped(reason=f"branch {draft.branch} already exists")
     _git(repo, "switch", "--quiet", "--detach", base_sha)
     _git(repo, "apply", "--index", str(patch))
-    refused: Final = tuple(path for path in staged_paths(repo) if not is_allowed(path))
+    staged: Final = staged_paths(repo)
+    refused: Final = tuple(path for path in staged if not is_allowed(path))
     if refused:
         _git(repo, "reset", "--quiet", "--hard")
         return Skipped(reason=f"the patch touches paths the agent may not change: {', '.join(refused)}")
+    untouched_tests: Final = tuple(path for path in draft.test_files if path not in staged)
+    if untouched_tests:
+        _git(repo, "reset", "--quiet", "--hard")
+        return Skipped(reason=f"the patch does not change the PR's tests: {', '.join(untouched_tests)}")
     _git(repo, "switch", "--quiet", "--create", draft.branch)
     _commit(repo, draft.title)
     target: Final = repo / asset_path(draft)
@@ -79,7 +90,7 @@ def ship(
     _commit(repo, "chore: keep the demo recording out of the merged tree")
     _push(repo, draft.branch, token)
     gif_url: Final = f"https://github.com/{repository}/blob/{recording_sha}/{asset_path(draft)}?raw=true"
-    return Opened(url=github.create_pr(draft.title, draft.branch, "main", pr_body(draft, verdict, gif_url, run_url)))
+    return Opened(url=github.create_pr(draft.title, draft.branch, base_branch, pr_body(draft, gif_url, run_url)))
 
 
 def ping(webhook_url: str, draft: PrDraft, opened: Opened) -> None:

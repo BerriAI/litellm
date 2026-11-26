@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import date
 
 import httpx
@@ -23,13 +24,16 @@ FINDING = Finding(
 )
 
 
+PR = "https://github.com/BerriAI/litellm/pull/2"
+
+
 @dataclass(frozen=True)
 class FakeGitHub:
-    hits: frozenset[str] = frozenset()
+    prs: Mapping[str, str] = field(default_factory=dict)
     branches: frozenset[str] = frozenset()
 
-    def count_prs(self, query: str) -> int:
-        return int(query in self.hits)
+    def first_pr(self, query: str) -> str | None:
+        return self.prs.get(query)
 
     def branch_exists(self, branch: str) -> bool:
         return branch in self.branches
@@ -41,17 +45,17 @@ class FakeGitHub:
 @pytest.mark.parametrize(
     ("github", "handled"),
     [
-        (FakeGitHub(), False),
-        (FakeGitHub(hits=frozenset({'is:open "BillingPolicy"'})), True),
-        (FakeGitHub(hits=frozenset({'is:merged merged:>=2026-11-20 "billing_policy"'})), True),
-        (FakeGitHub(branches=frozenset({FINDING.branch})), True),
+        (FakeGitHub(), None),
+        (FakeGitHub(prs={'is:open in:title "BillingPolicy"': PR}), PR),
+        (FakeGitHub(prs={'is:merged merged:>=2026-11-20 in:title "billing_policy"': PR}), PR),
+        (FakeGitHub(branches=frozenset({FINDING.branch})), f"branch {FINDING.branch}"),
     ],
-    ids=["nothing-yet", "open-pr-names-it", "merged-since-the-release", "agent-branch-exists"],
+    ids=["nothing-yet", "open-pr-title-names-it", "merged-since-the-release", "agent-branch-exists"],
 )
 def test_a_change_is_handled_once_an_open_pr_a_recent_merge_or_the_agent_branch_covers_it(
-    github: FakeGitHub, handled: bool
+    github: FakeGitHub, handled: str | None
 ) -> None:
-    assert already_handled(github, FINDING) is handled
+    assert already_handled(github, FINDING) == handled
 
 
 def github_answering(responses: tuple[httpx.Response, ...], waits: list[float]) -> RestGitHub:
@@ -71,10 +75,16 @@ def github_answering(responses: tuple[httpx.Response, ...], waits: list[float]) 
 def test_a_rate_limited_lookup_waits_for_github_and_retries(limit_headers: dict[str, str], wait: float) -> None:
     waits: list[float] = []
     limited = httpx.Response(403, headers=limit_headers)
-    github = github_answering((limited, httpx.Response(200, json={"total_count": 2})), waits)
+    github = github_answering((limited, httpx.Response(200, json={"items": [{"html_url": PR}]})), waits)
 
-    assert github.count_prs('is:open "billing_policy"') == 2
+    assert github.first_pr('is:open in:title "billing_policy"') == PR
     assert waits == [wait]
+
+
+def test_a_search_with_no_matching_pr_finds_none() -> None:
+    github = github_answering((httpx.Response(200, json={"total_count": 0, "items": []}),), [])
+
+    assert github.first_pr('is:open in:title "billing_policy"') is None
 
 
 def test_a_limit_that_resets_much_later_fails_at_once_instead_of_stalling_the_run() -> None:

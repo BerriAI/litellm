@@ -141,6 +141,10 @@ def fetch_sdk_diff_tool(sdk: Sdk, fetch_text: Callable[[str], str]) -> BaseTool:
     return fetch_sdk_diff
 
 
+def is_clean(repo: Path) -> bool:
+    return _git(repo, "status", "--porcelain") == ""
+
+
 def collect_patch(repo: Path) -> str:
     _git(repo, "add", "--intent-to-add", "--all")
     patch: Final = _git(repo, "diff", "--binary")

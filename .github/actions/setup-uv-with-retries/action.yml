@@ -7,6 +7,10 @@ inputs:
   version:
     description: "uv version to install"
     required: true
+  save-cache:
+    description: "'false' to never save the uv cache, for jobs that run untrusted code"
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -22,7 +26,7 @@ runs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: ${{ inputs.version }}
-        save-cache: ${{ github.ref == 'refs/heads/main' }}
+        save-cache: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/main' }}
 
     - name: Wait before attempt 2
       if: steps.attempt-1.outcome == 'failure'
@@ -36,7 +40,7 @@ runs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: ${{ inputs.version }}
-        save-cache: ${{ github.ref == 'refs/heads/main' }}
+        save-cache: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/main' }}
 
     - name: Wait before attempt 3
       if: steps.attempt-2.outcome == 'failure'
@@ -48,4 +52,4 @@ runs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: ${{ inputs.version }}
-        save-cache: ${{ github.ref == 'refs/heads/main' }}
+        save-cache: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/main' }}
