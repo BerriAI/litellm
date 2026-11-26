@@ -32,7 +32,7 @@ the gateway fixtures, so it runs as plain pytest inside its group
 
 GitHub Actions integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
 the files in `GITHUB_FILES` in `run.py`. `test-integration.yml` runs the same groups through the same
-`run_integration.sh` on GitHub Actions, on main every three hours from 8am to 8pm Pacific Monday to Saturday,
+`run_integration.sh` on GitHub Actions, on main at 10am, 2pm and 6pm Pacific Monday to Saturday,
 and on a pull request when someone adds the `run-ci` label. These jobs do not run every pull request, so a new file here
 first runs on main after its PR merges, or earlier if the PR gets `run-ci`. Wanting a file to run before merge
 is no reason to change CI, and a new
