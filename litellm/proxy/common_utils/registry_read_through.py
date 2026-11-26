@@ -1,20 +1,25 @@
 """Read-through recovery for in-memory registries in multi-replica deployments.
 
-A management write (POST /model/new, /guardrails, /v1/agents) lands on one
-replica and reaches Postgres, but sibling replicas only refresh their in-memory
-registries on the periodic config reload, so a request using the new object
-immediately can land on a sibling that has never heard of it and fail 400/404.
+A management write (POST /model/new, /guardrails, /v1/agents, /vector_store/new,
+/v1/indexes) lands on one replica and reaches Postgres, but sibling replicas only
+refresh their in-memory registries on the periodic config reload, so a request
+using the new object immediately can land on a sibling that has never heard of it
+and fail 400/404.
 On a registry miss, callers here fetch the missing row from the DB and load it
 into the local registry before giving up. A short negative-result TTL per key
 plus a global resync budget per window bound the DB load from lookups of
-genuinely unknown names. An auto router's tiers are deployment rows of their
-own, so a miss on an auto router reconciles every row instead of just its own,
-or the first routed request on this replica would pick a tier it has not loaded.
+genuinely unknown names. Vector store indexes instead reload their whole table,
+at most once per TTL, because the Azure passthrough looks up every index name it
+relays, so a burst of unknown names must neither cost a DB read each nor use up
+a budget that a real index created on a sibling then misses. An auto router's
+tiers are deployment rows of their own, so a miss on an auto router reconciles
+every row instead of just its own, or the first routed request on this replica
+would pick a tier it has not loaded.
 """
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -36,6 +41,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.agents import AgentResponse
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 
     _ModelTable: TypeAlias = TableActions[prisma_models.LiteLLM_ProxyModelTable]
     _ModelRows: TypeAlias = Sequence[prisma_models.LiteLLM_ProxyModelTable]
@@ -45,6 +51,9 @@ ModelLoadOutcome: TypeAlias = Literal["loaded", "missing", "no_router", "auto_ro
 READ_THROUGH_MISS_TTL_SECONDS: Final = 2.0
 READ_THROUGH_RESYNC_WINDOW_SECONDS: Final = 5.0
 READ_THROUGH_MAX_RESYNCS_PER_WINDOW: Final = 20
+READ_THROUGH_MAX_WAIT_SECONDS: Final = 1.0
+
+VectorStoreIndexLookup: TypeAlias = Literal["managed", "unmanaged", "unknown"]
 
 
 class RegistryReadThrough:
@@ -112,6 +121,58 @@ class RegistryReadThrough:
             if not found:
                 self._recent_misses.set_cache(key, True, ttl=self._miss_ttl_seconds)
             return found
+
+
+class ThrottledTableReload:
+    __slots__ = (
+        "_clock",
+        "_finished_at",
+        "_max_wait_seconds",
+        "_min_interval_seconds",
+        "_reload",
+        "_started_at",
+        "_succeeded",
+        "_task",
+    )
+
+    def __init__(
+        self,
+        reload: Callable[[], Awaitable[None]],
+        min_interval_seconds: float = READ_THROUGH_MISS_TTL_SECONDS,
+        max_wait_seconds: float = READ_THROUGH_MAX_WAIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._reload = reload
+        self._clock = clock
+        self._min_interval_seconds = min_interval_seconds
+        self._max_wait_seconds = max_wait_seconds
+        self._task: asyncio.Task[bool] | None = None
+        self._started_at = float("-inf")
+        self._finished_at = float("-inf")
+        self._succeeded = False
+
+    async def reload_if_stale(self) -> bool:
+        if self._task is None and self._clock() - self._finished_at >= self._min_interval_seconds:
+            self._started_at = self._clock()
+            self._task = asyncio.create_task(self._run())
+        task: Final = self._task
+        if task is None:
+            return self._succeeded
+        wait_seconds: Final = max(self._started_at + self._max_wait_seconds - self._clock(), 0.0)
+        done, _ = await asyncio.wait((task,), timeout=wait_seconds)
+        return task in done and not task.cancelled() and task.result()
+
+    async def _run(self) -> bool:
+        try:
+            await self._reload()
+            self._succeeded = True
+        except Exception as e:  # noqa: BLE001  # a failed reload must answer "unknown" to callers, not a 500
+            verbose_proxy_logger.warning("registry table reload failed: %s", e)
+            self._succeeded = False
+        finally:
+            self._finished_at = self._clock()
+            self._task = None
+        return self._succeeded
 
 
 def _db_backed_registries_enabled(object_type: str) -> bool:
@@ -299,6 +360,69 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
         return True
 
 
+async def _reload_vector_store_indexes() -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    _load_missing_vector_store_indexes(
+        await VectorStoreIndexRegistry.get_vector_store_indexes_from_db_writer(WriterPinnedClient(prisma_client.db))
+    )
+
+
+def _load_missing_vector_store_indexes(indexes: "Sequence[LiteLLM_ManagedVectorStoreIndex]") -> None:
+    import litellm
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    if not indexes:
+        return
+    registry: Final = litellm.vector_store_index_registry
+    if registry is None:
+        litellm.vector_store_index_registry = VectorStoreIndexRegistry(vector_store_indexes=list(indexes))
+        return
+    loaded_names: Final = frozenset(index.index_name for index in registry.vector_store_indexes)
+    for index in tuple(index for index in indexes if index.index_name not in loaded_names):
+        registry.upsert_vector_store_index(vector_store_index=index)
+
+
+def register_created_vector_store_index(row: "Iterable[tuple[str, object]]") -> None:
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    if _db_backed_registries_enabled("vector_store_indexes"):
+        _load_missing_vector_store_indexes((VectorStoreIndexRegistry.index_from_db_row(row),))
+
+
+async def _resync_vector_stores(vector_store_name: str) -> bool:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    if not _db_backed_registries_enabled("vector_stores"):
+        return False
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    stores: Final = await VectorStoreRegistry.get_vector_stores_by_name_from_db(
+        WriterPinnedClient(prisma_client.db), vector_store_name
+    )
+    if not stores:
+        return False
+    if litellm.vector_store_registry is None:
+        litellm.vector_store_registry = VectorStoreRegistry(vector_stores=list(stores))
+        return True
+    registry: Final = litellm.vector_store_registry
+    for store in stores:
+        if (vector_store_id := store.get("vector_store_id")) is None:
+            continue
+        if registry.is_config_vector_store(vector_store_id):
+            continue
+        registry.delete_vector_store_from_registry(vector_store_id)
+        registry.add_vector_store_to_registry(store)
+    return _vector_store_is_loaded(vector_store_name)
+
+
 def _model_is_loaded(model_name_or_id: str) -> bool:
     from litellm.proxy import proxy_server
 
@@ -317,9 +441,53 @@ def _agent_is_loaded(agent_id_or_name: str) -> bool:
     return _agent_from_registry(agent_id_or_name) is not None
 
 
+def _vector_store_index_is_loaded(index_name: str) -> bool:
+    import litellm
+
+    registry: Final = litellm.vector_store_index_registry
+    return registry is not None and registry.is_vector_store_index(vector_store_index_name=index_name)
+
+
+def _vector_store_from_registry(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":
+    import litellm
+
+    registry: Final = litellm.vector_store_registry
+    if registry is None:
+        return None
+    return registry.get_litellm_managed_vector_store_from_registry_by_name(vector_store_name=vector_store_name)
+
+
+def _vector_store_is_loaded(vector_store_name: str) -> bool:
+    return _vector_store_from_registry(vector_store_name) is not None
+
+
 model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments, is_loaded=_model_is_loaded)
 guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails, is_loaded=_guardrail_is_loaded)
 agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents, is_loaded=_agent_is_loaded)
+vector_store_index_table_reload: Final = ThrottledTableReload(reload=_reload_vector_store_indexes)
+vector_store_registry_read_through: Final = RegistryReadThrough(
+    resync=_resync_vector_stores, is_loaded=_vector_store_is_loaded
+)
+
+
+async def lookup_vector_store_index(index_name: str) -> VectorStoreIndexLookup:
+    if _vector_store_index_is_loaded(index_name):
+        return "managed"
+    if not _db_backed_registries_enabled("vector_store_indexes"):
+        return "unmanaged"
+    reloaded: Final = await vector_store_index_table_reload.reload_if_stale()
+    if _vector_store_index_is_loaded(index_name):
+        return "managed"
+    return "unmanaged" if reloaded else "unknown"
+
+
+async def get_vector_store_with_read_through(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":
+    vector_store: Final = _vector_store_from_registry(vector_store_name)
+    if vector_store is not None:
+        return vector_store
+    if not await vector_store_registry_read_through.attempt(vector_store_name):
+        return None
+    return _vector_store_from_registry(vector_store_name)
 
 
 def _agent_from_registry(agent_id_or_name: str) -> "AgentResponse | None":

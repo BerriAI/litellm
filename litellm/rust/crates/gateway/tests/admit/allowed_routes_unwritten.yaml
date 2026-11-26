@@ -1,0 +1,18 @@
+# `allowed_routes` written with no value is no list, so it lists no route, and the native app
+# refuses the native route with the proxy's 403, as it does for any other value that is not a list
+# of strings.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    allowed_routes:
+
+requests:
+  - name: the native route
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

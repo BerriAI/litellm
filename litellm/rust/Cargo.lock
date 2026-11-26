@@ -4249,9 +4249,9 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-messages",
  "litellm-license",
- "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-python-compat",
  "litellm-redaction",
  "litellm-redis-client",
@@ -4311,6 +4311,7 @@ name = "litellm-gateway-auth-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "fancy-regex 0.19.2",
  "http 1.4.2",
  "jiff",
  "jsonwebtoken",
@@ -4326,6 +4327,7 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "tokio",
+ "veil",
 ]
 
 [[package]]
@@ -4357,6 +4359,7 @@ dependencies = [
 name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "axum",
  "bytes",
  "futures-util",
@@ -4382,6 +4385,7 @@ dependencies = [
  "litellm-inference-ocr",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",
@@ -4826,6 +4830,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-error",
  "litellm-http",
+ "litellm-model-catalog",
  "litellm-s3",
  "litellm-secret-value",
  "percent-encoding",
