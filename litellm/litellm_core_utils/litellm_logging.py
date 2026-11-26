@@ -48,6 +48,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.cost_calculator import (
+    BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
     get_usage_object,
@@ -130,6 +131,12 @@ from litellm.litellm_core_utils.tool_fields import (
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.gemini.empty_image_response import (
+    IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE,
+    IMAGE_ANSWERS_BILLED_ON_FAILURE,
+    image_answer_cost_on_failure,
+    image_answer_tokens_counted_on_failure,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
@@ -233,6 +240,7 @@ from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.zerobus import ZerobusLogger
+from .coroutine_checker import coroutine_checker
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     get_trusted_callback_params,
@@ -340,6 +348,21 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+_PREVIOUS_ATTEMPT_FAILURE_DETAILS: Final = (
+    "has_logged_async_failure",
+    "has_logged_sync_failure",
+    "exception",
+    "traceback_exception",
+)
+_LOGGING_OWNED_BILLING_FIELDS: Final = frozenset(
+    {IMAGE_ANSWERS_BILLED_ON_FAILURE, IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE, "failed_attempts_billed_on_success"}
+)
+
+
+def _without_logging_owned_billing_fields(request_fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in request_fields.items() if key not in _LOGGING_OWNED_BILLING_FIELDS}
+
+
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
 )
@@ -553,6 +576,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_CALLBACK_ENTRIES: Final = TypeAdapter(list[object])
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -573,6 +597,17 @@ def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, (int, float)):
         return float(moment)
     return None
+
+
+def configured_callbacks(configured: object) -> tuple[str | Callable[..., object] | CustomLogger, ...] | None:
+    if not isinstance(configured, list):
+        return None
+    entries: Final = _CALLBACK_ENTRIES.validate_python(configured)
+    return tuple(entry for entry in entries if isinstance(entry, str | CustomLogger) or callable(entry))
+
+
+def _is_async_success_callback(callback: str | Callable[..., object] | CustomLogger) -> bool:
+    return coroutine_checker.is_async_callable(callback) or callback in ("dynamodb", "s3")
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -748,6 +783,10 @@ class Logging(LiteLLMLoggingBaseClass):
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
         self.process_dynamic_callbacks()
+        self._request_set_success_callbacks: Final = dynamic_success_callbacks is not None
+        self._request_set_failure_callbacks: Final = dynamic_failure_callbacks is not None
+        self._request_bound_callbacks: tuple[CustomLogger, ...] = ()
+        self.logs_each_attempt: bool = False
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -773,6 +812,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self.cost_breakdown: CostBreakdown | None = None
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
+        self._failed_attempts_owed_on_success: tuple[tuple[Usage, float], ...] = ()
+        self._image_answers_billed_on_failure: float = 0.0
+        self._image_answer_tokens_counted_on_failure: int = 0
+        self._last_failure_counted_for_image_answers: object = None
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -839,6 +882,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self.response_timing_metrics = dict(timing_metrics)
 
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
+        self._request_bound_callbacks = (
+            *self._request_bound_callbacks,
+            *(() if callback in self._request_bound_callbacks else (callback,)),
+        )
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
         self.dynamic_success_callbacks = self._with_dynamic_callback(self.dynamic_success_callbacks, callback)
         self.dynamic_async_success_callbacks = self._with_dynamic_callback(
@@ -887,11 +934,56 @@ class Logging(LiteLLMLoggingBaseClass):
             self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
         )
 
+    @property
+    def attempt_turned_off_message_logging(self) -> bool:
+        return self.logs_each_attempt and self.standard_callback_dynamic_params.get("turn_off_message_logging") is True
+
+    def follow_attempt_callback_settings(self, attempt_fields: Mapping[str, object]) -> None:
+        """A Logging object shared across router attempts logs each one by its own deployment's settings."""
+        self.logs_each_attempt = True
+        for failure_detail in _PREVIOUS_ATTEMPT_FAILURE_DETAILS:
+            self.model_call_details.pop(failure_detail, None)
+        previous_params: Final[Mapping[str, object]] = self.litellm_params
+        attempt_api_base: Final = attempt_fields.get("api_base")
+        attempt_params: Final[dict[str, object]] = {
+            **get_litellm_params(
+                **attempt_fields,  # pyright: ignore[reportArgumentType]  # the same loose kwargs __init__ passes
+            ),
+            "api_base": self._get_masked_api_base(attempt_api_base if isinstance(attempt_api_base, str) else None),
+            "_langfuse_masking_function": previous_params.get("_langfuse_masking_function"),
+        }
+        scrubbed_params: Final = scrub_sensitive_keys_in_metadata(attempt_params)
+        self.litellm_params = scrubbed_params
+        self.model_call_details["litellm_params"] = scrubbed_params
+        self.standard_callback_dynamic_params = _initialize_standard_callback_dynamic_params(dict(attempt_fields))
+        self.model_call_details["standard_callback_dynamic_params"] = self.standard_callback_dynamic_params
+        if not self._request_set_success_callbacks:
+            success_callbacks: Final = configured_callbacks(attempt_fields.get("success_callback"))
+            self.dynamic_async_success_callbacks = (
+                None
+                if success_callbacks is None
+                else [callback for callback in success_callbacks if _is_async_success_callback(callback)] or None
+            )
+            self.dynamic_success_callbacks = self._process_dynamic_callback_list(
+                None
+                if success_callbacks is None
+                else [callback for callback in success_callbacks if not _is_async_success_callback(callback)],
+                "success",
+            )
+        if not self._request_set_failure_callbacks:
+            failure_callbacks: Final = configured_callbacks(attempt_fields.get("failure_callback"))
+            self.dynamic_async_failure_callbacks = None
+            self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
+                None if failure_callbacks is None else [*failure_callbacks], "failure"
+            )
+        for callback in self._request_bound_callbacks:
+            self.add_dynamic_callback(callback)
+
     def _process_dynamic_callback_list(
         self,
-        callback_list: list[str | Callable | CustomLogger] | None,
+        callback_list: list[str | Callable[..., object] | CustomLogger] | None,
         dynamic_callbacks_type: Literal["input", "success", "failure", "async_success", "async_failure"],
-    ) -> list[str | Callable | CustomLogger] | None:
+    ) -> list[str | Callable[..., object] | CustomLogger] | None:
         """
         Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
 
@@ -903,7 +995,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if callback_list is None:
             return None
 
-        processed_list: Final[list[str | Callable | CustomLogger]] = []
+        processed_list: Final[list[str | Callable[..., object] | CustomLogger]] = []
         for callback in callback_list:
             if isinstance(callback, str) and callback in litellm._known_custom_logger_compatible_callbacks:
                 for callback_instance in self._resolve_dynamic_callback_string(callback):
@@ -1053,8 +1145,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "litellm_call_id": self.litellm_call_id,
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
-                **self.optional_params,
-                **additional_params,
+                **_without_logging_owned_billing_fields({**self.optional_params, **additional_params}),
             }
         )
         self._log_bridged_tool_names()
@@ -2353,6 +2444,68 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def owe_failed_attempt_on_success(self, usage: Usage, response_cost: float) -> None:
+        """A failed attempt the router falls back from stays owed by the attempt that serves the request."""
+        self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, (usage, response_cost))
+
+    def withdraw_failed_attempt_owed_on_success(self) -> None:
+        self._failed_attempts_owed_on_success = self._failed_attempts_owed_on_success[:-1]
+
+    def with_failed_attempts_owed(self, own_cost: float) -> float:
+        return own_cost + sum(cost for _, cost in self._failed_attempts_owed_on_success)
+
+    def bill_failed_attempts_owed_on_failure(self) -> None:
+        """A request cancelled before any attempt served it still owes the attempts it set aside."""
+        failed_attempts: Final = self._failed_attempts_owed_on_success
+        if not failed_attempts:
+            return
+        later_usage: Final = self.model_call_details.get("combined_usage_object")
+        later_attempts: Final = (later_usage,) if isinstance(later_usage, Usage) else ()
+        later_cost: Final = self.model_call_details.get("response_cost")
+        own_cost: Final = later_cost if later_attempts and isinstance(later_cost, (int, float)) else 0.0
+        total_cost: Final = self.with_failed_attempts_owed(own_cost)
+        self._failed_attempts_owed_on_success = ()
+        self.record_partial_usage_for_failure(
+            BaseTokenUsageProcessor.combine_usage_objects(
+                usage_objects=[*later_attempts, *(usage for usage, _ in failed_attempts)]
+            ),
+            total_cost,
+        )
+
+    def _count_image_answer_billed_on_failure(self) -> None:
+        failure: Final = self.model_call_details.get("exception")
+        if failure is self._last_failure_counted_for_image_answers:
+            return
+        self._last_failure_counted_for_image_answers = failure
+        self._image_answers_billed_on_failure += image_answer_cost_on_failure(self.model_call_details)
+        self._image_answer_tokens_counted_on_failure += image_answer_tokens_counted_on_failure(self.model_call_details)
+
+    def _add_failed_attempts_spend(self, served_response: object, image_usage: Usage | None) -> None:
+        failed_attempts: Final = self._failed_attempts_owed_on_success
+        if not failed_attempts:
+            return
+        own_usage: Final = image_usage or get_usage_object(completion_response=served_response)
+        if own_usage is None:
+            return
+        stored_cost: Final = self.model_call_details.get("response_cost")
+        own_cost: Final = stored_cost if isinstance(stored_cost, (int, float)) else 0.0
+        failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
+        self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
+        self.model_call_details[IMAGE_ANSWERS_BILLED_ON_FAILURE] = self._image_answers_billed_on_failure
+        self.model_call_details[IMAGE_ANSWER_TOKENS_COUNTED_ON_FAILURE] = self._image_answer_tokens_counted_on_failure
+        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
+        )
+        self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
+        if self.cost_breakdown is not None:
+            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
+                total_cost=own_cost + failed_attempts_cost,
+                additional_costs={
+                    **self.cost_breakdown.get("additional_costs", {}),
+                    "failed_attempts_cost": failed_attempts_cost,
+                },
+            )
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -2584,7 +2737,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _process_hidden_params_and_response_cost(
         self,
-        logging_result,
+        logging_result: object,
         start_time,
         end_time,
         build_logging_payload: bool = True,
@@ -2592,6 +2745,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> StandardLoggingPayload | None:
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         self._surface_response_headers_from_result(logging_result)
+        image_usage: Final = _image_usage(logging_result.usage) if isinstance(logging_result, ImageResponse) else None
         hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -2604,9 +2758,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
+            self._add_failed_attempts_spend(logging_result, image_usage)
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
+            self._add_failed_attempts_spend(logging_result, image_usage)
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
@@ -2614,6 +2770,7 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
+            self._add_failed_attempts_spend(logging_result, image_usage)
 
         if not build_logging_payload:
             return None
@@ -4056,6 +4213,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
             )
+            self._count_image_answer_billed_on_failure()
             callbacks: Final = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
                 global_callbacks=litellm.failure_callback,
@@ -4260,6 +4418,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
         self.mark_logging_complete(event_type="async_failure")
+        self._count_image_answer_billed_on_failure()
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})
@@ -7376,6 +7535,15 @@ def get_standard_logging_metadata(
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
                 clean_metadata["user_api_key_hash"] = metadata.get("user_api_key")  # this is the hash
     return clean_metadata
+
+
+def _image_usage(usage: object) -> Usage | None:
+    if not isinstance(usage, BaseModel):
+        return None
+    fields: Final = usage.model_dump()
+    if not ResponseAPILoggingUtils.is_response_api_usage(fields):
+        return None
+    return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(fields)
 
 
 def scrub_sensitive_keys_in_metadata(litellm_params: dict | None):

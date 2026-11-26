@@ -16,6 +16,11 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.llms.gemini.empty_image_response import (
+    SETTLED_BY_THE_ASYNC_FAILURE_HOOK,
+    billed_deployment_tokens,
+    success_tokens_without_failed_image_answers,
+)
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
@@ -271,7 +276,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif isinstance(id, int):
                 id = str(id)
 
-            total_tokens: Final = standard_logging_object.get("total_tokens")
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
 
             # ------------
             # Setup values
@@ -313,7 +320,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 return
             elif isinstance(id, int):
                 id = str(id)
-            total_tokens: Final = standard_logging_object.get("total_tokens")
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
             # ------------
             # Setup values
             # ------------
@@ -341,6 +350,37 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             verbose_logger.exception(
                 "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - %s", e
             )
+
+    @with_service_target("router_usage")
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if kwargs.get("call_type") in SETTLED_BY_THE_ASYNC_FAILURE_HOOK:
+            return
+        billed: Final = billed_deployment_tokens(kwargs)
+        if billed is None:
+            return
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        self.router_cache.increment_cache(
+            key=f"{billed.deployment_id}:{billed.deployment_name}:tpm:{current_minute}",
+            value=billed.tokens,
+            ttl=self.routing_args.ttl,
+        )
+
+    @with_service_target("router_usage")
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        billed: Final = billed_deployment_tokens(kwargs)
+        if billed is None:
+            return
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        await self.router_cache.async_increment_cache_post_call(
+            key=f"{billed.deployment_id}:{billed.deployment_name}:tpm:{current_minute}",
+            value=billed.tokens,
+            ttl=self.routing_args.ttl,
+            parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+        )
 
     def _return_potential_deployments(
         self,

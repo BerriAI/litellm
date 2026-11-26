@@ -759,12 +759,46 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
+    dynamic_callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
 ) -> list[str | Callable[..., object] | CustomLogger]:
     returned_callbacks: Final = litellm.callbacks.copy()
     if dynamic_callbacks:
         returned_callbacks.extend(dynamic_callbacks)
     return returned_callbacks
+
+
+def register_dynamic_callbacks(
+    dynamic_callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
+) -> None:
+    all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+
+    if len(all_callbacks) > 0:
+        for callback in all_callbacks:
+            # check if callback is a string - e.g. "lago", "openmeter"
+            if isinstance(callback, str):
+                resolved_callback: CustomLogger | None = (
+                    litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        callback,
+                        internal_usage_cache=None,
+                        llm_router=None,
+                    )
+                )
+                callback = resolved_callback
+                if callback is None or any(
+                    type(cb) is type(callback) for cb in litellm._async_success_callback
+                ):  # don't double add a callback
+                    continue
+            if callback not in litellm.input_callback:
+                litellm.input_callback.append(callback)
+            if callback not in litellm.success_callback:
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            if callback not in litellm.failure_callback:
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+            if callback not in litellm._async_success_callback:
+                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+            if callback not in litellm._async_failure_callback:
+                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+        print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
 
 
 def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -1049,33 +1083,10 @@ def function_setup(
         coroutine_checker: Final = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
-        all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
-
-        if len(all_callbacks) > 0:
-            for callback in all_callbacks:
-                # check if callback is a string - e.g. "lago", "openmeter"
-                if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                        callback,
-                        internal_usage_cache=None,
-                        llm_router=None,
-                    )
-                    if callback is None or any(
-                        type(cb) is type(callback) for cb in litellm._async_success_callback
-                    ):  # don't double add a callback
-                        continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)
-                if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)
-                if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)
-                if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
-            print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
+        dynamic_callbacks: Final[Sequence[str | Callable[..., object] | CustomLogger] | None] = kwargs.pop(
+            "callbacks", None
+        )
+        register_dynamic_callbacks(dynamic_callbacks)
 
         if (
             len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0

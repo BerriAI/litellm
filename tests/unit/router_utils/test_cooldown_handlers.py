@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import random
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +15,7 @@ from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
@@ -3103,3 +3104,66 @@ def test_shared_mode_upstream_429_still_cools_down_the_deployment(single_deploym
         is True
     )
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 429, exc) is True
+
+
+def _answered_with(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code, request=httpx.Request("POST", "https://google.invalid"))
+
+
+def _count_failure_on_the_failure_callback(router: Router, model_id: str, exception: Exception) -> None:
+    router.deployment_callback_on_failure(
+        kwargs={"exception": exception, "litellm_params": {"model_info": {"id": model_id}}},
+        completion_response=None,
+        start_time=0,
+        end_time=1,
+    )
+
+
+def _count_failure_on_the_fallback_path(router: Router, model_id: str, exception: Exception) -> None:
+    exception.failed_deployment_id = model_id
+    _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
+
+@pytest.mark.parametrize(
+    "record_failure",
+    (
+        pytest.param(_count_failure_on_the_failure_callback, id="failure_callback"),
+        pytest.param(_count_failure_on_the_fallback_path, id="fallback_path"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("exception", "counted"),
+    (
+        pytest.param(
+            ImageRefusalError(
+                message="refused", model="m", llm_provider="gemini", response=_answered_with(400),
+                provider_specific_fields={},
+            ),
+            0,
+            id="refusal",
+        ),
+        pytest.param(
+            UnservedImageError(message="no image", model="m", llm_provider="gemini", response=_answered_with(422)),
+            0,
+            id="no_image",
+        ),
+        pytest.param(litellm.Timeout(message="timed out", model="m", llm_provider="gemini"), 1, id="timeout"),
+    ),
+)
+def test_an_image_answer_without_an_image_is_not_counted_as_a_deployment_failure(
+    record_failure: Callable[[Router, str, Exception], None], exception: Exception, counted: int
+) -> None:
+    model_id: Final = "image-deployment"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image-group",
+                "litellm_params": {"model": "gemini/gemini-3.1-flash-image", "api_key": "test-key"},
+                "model_info": {"id": model_id},
+            }
+        ]
+    )
+
+    record_failure(router, model_id, exception)
+
+    assert get_deployment_failures_for_current_minute(router, model_id) == counted
