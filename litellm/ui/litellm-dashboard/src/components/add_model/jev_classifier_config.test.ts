@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { defaultJevClassifierConfig, hydrateOssClassifier, jevClassifierConfigSchema } from "./jev_classifier_config";
+import {
+  defaultJevClassifierConfig,
+  hydrateOssClassifier,
+  jevClassifierConfigSchema,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
 
 describe("hydrateOssClassifier", () => {
   it("keeps a stored Databricks classifier instead of falling back to Jev", () => {
@@ -33,6 +38,18 @@ describe("jevClassifierConfigSchema", () => {
     expect(fresh).toEqual({ provider: "databricks", model: "ai_decide", timeout_ms: 3000 });
     expect(jevClassifierConfigSchema.safeParse(fresh).success).toBe(true);
     expect(jevClassifierConfigSchema.safeParse({ ...fresh, model: "my-openjev" }).success).toBe(true);
+  });
+
+  it("starts a Nadir classifier on its bucket label, keeps a stored label, and drops instructions it would reject", () => {
+    expect(defaultJevClassifierConfig("nadir")).toEqual({ provider: "nadir", model: "bucket", timeout_ms: 3000 });
+    const stored = { provider: "nadir", model: "nadir-prod", timeout_ms: 4000 };
+    expect(hydrateOssClassifier({ classifier_type: "oss_classifier", opensource_classifier_config: stored })).toEqual({
+      classifier_type: "jev",
+      jev_classifier_config: stored,
+    });
+    expect(
+      normalizeJevClassifierConfig({ ...defaultJevClassifierConfig("nadir"), instructions: "Pick carefully" }),
+    ).toEqual({ provider: "nadir", model: "bucket", timeout_ms: 3000 });
   });
 
   it.each(["serving-endpoints/openjev", "openjev?x=1", "openjev#frag", ".", "..", ".openjev", "open jev"])(
