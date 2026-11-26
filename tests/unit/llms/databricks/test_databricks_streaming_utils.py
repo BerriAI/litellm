@@ -190,26 +190,26 @@ async def test_async_stream_skips_blank_sse_lines_and_keeps_the_usage_chunk():
     ]
 
 
-class _BrokenTransport(ValueError):
+class _UnreadableChunk(ValueError):
     pass
 
 
-def test_sync_stream_transport_error_surfaces_as_runtime_error():
+def test_sync_stream_value_error_surfaces_as_runtime_error():
     def lines():
         yield _SSE_LINES_WITH_BLANK_SEPARATORS[0]
-        raise _BrokenTransport("connection reset")
+        raise _UnreadableChunk("unreadable chunk")
 
-    with pytest.raises(RuntimeError, match="connection reset"):
+    with pytest.raises(RuntimeError, match="unreadable chunk"):
         list(ModelResponseIterator(streaming_response=lines(), sync_stream=True))
 
 
 @pytest.mark.asyncio
-async def test_async_stream_transport_error_surfaces_as_runtime_error():
+async def test_async_stream_value_error_surfaces_as_runtime_error():
     async def lines():
         yield _SSE_LINES_WITH_BLANK_SEPARATORS[0]
-        raise _BrokenTransport("connection reset")
+        raise _UnreadableChunk("unreadable chunk")
 
-    with pytest.raises(RuntimeError, match="connection reset"):
+    with pytest.raises(RuntimeError, match="unreadable chunk"):
         [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
 
 
