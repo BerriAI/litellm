@@ -814,9 +814,9 @@
     },
     "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[text_completions]": {
       "python": {
-        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.000023, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
         "counters": {
-          "spend:team:team-at-max": 1.0
+          "spend:team:team-at-max": 0.9999999999999999
         },
         "failure_hooks": [
           {
@@ -825,7 +825,7 @@
             "error_type": "auth_error",
             "exception": [
               "BudgetExceededError",
-              "Budget has been exceeded! Team=team-at-max Current cost: 1.000023, Max budget: 1.0"
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0"
             ],
             "identity": [
               "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -843,7 +843,7 @@
           }
         ],
         "headers": {
-          "content-length": "157",
+          "content-length": "158",
           "content-security-policy": "frame-ancestors 'none'",
           "content-type": "application/json",
           "x-content-type-options": "nosniff",
@@ -1403,9 +1403,9 @@
     "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[text_completions]": {
       "python": {
         "402": {
-          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.000023, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"402\"}}",
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"402\"}}",
           "counters": {
-            "spend:team:team-at-max": 1.0
+            "spend:team:team-at-max": 0.9999999999999999
           },
           "failure_hooks": [
             {
@@ -1414,7 +1414,7 @@
               "error_type": "auth_error",
               "exception": [
                 "BudgetExceededError",
-                "Budget has been exceeded! Team=team-at-max Current cost: 1.000023, Max budget: 1.0"
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0"
               ],
               "identity": [
                 "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -1432,7 +1432,7 @@
             }
           ],
           "headers": {
-            "content-length": "157",
+            "content-length": "158",
             "content-security-policy": "frame-ancestors 'none'",
             "content-type": "application/json",
             "x-content-type-options": "nosniff",
@@ -1441,9 +1441,9 @@
           "status": 402
         },
         "429": {
-          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.000023, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"429\"}}",
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"429\"}}",
           "counters": {
-            "spend:team:team-at-max": 1.0
+            "spend:team:team-at-max": 0.9999999999999999
           },
           "failure_hooks": [
             {
@@ -1452,7 +1452,7 @@
               "error_type": "auth_error",
               "exception": [
                 "BudgetExceededError",
-                "Budget has been exceeded! Team=team-at-max Current cost: 1.000023, Max budget: 1.0"
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0"
               ],
               "identity": [
                 "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -1470,7 +1470,7 @@
             }
           ],
           "headers": {
-            "content-length": "157",
+            "content-length": "158",
             "content-security-policy": "frame-ancestors 'none'",
             "content-type": "application/json",
             "x-content-type-options": "nosniff",

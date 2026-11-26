@@ -2242,6 +2242,8 @@ _STAND_IN_COUNTED: Final = pytest.mark.parametrize(
         ("claude-haiku-5-5", "vertex_ai/claude-haiku-5-5"),
         ("gemini-3.8-flash", "gemini/gemini-3.8-flash"),
         ("priced-model", "deepseek/deepseek-chat"),
+        ("gpt-4o", "mistral/mistral-large-latest"),
+        ("gpt-4o", "groq/llama-3.3-70b-versatile"),
     ],
 )
 
@@ -2281,7 +2283,13 @@ async def test_a_long_prompt_holds_a_token_per_byte_while_its_cancel_floor_keeps
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("group", "backend_model"),
-    [("gpt-5.5", "openai/gpt-5.5"), ("priced-model", "azure/gpt-5.5"), ("deepseek-chat", "deepseek/deepseek-chat")],
+    [
+        ("gpt-5.5", "openai/gpt-5.5"),
+        ("priced-model", "azure/gpt-5.5"),
+        ("deepseek-chat", "deepseek/deepseek-chat"),
+        ("gpt-3.5-turbo-instruct", "text-completion-openai/gpt-3.5-turbo-instruct"),
+        ("priced-model", "text-completion-openai/davinci-002"),
+    ],
 )
 async def test_a_long_prompt_counted_with_the_serving_models_own_tokenizer_holds_at_the_count(
     spend_counter_store: SpendCounterStore, group: str, backend_model: str

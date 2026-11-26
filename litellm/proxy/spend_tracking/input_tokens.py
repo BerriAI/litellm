@@ -251,20 +251,39 @@ def models_counted_for(model: str, llm_router: Router | None, team_id: str | Non
 
 
 def models_held_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
-    """The names `models_counted_for` counts `model` with whose tokenizer only stands in for the serving model's own,
-    so a long prompt can bill several times what they count. These are the names of deployments that serve no OpenAI
-    model, bar the Cohere, DeepSeek and Llama tokenizers."""
+    """The names to bound a request for `model` from `team_id` at one token per UTF-8 byte with, one per deployment
+    whose name in `models_counted_for` counts with a tokenizer that only stands in for the serving model's own, so a
+    long prompt can bill several times that count. That is any deployment serving a model tiktoken does not encode,
+    bar the Cohere, DeepSeek and Llama tokenizers. A deployment counted under an OpenAI name is bounded under the name
+    of the model it serves, since `token_counter` keeps an OpenAI name's own encoding."""
     deployments: Final = _routed_deployments(model, llm_router, team_id) if llm_router else ()
-    names: Final = (
-        tuple(_counted_name(model, deployment) for deployment in filter(_serves_no_openai_model, deployments))
-        if deployments
-        else tuple(name for name in (model,) if not is_openai_model(name))
-    )
-    return tuple(filter(_counted_with_stand_in, dict.fromkeys(names)))
+    names: Final = tuple(map(partial(_held_name, model), deployments)) if deployments else (_unrouted_held_name(model),)
+    return tuple(dict.fromkeys(filter(None, names)))
 
 
-def _serves_no_openai_model(deployment: object) -> bool:
-    return deployment_openai_model(deployment) is None
+def _held_name(model: str, deployment: object) -> str | None:
+    served: Final = next(iter(deployment_pricing_models(deployment)), None)
+    counted: Final = _counted_name(model, deployment)
+    if served is None:
+        return _unrouted_held_name(counted)
+    if _encoded_by_tiktoken(served) or not _counted_with_stand_in(counted):
+        return None
+    return served if is_openai_model(counted) else counted
+
+
+def _unrouted_held_name(model: str) -> str | None:
+    return model if not _encoded_by_tiktoken(model) and _counted_with_stand_in(model) else None
+
+
+def _encoded_by_tiktoken(model: str) -> bool:
+    return is_openai_model(model) or _tiktoken_model_encoding(model.rsplit("/", 1)[-1]) is not None
+
+
+def _tiktoken_model_encoding(model: str) -> str | None:
+    try:
+        return tiktoken.encoding_name_for_model(model)
+    except KeyError:
+        return None
 
 
 def _counted_with_stand_in(model: str) -> bool:
