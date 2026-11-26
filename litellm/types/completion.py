@@ -241,7 +241,7 @@ class CompletionDispatchContext:
     timeout: float | httpx.Timeout | None
     timeout_for_optional_params: Callable[[Mapping[str, object]], float | httpx.Timeout]
     top_p: float | None
-    unnarrowed_optional_params: dict
+    unnarrowed_optional_params: dict  # mutable-ok: provider paths pop credential keys from it before forwarding
 
 
 _CompletionDispatchContext = CompletionDispatchContext
