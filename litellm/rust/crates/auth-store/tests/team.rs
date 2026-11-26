@@ -9,7 +9,7 @@ mod support;
 
 use std::sync::Arc;
 
-use litellm_auth_store::{Error, TeamDatabase};
+use litellm_auth_store::{AliasMatch, Error, TeamDatabase};
 use litellm_db_testing::MigratedPostgres;
 use litellm_repositories::{ObjectPermissionRepository, Side, TeamRepository};
 use rstest::{fixture, rstest};
@@ -286,6 +286,61 @@ async fn a_team_no_row_has_is_not_found(#[future(awt)] teams: Teams) {
     let read = teams.database.team("gone", Side::Read).await.unwrap();
 
     assert_eq!(read, None);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_team_read_by_alias_is_the_team_read_by_id(#[future(awt)] teams: Teams) {
+    let by_id = teams.database.team("full", Side::Read).await.unwrap();
+
+    let by_alias = teams.database.team_by_alias("Full").await.unwrap();
+
+    assert_eq!(by_alias, AliasMatch::Found(by_id.unwrap()));
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_alias_no_team_has_is_absent(#[future(awt)] teams: Teams) {
+    let read = teams.database.team_by_alias("Gone").await.unwrap();
+
+    assert_eq!(read, AliasMatch::Absent);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_alias_two_teams_share_is_ambiguous(#[future(awt)] teams: Teams) {
+    execute(
+        teams.postgres.pool(),
+        r#"UPDATE "LiteLLM_TeamTable" SET team_alias = 'Full' WHERE team_id = 'created'"#,
+    )
+    .await;
+
+    let read = teams.database.team_by_alias("Full").await.unwrap();
+
+    assert_eq!(read, AliasMatch::Ambiguous);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_alias_with_a_row_the_model_refuses_fails_the_read(#[future(awt)] teams: Teams) {
+    execute(
+        teams.postgres.pool(),
+        r#"UPDATE "LiteLLM_TeamTable" SET team_alias = 'Full', metadata = '[1]' WHERE team_id = 'created'"#,
+    )
+    .await;
+
+    let read = teams.database.team_by_alias("Full").await;
+
+    assert!(
+        matches!(
+            &read,
+            Err(Error::Row {
+                column: "metadata",
+                within: None
+            })
+        ),
+        "{read:?}"
+    );
 }
 
 #[rstest]
