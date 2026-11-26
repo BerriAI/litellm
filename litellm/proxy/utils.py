@@ -4809,6 +4809,9 @@ class ProxyLogging:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
+        effective_route: Final = route or (
+            getattr(user_api_key_dict, "request_route", None) if user_api_key_dict is not None else None
+        )
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
             from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
@@ -4816,13 +4819,13 @@ class ProxyLogging:
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
-            route_call_type: Final = _call_type_for_route(route)
+            route_call_type: Final = _call_type_for_route(effective_route)
             route_prompt: Final = request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
             litellm_logging_obj, data = litellm.utils.function_setup(
                 original_function=(
                     route_call_type
                     if _is_text_or_message_prompt(route_prompt) and not _asks_for_message_redaction(request_fields)
-                    else route
+                    else effective_route
                 )
                 or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
@@ -4895,21 +4898,15 @@ class ProxyLogging:
                 **{key: value for key, value in logged_fields.items() if key in _PROMPT_FIELDS},
             )
 
-            input: list | str | dict = ""
             body_shape_call_type: str | None = None
             if "messages" in request_data and isinstance(request_data["messages"], list):
-                input = request_data["messages"]
-                litellm_logging_obj.model_call_details["messages"] = input
                 body_shape_call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
-                input = request_data["prompt"]
-                litellm_logging_obj.model_call_details["prompt"] = input
                 body_shape_call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
-                input = request_data["input"]
-                litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
-            resolved_call_type: Final = _call_type_for_route(route) or (
+
+            resolved_call_type: Final = _call_type_for_route(effective_route) or (
                 None if set_up_by_request else dispatched_call_type or body_shape_call_type
             )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
@@ -4919,6 +4916,68 @@ class ProxyLogging:
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
                 return
+
+            current_call_type: Final = litellm_logging_obj.call_type
+            input: list | str | dict = ""
+            if current_call_type in (CallTypes.adecisions.value, CallTypes.decisions.value):
+                if not _asks_for_message_redaction(request_data):
+                    from litellm.decisions.call import log_caller_request
+
+                    decisions_payload: Final[dict[str, object]] = {
+                        "input": request_data.get("input"),
+                        "questions": request_data.get("questions"),
+                        "audio": request_data.get("audio"),
+                        "videos": request_data.get("videos"),
+                        "prompt_cache_key": request_data.get("prompt_cache_key"),
+                        "prompt_cache_options": request_data.get("prompt_cache_options"),
+                        **{k: request_data[k] for k in ("state", "images", "assets") if k in request_data},
+                    }
+                    log_caller_request({"litellm_logging_obj": litellm_logging_obj}, decisions_payload)
+                if "input" in request_data:
+                    input = request_data["input"]
+                    litellm_logging_obj.model_call_details["input"] = input
+            elif current_call_type in (CallTypes.asystemone.value, CallTypes.systemone.value):
+                if not _asks_for_message_redaction(request_data):
+                    from litellm.decisions.call import SystemOneRequestFields, log_caller_request
+
+                    fields: Final = SystemOneRequestFields(
+                        state=request_data.get("state"),
+                        questions=request_data.get("questions"),
+                        images=request_data.get("images"),
+                        assets=request_data.get("assets"),
+                        audio=request_data.get("audio"),
+                        videos=request_data.get("videos"),
+                    )
+                    log_caller_request({"litellm_logging_obj": litellm_logging_obj}, fields)
+                input = ""
+            elif current_call_type in (CallTypes.aresponses.value, CallTypes.responses.value):
+                raw_input: Final = (
+                    request_data.get("input") if "input" in request_data else request_data.get("messages")
+                )
+                input = raw_input if raw_input is not None else ""
+                litellm_logging_obj.model_call_details["input"] = input
+                if _is_text_or_message_prompt(raw_input) and not _asks_for_message_redaction(request_data):
+                    normalized_messages: list[dict[str, object]] = []
+                    if isinstance(raw_input, str):
+                        normalized_messages = [{"role": "user", "content": raw_input}]
+                    elif isinstance(raw_input, list):
+                        if raw_input and isinstance(raw_input[0], str):
+                            normalized_messages = [
+                                {"role": "user", "content": item} for item in raw_input if isinstance(item, str)
+                            ]
+                        else:
+                            normalized_messages = [dict(m) if isinstance(m, dict) else m for m in raw_input]
+                    if normalized_messages:
+                        litellm_logging_obj.update_messages(normalized_messages)
+            elif "messages" in request_data and isinstance(request_data["messages"], list):
+                input = request_data["messages"]
+                litellm_logging_obj.model_call_details["messages"] = input
+            elif "prompt" in request_data and isinstance(request_data["prompt"], str):
+                input = request_data["prompt"]
+                litellm_logging_obj.model_call_details["prompt"] = input
+            elif "input" in request_data:
+                input = request_data["input"]
+                litellm_logging_obj.model_call_details["input"] = input
             # This is a proxy-gate error (auth/rate-limit) for a request that never
             # reached a provider. ``pre_call`` below still fires every callback's
             # input hook so the failure is logged — but tracing callbacks must not
