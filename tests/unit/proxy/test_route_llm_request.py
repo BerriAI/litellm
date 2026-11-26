@@ -3013,15 +3013,22 @@ class _WorkspaceVideoConfig(QueueVideoConfig):
         order: str | None = None,
         extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
-        return api_base, {"workspace": (litellm_params.model_extra or {}).get("workspace")}
+        asked: Final = {**(litellm_params.model_extra or {}), "after": after, "limit": limit, "order": order}
+        sent: Final = ("model", "workspace", "after", "limit", "order")
+        return api_base, {name: asked[name] for name in sent if asked.get(name) is not None}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_settings", "sent_workspace"), [({}, "dep-workspace"), ({"workspace": "asked-workspace"}, "asked-workspace")]
+    ("request_settings", "sent"),
+    [
+        ({}, {"workspace": "dep-workspace"}),
+        ({"workspace": "asked-workspace"}, {"workspace": "asked-workspace"}),
+        ({"order": "asc"}, {"workspace": "dep-workspace", "order": "asc"}),
+    ],
 )
 async def test_a_video_list_passes_a_custom_provider_its_deployments_own_settings(
-    monkeypatch: pytest.MonkeyPatch, request_settings: dict[str, object], sent_workspace: str
+    monkeypatch: pytest.MonkeyPatch, request_settings: dict[str, object], sent: dict[str, str]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(
@@ -3036,6 +3043,9 @@ async def test_a_video_list_passes_a_custom_provider_its_deployments_own_setting
                     "api_key": "dep-key",
                     "api_base": "https://queue.example",
                     "workspace": "dep-workspace",
+                    "order": 1,
+                    "limit": 5,
+                    "after": "video_1",
                 },
                 "model_info": {"id": "dep-workspace"},
             }
@@ -3054,7 +3064,54 @@ async def test_a_video_list_passes_a_custom_provider_its_deployments_own_setting
         )
         await (await route_request(request, router, None, "avideo_list"))
 
-    assert dict(route.calls.last.request.url.params) == {"workspace": sent_workspace}
+    assert dict(route.calls.last.request.url.params) == sent
+
+
+@pytest.mark.asyncio
+async def test_a_video_list_never_sends_a_built_in_provider_what_its_deployment_adds_to_a_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _team_b_seedance_router(extra_query={"draft": "true"})
+    request: Final = {**_video_list_pinned_to("dep-b"), "litellm_metadata": {"user_api_key_team_id": "team-b"}}
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"https://dep-b.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        await (await route_request(request, router, None, "avideo_list"))
+
+    assert "draft" not in route.calls.last.request.url.params
+
+
+@pytest.mark.asyncio
+async def test_only_a_video_list_is_sent_straight_to_the_deployment_it_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _team_b_seedance_router()
+    request: Final = {
+        "model": "dep-b",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_api_key_team_id": "team-b"},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(url__startswith="https://dep-b.ark.example").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "doubao-seedance-2-0-mini-260615",
+                    "choices": [
+                        {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hello"}}
+                    ],
+                },
+            )
+        )
+        await (await route_request(request, router, None, "acompletion"))
+
+    assert json.loads(route.calls.last.request.content)["model"] == "doubao-seedance-2-0-mini-260615"
 
 
 @pytest.mark.asyncio

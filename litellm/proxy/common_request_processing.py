@@ -3273,7 +3273,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
-            pinned_provider=None if pinned is None else pinned.custom_llm_provider,
+            pinned=pinned,
         )
         request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
         customer_auth: Final = customer_request_auth(request_fields)
@@ -3408,9 +3408,13 @@ class ProxyBaseLLMRequestProcessing:
         # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
         merged_for_requested: Final = (
             self.data
-            if rate_limited_model is None
+            if rate_limited_model is None and pinned is None
             else check_and_merge_model_level_guardrails(
-                data=self.data, llm_router=llm_router, trust_client_model_info=False, model_alias=rate_limited_model
+                data=self.data,
+                llm_router=llm_router,
+                trust_client_model_info=False,
+                model_alias=rate_limited_model,
+                deployment_id=None if pinned is None else pinned.deployment_id,
             )
         )
         self.data = check_and_merge_model_level_guardrails(

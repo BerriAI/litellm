@@ -18,19 +18,23 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from fastapi import HTTPException
 
 import litellm
 from litellm.router import Router
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import NO_TEAM_MEMBERSHIP_SENTINEL
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.types.agents import AgentResponse
 from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
@@ -989,6 +993,24 @@ def test_stamp_listed_video_ids_records_the_deployment_that_served_the_list() ->
     assert stamp_listed_video_ids(listed, None) == listed
 
 
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_stamp_listed_video_ids_makes_the_video_objects_of_a_provider_readable(wrapped: bool) -> None:
+    videos: Final = [_video("job-7"), _video("job;8")]
+    listed: Final = {"data": videos, "first_id": "job-7", "last_id": "job;8"} if wrapped else videos
+
+    stamped: Final = stamp_listed_video_ids(listed, PinnedDeployment("dep-queue", "queue-group", "queue-video"))
+    stamped_videos: Final = stamped["data"] if wrapped else stamped
+
+    assert decode_video_id_with_provider(stamped_videos[0].id) == decode_video_id_with_provider(
+        encode_video_id_with_provider("job-7", "queue-video", "dep-queue", deployment_id="dep-queue")
+    )
+    assert [video.model_dump(exclude={"id"}) for video in stamped_videos] == [
+        video.model_dump(exclude={"id"}) for video in videos
+    ]
+    assert stamped_videos[1].id == "job;8"
+    assert not wrapped or (stamped["first_id"], stamped["last_id"]) == (stamped_videos[0].id, "job;8")
+
+
 def test_stamp_listed_video_ids_makes_a_providers_raw_ids_readable_and_leaves_ids_it_cannot_encode() -> None:
     raw: Final = {
         "data": [{"id": "job-7"}, {"id": "job;8"}, {"id": 9}, {"status": "queued"}],
@@ -1536,3 +1558,158 @@ async def test_video_list_target_refuses_a_named_model_the_key_cannot_call() -> 
         await video_list_target("seedance-video", None, _video_list_router(), restricted)
 
     assert str(refused.value.code) == "403"
+
+
+async def _cache_with_owner(owner_models: list[str], teams: list[str]) -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.user("owner-1"), value=LiteLLM_UserTable(user_id="owner-1", models=owner_models, teams=teams)
+    )
+    await cache.async_set_cache(
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["seedance-video"])
+    )
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="owner-1", team_id="team-a"),
+        value=NO_TEAM_MEMBERSHIP_SENTINEL,
+    )
+    return cache
+
+
+async def _target_for_owner(
+    key: UserAPIKeyAuth,
+    requested_model: str | None,
+    custom_llm_provider: str | None,
+    owner_models: list[str],
+    teams: list[str] | None = None,
+) -> VideoListTarget:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch(  # test-quality-ok: proxy_server global, no seam
+            "litellm.proxy.proxy_server.user_api_key_cache", await _cache_with_owner(owner_models, teams or [])
+        ),
+    ):
+        return await video_list_target(requested_model, custom_llm_provider, _video_list_router(), key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner_models", "volcengine_pick", "openai_pick"),
+    [
+        pytest.param([], "dep-seedance", "dep-sora", id="owner-without-limits"),
+        pytest.param(["sora-video"], None, "dep-sora", id="owner-limited-to-sora"),
+        pytest.param(["no-default-models"], None, None, id="owner-with-team-models-only"),
+    ],
+)
+async def test_video_list_target_lends_a_personal_key_only_what_its_owner_may_call(
+    owner_models: list[str], volcengine_pick: str | None, openai_pick: str | None
+) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", user_id="owner-1")
+
+    picks: Final = [
+        _listed_with(await _target_for_owner(key, None, provider, owner_models)) for provider in ("volcengine", "openai")
+    ]
+
+    assert picks == [volcengine_pick, openai_pick]
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_refuses_a_named_model_the_keys_owner_cannot_call() -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", user_id="owner-1")
+
+    with pytest.raises(ProxyException) as refused:
+        await _target_for_owner(key, "seedance-video", None, ["sora-video"])
+
+    assert str(refused.value.code) == "403"
+    assert _listed_with(await _target_for_owner(key, "sora-video", None, ["sora-video"])) == "dep-sora"
+
+
+def _personal_key_in_a_dashboard_session() -> UserAPIKeyAuth:
+    key: Final = UserAPIKeyAuth(api_key="hashed", user_id="owner-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    key.bind_dashboard_session(UserAPIKeyAuth(api_key="ui-session", user_id="owner-1", team_id=UI_TEAM_ID))
+    return key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", [None, "seedance-video"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param(
+            UserAPIKeyAuth(api_key="hashed", user_id="owner-1", team_id="team-a", team_models=["seedance-video"]),
+            id="team-key",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(api_key="hashed", user_id="owner-1", user_role=LitellmUserRoles.PROXY_ADMIN), id="proxy-admin"
+        ),
+        pytest.param(
+            UserAPIKeyAuth(
+                api_key="hashed",
+                user_id="owner-1",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                team_id=UI_TEAM_ID,
+            ),
+            id="dashboard-session-with-a-team-grant",
+        ),
+        pytest.param(_personal_key_in_a_dashboard_session(), id="personal-key-in-a-dashboard-session"),
+        pytest.param(UserAPIKeyAuth(api_key="hashed", user_id="deleted-owner"), id="owner-without-a-row"),
+    ],
+)
+async def test_video_list_target_applies_the_owners_models_only_where_auth_does(
+    key: UserAPIKeyAuth, requested_model: str | None
+) -> None:
+    target: Final = await _target_for_owner(key, requested_model, "volcengine", ["sora-video"], ["team-a"])
+
+    assert _listed_with(target) == "dep-seedance"
+
+
+def _agent_key(granted_models: list[str]) -> UserAPIKeyAuth:
+    policy: Final = AgentResponse(
+        agent_id="agent-1", agent_name="agent", agent_card_params={}, object_permission={"models": granted_models}
+    )
+    return UserAPIKeyAuth(api_key="hashed").model_copy(update={"managed_agent_policy": policy})
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lends_an_agent_key_only_what_its_agent_may_call() -> None:
+    agent_key: Final = _agent_key(["sora-video"])
+
+    assert await video_list_target(None, "volcengine", _video_list_router(), agent_key) == VideoListTarget()
+    assert _listed_with(await video_list_target(None, "openai", _video_list_router(), agent_key)) == "dep-sora"
+    assert _listed_with(await video_list_target("sora-video", None, _video_list_router(), agent_key)) == "dep-sora"
+    with pytest.raises(ProxyException) as refused:
+        await video_list_target("seedance-video", None, _video_list_router(), agent_key)
+    assert str(refused.value.code) == "403"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lends_nothing_to_an_agent_key_without_model_grants() -> None:
+    agent_key: Final = _agent_key([])
+
+    assert await video_list_target(None, "openai", _video_list_router(), agent_key) == VideoListTarget()
+    with pytest.raises(HTTPException) as refused:
+        await video_list_target("sora-video", None, _video_list_router(), agent_key)
+    assert refused.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lends_a_team_deployment_only_to_an_agent_that_may_call_it() -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["team-seedance"])
+    )
+    team_key: Final = {"team_id": "team-a", "team_models": ["team-seedance"]}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        picks: Final = [
+            _listed_with(
+                await video_list_target(
+                    None, "volcengine", _team_video_list_router(), _agent_key(granted).model_copy(update=team_key)
+                )
+            )
+            for granted in (["team-seedance"], ["sora-video"])
+        ]
+
+    assert picks == ["team-a-seedance", None]

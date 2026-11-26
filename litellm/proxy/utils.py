@@ -10151,6 +10151,7 @@ def check_and_merge_model_level_guardrails(
     llm_router: Router | None,
     trust_client_model_info: bool = True,
     model_alias: str | None = None,
+    deployment_id: str | None = None,
 ) -> dict:
     """
     Check if the model has guardrails defined and merge them with existing guardrails in the request data.
@@ -10159,6 +10160,7 @@ def check_and_merge_model_level_guardrails(
         data: The request data dict
         llm_router: The LLM router instance to get deployment info from
         model_alias: Resolve guardrails for this model group instead of data["model"]
+        deployment_id: Resolve guardrails for this deployment, which the proxy already picked
         trust_client_model_info: If False, ignore metadata.model_info.id and
             resolve guardrails by alias-union only. Set to False on the
             pre_call path because add_litellm_data_to_request preserves
@@ -10177,7 +10179,7 @@ def check_and_merge_model_level_guardrails(
     metadata: Final = data.get("metadata") or {}
     litellm_metadata: Final = data.get("litellm_metadata") or {}
     model_info: Final = metadata.get("model_info") or {}
-    model_id: Final = model_info.get("id") if trust_client_model_info else None
+    model_id: Final = deployment_id or (model_info.get("id") if trust_client_model_info else None)
     # route_request resolves team-scoped public model names with the
     # server-populated team id; pre_call lookup must do the same so
     # team-scoped guardrails are not silently skipped (greptile/veria-ai

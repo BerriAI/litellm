@@ -634,6 +634,34 @@ async def authorize_model_for_key(
     )
 
 
+async def authorize_model_for_caller(
+    model_id: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> None:
+    """``authorize_model_for_key`` plus the model limits of the key's agent and of the user who owns the key."""
+    from litellm.proxy.auth.auth_checks import can_agent_and_owner_call_model
+
+    await authorize_model_for_key(model_id, llm_router, user_api_key_dict)
+    await can_agent_and_owner_call_model(model_id, user_api_key_dict, llm_router)
+
+
+async def _agent_and_owner_may_use_model(
+    model: str,
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import can_agent_and_owner_call_model
+
+    try:
+        await can_agent_and_owner_call_model(model, user_api_key_dict, llm_router)
+    except (ProxyException, HTTPException):
+        return False
+    return True
+
+
 async def team_deployment_the_caller_may_use(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -714,6 +742,7 @@ async def video_deployment_the_caller_may_use(
                 for deployment in _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
                 if lists_videos(deployment.deployment_id)
                 and await tags_route_to_deployment(llm_router, deployment, request_kwargs)
+                and await _agent_and_owner_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict)
             ]
         ),
         custom_llm_provider,
@@ -728,8 +757,10 @@ async def video_deployment_the_caller_may_use(
         custom_llm_provider,
         candidates=functools.partial(_video_deployments_in_group, lists_videos),
     ):
-        if await tags_route_to_deployment(llm_router, deployment, request_kwargs) and await caller_may_use_model(
-            deployment.public_model_name, llm_router, user_api_key_dict
+        if (
+            await tags_route_to_deployment(llm_router, deployment, request_kwargs)
+            and await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict)
+            and await _agent_and_owner_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict)
         ):
             return deployment
     return None
@@ -767,9 +798,13 @@ async def tags_route_to_deployment(
 
 
 def _video_fit(registry: "RouterRegistry") -> "Callable[[str], _VideoFit]":
-    @functools.cache
-    def fit_of_model(described: _DescribedModel) -> _VideoFit:
-        model_info: Final = registry.deployment_model_info(described.deployment_id, described.model, cached=True)
+    def fit(deployment_id: str) -> _VideoFit:
+        deployment: Final = registry.deployment(deployment_id)
+        model_info: Final = (
+            None
+            if deployment is None
+            else registry.deployment_model_info(deployment_id, deployment.litellm_params.model, cached=True)
+        )
         match None if model_info is None else model_info.get("mode"):
             case "video_generation":
                 return _VideoFit.SERVES_VIDEOS
@@ -777,13 +812,6 @@ def _video_fit(registry: "RouterRegistry") -> "Callable[[str], _VideoFit]":
                 return _VideoFit.UNKNOWN
             case _:
                 return _VideoFit.SERVES_ANOTHER_MODE
-
-    def fit(deployment_id: str) -> _VideoFit:
-        deployment: Final = registry.deployment(deployment_id)
-        if deployment is None:
-            return _VideoFit.UNKNOWN
-        configured: Final = deployment.model_info.model_dump_json(exclude={"id"}, exclude_none=True)
-        return fit_of_model(_DescribedModel(deployment.litellm_params.model, configured, deployment_id))
 
     return fit
 
@@ -1133,13 +1161,6 @@ class _VideoFit(IntEnum):
     SERVES_VIDEOS = 0
     UNKNOWN = 1
     SERVES_ANOTHER_MODE = 2
-
-
-@dataclass(frozen=True, slots=True)
-class _DescribedModel:
-    model: str
-    configured: str
-    deployment_id: str = field(compare=False)
 
 
 class _KeyReach(IntEnum):

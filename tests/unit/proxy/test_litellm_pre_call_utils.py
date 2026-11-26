@@ -5895,6 +5895,66 @@ async def test_add_guardrails_from_policy_engine_applies_inherited_parent_guardr
     assert "child_guard" not in data["metadata"]["guardrails"]
 
 
+def _any_model_policy_registries():
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyCondition, PolicyGuardrails
+
+    policy_registry: Final = get_policy_registry()
+    policy_registry._policies = {
+        "any-model": Policy(guardrails=PolicyGuardrails(add=["any_model_guard"]), condition=PolicyCondition(model=".*"))
+    }
+    policy_registry._initialized = True
+    attachment_registry: Final = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="any-model", scope="*")]
+    attachment_registry._initialized = True
+    return policy_registry, attachment_registry
+
+
+def _reset_policy_registries(policy_registry, attachment_registry) -> None:
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_matches_a_model_condition_on_an_empty_model_name():
+    data: Final = {"model": "", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    policy_registry, attachment_registry = _any_model_policy_registries()
+
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == ["any_model_guard"]
+
+
+def test_key_policies_match_a_model_condition_on_an_empty_model_name():
+    from litellm.proxy.litellm_pre_call_utils import _add_guardrails_from_policies_in_metadata
+
+    data: Final = {"model": "", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    policy_registry, attachment_registry = _any_model_policy_registries()
+
+    try:
+        with patch("litellm.proxy.utils.premium_user_check"):
+            _add_guardrails_from_policies_in_metadata(
+                key_metadata={"policies": ["any-model"]},
+                team_metadata=None,
+                data=data,
+                metadata_variable_name="metadata",
+            )
+    finally:
+        _reset_policy_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == ["any_model_guard"]
+
+
 @pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
     """

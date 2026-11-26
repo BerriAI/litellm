@@ -5886,6 +5886,45 @@ async def _can_key_call_resolved_model(
             )
 
 
+async def can_agent_and_owner_call_model(model: str, valid_token: UserAPIKeyAuth, llm_router: Router | None) -> None:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    await can_agent_call_model(
+        model=model,
+        valid_token=valid_token,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await can_user_call_model(
+        model=model,
+        llm_router=llm_router,
+        user_object=await _owner_whose_models_limit_the_key(valid_token),
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+    )
+
+
+async def _owner_whose_models_limit_the_key(valid_token: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if valid_token.team_id is not None or valid_token.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    if _is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token):
+        return None
+    try:
+        return await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:  # noqa: BLE001  # auth reads an owner it cannot load as one without model limits
+        return None
+
+
 def can_org_access_model(
     model: str,
     org_object: LiteLLM_OrganizationTable | None,

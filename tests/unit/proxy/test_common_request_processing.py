@@ -37,7 +37,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
 from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -109,6 +109,7 @@ from litellm.router_config import build_router_config
 from litellm.router_python_host import python_host
 from litellm.router_rust.core import RustCore
 from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import (
@@ -12827,13 +12828,13 @@ def _seedance_router() -> Router:
         model_list=[
             {
                 "model_name": group,
-                "litellm_params": {"model": model, "api_key": "video-key"},
+                "litellm_params": {"model": model, "api_key": "video-key", "guardrails": [rule]},
                 "model_info": {"id": deployment_id},
             }
-            for group, model, deployment_id in (
-                ("seedance-video", "openai/sora-2", "dep-sora"),
-                ("seedance-video", _SEEDANCE, "dep-seedance"),
-                ("other-video", _SEEDANCE, "dep-other"),
+            for group, model, deployment_id, rule in (
+                ("seedance-video", "openai/sora-2", "dep-sora", "sora-rule"),
+                ("seedance-video", _SEEDANCE, "dep-seedance", "seedance-rule"),
+                ("other-video", _SEEDANCE, "dep-other", "other-rule"),
             )
         ]
     )
@@ -12843,11 +12844,22 @@ def _credential(name: str, api_key: str) -> CredentialItem:
     return CredentialItem(credential_name=name, credential_info={}, credential_values={"api_key": api_key})
 
 
+def _rules_run_on(data: dict[str, object]) -> tuple[str, ...]:
+    return tuple(
+        rule
+        for rule in ("sora-rule", "seedance-rule", "other-rule", "policy-rule")
+        if CustomGuardrail(guardrail_name=rule, event_hook="pre_call").should_run_guardrail(
+            data, GuardrailEventHooks.pre_call
+        )
+    )
+
+
 def _answering_with_model(hook_model: str | None) -> Callable[..., object]:
     def pre_call_hook(*, data: dict[str, object], **_: object) -> dict[str, object]:
         return {
             **data,
             "model_the_hook_saw": data.get("model"),
+            "rules_run": _rules_run_on(data),
             **({"model": hook_model} if hook_model else {}),
         }
 
@@ -12858,6 +12870,7 @@ async def _pinned_pre_call(
     caller: ProxyUserAPIKeyAuth,
     *,
     named: str | None = "seedance-video",
+    group: str = "seedance-video",
     hook_model: str | None = None,
     rate_limited_model: str | None = None,
 ) -> tuple[Mapping[str, object], str | None]:
@@ -12867,7 +12880,7 @@ async def _pinned_pre_call(
     logging.pre_call_hook = AsyncMock(side_effect=_answering_with_model(hook_model))
     processor: Final = ProxyBaseLLMRequestProcessing(
         data={"query_params": {}, **({"model": named} if named else {})},
-        pinned=PinnedDeployment("dep-seedance", "seedance-video", "volcengine", "seedance-video" if named else None),
+        pinned=PinnedDeployment("dep-seedance", group, "volcengine", group if named else None),
     )
     data, _ = await processor.common_processing_pre_call_logic(
         request=Request({"type": "http", "method": "GET", "path": "/v1/videos", "headers": [], "query_string": b""}),
@@ -12906,6 +12919,76 @@ async def test_a_pinned_request_that_names_no_model_names_none_until_it_is_dispa
 
     assert (data["model_the_hook_saw"], data["model"]) == (None, "dep-seedance")
     assert dispatched_to == "dep-seedance"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "named, group, rules",
+    [
+        pytest.param("seedance-video", "seedance-video", ("sora-rule", "seedance-rule"), id="by-group"),
+        pytest.param("dep-seedance", "dep-seedance", ("seedance-rule",), id="by-deployment-id"),
+        pytest.param(None, "seedance-video", ("seedance-rule",), id="no-model"),
+        pytest.param(None, "dep-seedance", ("seedance-rule",), id="no-model-and-a-key-for-the-deployment-id"),
+    ],
+)
+async def test_a_pinned_request_runs_the_guardrails_of_its_deployment(
+    named: str | None, group: str, rules: tuple[str, ...]
+) -> None:
+    data, _ = await _pinned_pre_call(ProxyUserAPIKeyAuth(api_key="hash"), named=named, group=group)
+
+    assert data["rules_run"] == rules
+
+
+@pytest.fixture
+def clean_policies() -> Iterator[None]:
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    yield
+    get_policy_registry().clear()
+    get_attachment_registry().clear()
+
+
+_ALIASING: Final = {"my-video": "seedance-video"}
+_POLICY_MODELS: Final = [
+    pytest.param(None, "seedance-video", True, id="no-model-policy-of-its-group"),
+    pytest.param(None, "other-video", False, id="no-model-policy-of-another-group"),
+    pytest.param("my-video", "my-video", True, id="policy-of-the-alias-it-named"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named, policy_model, ran", _POLICY_MODELS)
+async def test_a_pinned_request_runs_the_policies_attached_to_the_model_it_is_for(
+    clean_policies: None, named: str | None, policy_model: str, ran: bool
+) -> None:
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    get_policy_registry().load_policies({"attached": {"guardrails": {"add": ["policy-rule"]}}})
+    get_attachment_registry().load_attachments([{"policy": "attached", "models": [policy_model]}])
+
+    data, _ = await _pinned_pre_call(ProxyUserAPIKeyAuth(api_key="hash", aliases=_ALIASING), named=named)
+
+    assert ("policy-rule" in data["rules_run"]) is ran
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named, policy_model, ran", _POLICY_MODELS)
+async def test_a_pinned_request_runs_its_keys_policies_for_the_model_it_is_for(
+    monkeypatch: pytest.MonkeyPatch, clean_policies: None, named: str | None, policy_model: str, ran: bool
+) -> None:
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    get_policy_registry().load_policies(
+        {"conditional": {"condition": {"model": policy_model}, "guardrails": {"add": ["policy-rule"]}}}
+    )
+    caller: Final = ProxyUserAPIKeyAuth(api_key="hash", aliases=_ALIASING, metadata={"policies": ["conditional"]})
+
+    data, _ = await _pinned_pre_call(caller, named=named)
+
+    assert ("policy-rule" in data["rules_run"]) is ran
 
 
 @pytest.mark.asyncio

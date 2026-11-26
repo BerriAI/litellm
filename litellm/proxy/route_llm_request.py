@@ -826,6 +826,7 @@ async def _authorized_team_file_deployment(
 
 _CONNECTION_SETTINGS: Final = frozenset({"extra_headers", "ssl_verify"})
 _CREDENTIAL_OVERRIDES: Final = frozenset({"api_base", "api_key", "api_version"})
+_PAGE_PARAMS: Final = frozenset({"after", "limit", "order"})
 
 
 async def _video_list_deployment(
@@ -870,8 +871,9 @@ def _connection_settings(deployment: TeamProviderDeployment, llm_router: Litellm
     if listed_with is None:
         return MappingProxyType({})
     provider: Final = deployment.credentials.get("custom_llm_provider")
+    extra_settings: Final = as_str_mapping(listed_with.litellm_params.model_extra) or {}
     custom_settings: Final[Mapping[str, object]] = (
-        listed_with.litellm_params.model_extra or {}
+        {key: value for key, value in extra_settings.items() if key not in _PAGE_PARAMS}
         if isinstance(provider, str) and ProviderConfigManager.get_custom_provider_video_config(provider) is not None
         else {}
     )

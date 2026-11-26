@@ -11,6 +11,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
+    authorize_model_for_caller,
     authorize_model_for_key,
     video_deployment_in_group,
     video_deployment_the_caller_may_use,
@@ -202,9 +203,7 @@ async def video_list_target(
     provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
     request_kwargs: Final = {**per_request_router_settings(router_settings or MappingProxyType({})), **request_routing}
     if requested_model:
-        await authorize_model_for_key(
-            model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
-        )
+        await authorize_model_for_caller(requested_model, llm_router, user_api_key_dict)
         served: Final = await _pre_call_model(requested_model, user_api_key_dict, llm_router, router_settings)
         group: Final = None if llm_router is None else llm_router.registry().resolve(served, kind="alias")
         named: Final = await video_deployment_in_group(
@@ -243,6 +242,8 @@ def _video_id_with_deployment(video_id: object, listed_with: PinnedDeployment) -
 
 
 def _listed_video_with_deployment(video: object, listed_with: PinnedDeployment) -> object:
+    if isinstance(video, VideoObject):
+        return video.model_copy(update={"id": _video_id_with_deployment(video.id, listed_with)})
     fields: Final = as_str_mapping(video)
     if fields is None or "id" not in fields:
         return video
@@ -250,8 +251,13 @@ def _listed_video_with_deployment(video: object, listed_with: PinnedDeployment) 
 
 
 def stamp_listed_video_ids(listed: object, listed_with: PinnedDeployment | None) -> object:
+    if listed_with is None:
+        return listed
+    unwrapped_videos: Final = as_object_list(listed)
+    if unwrapped_videos is not None:
+        return [_listed_video_with_deployment(video, listed_with) for video in unwrapped_videos]
     fields: Final = as_str_mapping(listed)
-    if listed_with is None or fields is None:
+    if fields is None:
         return listed
     videos: Final = as_object_list(fields.get("data"))
     stamped_videos: Final[Mapping[str, object]] = (
