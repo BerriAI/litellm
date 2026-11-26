@@ -1128,6 +1128,7 @@ class PrometheusLogger(CustomLogger):
                 "litellm_deployment_state",
                 "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
                 labelnames=self.get_labels_for_metric("litellm_deployment_state"),
+                multiprocess_mode="livemostrecent",
             )
 
             self.litellm_deployment_tpm_limit = self._gauge_factory(

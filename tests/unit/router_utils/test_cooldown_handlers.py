@@ -3485,3 +3485,70 @@ async def test_cooldown_recovery_and_partial_outage_write_one_deployment_state_s
         output_tokens=1.0,
     )
     assert _deployment_state_series() == {_served_deployment_state_key(): 0.0}
+
+
+@pytest.mark.asyncio
+async def test_deployment_state_series_ignores_caller_metadata_on_the_router_bucket(prometheus_callback):
+    """A batch call is stamped in `litellm_metadata`, so a caller-sent `metadata` must not split the series.
+
+    The caller's keys reach `litellm_params.metadata` and only the router's own bucket holds the deployment it
+    picked, so reading the wrong bucket labels the outage with caller-chosen values and the recovery misses it.
+    """
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "my-alias",
+                "litellm_params": {"model": "hosted_vllm/served-a", "api_base": "http://127.0.0.1:9/v1/"},
+                "model_info": {"id": "dep-a"},
+            }
+        ]
+    )
+    payload: Final = {**_logged_payload("failure"), "call_type": "acreate_batch"}
+    caller_metadata: Final = {
+        "deployment": "caller-chosen",
+        "api_base": "http://caller.example/v1",
+        "model_info": {"id": "caller-id"},
+    }
+    router_metadata: Final = {
+        "deployment": "hosted_vllm/served-a",
+        "api_base": "http://127.0.0.1:9/v1",
+        "model_info": {"id": "dep-a"},
+        "model_group": "my-alias",
+    }
+    routed_kwargs: Final = {
+        "model": "served-a",
+        "litellm_params": {
+            "custom_llm_provider": "hosted_vllm",
+            "api_base": "http://127.0.0.1:9/v1/chat/completions",
+            "metadata": caller_metadata,
+            "litellm_metadata": router_metadata,
+        },
+        "standard_logging_object": payload,
+    }
+    start_time: Final = datetime.datetime.now()
+    api_error: Final = litellm.InternalServerError(
+        message="deployment is down", llm_provider="hosted_vllm", model="served-a"
+    )
+
+    prometheus_callback.set_llm_deployment_failure_metrics({**routed_kwargs, "exception": api_error})
+    assert _deployment_state_series() == {_served_deployment_state_key(): 1.0}
+
+    await router_cooldown_event_callback(
+        ctx=RoutingContext(router),
+        deployment_id="dep-a",
+        exception_status="429",
+        cooldown_time=60.0,
+    )
+    assert _deployment_state_series() == {_served_deployment_state_key(): 2.0}
+
+    prometheus_callback.set_llm_deployment_success_metrics(
+        request_kwargs={
+            **routed_kwargs,
+            "standard_logging_object": {**_logged_payload("success"), "call_type": "acreate_batch"},
+        },
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=1),
+        enum_values=UserAPIKeyLabelValues(model_group="my-alias", model_id="dep-a"),
+        output_tokens=1.0,
+    )
+    assert _deployment_state_series() == {_served_deployment_state_key(): 0.0}

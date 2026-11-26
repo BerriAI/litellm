@@ -1962,6 +1962,85 @@ def test_deployment_latency_per_output_token_emits_model_group_from_enum_values(
         _clear_prometheus_registry()
 
 
+def test_deployment_state_identity_reads_the_bucket_the_router_stamped() -> None:
+    """A batch call's router stamp lives in `litellm_metadata`, so the caller's `metadata` must not shadow it."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+
+    identity: Final = deployment_identity.identity_from_request_kwargs(
+        {
+            "model": "served-a",
+            "litellm_params": {
+                "custom_llm_provider": "hosted_vllm",
+                "metadata": {
+                    "deployment": "caller-chosen",
+                    "api_base": "http://caller.example/v1",
+                    "model_info": {"id": "caller-id"},
+                },
+                "litellm_metadata": {
+                    "deployment": "hosted_vllm/served-a",
+                    "api_base": "http://127.0.0.1:9/v1",
+                    "model_info": {"id": "dep-a"},
+                },
+            },
+            "standard_logging_object": {"call_type": "acreate_batch", "model_id": "dep-a"},
+        }
+    )
+
+    assert identity == deployment_identity.DeploymentStateIdentity(
+        litellm_model_name="hosted_vllm/served-a",
+        model_id="dep-a",
+        api_base="http://127.0.0.1:9/v1",
+        api_provider="hosted_vllm",
+    )
+
+
+def test_deployment_state_identity_prefers_the_configured_id_over_a_request_scoped_one() -> None:
+    """Forwarded client credentials give the call a generated model id; cooldown knows only the configured one."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+
+    identity: Final = deployment_identity.identity_from_request_kwargs(
+        {
+            "model": "served-a",
+            "litellm_params": {
+                "custom_llm_provider": "hosted_vllm",
+                "metadata": {
+                    "deployment": "hosted_vllm/served-a",
+                    "api_base": "http://127.0.0.1:9/v1",
+                    "model_info": {"id": "a7f3c2d1", "original_model_id": "dep-a"},
+                },
+            },
+        }
+    )
+
+    assert identity.model_id == "dep-a"
+
+
+def test_declared_provider_is_used_without_inferring_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deployment's declared provider is the label; deriving it is the fallback, not the rule."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+    from litellm.litellm_core_utils import get_llm_provider_logic
+
+    def _fail_inference(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the declared provider should have been used")
+
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _fail_inference)
+
+    assert deployment_identity.resolve_api_provider("hosted_vllm/served-a", "hosted_vllm") == "hosted_vllm"
+
+
+def test_inference_failure_keeps_an_inferred_provider_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no declared provider an unparseable model yields no label rather than a raised exception."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+    from litellm.litellm_core_utils import get_llm_provider_logic
+
+    def _fail_inference(*args: object, **kwargs: object) -> None:
+        raise ValueError("unknown provider")
+
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _fail_inference)
+
+    assert deployment_identity.resolve_api_provider("mystery/model", None) == ""
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()
