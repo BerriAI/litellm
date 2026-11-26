@@ -187,4 +187,84 @@ mod tests {
         assert!(!request.to_ascii_lowercase().contains("authorization"));
         assert!(!request.contains("provider-secret"));
     }
+
+    #[rstest::rstest]
+    #[case::refused(None, Some(400), true)]
+    #[case::cut_mid_body(
+        Some("HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc"),
+        Some(400),
+        true
+    )]
+    #[case::redirect_without_a_location(
+        Some("HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        Some(400),
+        true
+    )]
+    #[case::redirect_to_an_invalid_url(
+        Some(
+            "HTTP/1.1 302 Found\r\nLocation: http://\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+        Some(400),
+        true
+    )]
+    #[case::not_found(
+        Some("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        Some(404),
+        false
+    )]
+    #[tokio::test]
+    async fn a_document_that_cannot_be_fetched_is_a_client_error(
+        #[case] answer: Option<&'static str>,
+        #[case] status: Option<u16>,
+        #[case] unreachable: bool,
+    ) {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = answer.map(|answer| {
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket.write_all(answer.as_bytes()).await.unwrap();
+            })
+        });
+        let error = inline_remote_document(
+            &MediaFetcher::for_test(litellm_http::Client::for_test()),
+            document(&format!("http://{address}/document.pdf")),
+            &OcrConnection::default(),
+        )
+        .await
+        .unwrap_err();
+        if let Some(server) = server {
+            server.await.unwrap();
+        }
+
+        assert_eq!(error.http_status_code(), status);
+        assert_eq!(error.is_unreachable_document(), unreachable);
+        assert_eq!(error.is_request(), unreachable);
+        assert!(!error.is_response());
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn an_unreachable_provider_keeps_no_client_status() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = litellm_http::Client::for_test()
+            .get(format!("http://{address}/ocr"))
+            .send()
+            .await
+            .unwrap_err();
+        let error = Error::from(litellm_http::Error::from(error));
+
+        assert!(error.upstream_response().is_none());
+        assert_eq!(error.http_status_code(), None);
+        assert!(!error.is_unreachable_document());
+    }
 }

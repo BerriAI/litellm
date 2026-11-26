@@ -120,11 +120,12 @@ def test_plain_chunks_keep_text_role_and_provider_fields(gateway: Gateway, provi
     assert hel_choice.get("content_filter_results") == {"hate": {"filtered": False, "severity": "safe"}}
     bang_delta: Final = object_value(object_value(list_value(_event_with_content(events, "!")["choices"])[0])["delta"])
     assert bang_delta.get("provider_specific_fields") == dict(PROVIDER_FIELDS)
-    assert tuple(
-        object_value(list_value(event["choices"])[0]).get("finish_reason")
+    finish_reasons: Final = tuple(
+        object_value(list_value(event["choices"])[0]).get("finish_reason", "<missing>")
         for event in events
-        if event["choices"] and object_value(list_value(event["choices"])[0]).get("finish_reason") is not None
-    ) == ("stop",)
+        if event["choices"]
+    )
+    assert finish_reasons == (*(None,) * (len(finish_reasons) - 1), "stop")
     usages: Final = tuple(object_value(event["usage"]) for event in events if event.get("usage"))
     assert tuple((usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) for usage in usages) == (
         (11, 4, 15),

@@ -2144,7 +2144,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
 
         config = AnthropicMessagesConfig()
-        assert config.max_retry_on_anthropic_messages_http_error == 2
+        assert config.max_retry_on_anthropic_messages_http_error == 4
 
         req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         err_text = (
@@ -2154,7 +2154,13 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
         resp = httpx.Response(400, request=req, text=err_text)
         err = httpx.HTTPStatusError("bad", request=req, response=resp)
-        assert config.should_retry_anthropic_messages_on_http_error(err, {}) is True
+        signed_turn = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "y"}]}
+        assert config.should_retry_anthropic_messages_on_http_error(err, {}, {"messages": [signed_turn]}) is True
+        assert config.should_retry_anthropic_messages_on_http_error(err, {}, {"messages": []}) is False
+
+        id_text = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
+        id_err = httpx.HTTPStatusError("bad", request=req, response=httpx.Response(400, request=req, text=id_text))
+        assert config.should_retry_anthropic_messages_on_http_error(id_err, {}, {"model": "claude-sonnet-4-6"}) is False
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)

@@ -619,5 +619,117 @@
         "strict_dropped": true
       }
     ]
+  },
+  "tool_use_id_retry": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "run ls"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Running it."
+          },
+          {
+            "type": "tool_use",
+            "id": "functions.Bash:0",
+            "name": "Bash",
+            "input": {
+              "command": "ls"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "functions.Bash:0",
+            "content": "README.md"
+          }
+        ]
+      }
+    ],
+    "renamed_messages": [
+      {
+        "role": "user",
+        "content": "run ls"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Running it."
+          },
+          {
+            "type": "tool_use",
+            "id": "functions_Bash_0",
+            "name": "Bash",
+            "input": {
+              "command": "ls"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "functions_Bash_0",
+            "content": "README.md"
+          }
+        ]
+      }
+    ],
+    "cases": [
+      {
+        "name": "tool_use_id_pattern",
+        "status": 400,
+        "error_text": "messages.1.content.1.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        "renamable": true,
+        "retried": true
+      },
+      {
+        "name": "tool_result_id_pattern_in_an_error_envelope",
+        "status": 400,
+        "error_text": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.2.content.0.tool_result.tool_use_id: String should match pattern '^[a-zA-Z0-9_-]+$'\"},\"request_id\":\"req_011CaTool\"}",
+        "renamable": true,
+        "retried": true
+      },
+      {
+        "name": "ids_already_match_the_pattern",
+        "status": 400,
+        "error_text": "messages.1.content.1.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        "renamable": false,
+        "retried": false
+      },
+      {
+        "name": "another_field_misses_a_pattern",
+        "status": 400,
+        "error_text": "tools.0.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'",
+        "renamable": true,
+        "retried": false
+      },
+      {
+        "name": "rate_limited",
+        "status": 429,
+        "error_text": "messages.1.content.1.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        "renamable": true,
+        "retried": false
+      },
+      {
+        "name": "unrelated_400",
+        "status": 400,
+        "error_text": "messages: text content blocks must be non-empty",
+        "renamable": true,
+        "retried": false
+      }
+    ]
   }
 }

@@ -23,12 +23,12 @@ from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
 from types import FunctionType, MappingProxyType, MethodType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
 from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import AllowInfNan, BaseModel, JsonValue, NonNegativeFloat, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
@@ -70,6 +70,7 @@ from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    billed_flat_cost,
     declared_cost_map_pricing,
     get_response_cost_from_hidden_params,
     get_usage_object,
@@ -732,9 +733,18 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_AGENT_PRICE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[NonNegativeFloat, AllowInfNan(False)])
 _DECODED_BODY: Final = TypeAdapter(object)
 _LoggedResponse = TypeVar("_LoggedResponse")
 _LoggedMessages = TypeVar("_LoggedMessages")
+
+
+@dataclass(frozen=True, slots=True)
+class A2AAgentBilling:
+    agent_id: str | None
+    cost_per_query: object
+
+
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
@@ -1077,6 +1087,9 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
     custom_model_info: ModelInfo | None = None
+    a2a_agent_billing: A2AAgentBilling | None = None
+    a2a_agent_cost_per_query: object = None
+    a2a_agent_id: str | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
@@ -1691,6 +1704,27 @@ class Logging(LiteLLMLoggingBaseClass):
         self.litellm_params["custom_llm_provider"] = provider
         if logged_params is not self.litellm_params:
             self.model_call_details["litellm_params"] = {**logged_params, "custom_llm_provider": provider}
+
+    def bill_as_a2a_agent(self, agent_id: str | None, cost_per_query: object) -> None:
+        self.a2a_agent_billing = A2AAgentBilling(agent_id=agent_id, cost_per_query=cost_per_query)
+        self.resume_billing_as_a2a_agent()
+
+    def resume_billing_as_a2a_agent(self) -> None:
+        billing: Final = self.a2a_agent_billing
+        if billing is None:
+            return
+        self.a2a_agent_cost_per_query = billing.cost_per_query
+        self.a2a_agent_id = billing.agent_id
+        if billing.agent_id is not None:
+            self.model_call_details["agent_id"] = billing.agent_id
+
+    def stop_billing_as_a2a_agent(self) -> None:
+        if self.a2a_agent_id is not None:
+            self.model_call_details.pop("agent_id", None)
+        self.a2a_agent_cost_per_query = None
+
+    def stop_attributing_to_a2a_agent(self) -> None:
+        self.a2a_agent_id = None
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params
@@ -2751,6 +2785,9 @@ class Logging(LiteLLMLoggingBaseClass):
             else response_result
         )
 
+        if self.a2a_agent_cost_per_query is not None:
+            return self._a2a_agent_response_cost(self.a2a_agent_cost_per_query)
+
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent, litellm.CustomStreamWrapper)) and hasattr(
             priced_result, "_hidden_params"
@@ -2897,6 +2934,31 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _a2a_agent_response_cost(self, cost_per_query: object) -> float | None:
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        try:
+            billed_cost: Final = billed_flat_cost(
+                base_cost=_AGENT_PRICE.validate_python(cost_per_query),
+                custom_llm_provider=provider if isinstance(provider, str) else None,
+                model=self.model,
+                litellm_logging_obj=self,
+            )
+        except Exception as e:  # noqa: BLE001  # any pricing error leaves the cost unset instead of failing logging
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=_get_traceback_str_for_error(str(e)),
+                    model=self.model,
+                )
+            )
+            return None
+        additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+        return self._recorded_response_cost(
+            billed_cost + additional_response_cost
+            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
+            else billed_cost
+        )
 
     def _recorded_response_cost(self, cost: float | None) -> float | None:
         if cost is None or finite_cost(cost) is not None:
@@ -4755,7 +4817,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.shadow_eval_request_snapshot = None
             content_before_hook: Final = logged_content_fingerprint(before, prepared.result)
-            hooked_details, hooked_result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # logging_hook is typed with a bare dict
+            hooked_details, hooked_result = callback.logging_hook(
                 kwargs=before,
                 result=prepared.result,
                 call_type=self.call_type,
@@ -4764,7 +4826,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 logs_without_prompt_fields_once_masked(
                     self.logging_only_guardrail_masked,
                     content_before_hook,
-                    hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                    hooked_details,
                     hooked_result,
                 )
             )
@@ -5421,7 +5483,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 self.shadow_eval_request_snapshot = None
                 content_before_hook: Final = logged_content_fingerprint(self.model_call_details, prepared.result)
-                hooked_details, hooked_result = await callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # async_logging_hook is typed with a bare dict
+                hooked_details, hooked_result = await callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType]  # async_logging_hook is typed with a bare dict
                     kwargs=self.model_call_details,
                     result=prepared.result,
                     call_type=self.call_type,
@@ -5430,7 +5492,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     logs_without_prompt_fields_once_masked(
                         self.logging_only_guardrail_masked,
                         content_before_hook,
-                        hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook is typed with a bare dict
+                        hooked_details,
                         hooked_result,
                     )
                 )

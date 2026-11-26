@@ -8,10 +8,11 @@ use litellm_config::LitellmRole;
 use serde_json::Value;
 
 use crate::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Refreshed, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
-        key::{CachedTeam, KeyRecord, Keyed},
+        key::{KeyRecord, Keyed},
     },
     body::Params,
     identity::{
@@ -194,10 +195,10 @@ impl AuthHost for ScriptedHost {
     async fn evict_key(&self, hash: &KeyHash) -> Result<(), Error> {
         self.step("evict", format!("evict {hash}"))
     }
-    async fn cached_team(&self, team_id: &str) -> Result<Option<CachedTeam<String>>, Error> {
+    async fn cached_team(&self, team_id: &str) -> Result<Option<Refreshed<String>>, Error> {
         self.step("cached_team", format!("cached_team {team_id}"))?;
-        Ok(Some(CachedTeam {
-            refreshed_at: self.team_refreshed_at,
+        Ok(Some(Refreshed {
+            at: self.team_refreshed_at,
             row: format!("cached-team {team_id}"),
         }))
     }

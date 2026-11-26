@@ -193,6 +193,21 @@ def _all_attempts_failed(last_error: Exception) -> Exception:
     )
 
 
+async def _fallback_response(plan: _FallbackPlan, attempt: _FallbackAttempt) -> object:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = plan.logging_obj
+    if not isinstance(logging_obj, Logging):
+        return await litellm.acompletion(**attempt.kwargs)
+    if attempt.model == plan.original_model:
+        logging_obj.resume_billing_as_a2a_agent()
+        return await litellm.acompletion(**attempt.kwargs)
+    logging_obj.stop_billing_as_a2a_agent()
+    response: Final = await litellm.acompletion(**attempt.kwargs)
+    logging_obj.stop_attributing_to_a2a_agent()
+    return response
+
+
 async def async_completion_with_fallbacks(**kwargs: object) -> object:
     plan: Final = _fallback_plan(kwargs)
     primary: Final = _fallback_attempt(plan, plan.original_model)
@@ -206,7 +221,7 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
         for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
             try:
                 return add_fallback_headers_to_response(
-                    response=await litellm.acompletion(**attempt.kwargs), attempted_fallbacks=attempted_fallbacks
+                    response=await _fallback_response(plan, attempt), attempted_fallbacks=attempted_fallbacks
                 )
             except Exception as fallback_error:  # noqa: BLE001  # any failed attempt moves on to the next fallback
                 verbose_logger.exception("Fallback attempt failed for model %s: %s", attempt.model, fallback_error)
