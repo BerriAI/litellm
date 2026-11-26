@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from typing import Final, cast
 from unittest.mock import patch
@@ -24,10 +25,13 @@ from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
     request_safeguards_evaluator,
 )
-from litellm.llms.anthropic.messages.safeguards import ToolUseUnderReview
+from litellm.llms.anthropic.messages.caller_model_checks import CallerModelVerdict
+from litellm.llms.anthropic.messages.safeguards import ToolUseUnderReview, build_safeguards_evaluator
+from litellm.llms.anthropic.messages.utils import proxy_sub_call_forwarded_headers
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.router import Router
+from litellm.types.router import ForwardedClientHeaders, ModelGroupSettings
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -134,6 +138,20 @@ class _ClassifierRouter:
         return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=Message(content=self._reply))])
 
 
+class _ClassifierCall:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
+        self.calls.append({"messages": messages, **kwargs})
+        reply: Final = '{"verdicts": {"call_1": {"flagged": false}}}'
+        return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=Message(content=reply))])
+
+
+async def _allowed(model: str) -> CallerModelVerdict:
+    return "allowed"
+
+
 async def _call(
     backend: _Backend, router: _ClassifierRouter, stream: bool, settings: Mapping[str, object], **extra: object
 ) -> object:
@@ -192,6 +210,11 @@ async def test_non_stream_response_carries_a_verdict_for_the_tool_use_and_bills_
     assert json.dumps({"command": "npm ci"}) in str(classifier_call["messages"][1]["content"])
 
 
+def _forwarded_stamp(headers: Mapping[str, str], *, model_group_scoped: bool = False) -> Mapping[str, object]:
+    stamp: Final = ForwardedClientHeaders.of(headers, model_group_scoped=model_group_scoped).model_dump()
+    return {"proxy_server_request": {"forwarded_client_headers": stamp}}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
 async def test_classifier_call_carries_the_caller_headers_the_proxy_forwards_to_the_parent_model(stream: bool):
@@ -205,10 +228,65 @@ async def test_classifier_call_carries_the_caller_headers_the_proxy_forwards_to_
         {"safeguards_classifier_model": "classifier"},
         safeguards=SAFEGUARDS,
         headers=caller_headers,
+        **_forwarded_stamp(caller_headers),
     )
     if stream:
         await _drain_stream(response)
     assert router.calls[0]["headers"] == caller_headers
+
+
+@pytest.mark.asyncio
+async def test_classifier_call_drops_a_header_the_proxy_did_not_forward_to_the_parent_model():
+    backend: Final = _Backend(stream=False)
+    router: Final = _ClassifierRouter('{"verdicts": {"call_main": {"flagged": false}}}')
+    caller_headers: Final = {"X-User-Id": "user-42"}
+    response: Final = await _call(
+        backend,
+        router,
+        False,
+        {"safeguards_classifier_model": "classifier"},
+        safeguards=SAFEGUARDS,
+        headers={**caller_headers, "X-Gateway-Token": "secret"},
+        **_forwarded_stamp(caller_headers),
+    )
+    assert response
+    assert router.calls[0]["headers"] == caller_headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope, expected",
+    [(["classifier"], {"X-User-Id": "user-42"}), (["parent-group"], None)],
+    ids=["scope-covers-the-classifier", "scope-covers-only-the-parent"],
+)
+async def test_a_model_group_scoped_forwarding_reaches_the_classifier_only_when_its_scope_covers_it(
+    monkeypatch: pytest.MonkeyPatch, scope: Sequence[str], expected: Mapping[str, str] | None
+) -> None:
+    router: Final = Router(model_list=[_mock_deployment("classifier", '{"verdicts": {"call_1": {"flagged": false}}}')])
+    recorder: Final = _ClassifierCall()
+    monkeypatch.setattr(
+        litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=list(scope))
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        evaluator: Final = build_safeguards_evaluator(
+            safeguards=SAFEGUARDS,
+            messages=MESSAGES,
+            litellm_metadata={"user_api_key_auth": UserAPIKeyAuth(api_key="sk-test", team_id="team-1")},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", team_id="team-1"),
+            llm_router=router,
+            logging_kwargs={},
+            forwarded_headers=proxy_sub_call_forwarded_headers(
+                {
+                    **_forwarded_stamp({"X-User-Id": "user-42"}, model_group_scoped=True),
+                    "headers": {"X-User-Id": "user-42"},
+                }
+            ),
+        )
+    assert evaluator is not None
+    recorded: Final = replace(evaluator, acompletion=recorder, caller_model_verdict=_allowed)
+    await recorded.evaluate((ToolUseUnderReview(id="call_1", name="Bash", input={"command": "ls"}),))
+    assert recorder.calls[0].get("headers") == expected
+    assert (recorder.calls[0].get("proxy_server_request") is not None) is (expected is not None)
 
 
 @pytest.mark.asyncio

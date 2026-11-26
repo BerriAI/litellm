@@ -2,6 +2,7 @@ import copy
 import json
 import os
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.types.router import ForwardedClientHeaders
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
@@ -291,7 +293,7 @@ def proxy_sub_call_metadata(
 
 class ProxySubCallLoggingKwargs(StandardCallbackDynamicParams, total=False):
     litellm_trusted_callback_vars: ReadOnly[Mapping[str, object]]
-    proxy_server_request: ReadOnly[Mapping[str, Mapping[str, str]]]
+    proxy_server_request: ReadOnly[Mapping[str, object]]
     litellm_session_id: ReadOnly[str]
     litellm_trace_id: ReadOnly[str]
 
@@ -325,16 +327,30 @@ def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxyS
     return {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
 
 
-def proxy_sub_call_forwarded_headers(parent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
+@dataclass(frozen=True, slots=True)
+class ProxySubCallForwardedHeaders:
+    """The client headers a sub-call may send upstream, beside the proxy's stamp of having forwarded them, so the
+    sub-call's own fallback re-checks the forwarding scope the parent's did."""
+
+    headers: Mapping[str, str]
+    stamp: ForwardedClientHeaders
+
+
+def proxy_sub_call_forwarded_headers(parent_kwargs: Mapping[str, object]) -> ProxySubCallForwardedHeaders | None:
     """The client headers the proxy forwards to the upstream for the parent request, so a sub-call to an
-    admin-configured model reaches that upstream under the same caller identity. Only the headers
-    ``forward_client_headers_to_llm_api`` resolved for the parent are carried, never the rest of the
-    request's headers."""
+    admin-configured model reaches that upstream under the same caller identity. Only a header the proxy copied from
+    the caller's request rides along, as its forwarded-client-headers stamp records, never one a hook or a deployment
+    set, and never the rest of the request's headers."""
+    from litellm.router_rust.invoke.shaping import forwarded_client_headers
+
+    stamp: Final = forwarded_client_headers(parent_kwargs)
     headers: Final = object_mapping(parent_kwargs.get("headers"))
-    if headers is None:
+    if stamp is None or headers is None:
         return None
-    forwarded: Final = {name: value for name, value in headers.items() if isinstance(value, str)}
-    return forwarded or None
+    forwarded: Final = {
+        name: value for name, value in headers.items() if isinstance(value, str) and stamp.still_forwarded(name, value)
+    }
+    return ProxySubCallForwardedHeaders(headers=forwarded, stamp=stamp) if forwarded else None
 
 
 def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
