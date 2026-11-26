@@ -5,7 +5,10 @@ from tests.integration._support.shard_durations import recorded_durations, refre
 
 
 def _junit(path: Path, cases: tuple[tuple[str, float], ...]) -> Path:
-    body: Final = "".join(f'<testcase classname="c" name="t{index}" file="{file}" time="{seconds}" />' for index, (file, seconds) in enumerate(cases))
+    body: Final = "".join(
+        f'<testcase classname="c" name="t{index}" file="{file}" time="{seconds}" />'
+        for index, (file, seconds) in enumerate(cases)
+    )
     path.write_text(f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{body}</testsuite></testsuites>')
     return path
 

@@ -71,9 +71,7 @@ def uncollected(nodes: tuple[str, ...], collected: frozenset[str]) -> tuple[str,
     return tuple(node for node in nodes if file_of(node) not in collected_files)
 
 
-def assign_shards(
-    files: tuple[str, ...], durations: Mapping[str, float], count: int
-) -> tuple[tuple[str, ...], ...]:
+def assign_shards(files: tuple[str, ...], durations: Mapping[str, float], count: int) -> tuple[tuple[str, ...], ...]:
     known: Final = tuple(durations[file] for file in files if file in durations)
     fallback: Final = statistics.median(known) if known else 1.0
     weight: Final = MappingProxyType({file: durations.get(file, fallback) for file in files})

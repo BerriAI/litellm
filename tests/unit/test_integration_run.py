@@ -51,7 +51,10 @@ def test_a_single_worker_run_keeps_the_supplied_deployment(group: str) -> None:
 
 def test_a_file_heavier_than_the_rest_combined_gets_a_shard_to_itself() -> None:
     durations: Final = {"heavy.py": 100.0, "a.py": 10.0, "b.py": 10.0, "c.py": 10.0}
-    assert assign_shards(("a.py", "b.py", "c.py", "heavy.py"), durations, 2) == (("heavy.py",), ("a.py", "b.py", "c.py"))
+    assert assign_shards(("a.py", "b.py", "c.py", "heavy.py"), durations, 2) == (
+        ("heavy.py",),
+        ("a.py", "b.py", "c.py"),
+    )
 
 
 @pytest.mark.parametrize("count", (1, 2, 3, 7))
