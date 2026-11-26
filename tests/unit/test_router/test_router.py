@@ -67,7 +67,6 @@ from litellm.router_rust.invoke.streaming import (
     _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
     _stream_fallback_error_for_raised,
-    _anthropic_stream_forwards_ping_live,
     _stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
     _is_retriable_anthropic_status,
@@ -7660,6 +7659,9 @@ def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     reasoning_chunk = _chunk(Delta(reasoning_content="Thinking"))
     assert _stream_chunks_have_generated_content([reasoning_chunk]) is True
 
+    signature_only_chunk = _chunk(Delta(reasoning_details=[{"type": "reasoning.text", "signature": "sig", "index": 0}]))
+    assert _stream_chunks_have_generated_content([empty_chunk, signature_only_chunk]) is True
+
     tool_call_delta = Delta(
         tool_calls=[
             ChatCompletionDeltaToolCall(
@@ -11992,14 +11994,6 @@ def _anthropic_messages_ping_chunk() -> bytes:
 
 
 # -------- mid-stream error handling --------
-
-
-def test_anthropic_stream_forwards_ping_live_direct_call():
-    ping = _anthropic_messages_ping_chunk()
-    content = _anthropic_messages_content_chunk("hi")
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False) is True
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True) is False
-    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False) is False
 
 
 def test_anthropic_stream_error_is_gateway_verdict_direct_call():

@@ -16,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ErrorEvent,
@@ -392,11 +393,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             MCPRequestHandler,
         )
 
-        # Extract headers from secret_fields in original_request_params
-        raw_headers_from_request: dict[str, str] | None = None
-        secret_fields: Final = self.original_request_params.get("secret_fields")
-        if secret_fields and isinstance(secret_fields, dict):
-            raw_headers_from_request = secret_fields.get("raw_headers")
+        raw_headers_from_request: Final = ResponsesAPIRequestUtils.mcp_raw_headers(
+            self.original_request_params.get("secret_fields"), self.user_api_key_auth
+        )
 
         # Extract MCP-specific headers
         self.mcp_auth_header: str | None = None

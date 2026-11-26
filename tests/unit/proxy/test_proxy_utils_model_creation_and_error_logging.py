@@ -1057,6 +1057,59 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fallback_also_failed", [False, True], ids=["agent-failed", "agent-and-fallback-failed"])
+    async def test_failed_agent_call_spend_row_names_the_agent_it_was_billed_to(
+        self, monkeypatch: pytest.MonkeyPatch, fallback_also_failed: bool
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        logging_obj: Final = Logging(
+            model="a2a/my-agent",
+            messages=[{"role": "user", "content": "ping"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=real_datetime.datetime.now(),
+            litellm_call_id="failed-agent-call",
+            function_id="a2a-chat",
+        )
+        logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_per_query=0.05)
+        if fallback_also_failed:
+            logging_obj.stop_billing_as_a2a_agent()
+        agent_down: Final = InternalServerError(
+            message="agent endpoint returned 500", model="a2a/my-agent", llm_provider="databricks"
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data={
+                        "model": "a2a/my-agent",
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "stream": True,
+                        "litellm_logging_obj": logging_obj,
+                    },
+                    original_exception=agent_down,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/chat/completions"),
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["agent_id"] == "my-agent-id"
+
+    @pytest.mark.asyncio
     async def test_failed_speech_spend_row_records_the_endpoint_call_type_over_the_body(
         self, monkeypatch: pytest.MonkeyPatch
     ):
@@ -1478,6 +1531,111 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         )
 
         assert request_data.get("response_cost", 0.0) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_an_image_rejected_after_its_success_log_ran_bills_nothing_on_the_failure_row(self, monkeypatch):
+        from datetime import datetime
+
+        import respx
+
+        from litellm import Router
+        from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
+        from litellm.utils import Rules, function_setup
+
+        class _SuccessLog(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.cost: object = None
+                self.logged: Final = asyncio.Event()
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.cost = kwargs["standard_logging_object"]["response_cost"]
+                self.logged.set()
+
+        usage: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+        image: Final = {"inlineData": {"mimeType": "image/png", "data": "aW1n"}}
+        monkeypatch.setattr(litellm, "callbacks", [])
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        success_log: Final = _SuccessLog()
+        litellm.logging_callback_manager.add_litellm_callback(success_log)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "gemini/gemini-3.1-flash-image",
+                        "api_key": "test-key",
+                        "api_base": f"https://{group}.invalid/v1",
+                    },
+                }
+                for group in ("primary", "backup")
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+        )
+        logging_obj, request = function_setup(
+            original_function="aimage_generation",
+            rules_obj=Rules(),
+            start_time=datetime.now(),
+            model="primary",
+            prompt="a single small red dot",
+            litellm_call_id="refused-then-served-then-rejected",
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://primary.invalid/").respond(
+                200,
+                json={
+                    "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+                    "usageMetadata": usage,
+                },
+            )
+            upstream.post(url__startswith="https://backup.invalid/").respond(
+                200,
+                json={
+                    "candidates": [{"finishReason": "STOP", "content": {"parts": [image]}}],
+                    "usageMetadata": usage,
+                },
+            )
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            await asyncio.wait_for(success_log.logged.wait(), 10)
+
+        request_data: Final = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(
+            request_data,
+            original_exception=HTTPException(status_code=400, detail="post_call guardrail rejected the image"),
+            dispatched_call_type="aimage_generation",
+        )
+
+        assert isinstance(success_log.cost, float) and success_log.cost > 0
+        assert failure_row_response_cost(request_data) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_a_failure_after_an_enqueued_success_log_lifts_only_the_attempts_that_success_does_not_bill(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        logging_obj: Final = Logging(
+            model="gemini/gemini-3.1-flash-image",
+            messages=[],
+            stream=False,
+            call_type="aimage_generation",
+            start_time=datetime(2026, 1, 1, 12, 0, 0),
+            litellm_call_id="success-enqueued-with-carried-attempts",
+            function_id="fn",
+        )
+        logging_obj.record_served_rounds_for_failure(((Usage(prompt_tokens=9, completion_tokens=7), 0.02),))
+        logging_obj.carry_failed_attempt_usage()
+        logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=5, completion_tokens=3), 0.03)
+        logging_obj.carry_failed_attempt_usage()
+        assert logging_obj.claim_async_success_log()
+        logging_obj.mark_async_success_log_enqueued()
+        request_data: Final = {"litellm_logging_obj": logging_obj, "metadata": {}}
+
+        await self._run(request_data, original_exception=HTTPException(status_code=400, detail="rejected"))
+
+        assert request_data["response_cost"] == pytest.approx(0.03)
+        assert request_data["combined_usage_object"].completion_tokens == 3
 
     @pytest.mark.asyncio
     async def test_client_disconnect_with_a_claimed_but_deferred_success_log_is_still_priced(self):
@@ -2942,13 +3100,19 @@ def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monk
 PER_QUERY_RERANK_MODEL: Final = "cohere/rerank-v3.5"
 
 
-def _rerank_router_deployment(monkeypatch, deployment_id: str, extra_litellm_params: Mapping[str, object]) -> None:
+def _rerank_router_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_id: str,
+    extra_litellm_params: Mapping[str, object],
+    registered_provider: str | None = None,
+) -> None:
+    provider_info: Final = {"litellm_provider": registered_provider} if registered_provider else {}
     router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "team-rerank",
                 "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", **extra_litellm_params},
-                "model_info": {"id": deployment_id},
+                "model_info": {"id": deployment_id, **provider_info},
             }
         ]
     )
@@ -2984,6 +3148,18 @@ def test_a_failed_rerank_on_a_deployment_priced_per_token_bills_the_estimated_to
     _rerank_router_deployment(monkeypatch, "dep-rerank-own-token-rate", {"input_cost_per_token": 0.001})
 
     assert _rerank_failure_input_cost("dep-rerank-own-token-rate") == pytest.approx(40 * 0.001)
+
+
+def test_a_failed_rerank_bills_its_deployments_per_query_rate_when_the_id_is_another_providers_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, "pinned-anthropic-rerank"})
+    assert get_llm_provider("pinned-anthropic-rerank")[1] == "anthropic", "the id alone must read as an anthropic model"
+    _rerank_router_deployment(monkeypatch, "pinned-anthropic-rerank", {"input_cost_per_query": 0.5}, "cohere")
+
+    assert _rerank_failure_input_cost("pinned-anthropic-rerank") == pytest.approx(0.5)
 
 
 def _failed_rerank_prompt_tokens(query: str, documents: list[object]) -> int:
@@ -4194,6 +4370,40 @@ def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price(
     assert response_cost > 0
 
 
+@pytest.mark.parametrize(
+    ("call_type", "provider_billed", "adds_an_estimate"),
+    (
+        pytest.param("aimage_generation", False, False, id="unbilled_image"),
+        pytest.param("aimage_edit", False, False, id="unbilled_edit"),
+        pytest.param("aimage_generation", True, True, id="provider_billed_image"),
+        pytest.param("acompletion", False, True, id="chat"),
+    ),
+)
+def test_failed_image_attempt_after_a_billed_one_adds_no_estimated_tokens(
+    call_type: str, provider_billed: bool, adds_an_estimate: bool
+) -> None:
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted: Final = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": call_type,
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+            "prompt": "draw a tree",
+            "failed_attempts_usage": ((Usage(prompt_tokens=777, completion_tokens=333, total_tokens=1110), 0.5),),
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=provider_billed,
+    )
+
+    assert lifted is not None
+    usage, _ = lifted
+    assert isinstance(usage, Usage)
+    assert usage.completion_tokens == 333
+    assert (usage.prompt_tokens > 777) is adds_an_estimate
+
+
 def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rate():
     from litellm.proxy.utils import _failure_usage_to_lift
 
@@ -4935,6 +5145,16 @@ def test_is_client_error_exception_budget_exceeded_5xx_is_not_client_error() -> 
     assert _is_client_error_exception(exc) is False
 
 
+def test_is_client_error_exception_an_unresolvable_previous_response_is_client_error() -> None:
+    from litellm.exceptions import UnresolvablePreviousResponseError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = UnresolvablePreviousResponseError(
+        message="Previous response with id 'resp_unknown' not found.", model="gpt-5.4-mini", llm_provider="openai"
+    )
+    assert _is_client_error_exception(exc) is True
+
+
 def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     from litellm.proxy._types import ProxyException
     from litellm.proxy.utils import _is_client_error_exception
@@ -4943,6 +5163,32 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
     assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
+
+
+def test_image_answers_without_an_image_are_client_errors() -> None:
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
+    from litellm.proxy.utils import _is_client_error_exception
+    from litellm.types.utils import ImageResponse
+
+    reply: Final = httpx.Response(400, request=httpx.Request("POST", "https://google.invalid"))
+    refused: Final = ImageRefusalError(
+        message="refused",
+        model="gemini/image-model",
+        llm_provider="gemini",
+        response=reply,
+        provider_specific_fields={},
+        billed_answer=None,
+    )
+    unserved: Final = UnservedImageError(
+        message="no image",
+        model="gemini/image-model",
+        llm_provider="gemini",
+        response=reply,
+        billed_answer=ImageResponse(created=1, data=[]),
+    )
+
+    assert _is_client_error_exception(refused) is True
+    assert _is_client_error_exception(unserved) is True
 
 
 class _NativeHookMCPGuardrail(_RecordingMCPGuardrail):

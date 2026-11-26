@@ -16,6 +16,7 @@ from litellm.proxy.spend_tracking.spend_event import (
     is_offloadable_success,
     spend_event_callback_args,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
@@ -153,6 +154,40 @@ def test_round_trip_preserves_identity_usage_reservation_and_tools():
     tool_calls: Final = args.response_obj["choices"][0]["message"]["tool_calls"]
     assert [call["function"]["name"] for call in tool_calls] == ["get_weather"]
     assert "complete_streaming_response" not in args.kwargs
+
+
+@pytest.mark.parametrize(
+    ("failed_attempt_kwargs", "tokens"),
+    (
+        pytest.param(
+            {
+                "failed_attempts_billed_on_success": (
+                    (Usage(prompt_tokens=16, completion_tokens=2, total_tokens=18), 0.25),
+                )
+            },
+            (5016, 4002, 9018),
+            id="success_bills_a_failed_attempt",
+        ),
+        pytest.param({}, (5000, 4000, 9000), id="no_failed_attempt"),
+    ),
+)
+def test_collector_row_counts_the_tokens_the_success_billed(
+    failed_attempt_kwargs: dict[str, object], tokens: tuple[int, int, int]
+):
+    kwargs: Final = {
+        **_success_kwargs(),
+        "combined_usage_object": Usage(prompt_tokens=5016, completion_tokens=4002, total_tokens=9018),
+        **failed_attempt_kwargs,
+    }
+    event: Final = decode_spend_event(_build(kwargs, _response()))
+    assert not isinstance(event, SpendEventDecodeError)
+    args: Final = spend_event_callback_args(event)
+
+    row: Final = get_logging_payload(
+        kwargs=dict(args.kwargs), response_obj=args.response_obj, start_time=args.start_time, end_time=args.end_time
+    )
+
+    assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == tokens
 
 
 def test_streaming_event_reconstructs_complete_streaming_response():

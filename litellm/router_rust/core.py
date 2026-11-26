@@ -37,6 +37,7 @@ from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
+from litellm.exceptions import UnknownPreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -348,7 +349,10 @@ _FAILURE_KINDS: Final = (
     "CallerCredentialAuthenticationError",
     "CallerCredentialRateLimitError",
 )
-_DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
+_IMAGE_ANSWERS_WITHOUT_AN_IMAGE: Final = frozenset({"ImageRefusalError", "UnservedImageError"})
+_DECLINED: Final = frozenset(
+    {"MalformedRequestFieldError", "UnsupportedEndpointError", *_IMAGE_ANSWERS_WITHOUT_AN_IMAGE}
+)
 _BATCH_API_KINDS: Final = frozenset({"batch", "cancel_batch", "create_file"})
 _BATCH_API_HANDLERS: Final = frozenset(
     {
@@ -577,6 +581,10 @@ class RustCoreUnsupported(AttributeError):
 
 
 # --- failures -----------------------------------------------------------------------------------
+
+
+def _answered_without_an_image(error: BaseException) -> bool:
+    return not _IMAGE_ANSWERS_WITHOUT_AN_IMAGE.isdisjoint(cls.__name__ for cls in type(error).__mro__)
 
 
 def failure_kind(error: BaseException) -> str:
@@ -4717,7 +4725,8 @@ class _Driver:
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
-        self._queue_rejection: QueueRejectedError | None = None
+        self._ending_error: BaseException | None = None
+        self._answer_without_an_image: BaseException | None = None
         self._attempt_errors: Final[dict[tuple[int, str], BaseException]] = {}  # mutable-ok: filled as the call runs
         self._raises_stream_origin: bool = False
         # The retry counts an exhausted retry loop stamps on the pick error its level then raises.
@@ -4760,7 +4769,8 @@ class _Driver:
 
     def clear_errors(self) -> None:
         self._last_error = None
-        self._queue_rejection = None
+        self._ending_error = None
+        self._answer_without_an_image = None
         self._level_errors.clear()
         self._hop_first.clear()
         self._attempt_errors.clear()
@@ -4882,7 +4892,7 @@ class _Driver:
         if isinstance(error, RustCoreUnsupported):
             raise error
         if isinstance(error, QueueRejectedError):
-            self._queue_rejection = error
+            self._ending_error = error
         if logged:
             self._log_pick_failure(error)
         else:
@@ -5378,6 +5388,10 @@ class _Driver:
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
         self._last_error = error
+        if isinstance(error, UnknownPreviousResponseError):
+            self._ending_error = error
+        if _answered_without_an_image(error) and self._answer_without_an_image is None:
+            self._answer_without_an_image = error
         level: Final = step.get("fallback_level")
         retry: Final = step.get("retry")
         if isinstance(retry, int) and retry > 0:
@@ -5407,7 +5421,14 @@ class _Driver:
             "uncounted_request": self._plan.sync
             or is_batch_retrieve_call_type(logged.get("call_type"))
             or _raised_before_provider(error),
+            "answered_tokens": self._billed_answer_tokens(call, error),
         }
+
+    def _billed_answer_tokens(self, call: "AttemptCall | None", error: BaseException) -> int:
+        billed_answer: Final[object] = getattr(error, "billed_answer", None)
+        if call is None or billed_answer is None or not self._tracks_usage(call, billed_answer, False):
+            return 0
+        return total_tokens(billed_answer)
 
     def _records_blocked(
         self, failed: Mapping[str, object], call: "AttemptCall | None", error: BaseException, in_call: bool
@@ -5417,7 +5438,9 @@ class _Driver:
             _failure_callbacks_blocked_logging_object,  # pyright: ignore[reportPrivateUsage]  # the fallback path's own rule
         )
 
-        if not in_call or call is None or failed.get("outside_deployment") is True:
+        if not in_call or call is None:
+            return False
+        if failed.get("outside_deployment") is True and not _answered_without_an_image(error):
             return False
         if self._plan.sync:
             if not failure_already_logged(call.kwargs, "sync_failure"):
@@ -5722,7 +5745,7 @@ class _Driver:
     ) -> Mapping[str, object]:
         terminal: Final = await self._queue_terminal(admission, error)
         if terminal is not None:
-            self._queue_rejection = terminal
+            self._ending_error = terminal
             return {**self._failed(step, deployment, call, terminal), "recorded": True}
         failed: Final = self._failed(step, deployment, call, error)
         if reading_stream is None or not logs_failure:
@@ -6056,10 +6079,10 @@ class _Driver:
             self.clear_errors()
 
     def _failure(self, step: Mapping[str, object]) -> BaseException:
-        if self._queue_rejection is not None:
-            return self._queue_rejection
+        if self._ending_error is not None:
+            return self._ending_error
         model: Final = str(self._request.get("model"))
-        primary: Final = self._level_errors.get(self._base_level)
+        primary: Final = self._error_the_client_gets()
         if primary is None:
             return self._core._failure_error(  # pyright: ignore[reportPrivateUsage]  # see above
                 step, model, self._last_error, request=self._request, has_input=self._has_input(), tags=not self._sync
@@ -6072,6 +6095,13 @@ class _Driver:
         ):
             primary.message += self._explanation(primary, model)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
         return primary
+
+    def _error_the_client_gets(self) -> BaseException | None:
+        primary: Final = self._level_errors.get(self._base_level)
+        billed_answer: Final = self._answer_without_an_image
+        if primary is None or billed_answer is None or _answered_without_an_image(primary):
+            return primary
+        return billed_answer
 
     def _hop_failure_explainer(
         self, step: Mapping[str, object]
@@ -6117,6 +6147,8 @@ class _Driver:
 
     def _kind_hint(self, error: BaseException, model: str, fallbacks: object) -> str:
         """The hint a context-window or content-policy error gets when its own list is unset."""
+        if _answered_without_an_image(error):
+            return ""
         import litellm.exceptions as litellm_exceptions
 
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
@@ -6136,6 +6168,8 @@ class _Driver:
     def _explanation(self, primary: BaseException, model: str, failed_hop: BaseException | None = None) -> str:
         """What ``async_function_with_fallbacks_common_utils`` appends to the error it re-raises
         under ``expose_router_debug_in_errors``, from the resolved settings and what the call did."""
+        if _answered_without_an_image(primary):
+            return ""
         import litellm.exceptions as litellm_exceptions
         from litellm.router_utils.fallback_event_handlers import (
             check_non_standard_fallback_format,

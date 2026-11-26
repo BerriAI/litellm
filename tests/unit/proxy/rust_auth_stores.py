@@ -7,7 +7,7 @@ another field of ``RustAuthStores``.
 """
 
 import json
-from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
@@ -54,6 +54,18 @@ def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -
     return failure
 
 
+def _key_view_json(view: LiteLLM_VerificationTokenView) -> str:
+    """Timestamps end in ``+00:00`` like the Rust key repository writes them, which Python 3.10 can read back."""
+    timestamps: Final = {
+        name: (value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc))
+        .astimezone(timezone.utc)
+        .isoformat()
+        for name, value in view
+        if isinstance(value, datetime)
+    }
+    return json.dumps({**view.model_dump(mode="json"), **timestamps})
+
+
 @dataclass
 class FakeKeyStore:
     """``combined_view`` rows by hash, written the way the Prisma row was, shaped through the view model."""
@@ -68,7 +80,7 @@ class FakeKeyStore:
         row = source.get(token)
         if isinstance(row, Exception):
             raise row
-        return None if row is None else LiteLLM_VerificationTokenView(**row).model_dump_json()
+        return None if row is None else _key_view_json(LiteLLM_VerificationTokenView(**row))
 
 
 @dataclass(frozen=True)
@@ -156,6 +168,9 @@ class FakeAuditLogStore:
 
     rows: list[Mapping[str, object]] = field(default_factory=list)
     error: Exception | None = None
+    next_errors: list[Exception] = field(default_factory=list)
+    attempts: int = 0
+    during_attempt: Callable[[], Awaitable[None]] | None = None
 
     @staticmethod
     def _prisma_table() -> object | None:
@@ -164,9 +179,17 @@ class FakeAuditLogStore:
         client: Final = proxy_server.prisma_client
         return None if client is None else client.db.litellm_auditlog
 
-    async def insert(self, row: AuditLogRow) -> None:
+    async def _fail_if_scripted(self) -> None:
+        self.attempts += 1
+        if self.during_attempt is not None:
+            await self.during_attempt()
+        if self.next_errors:
+            raise self.next_errors.pop(0)
         if self.error is not None:
             raise self.error
+
+    async def insert(self, row: AuditLogRow) -> None:
+        await self._fail_if_scripted()
         data: Final = audit_log_data(row)
         self.rows.append(data)
         table: Final = self._prisma_table()
@@ -174,8 +197,7 @@ class FakeAuditLogStore:
             await table.create(data=data)
 
     async def insert_many(self, rows: Sequence[AuditLogRow]) -> None:
-        if self.error is not None:
-            raise self.error
+        await self._fail_if_scripted()
         data: Final = tuple(audit_log_data(row) for row in rows)
         self.rows.extend(data)
         table: Final = self._prisma_table()

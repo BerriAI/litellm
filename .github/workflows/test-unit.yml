@@ -1038,6 +1038,8 @@ jobs:
         id: changes
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
+        with:
+          category: ${{ matrix.changes-category || 'backend' }}
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -1070,6 +1072,7 @@ jobs:
         timeout-minutes: 5
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
+          PRISMA_VERSION: ${{ matrix.prisma-version }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
@@ -1081,6 +1084,9 @@ jobs:
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+          if [ -n "$PRISMA_VERSION" ]; then
+            uv pip install --python .venv/bin/python "prisma==${PRISMA_VERSION}"
+          fi
 
       - name: Check litellm/schema.prisma against the merge base
         if: steps.changes.outputs.decision != 'skip' && (matrix.shard == 'db-and-spend' || matrix.shard == 'core-auth-spend') && github.event_name == 'pull_request'
@@ -1098,7 +1104,7 @@ jobs:
           uv run --no-sync python litellm/scripts/check_schema_compatibility.py --base-commit "$merge_base"
 
       - name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && !matrix.prisma-version
         timeout-minutes: 3
         uses: ./.github/actions/cache-prisma-binaries
 
@@ -1329,6 +1335,36 @@ jobs:
             reruns: 0
             timeout-minutes: 7
             dist: worksteal
+    steps: *unit-steps
+  unit-python-310:
+    name: ${{ matrix.shard }}
+    needs: [rust-bridge]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.job-timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: python-310
+            changes-category: python-310
+            test-path: >-
+              tests/unit/proxy/db/test_prisma_engine.py
+              tests/unit/proxy/db/test_prisma_planned_engine_restart.py
+              tests/unit/integrations/custom_logger_v2/test_dispatcher.py
+            python-version: "3.10"
+            prisma-version: "0.15.0"
+            workers: 0
+            reruns: 0
+            timeout-minutes: 5
+            job-timeout-minutes: 60
+            dist: loadscope
     steps: *unit-steps
   lint-runtime:
     name: lint-runtime
@@ -1819,7 +1855,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, plan, unit, unit-core, unit-changed, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [rust-bridge, plan, unit, unit-core, unit-changed, unit-python-310, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

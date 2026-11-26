@@ -174,6 +174,10 @@ class _UsageObject(Protocol):
     def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
 
 
+def _usage_object(usage: object) -> _UsageObject:
+    return require_attributes(usage, _UsageObject, "get")
+
+
 def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
     """Chat-shaped view of a response's usage.
 
@@ -183,14 +187,14 @@ def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
     returned unchanged.
     """
     if isinstance(raw_usage, ResponseAPIUsage):
-        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
+        return _usage_object(ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage))
     usage_fields: Final = _object_mapping(raw_usage)
     if usage_fields is None or not (
         ResponseAPILoggingUtils.is_response_api_usage(usage_fields) or "prompt_tokens" in usage_fields
     ):
         return raw_usage
     try:
-        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_fields)
+        return _usage_object(ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_fields))
     except ValueError:
         return raw_usage
 
@@ -651,10 +655,10 @@ class LangFuseLogger:
             output = self._get_text_completion_content_for_langfuse(response_obj)
         elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
             input = prompt
-            output = response_obj.get("data", None)
+            output = response_obj.data
         elif response_obj is not None and isinstance(response_obj, litellm.TranscriptionResponse):
             input = prompt
-            output = response_obj.get("text", None)
+            output = response_obj.text
         elif response_obj is not None and isinstance(response_obj, litellm.RerankResponse):
             input = prompt
             output = response_obj.results

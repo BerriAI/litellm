@@ -81,7 +81,10 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Two passes so test code may spawn bare tasks: clippy.toml has no tests
+      # switch for disallowed_methods. Keep in step with `make lint-rust-clippy`
+      - run: cargo clippy --workspace --lib --bins --examples --locked -- -D warnings
+      - run: cargo clippy --workspace --tests --benches --locked -- -D warnings -A clippy::disallowed_methods
 
   rust-test:
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'rust-tests')

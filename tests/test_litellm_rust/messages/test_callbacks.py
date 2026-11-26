@@ -213,7 +213,7 @@ async def test_success_event_logs_the_sent_messages_and_the_callers_params(serve
     assert_served_natively(server, response)
     sent: Final = server.requests[0].body
     assert isinstance(sent, dict)
-    assert sent["messages"][1]["content"] == [{**tool_use, "id": "functions_Bash_0"}]
+    assert sent["messages"][1]["content"] == [tool_use]
     assert isinstance(success[0].kwargs, dict)
     logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
     assert logged["messages"] == sent["messages"]
