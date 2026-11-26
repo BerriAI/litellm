@@ -83,6 +83,7 @@ _OPENCODE_HELP_LISTS_STANDALONE: Final = re.compile(rf"^\s+{OPENCODE_STANDALONE_
 _OPENCODE_PROBE_TIMEOUT_SECONDS: Final = 10.0
 _OPENCODE_SERVICE_STOPPED: Final = "stopped"
 _OPENCODE_SERVICE_ONLY_ENV: Final = frozenset({"XDG_STATE_HOME"})
+_OPENCODE_SERVICE_ONLY_COMMANDS: Final = frozenset({("machine",)})
 
 _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
@@ -985,6 +986,8 @@ def _opencode_standalone_command(
     if usage is None:
         return _OpencodeProbeFailed("its --help has no USAGE line lite can read")
     command: Final = tuple(usage.group(1).split())
+    if command[:1] in _OPENCODE_SERVICE_ONLY_COMMANDS:
+        return None
     return _OpencodeStandaloneCommand(
         insert_at=index + len(command) if command else 0,
         reads_config=command in _OPENCODE_CONFIG_COMMANDS,
@@ -1008,7 +1011,8 @@ def with_opencode_private_server(
     it gets one, since OpenCode 1 has no such flag and 2.x adds it command by
     command. Commands that start a session or print the config always get it,
     and the others only when no service runs, so they never start a shared
-    service that keeps this env after they exit.
+    service that keeps this env after they exit. `machine` never gets one,
+    since OpenCode runs it only on the shared service.
     A `--server`, `--standalone` or `--no-standalone` the user passed wins.
     A private server gets the env set with `opencode service set env` too, which
     OpenCode itself applies only to the shared service.

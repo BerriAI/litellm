@@ -943,7 +943,6 @@ class TestOpencodePrivateServer:
         [
             ["auth", "login"],
             ["session", "list"],
-            ["machine", "list"],
             ["--log-level", "warn", "mcp", "list"],
         ],
     )
@@ -955,12 +954,16 @@ class TestOpencodePrivateServer:
         [
             (["auth", "login"], ["auth", "login", "--standalone"]),
             (["session", "list"], ["session", "list", "--standalone"]),
-            (["machine", "list"], ["machine", "list", "--standalone"]),
             (["--log-level", "warn", "mcp", "list"], ["--log-level", "warn", "mcp", "list", "--standalone"]),
         ],
     )
     def test_management_commands_start_no_shared_service(self, args, launched):
         assert _private_server(args, run=_FakeOpencode(service_status="stopped\n")) == tuple(launched)
+
+    @pytest.mark.parametrize("service_status", ["http://127.0.0.1:4096\n", "stopped\n"])
+    @pytest.mark.parametrize("args", [["machine", "list"], ["--log-level", "warn", "machine", "list"]])
+    def test_machine_commands_stay_on_the_shared_service_opencode_requires(self, args, service_status):
+        assert _private_server(args, run=_FakeOpencode(service_status=service_status)) == tuple(args)
 
     def test_a_session_launch_gets_a_private_server_while_a_service_runs(self):
         run = _FakeOpencode(service_status="http://127.0.0.1:4096\n")
