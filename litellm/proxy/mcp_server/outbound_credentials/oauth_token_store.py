@@ -5,11 +5,9 @@ The resolver reads a user's token through the injected ``OAuthTokenStore`` seam;
 signals an unreachable backing store, so an outage is never cached or read as "not authorized".
 
 ``RefreshingTokenStore`` mints a fresh token through an injected ``TokenRefresher`` when the stored
-one is near expiry, under in-process per-(user, server) single-flight so concurrent callers share
-one refresh. Distributed (cross-replica) single-flight and reactive-401 refresh are the later
-hardening. The mode plugs in its own source and refresher; the cache, store seam, and refresh
-machinery are shared across the oauth2 modes (authorization_code / client_credentials /
-token_exchange).
+one is near expiry, under per-(user, server) single-flight so concurrent callers share one refresh.
+The mode plugs in its own source and refresher; the cache, store seam, and refresh machinery are
+shared across the oauth2 modes (authorization_code / client_credentials / token_exchange).
 """
 
 from __future__ import annotations
@@ -105,9 +103,8 @@ class TokenRefresher(Protocol):
     """Mints a fresh token from an expired one and persists it, returning the new token.
 
     The action is mode-specific: the ``authorization_code`` refresh_token grant, the
-    ``client_credentials`` grant, or an RFC 8693 re-exchange. Returns ``None`` when it cannot
-    refresh (e.g. no ``refresh_token``), which the caller turns into a 401 challenge. It must
-    persist the new token so later requests (and the surrounding cache) read it without refreshing.
+    ``client_credentials`` grant, or an RFC 8693 re-exchange. It must persist the new token so later
+    requests (and the surrounding cache) read it without refreshing.
 
     ``server_id`` selects the upstream's config (token endpoint, client credentials, scopes) the
     grant runs against; ``(user_id, server_id)`` is the key the new token is persisted under. They
@@ -289,8 +286,7 @@ class RefreshingTokenStore:
     bearer.
 
     The default coordinator is in-process; a cross-replica deployment injects a distributed one (Redis
-    SET NX). Reactive-401 refresh is later hardening (it lives in the egress transport, which sees the
-    upstream's 401). Composes under ``CachedOAuthTokenStore`` so the refreshed token is cached.
+    SET NX). Composes under ``CachedOAuthTokenStore`` so the refreshed token is cached.
     """
 
     def __init__(
