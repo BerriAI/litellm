@@ -408,6 +408,7 @@ def _complexity_router_deployment(name: str, target: str) -> dict[str, object]:
 @pytest.fixture
 def auto_routed_logger(monkeypatch: pytest.MonkeyPatch) -> Iterator[PrometheusLogger]:
     monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", list(_AUTO_ROUTED_LABELS))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     _clear_prometheus_registry()
     logger: Final = PrometheusLogger()
     monkeypatch.setattr(litellm, "callbacks", [logger])
@@ -536,15 +537,28 @@ class _SuccessRecorder(CustomLogger):
 
 _PROVIDER_HEADERS: Final = {"x_ratelimit_remaining_requests": 99, "x_ratelimit_remaining_tokens": 9999}
 _V3_LIMITER_HEADERS: Final = {"x-ratelimit-api_key-limit-requests": 100, "x-ratelimit-api_key-remaining-requests": 99}
+_ROUTER_REMAINING_LIMITS: Final = {"x-ratelimit-remaining-requests": 9, "x-ratelimit-remaining-tokens": 75}
 _REMAINING_GAUGES: Final = ("litellm_remaining_requests_metric", "litellm_remaining_tokens_metric")
 _V3_GAUGES: Final = ("litellm_api_key_rate_limit_allowed_metric", "litellm_api_key_rate_limit_used_metric")
 
 
+class _RouterWithRemainingLimits:
+    def __init__(self, remaining: Mapping[str, int]) -> None:
+        self.remaining = remaining
+
+    def health(self) -> "_RouterWithRemainingLimits":
+        return self
+
+    async def usage(self, model_group: str, kind: str) -> Mapping[str, int]:
+        return self.remaining
+
+
 @pytest.mark.parametrize(
-    ("logged_headers", "gauges"),
+    ("logged_headers", "router_remaining", "gauges"),
     [
-        pytest.param(_PROVIDER_HEADERS, _REMAINING_GAUGES, id="provider headers"),
-        pytest.param(_V3_LIMITER_HEADERS, _V3_GAUGES, id="v3 limiter headers"),
+        pytest.param(_PROVIDER_HEADERS, {}, _REMAINING_GAUGES, id="provider headers"),
+        pytest.param(_V3_LIMITER_HEADERS, {}, _V3_GAUGES, id="v3 limiter headers"),
+        pytest.param({}, _ROUTER_REMAINING_LIMITS, _REMAINING_GAUGES, id="router remaining limits"),
     ],
 )
 @pytest.mark.parametrize(
@@ -560,6 +574,7 @@ async def test_rate_limit_gauges_of_an_auto_routed_call_never_take_its_tier(
     auto_router: litellm.Router,
     monkeypatch: pytest.MonkeyPatch,
     logged_headers: Mapping[str, int],
+    router_remaining: Mapping[str, int],
     gauges: tuple[str, ...],
     key_metadata: Mapping[str, object] | None,
     gauge_labels: tuple[str, ...],
@@ -569,6 +584,7 @@ async def test_rate_limit_gauges_of_an_auto_routed_call_never_take_its_tier(
     await _call(auto_router, "smart-router", key_metadata=key_metadata, nested={"caller": "from-header"})
     kwargs, response_obj, start_time, end_time = recorder.events[0]
     payload: Final = kwargs["standard_logging_object"]
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _RouterWithRemainingLimits(router_remaining))
 
     await auto_routed_logger.async_log_success_event(
         kwargs={
