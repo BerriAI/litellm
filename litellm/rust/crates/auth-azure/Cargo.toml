@@ -14,12 +14,13 @@ litellm-http.workspace = true
 litellm-python-compat.workspace = true
 
 async-trait.workspace = true
+aws-lc-rs.workspace = true
 futures-util.workspace = true
+hex.workspace = true
 moka.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 time.workspace = true

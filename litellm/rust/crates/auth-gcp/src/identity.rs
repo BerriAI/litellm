@@ -2,12 +2,12 @@ use crate::{
     config::{CredentialSource, is_base64_encoded_json, names_a_credentials_file},
     constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT},
 };
+use aws_lc_rs::digest::{SHA256, SHA256_OUTPUT_LEN, digest};
 use gcp_auth::{CustomServiceAccount, TokenProvider};
 use litellm_auth_types::{Error, ErrorDetail};
 use litellm_secret_value::SecretValue;
 use moka::future::Cache;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     future::Future,
     pin::Pin,
@@ -416,18 +416,21 @@ fn validate_request_credentials(configured: &str) -> Result<&str, Error> {
 impl CredentialSource {
     fn cache_key(&self) -> CredentialCacheKey {
         match self {
-            Self::Inline(configured) => {
-                CredentialCacheKey::Inline(Sha256::digest(configured.expose()).into())
-            }
-            Self::Trusted(configured) => {
-                CredentialCacheKey::Trusted(Sha256::digest(configured.expose()).into())
-            }
+            Self::Inline(configured) => CredentialCacheKey::Inline(sha256(configured.expose())),
+            Self::Trusted(configured) => CredentialCacheKey::Trusted(sha256(configured.expose())),
             Self::ApplicationCredentials(path) => {
                 CredentialCacheKey::ApplicationCredentials(path.clone())
             }
             Self::Adc => CredentialCacheKey::Adc,
         }
     }
+}
+
+/// The SHA-256 digest of credentials text.
+fn sha256(text: &str) -> [u8; SHA256_OUTPUT_LEN] {
+    let mut out = [0; SHA256_OUTPUT_LEN];
+    out.copy_from_slice(digest(&SHA256, text.as_bytes()).as_ref());
+    out
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -451,7 +454,7 @@ impl CredentialCacheKey {
                 path: configured.to_owned(),
                 version,
             },
-            None => Self::Trusted(Sha256::digest(configured).into()),
+            None => Self::Trusted(sha256(configured)),
         }
     }
 
@@ -698,10 +701,23 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::ascii(
+        "abc",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )]
+    #[case::empty("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")]
+    fn credentials_text_digest_is_its_sha256(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(
+            sha256(text).map(|byte| format!("{byte:02x}")).concat(),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
     fn credentials_text_that_names_no_file_is_keyed_by_its_text() {
         assert_eq!(
             CredentialCacheKey::versioned(r#"{"type":"service_account"}"#),
-            CredentialCacheKey::Trusted(Sha256::digest(r#"{"type":"service_account"}"#).into())
+            CredentialCacheKey::Trusted(sha256(r#"{"type":"service_account"}"#))
         );
     }
 
