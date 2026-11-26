@@ -102,3 +102,36 @@ def test_the_unit_gate_accepts_a_skipped_job_only_when_the_plan_skipped_it(skipp
     )
 
     assert (result.returncode == 0) is passes, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("base_ref", "skipped"),
+    (
+        ("main", []),
+        ("litellm_feature", []),
+        ("", []),
+        ("rc/1.90.0", ["lint-runtime"]),
+        ("stable/1.86.x", ["lint-runtime"]),
+        ("lts/1.108.x", ["lint-runtime"]),
+    ),
+)
+def test_the_unit_plan_skips_lint_runtime_only_on_release_branches(
+    tmp_path: Path, base_ref: str, skipped: list[str]
+) -> None:
+    plan_steps: Final = _jobs(_TIERS[1])["plan"]["steps"]
+    assert isinstance(plan_steps, list)
+    step: Final = next(step for step in plan_steps if step.get("id") == "plan")
+    output: Final = tmp_path / "github_output"
+
+    subprocess.run(
+        ("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]),
+        env={**os.environ, "BASE_REF": base_ref, "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+
+    outputs: Final = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert json.loads(outputs["skipped"]) == skipped
+    assert outputs["lint-runtime"] == ("false" if skipped else "true")
