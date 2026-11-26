@@ -160,7 +160,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for OpenAI video generation.
@@ -180,7 +180,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for OpenAI API.
@@ -211,7 +211,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
             )
         return data_without_files, files_list, api_base
 
-    def _decode_character_ids_in_create_video_request(self, request_dict: dict) -> dict:
+    def _decode_character_ids_in_create_video_request(self, request_dict: dict[str, object]) -> dict[str, object]:
         """
         Decode LiteLLM-managed encoded character ids for provider requests.
 
@@ -232,7 +232,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> VideoObject:
         """Transform the OpenAI video creation response."""
         video_obj: Final = VideoObject.model_validate(raw_response.json())
@@ -490,7 +490,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         return video_obj
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
         raise BaseLLMException(

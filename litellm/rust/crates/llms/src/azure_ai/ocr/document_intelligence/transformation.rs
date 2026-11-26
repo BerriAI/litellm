@@ -723,7 +723,8 @@ fn transform_completed_response(
                     .iter()
                     .flat_map(|page| page.spans.iter().flatten()),
             )
-        });
+        })
+        .filter(|content| span_text_bytes(content, &result.pages) <= content.text.len());
     let pages = result
         .pages
         .into_iter()
@@ -745,6 +746,14 @@ fn transform_completed_response(
             .unwrap_or_default(),
         ..LiteLLMOcrResponse::new(model, pages)
     })
+}
+
+fn span_text_bytes(content: &IndexedText<'_>, pages: &[AzureDocumentIntelligencePage]) -> usize {
+    pages
+        .iter()
+        .flat_map(|page| page.spans.iter().flatten())
+        .map(|span| content.slice(span).len())
+        .fold(0, usize::saturating_add)
 }
 
 fn transform_azure_page(

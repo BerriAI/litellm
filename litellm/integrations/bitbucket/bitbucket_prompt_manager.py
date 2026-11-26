@@ -336,7 +336,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         Parse prompt content into a list of messages.
         Handles both simple prompts and multi-role conversations.
         """
-        messages = []
+        messages: list[dict[str, str]] = []
         lines: Final = prompt_content.strip().split("\n")
         current_role = None
         current_content: list[str] = []

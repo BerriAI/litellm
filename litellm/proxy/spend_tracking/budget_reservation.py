@@ -22,7 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BadRequestError
 from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, float_of
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     is_annual_budget_duration,
@@ -38,6 +38,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
+    CLAUDE_CODE_GATEWAY_PREFIX,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -264,7 +265,7 @@ async def _renew_reservation_lease(
 
 
 async def reserve_budget_for_request(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
@@ -280,7 +281,7 @@ async def reserve_budget_for_request(
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
     request: Request | None = None,
-) -> dict | None:
+) -> dict[str, object] | None:
     if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
@@ -613,7 +614,7 @@ async def release_budget_reservation_on_cancel(
 
 
 async def invalidate_budget_reservation_counters(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
 ) -> None:
     if budget_reservation is None:
         return
@@ -674,7 +675,7 @@ async def release_unbound_budget_reservation(budget_reservation: Mapping[str, ob
 
 
 async def _get_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -850,7 +851,7 @@ async def _get_end_user_budget_counter(
 
 
 async def _get_tag_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -1217,9 +1218,9 @@ async def reseed_reserved_counter(counter_key: str, actual_cost: float) -> None:
         await increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
 
 
-def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float:
+def _get_entry_reserved_cost(entry: Mapping[str, object], default_reserved_cost: float) -> float:
     try:
-        return float(entry.get("reserved_cost", default_reserved_cost) or 0.0)
+        return float_of(entry.get("reserved_cost", default_reserved_cost) or 0.0)
     except (TypeError, ValueError):
         return default_reserved_cost
 
@@ -1276,7 +1277,7 @@ def _coerce_datetime(value: object) -> datetime | None:
 
 
 def estimate_request_max_cost(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None = None,
@@ -1286,7 +1287,7 @@ def estimate_request_max_cost(
 
 
 def estimate_request_input_cost(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None = None,
@@ -1360,7 +1361,7 @@ _NO_SHAPES: Final = _ModelShapes(shapes=(), rows=(), serving=())
 
 
 def _bound(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None,
@@ -1389,7 +1390,7 @@ def _bound(
 
 
 def max_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     requested_output_tokens: int,
@@ -1407,7 +1408,7 @@ def max_cost_for_cost_info(
 
 
 def input_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     input_tokens: int | None,
@@ -1423,7 +1424,7 @@ def input_cost_for_cost_info(
 
 
 def _hold_for_row(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     caps: _OutputCaps,
@@ -1619,7 +1620,7 @@ def _get_deployment_tiered_pricing_tables(
 
 
 def _get_request_models(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     path_params: Mapping[str, object] | None = None,
@@ -1631,7 +1632,7 @@ def _get_request_models(
 
 
 async def count_request_input_tokens(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     team_id: str | None,
@@ -1678,7 +1679,7 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
 
 
 def _model_input_tokens(
-    request_body: dict, model: str, input_token_counts: Mapping[str, int | None] | None
+    request_body: dict[str, object], model: str, input_token_counts: Mapping[str, int | None] | None
 ) -> int | None:
     if input_token_counts is not None and model in input_token_counts:
         return input_token_counts[model]
@@ -1741,7 +1742,6 @@ _PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
 _OutputCapSurface: TypeAlias = Literal[
     "completion", "responses", "messages", "generate_content", "pass_through", "uncapped"
 ]
-_CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _INTERACTIONS_ROUTES: Final = frozenset({"/interactions", "/v1beta/interactions"})
 _GENERATE_CONTENT_ROUTE_SUFFIXES: Final = (":generateContent", ":streamGenerateContent")
 
@@ -1753,7 +1753,7 @@ def _output_cap_surface(route: str, request_body: Mapping[str, object]) -> _Outp
         return "uncapped"
     if route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
         return "generate_content"
-    call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(_CLAUDE_CODE_GATEWAY_PREFIX)) or ())
+    call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(CLAUDE_CODE_GATEWAY_PREFIX)) or ())
     if call_types & _RESPONSES_CALL_TYPES:
         return "responses"
     if call_types & _ANTHROPIC_MESSAGES_CALL_TYPES:

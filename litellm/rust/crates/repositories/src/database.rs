@@ -87,10 +87,20 @@ impl Database {
             Side::Read => self.pools.read().await?,
             Side::Writer => self.pools.writer_only().await?,
         };
-        Ok(Session {
+        Ok(self.session_on(connection))
+    }
+
+    /// A connection from the writer, or from the read replica while the writer is marked down, for a read that must
+    /// see the latest commit yet keep working through a writer outage, as Python's `WriterPinnedClient` does.
+    pub(crate) async fn writer_preferred_session(&self) -> Result<Session, litellm_db::Error> {
+        Ok(self.session_on(self.pools.read_after_write().await?))
+    }
+
+    fn session_on(&self, connection: PoolConnection<Postgres>) -> Session {
+        Session {
             connection,
             named: self.names_statements,
-        })
+        }
     }
 }
 

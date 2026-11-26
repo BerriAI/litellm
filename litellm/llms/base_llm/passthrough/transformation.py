@@ -254,6 +254,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         endpoint: str,
         *,
         response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
+        base_model: str | None = None,
     ) -> PassthroughStreamCollector:
         return RawBytesStreamCollector(
             provider_config=self, model=model, custom_llm_provider=custom_llm_provider, endpoint=endpoint

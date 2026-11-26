@@ -5,9 +5,10 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import TypedDict
 
 import litellm
-from litellm.constants import STREAM_SSE_DONE_STRING
-from litellm.litellm_core_utils.core_helpers import loads_json_object
+from litellm.constants import STREAM_SSE_DONE_STRING, VLLM_STREAM_PROMPT_FIELDS
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, loads_json_object
 from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
 if TYPE_CHECKING:
     import httpx
@@ -87,6 +88,12 @@ def convert_model_response_to_streaming(
             model=model_response.model,
             system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
+        ).model_copy(
+            update={
+                field: value
+                for field in VLLM_STREAM_PROMPT_FIELDS
+                if (value := attribute_or_none(model_response, field)) is not None
+            }
         )
         service_tier: Final = stored_attribute(model_response, "service_tier")
         if service_tier is not None:
@@ -123,7 +130,7 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             self.http_response.close()
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -192,10 +199,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -228,10 +234,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -285,7 +290,7 @@ class FakeStreamResponseIterator:
         return self
 
     @abstractmethod
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk:
         pass
 
     def __next__(self):

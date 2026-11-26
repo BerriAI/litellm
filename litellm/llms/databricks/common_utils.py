@@ -482,7 +482,7 @@ class DatabricksBase:
         api_base: str | None,
         endpoint_type: Literal["chat_completions", "embeddings", "anthropic_messages"],
         custom_endpoint: bool | None,
-        headers: dict | None,
+        headers: dict[str, str] | None,
         custom_user_agent: str | None = None,
         client_id: object = None,
         client_secret: object = None,

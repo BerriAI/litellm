@@ -3484,3 +3484,16 @@ def test_url_citation_annotations_keep_provider_keys() -> None:
 
     assert message.annotations == [_URL_CITATION]
     assert "annotations" not in (message.provider_specific_fields or {})
+
+
+@pytest.mark.parametrize(
+    ("tool_calls", "expected"),
+    (
+        ([ChatCompletionMessageToolCall(function=Function(name="json_tool_call", arguments="{}"))], True),
+        ([ChatCompletionMessageToolCall(function=Function(name="other", arguments="{}"))], False),
+        ([{"function": {"name": "json_tool_call", "arguments": "{}"}}], True),
+        ([{"id": "x"}], False),
+    ),
+)
+def test_json_mode_tool_call_detection_reads_models_and_dicts_alike(tool_calls: list[object], expected: bool) -> None:
+    assert should_convert_tool_call_to_json_mode(tool_calls, convert_tool_call_to_json_mode=True) is expected

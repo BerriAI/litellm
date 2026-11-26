@@ -45,6 +45,7 @@ async fn inference_for(config: &Config) -> Inference {
             litellm_gateway_inference::RouterTiers::default(),
         ),
         &RedisClients::default(),
+        None,
     )
     .await
     .unwrap()
@@ -56,6 +57,7 @@ fn global(router: axum::Router) -> axum::Router {
         &litellm_gateway::middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &litellm_gateway::middleware::InFlight::new(),
+        None,
     )
 }
 
@@ -71,8 +73,13 @@ fn without_stores(inference: Inference) -> AppState {
         redis: RedisClients::default(),
         database: None,
         keys: None,
+        spend_logs: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
+        counters: litellm_gateway::parallel_request_limiter::counters(None),
+        variables: Environment::default(),
+        gateway_requests: None,
+        gateway_requests_flush: None,
     }
 }
 
@@ -290,30 +297,42 @@ fn deployment(name: &str, id: &str, upstream: &MockServer) -> String {
     )
 }
 
-async fn routed(config: &str, model: &str) -> axum::response::Response {
-    let config = Config::from_yaml(config).unwrap();
-    let request = Request::post("/v1/messages")
+fn asking(body: &Value) -> Request<Body> {
+    Request::post("/v1/messages")
         .header("authorization", "Bearer gateway-key")
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
-                .to_string(),
-        ))
-        .unwrap();
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn app(config: &str) -> axum::Router {
+    let config = Config::from_yaml(config).unwrap();
     global(litellm_gateway::router(
         without_stores(inference_for(&config).await),
         &config,
     ))
-    .oneshot(request)
-    .await
-    .unwrap()
 }
+
+async fn routed(config: &str, model: &str) -> axum::response::Response {
+    let body =
+        json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]});
+    app(config).await.oneshot(asking(&body)).await.unwrap()
+}
+
+/// The headers that tell what the router did for a call.
+const ROUTING_HEADERS: [&str; 5] = [
+    "x-litellm-model-id",
+    "x-litellm-model-group",
+    "x-litellm-attempted-retries",
+    "x-litellm-attempted-fallbacks",
+    "x-litellm-max-retries",
+];
 
 fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
     response
         .headers()
         .iter()
-        .filter(|(name, _)| name.as_str().starts_with("x-litellm-") && *name != "x-litellm-call-id")
+        .filter(|(name, _)| ROUTING_HEADERS.contains(&name.as_str()))
         .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
         .collect()
 }
@@ -690,6 +709,91 @@ async fn a_strategy_the_native_host_does_not_pick_by_fails_the_call() {
 
     assert_eq!(response.status().as_u16(), 500);
     assert!(provider.received_requests().await.unwrap().is_empty());
+}
+
+async fn answering() -> MockServer {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    upstream
+}
+
+async fn reached(upstream: &MockServer) -> bool {
+    !upstream.received_requests().await.unwrap().is_empty()
+}
+
+/// A `claude` group of a deployment with a 100 token window and one of `large_model` with a 1000
+/// token window, with the pre-call checks on.
+fn two_windows(small: &MockServer, large: &MockServer, large_model: &str) -> String {
+    let sized = |id: &str, model: &str, upstream: &MockServer, window: u32| {
+        format!(
+            "  - model_name: claude\n    litellm_params:\n      model: anthropic/{model}\n      api_base: {}\n      api_key: test-key\n    model_info:\n      id: {id}\n      max_input_tokens: {window}\n",
+            upstream.uri()
+        )
+    };
+    format!(
+        "model_list:\n{}{}router_settings:\n  enable_pre_call_checks: true\ngeneral_settings:\n  master_key: gateway-key\n",
+        sized("small", UNLISTED, small, 100),
+        sized("large", large_model, large, 1000),
+    )
+}
+
+const UNLISTED: &str = "in-house-9";
+
+/// One user message of `words` words, a few tokens over `words` as the gateway estimates it.
+fn prompt(words: usize) -> Value {
+    json!({
+        "model": "claude", "max_tokens": 8,
+        "messages": [{"role": "user", "content": "word ".repeat(words)}],
+    })
+}
+
+#[rstest]
+#[case::every_deployment_it_fits(10, (true, true))]
+#[case::only_the_deployments_it_fits(150, (false, true))]
+#[case::a_deployment_its_estimate_overflows_by_less_than_twice_when_none_fits(1500, (false, true))]
+#[tokio::test]
+async fn a_prompt_reaches(#[case] words: usize, #[case] expected: (bool, bool)) {
+    let (small, large) = (answering().await, answering().await);
+    let app = app(&two_windows(&small, &large, UNLISTED)).await;
+
+    for _ in 0..30 {
+        let response = app.clone().oneshot(asking(&prompt(words))).await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+    }
+
+    assert_eq!((reached(&small).await, reached(&large).await), expected);
+}
+
+#[rstest]
+#[case::past_twice_every_window(3000, UNLISTED)]
+#[case::over_a_window_its_own_model_info_caps_below_the_cost_maps(1500, "claude-haiku-5-5")]
+#[tokio::test]
+async fn a_prompt_no_deployment_fits_is_refused_before_any_provider_call(
+    #[case] words: usize,
+    #[case] large_model: &str,
+) {
+    let (small, large) = (answering().await, answering().await);
+    let app = app(&two_windows(&small, &large, large_model)).await;
+
+    let response = app.oneshot(asking(&prompt(words))).await.unwrap();
+
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let answer: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        (
+            status,
+            answer["error"]["type"].as_str(),
+            reached(&small).await,
+            reached(&large).await
+        ),
+        (400, Some("invalid_request_error"), false, false)
+    );
 }
 
 fn streamed(events: &str) -> ResponseTemplate {
@@ -1193,7 +1297,7 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         upstream.uri()
     ))
     .unwrap();
-    let config = litellm_gateway::load_config(&path).await.unwrap();
+    let config = litellm_gateway::load_config(&path).await.unwrap().config;
     let mut body = json!({
         "model": "public-model",
         "max_tokens": 8,
@@ -1253,6 +1357,49 @@ async fn a_deployment_additional_drop_param_never_reaches_the_provider(
     let forwarded = forwarded_body(deployment_params, json!({"temperature": 0.5})).await;
 
     assert_eq!(forwarded.get("temperature").cloned(), expected);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_requests_messages_settings_lay_over_the_deployments_and_never_reach_the_provider() {
+    let forwarded = forwarded_body(
+        "      additional_drop_params: [top_k]\n",
+        json!({
+            "temperature": 0.5,
+            "top_k": 5,
+            "drop_params": true,
+            "additional_drop_params": ["temperature"],
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        [
+            "temperature",
+            "top_k",
+            "drop_params",
+            "additional_drop_params"
+        ]
+        .map(|key| forwarded.get(key).cloned()),
+        [None, Some(json!(5)), None, None]
+    );
+}
+
+#[rstest]
+#[case::text_python_reads_as_on("  reasoning_auto_summary: \"false\"\n", Some(json!("summarized")))]
+#[case::off("  reasoning_auto_summary: false\n", None)]
+#[tokio::test]
+async fn litellm_settings_reasoning_auto_summary_asks_for_summarized_thinking(
+    #[case] settings: &str,
+    #[case] expected: Option<Value>,
+) {
+    let forwarded = forwarded_body(
+        &format!("    model_info:\n      supports_reasoning: true\nlitellm_settings:\n{settings}"),
+        json!({"max_tokens": 2048, "thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    )
+    .await;
+
+    assert_eq!(forwarded["thinking"].get("display").cloned(), expected);
 }
 
 #[rstest]

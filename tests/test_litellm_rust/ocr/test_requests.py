@@ -50,6 +50,43 @@ async def test_ocr_contract_native_format_supported(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_nace_parses_a_public_link_into_pages(
+    server: RecordingServer,
+    asynchronous: bool,
+) -> None:
+    source: Final = {"type": "url", "url": "https://docs.example/report.pdf", "file_name": "report.pdf"}
+    server.expected_requests = 2
+    server.default_response = ResponseSpec(
+        body={
+            "job_id": "job-1",
+            "status": "succeeded",
+            "source": source,
+            "units": 2,
+            "result": {
+                "document": {"markdown": "--- Page 1 ---\none\n\n--- Page 2 ---\ntwo", "page_count": 2, "blocks": []},
+                "disclosures": [],
+            },
+        }
+    )
+    response: Final = await call(
+        server,
+        asynchronous,
+        model="nace/parse-medium",
+        document={"type": "document_url", "document_url": source["url"]},
+        num_retries=0,
+    )
+    assert [page.markdown for page in response.pages] == ["one", "two"]
+    assert response.usage_info is not None and response.usage_info.pages_processed == 2
+    sent: Final = server.requests[0]
+    assert sent.path.startswith("/v1/documents/parse?wait_seconds=")
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert sent.body == {"source": source, "parse_mode": "medium", "output": {"include_page_markers": True}}
+    assert (server.requests[1].method, server.requests[1].path) == ("DELETE", "/v1/documents/jobs/job-1")
+    assert_served_natively(server, count=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_unknown_reducto_model_reaches_provider(
     server: RecordingServer,
     asynchronous: bool,

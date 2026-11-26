@@ -26,7 +26,7 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         client: AsyncHTTPHandler | HTTPHandler | None = None,
         aembedding: bool | None = None,
         custom_endpoint: bool | None = None,
-        headers: dict | None = None,
+        headers: dict[str, str] | None = None,
         drop_params: bool = False,
         client_id: object = None,
         client_secret: object = None,

@@ -17,7 +17,7 @@
 //! | [`pystr`] | `len(text)` and `text[start:end]` over code points |
 //! | [`number`] | `int(text)`, `float(text)`, `int(value)` and `float(value)` of loaded values, `sum(floats)`, `int(seconds)` as a `Duration`, and `str()` of an `int` or `float` |
 //! | [`format`] | `format(value, f".{precision}f")` and `format(value, f".{precision}%")` |
-//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, and whether `str.encode("latin-1")` succeeds |
+//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, whether `str.encode("latin-1")` succeeds, and `bytes.decode("latin-1")` |
 //! | [`pydantic`] | `TypeAdapter(bool)`, `TypeAdapter(int)` and `TypeAdapter(float)` lax validation |
 //! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` and `urllib.parse.urlsplit(url)` |
 //! | [`base64`] | `base64.b64decode(text, validate=True)` |
