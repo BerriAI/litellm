@@ -16,7 +16,8 @@ use crate::text::masked_ip_text;
 use crate::{RowError, SpendLogRowBuilder};
 
 const RESPONSES_CALL_TYPES: [&str; 2] = ["responses", "aresponses"];
-const STORED_CONVERSATION_CALL_TYPES: [&str; 3] = ["responses", "aresponses", "_aresponses_websocket"];
+const STORED_CONVERSATION_CALL_TYPES: [&str; 3] =
+    ["responses", "aresponses", "_aresponses_websocket"];
 const STATEFUL_REQUEST_KEYS: [&str; 2] = ["previous_response_id", "conversation"];
 const TURNS_KEYS: [&str; 2] = ["messages", "input"];
 const TEXT_BLOCK_TYPES: [&str; 2] = ["text", "input_text"];
