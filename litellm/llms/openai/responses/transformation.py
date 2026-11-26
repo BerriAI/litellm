@@ -467,7 +467,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         defaults: Final = frozenset(name for name in ("temperature", "top_p") if params.get(name) == 1)
         sent: Final = tuple(name for name in ("temperature", "top_p") if params.get(name) not in (None, 1))
         if not sent:
-            return defaults
+            return self._dropped_defaults(defaults, model)
         if not drop_params:
             raise litellm.UnsupportedParamsError(
                 status_code=400,
@@ -477,7 +477,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 ),
             )
         verbose_logger.warning("Responses API: dropping %s, which %s doesn't support.", list(sent), model)
-        return defaults | frozenset(sent)
+        return self._dropped_defaults(defaults, model) | frozenset(sent)
+
+    @staticmethod
+    def _dropped_defaults(defaults: frozenset[str], model: str) -> frozenset[str]:
+        if defaults:
+            verbose_logger.debug("Responses API: dropping %s at their default value 1 for %s.", sorted(defaults), model)
+        return defaults
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
