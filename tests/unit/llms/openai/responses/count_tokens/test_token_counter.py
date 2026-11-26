@@ -383,7 +383,7 @@ async def test_anthropic_format_counts_the_structured_output_schema(monkeypatch:
             "format": {
                 "type": "json_schema",
                 "name": "structured_output",
-                "schema": {**schema, "required": ["answer"], "additionalProperties": False},
+                "schema": {**schema, "additionalProperties": False, "required": ["answer"]},
                 "strict": True,
             }
         },
@@ -541,6 +541,32 @@ async def test_anthropic_format_malformed_tool_result_text_answers_400_without_c
         True,
         400,
         "tool_result toolu_log content.1.text: Input should be a valid string",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+async def test_anthropic_format_non_string_user_text_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}, dict(text_block)]}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            messages_format="anthropic",
+        )
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message) == (
+        True,
+        400,
+        "messages.0.content.1.text: Input should be a valid string",
     )
 
 

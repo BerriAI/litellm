@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._internal_context import reporting_nested_tool_call_failure
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX
@@ -31,6 +32,7 @@ from litellm.integrations.custom_logger_v2.rust import (
 )
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.total_deadline import total_timeout_held
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
 from litellm.proxy.hooks.batch_enqueued_tokens import (
@@ -341,6 +343,8 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                     hook, reads, view, ctx, {"call_id": _call_id(data), "batch": _batch_response(response)}
                 )
             case Hook.post_call_failure:
+                if reporting_nested_tool_call_failure():
+                    return None
                 return await self._call(
                     hook,
                     reads,
@@ -348,6 +352,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                     ctx,
                     {
                         "combined_is_usage": isinstance(data.get("combined_usage_object"), Usage),
+                        "provider_billed": is_answer_without_an_image(_member(view, Field.error.value)),
                         "token_rate_limit_type": _general_setting("token_rate_limit_type", "total"),
                     },
                 )
@@ -625,6 +630,8 @@ def _metadata_member(metadata: object, name: str) -> object:
 
 
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    from litellm.proxy.auth.auth_utils import team_models_counting_cached_tokens
+
     if auth is None:
         return MappingProxyType({})
     budgets: Final = _entries(_member(auth, "model_max_budget"))
@@ -637,6 +644,7 @@ def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
         else None,
         "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
         "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(_member(auth, "team_metadata")),
         "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
         "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
         "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),

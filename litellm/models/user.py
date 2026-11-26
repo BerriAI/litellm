@@ -19,6 +19,10 @@ from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
     user_alias: str | None = None
@@ -32,8 +36,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
-    rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
-    rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    rollover_max_budget: float | None = Field(default=None, exclude_if=_is_none)
+    rollover_credit: float | None = Field(default=None, exclude_if=_is_none)
     budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     spend: float = 0.0
     user_email: str | None = None

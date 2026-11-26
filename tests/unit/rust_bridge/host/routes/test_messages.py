@@ -239,6 +239,26 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     )
 
 
+@pytest.mark.parametrize("custom_llm_provider", (None, "anthropic"), ids=("provider-in-the-model", "provider-passed"))
+def test_a_rejection_before_the_send_names_the_resolved_provider_and_is_raised_as_python_raises_it(
+    custom_llm_provider: str | None,
+) -> None:
+    rejected: Final = ValueError("messages: no message has content left after dropping empty or non-string text blocks")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_unresolved_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": "anthropic/claude-sonnet-5", "custom_llm_provider": custom_llm_provider, "messages": []},
+        "anthropic",
+    )
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert mapped.status_code == 400
+    assert (mapped.model, mapped.llm_provider) == ("anthropic/claude-sonnet-5", "anthropic")
+    assert mapped.__traceback__ is not None
+
+
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
     hidden: Final = messages_host.stream_hidden_params(
         (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41"))
@@ -1780,6 +1800,77 @@ async def test_pre_request_hooks_keep_the_callers_provider_over_the_hook(monkeyp
     assert hooked["custom_llm_provider"] == "anthropic"
 
 
+def _tool_round(tool_use_id: str) -> list[dict[str, object]]:
+    return [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "base_env", "sent_id"),
+    [
+        pytest.param("anthropic/kimi-k2", "http://kimi.test", None, "functions.Bash:0", id="other-model-custom-base"),
+        pytest.param("anthropic/sonnet-prod", "http://gateway.test", None, "functions.Bash:0", id="alias-gateway-base"),
+        pytest.param(
+            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions.Bash:0", id="claude-name-custom-base"
+        ),
+        pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_API_BASE", "functions.Bash:0", id="anthropic-api-base-env"),
+        pytest.param("anthropic/kimi-k2", None, None, "functions_Bash_0", id="anthropics-own-api"),
+        pytest.param(
+            "anthropic/my-sonnet",
+            "https://example.services.ai.azure.com/anthropic",
+            None,
+            "functions_Bash_0",
+            id="foundry",
+        ),
+        pytest.param("deepseek/deepseek-chat", None, None, "functions_Bash_0", id="other-native-provider"),
+        pytest.param("kimi-k2", "http://kimi.test", None, "functions_Bash_0", id="unresolved-provider"),
+    ],
+)
+async def test_pre_request_hooks_rewrite_tool_use_ids_only_for_an_upstream_that_enforces_anthropics_pattern(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_base: str | None, base_env: str | None, sent_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_hook({})])
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if base_env is not None:
+        monkeypatch.setenv(base_env, "http://kimi.test")
+
+    hooked: Final = await messages_host.pre_request_hooks(
+        _hook_request(model=model, api_base=api_base, messages=_tool_round("functions.Bash:0"))
+    )
+
+    assert hooked["messages"] == _tool_round(sent_id)
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+@pytest.mark.parametrize(
+    ("model", "sent_id"),
+    [
+        pytest.param("anthropic/kimi-k2", "functions.Bash:0", id="other-model"),
+        pytest.param("anthropic/claude-sonnet-4-5", "functions.Bash:0", id="claude-name"),
+    ],
+)
+def test_body_params_keep_tool_use_ids_for_a_custom_anthropic_base_whatever_the_model_name(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, model: str, sent_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+
+    fields: Final = messages_host.body_params(
+        {
+            "model": model,
+            "api_base": "http://kimi.test",
+            "messages": _tool_round("functions.Bash:0"),
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        },
+        asynchronous=asynchronous,
+    )
+
+    assert fields["messages"] == _tool_round(sent_id)
+
+
 def test_body_params_hand_hooked_messages_on_as_already_sanitized() -> None:
     hooked: Final = [{"role": "user", "content": [{"type": "text", "text": ""}]}]
 
@@ -2610,7 +2701,7 @@ def test_an_attributed_unsupported_param_names_the_provider_and_model(
 ) -> None:
     text: Final = (
         "claude-sonnet-4-5 does not support anthropic-version=latest. "
-        "To drop unsupported params, set `litellm.drop_params = True`."
+        "To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )
     rejected: Final = ValueError(text)
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets

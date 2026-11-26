@@ -21,22 +21,22 @@ class BaseRerankConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
+        optional_rerank_params: dict[str, object],
         headers: dict[str, object],
         litellm_params: dict[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     @abstractmethod
@@ -88,7 +88,7 @@ class BaseRerankConfig(ABC):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

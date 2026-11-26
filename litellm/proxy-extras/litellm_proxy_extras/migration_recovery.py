@@ -1,6 +1,7 @@
 import hashlib
 import re
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from uuid import uuid4
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import MigrationCoordinator
 
 if TYPE_CHECKING:
@@ -222,3 +224,75 @@ def roll_back_replayable_failed_migration(coordinator: MigrationCoordinator, sch
         migration.parent.name,
     )
     return True
+
+
+KILLED_SESSION_WAIT_SECONDS: Final = 30.0
+
+
+def roll_back_killed_migration(
+    database_url: str, schema: str, application_name: str, attempt_started: float
+) -> tuple[str, ...]:
+    """Roll back the history row of a migration that was still running when its `prisma migrate deploy`
+    was killed at the deploy time limit, and return its name.
+
+    Postgres keeps running a killed client's statement, so the session Prisma left behind can still
+    commit the migration once the lock it waits on is released. Every session named `application_name`
+    is terminated and confirmed gone before the row is touched, otherwise nothing is changed. The
+    caller holds Prisma's migration lock and `attempt_started` is its `time.monotonic()` from before
+    the deploy, so the unfinished row is the killed command's own.
+    """
+    try:
+        import psycopg
+    except ImportError:
+        return ()
+    from psycopg import sql
+
+    unchanged: Final = "Its migration history row was left unchanged."
+    try:
+        with psycopg.connect(database_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as connection:
+            deadline: Final = time.monotonic() + KILLED_SESSION_WAIT_SECONDS
+            while _terminate_sessions(connection, application_name):
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "The database session of the prisma migrate deploy that was stopped at its time limit "
+                        "is still running after %ss. %s",
+                        KILLED_SESSION_WAIT_SECONDS,
+                        unchanged,
+                    )
+                    return ()
+                time.sleep(0.2)
+            rolled_back: Final = connection.execute(
+                sql.SQL(
+                    "UPDATE {} SET rolled_back_at = current_timestamp "
+                    "WHERE finished_at IS NULL AND rolled_back_at IS NULL AND logs IS NULL "
+                    "AND applied_steps_count = 0 AND started_at >= current_timestamp - make_interval(secs => %s) "
+                    "RETURNING migration_name"
+                ).format(sql.Identifier(schema, "_prisma_migrations")),
+                (time.monotonic() - attempt_started,),
+            ).fetchall()
+    except psycopg.Error as exc:
+        logger.warning(
+            "Could not confirm that the database session of the prisma migrate deploy that was stopped at its "
+            "time limit is gone (%s). %s",
+            _redact_credentials(str(exc)).strip(),
+            unchanged,
+        )
+        return ()
+    names: Final = tuple(str(row[0]) for row in rolled_back)
+    for name in names:
+        logger.warning(
+            "Migration %s was still running when prisma migrate deploy was stopped at its time limit. "
+            "Its database session was ended and its migration history row was marked rolled back so it can be "
+            "applied again.",
+            name,
+        )
+    return names
+
+
+def _terminate_sessions(connection: "psycopg.Connection[tuple[object, ...]]", application_name: str) -> bool:
+    """Signal every other session named `application_name` to end, and say whether any was still there."""
+    return connection.execute(
+        "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND application_name = %s AND pid <> pg_backend_pid()",
+        (application_name,),
+    ).fetchone() != (0,)

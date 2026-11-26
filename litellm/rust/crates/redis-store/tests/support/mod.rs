@@ -1,5 +1,7 @@
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
+pub mod auth_cache;
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,

@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
+    set_provider_response_headers_in_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_events_before_upstream_error,
     build_complete_streaming_response,
@@ -33,6 +35,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     split_sse_chunk_into_events,
 )
 from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
+from litellm.llms.bedrock_mantle.common_utils import MANTLE_HOST_RE
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -62,6 +65,8 @@ else:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
+_PROVIDER_RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, str], config=ConfigDict(hide_input_in_errors=True))
+_RATE_LIMIT_HEADER_PREFIXES: Final = ("anthropic-ratelimit-", "x-ratelimit-")
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
@@ -96,6 +101,21 @@ def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]
         )
 
 
+def _stamp_provider_response_headers(response: ModelResponse, logging_obj: LiteLLMLoggingObj) -> None:
+    try:
+        headers: Final = _PROVIDER_RESPONSE_HEADERS.validate_python(
+            logging_obj.model_call_details.get("response_headers")
+        )
+    except ValidationError:
+        return
+    rate_limit_headers: Final = {
+        name.lower(): value for name, value in headers.items() if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES)
+    }
+    set_provider_response_headers_in_hidden_params(
+        response, rate_limit_headers, process_headers=process_anthropic_headers
+    )
+
+
 def _stamp_reported_stream_cost(
     response: ModelResponse, all_chunks: Sequence[str | bytes], logging_obj: LiteLLMLoggingObj
 ) -> None:
@@ -105,6 +125,22 @@ def _stamp_reported_stream_cost(
     reported: Final = next((cost for cost in costs if cost is not None), None)
     if reported is not None:
         override_stamped_response_cost(response, reported)
+
+
+def _is_priced_mantle_call(url_route: str | None, request_body: Mapping[str, object] | None) -> bool:
+    if not url_route or not MANTLE_HOST_RE.match(url_route):
+        return False
+    priced_models: Final[Mapping[str, object]] = litellm.model_cost  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm.model_cost is an untyped module global
+    return f"{litellm.LlmProviders.BEDROCK_MANTLE.value}/{(request_body or {}).get('model')}" in priced_models
+
+
+def _stamp_upstream_provider(
+    logging_obj: LiteLLMLoggingObj, url_route: str | None, request_body: Mapping[str, object] | None
+) -> None:
+    if not logging_obj.model_call_details.get("custom_llm_provider") and _is_priced_mantle_call(
+        url_route, request_body
+    ):
+        logging_obj.model_call_details["custom_llm_provider"] = litellm.LlmProviders.BEDROCK_MANTLE.value
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -141,9 +177,9 @@ class AnthropicPassthroughLoggingHandler:
             )
 
         model: Final = response_body.get("model", "")
-        speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(
-            request_body or kwargs.get("request_body")
-        )
+        resolved_request_body: Final[Mapping[str, object] | None] = request_body or kwargs.get("request_body")  # pyright: ignore[reportUnknownVariableType]  # request_body is an untyped dict param
+        _stamp_upstream_provider(logging_obj, url_route, resolved_request_body)  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict param
+        speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(resolved_request_body)
         anthropic_config: Final = get_anthropic_config(url_route)
         litellm_model_response: Final[ModelResponse] = anthropic_config().transform_response(
             raw_response=httpx_response,
@@ -168,6 +204,9 @@ class AnthropicPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=logging_obj,
             response_id=optional_str(response_body.get("id")),
+            fallback_model=AnthropicPassthroughLoggingHandler._requested_model(
+                resolved_request_body  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict param
+            ),
         )
 
         return {
@@ -185,6 +224,10 @@ class AnthropicPassthroughLoggingHandler:
         """
         speed: Final = (request_body or {}).get("speed")
         return speed if isinstance(speed, str) else None
+
+    @staticmethod
+    def _requested_model(request_body: Mapping[str, object] | None) -> str | None:
+        return optional_str((request_body or {}).get("model"))
 
     @staticmethod
     def _get_user_from_metadata(
@@ -279,6 +322,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_provider_response_headers(response, litellm_logging_obj)
         _stamp_reported_stream_cost(response, all_chunks, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
@@ -293,9 +337,11 @@ class AnthropicPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: Mapping[str, object],
         all_chunks: Sequence[str | bytes],
+        url_route: str | None = None,
     ) -> None:
         if not all_chunks:
             return
+        _stamp_upstream_provider(litellm_logging_obj, url_route, request_body)
         model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
             litellm_logging_obj, request_body, all_chunks
         )
@@ -308,20 +354,27 @@ class AnthropicPassthroughLoggingHandler:
         litellm_logging_obj.record_partial_usage_for_failure(
             usage=usage,
             response_cost=AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(
-                partial_response=partial_response, model=model, logging_obj=litellm_logging_obj
+                partial_response=partial_response,
+                model=model,
+                logging_obj=litellm_logging_obj,
+                fallback_model=AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks),
             ),
         )
 
     @staticmethod
     def _cost_partial_stream_or_zero(
-        partial_response: ModelResponse | TextCompletionResponse, model: str, logging_obj: LiteLLMLoggingObj
+        partial_response: ModelResponse | TextCompletionResponse,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        fallback_model: str | None = None,
     ) -> float:
         try:
-            return AnthropicPassthroughLoggingHandler._compute_response_cost(
+            return AnthropicPassthroughLoggingHandler._priced_model_and_cost(
                 litellm_model_response=partial_response,
                 model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj),
+                fallback_model=fallback_model,
                 logging_obj=logging_obj,
-            )
+            )[1]
         except Exception as e:  # noqa: BLE001  # an uncostable partial stream still bills its tokens, at zero cost
             verbose_proxy_logger.warning(
                 "Anthropic passthrough: could not cost the partial usage of an interrupted stream (model=%s): %s",
@@ -329,6 +382,38 @@ class AnthropicPassthroughLoggingHandler:
                 e,
             )
             return 0.0
+
+    @staticmethod
+    def _priced_model_and_cost(
+        litellm_model_response: ModelResponse | TextCompletionResponse,
+        model: str,
+        fallback_model: str | None,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> tuple[str, float]:
+        """
+        The request and the response can name one model differently (a Bedrock id against a native Anthropic id),
+        and which of the two has a price row depends on the upstream. A name that prices to zero or is unmapped
+        gives way to the other one.
+        """
+
+        def cost_of(candidate: str) -> float:
+            return AnthropicPassthroughLoggingHandler._compute_response_cost(
+                litellm_model_response=litellm_model_response, model=candidate, logging_obj=logging_obj
+            )
+
+        if not fallback_model or fallback_model == model:
+            return model, cost_of(model)
+        try:
+            cost: Final = cost_of(model)
+        except Exception:  # noqa: BLE001  # an unmapped first name must not stop the second name from pricing
+            return fallback_model, cost_of(fallback_model)
+        if cost > 0:
+            return model, cost
+        try:
+            fallback_cost: Final = cost_of(fallback_model)
+        except Exception:  # noqa: BLE001  # an unmapped second name keeps the first name's zero cost
+            return model, cost
+        return (fallback_model, fallback_cost) if fallback_cost > 0 else (model, cost)
 
     @staticmethod
     def _compute_response_cost(
@@ -492,6 +577,7 @@ class AnthropicPassthroughLoggingHandler:
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
         response_id: str | None = None,
+        fallback_model: str | None = None,
     ):
         """
         Create the standard logging object for Anthropic passthrough
@@ -504,13 +590,15 @@ class AnthropicPassthroughLoggingHandler:
         if logging_obj.model_call_details.get("stream") is True:
             logging_obj.model_call_details["complete_streaming_response"] = litellm_model_response
         try:
-            model = AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj)
-            response_cost: Final = AnthropicPassthroughLoggingHandler._compute_response_cost(
-                litellm_model_response=litellm_model_response, model=model, logging_obj=logging_obj
+            priced_model, response_cost = AnthropicPassthroughLoggingHandler._priced_model_and_cost(
+                litellm_model_response=litellm_model_response,
+                model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj),
+                fallback_model=fallback_model,
+                logging_obj=logging_obj,
             )
 
             kwargs["response_cost"] = response_cost
-            kwargs["model"] = model
+            kwargs["model"] = priced_model
             # the pass-through success path reads spend from
             # model_call_details["response_cost"], not from kwargs
             logging_obj.model_call_details["response_cost"] = response_cost
@@ -532,8 +620,8 @@ class AnthropicPassthroughLoggingHandler:
             )
 
             litellm_model_response.id = response_id or logging_obj.litellm_call_id
-            litellm_model_response.model = model
-            logging_obj.model_call_details["model"] = model
+            litellm_model_response.model = priced_model
+            logging_obj.model_call_details["model"] = priced_model
             if not logging_obj.model_call_details.get("custom_llm_provider"):
                 logging_obj.model_call_details["custom_llm_provider"] = litellm.LlmProviders.ANTHROPIC.value
             return kwargs
@@ -560,6 +648,7 @@ class AnthropicPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
 
+        _stamp_upstream_provider(litellm_logging_obj, url_route, request_body)
         model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
             litellm_logging_obj, request_body, all_chunks
         )
@@ -583,6 +672,7 @@ class AnthropicPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=litellm_logging_obj,
             response_id=AnthropicPassthroughLoggingHandler._extract_response_id_from_anthropic_chunks(all_chunks),
+            fallback_model=AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks),
         )
 
         return {

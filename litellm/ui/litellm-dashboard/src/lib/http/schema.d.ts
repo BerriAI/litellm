@@ -19083,6 +19083,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+         *     - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -19349,6 +19350,7 @@ export interface paths {
          *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -20087,42 +20089,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/typesafe/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/background_chat_settings": {
@@ -30103,7 +30069,7 @@ export interface components {
             sanitize_error_detail: boolean | null;
             /**
              * Scan Only Tool Results
-             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
+             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant message text. It limits message text only, so tool calls and tool descriptions are still scanned when scan_tool_calls_as_text or scan_tool_descriptions_as_text is also set. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
             /**
@@ -30113,12 +30079,12 @@ export interface components {
             scan_raw_request?: boolean | null;
             /**
              * Scan Tool Calls As Text
-             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.
+             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, every tool call is also scanned as text, its name and each argument key and value as a separate block. Tool calls in the request history, including Gemini functionCall parts, are scanned as input, and a masked argument value is written back into the request in the shape the caller sent. Tool calls generated by the model are scanned as output, and a mask there blocks the response. A blocked tool call blocks the request or response, and so does a mask that touches a tool name or argument key.
              */
             scan_tool_calls_as_text?: boolean | null;
             /**
              * Scan Tool Descriptions As Text
-             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, the guardrail also scans every description string in tools[] (tool and parameter descriptions) as text. A pre_call guardrail blocks or masks them like message text, and a logging_only guardrail whose logging_only_scope covers the request records its verdict on a copy. Mode must include pre_call, or logging_only on a guardrail that supports logging_only_scope, otherwise the guardrail is rejected on create or update and the setting is ignored at config load. Costs one extra guardrail call per tool that has a description.
              */
             scan_tool_descriptions_as_text?: boolean | null;
             /**
@@ -30468,6 +30434,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -30479,6 +30449,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -30490,6 +30464,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -33110,6 +33088,11 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
+             * Customer Budget Response Headers
+             * @description If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.
+             */
+            customer_budget_response_headers?: boolean | null;
+            /**
              * Customer Member Id Header
              * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
              */
@@ -33297,6 +33280,8 @@ export interface components {
             key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
+            /** @description Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis. */
+            ldap_sync?: components["schemas"]["LDAPSyncSettings"] | null;
             /**
              * Master Key
              * @description require a key for all calls to proxy
@@ -33601,6 +33586,11 @@ export interface components {
              * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
              */
             request_tag_mappings?: components["schemas"]["RequestTagMapping"][] | null;
+            /**
+             * Require Key Mcp Access Defined
+             * @description When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.
+             */
+            require_key_mcp_access_defined?: boolean | null;
             /**
              * Responses Websocket Session Limit Seconds
              * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
@@ -37683,6 +37673,96 @@ export interface components {
             /** Service Host */
             service_host: string;
         };
+        /** LDAPSyncSettings */
+        LDAPSyncSettings: {
+            /**
+             * Allow Empty Groups
+             * @default false
+             */
+            allow_empty_groups: boolean;
+            /** Bind Dn */
+            bind_dn?: string | null;
+            /** Bind Password */
+            bind_password?: string | null;
+            /** Ca Cert Path */
+            ca_cert_path?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Group Filter
+             * @default
+             */
+            group_filter: string;
+            /**
+             * Group Id Attribute
+             * @default cn
+             */
+            group_id_attribute: string;
+            /**
+             * Group Name Attribute
+             * @default cn
+             */
+            group_name_attribute: string;
+            /**
+             * Group Search Base
+             * @default
+             */
+            group_search_base: string;
+            /**
+             * Interval Minutes
+             * @default 30
+             */
+            interval_minutes: number;
+            /**
+             * Litellm Match Field
+             * @default user_email
+             * @enum {string}
+             */
+            litellm_match_field: "user_email" | "user_id" | "sso_user_id";
+            /**
+             * Member Attribute
+             * @default member
+             */
+            member_attribute: string;
+            /**
+             * Member Lookup Attribute
+             * @default uid
+             */
+            member_lookup_attribute: string;
+            /**
+             * Server Url
+             * @default
+             */
+            server_url: string;
+            /**
+             * Start Tls
+             * @default false
+             */
+            start_tls: boolean;
+            /**
+             * Timeout Seconds
+             * @default 30
+             */
+            timeout_seconds: number;
+            /**
+             * User Match Attribute
+             * @default mail
+             */
+            user_match_attribute: string;
+            /**
+             * User Search Base
+             * @default
+             */
+            user_search_base: string;
+        };
         /** LLMV2Calibration */
         LLMV2Calibration: {
             capable: components["schemas"]["LLMV2ProbabilityCalibration"];
@@ -39295,6 +39375,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -39337,6 +39427,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -41031,7 +41123,7 @@ export interface components {
             sanitize_error_detail: boolean | null;
             /**
              * Scan Only Tool Results
-             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
+             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant message text. It limits message text only, so tool calls and tool descriptions are still scanned when scan_tool_calls_as_text or scan_tool_descriptions_as_text is also set. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
             /**
@@ -41041,12 +41133,12 @@ export interface components {
             scan_raw_request?: boolean | null;
             /**
              * Scan Tool Calls As Text
-             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.
+             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, every tool call is also scanned as text, its name and each argument key and value as a separate block. Tool calls in the request history, including Gemini functionCall parts, are scanned as input, and a masked argument value is written back into the request in the shape the caller sent. Tool calls generated by the model are scanned as output, and a mask there blocks the response. A blocked tool call blocks the request or response, and so does a mask that touches a tool name or argument key.
              */
             scan_tool_calls_as_text?: boolean | null;
             /**
              * Scan Tool Descriptions As Text
-             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, the guardrail also scans every description string in tools[] (tool and parameter descriptions) as text. A pre_call guardrail blocks or masks them like message text, and a logging_only guardrail whose logging_only_scope covers the request records its verdict on a copy. Mode must include pre_call, or logging_only on a guardrail that supports logging_only_scope, otherwise the guardrail is rejected on create or update and the setting is ignored at config load. Costs one extra guardrail call per tool that has a description.
              */
             scan_tool_descriptions_as_text?: boolean | null;
             /**
@@ -43440,6 +43532,10 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
+            } | null;
             /**
              * Models
              * @default []
@@ -45025,6 +45121,10 @@ export interface components {
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
+            } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
             } | null;
             /** Models */
             models?: unknown[] | null;
@@ -52860,6 +52960,8 @@ export interface components {
             response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            /** @description Google systemInstruction, counted with contents */
+            systemInstruction?: components["schemas"]["JsonValue"];
             thinking?: components["schemas"]["JsonValue"];
             tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
@@ -53781,6 +53883,12 @@ export interface components {
             source: {
                 [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
+            /**
+             * Supports Similarity Threshold
+             * @description Whether the active response cache supports similarity thresholds
+             * @default false
+             */
+            supports_similarity_threshold: boolean;
             /** Values */
             values: {
                 [key: string]: unknown;
@@ -54606,6 +54714,10 @@ export interface components {
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
+            } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
             } | null;
             /** Models */
             models?: unknown[] | null;
@@ -56787,6 +56899,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -56829,6 +56951,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -85770,161 +85894,6 @@ export interface operations {
             header?: never;
             path: {
                 operation: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
             };
             cookie?: never;
         };

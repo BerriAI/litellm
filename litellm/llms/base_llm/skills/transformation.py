@@ -40,7 +40,7 @@ class BaseSkillsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict[str, object]:
         """
         Validate and update headers with provider-specific requirements
 
@@ -154,7 +154,7 @@ class BaseSkillsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform get skill request
 
@@ -192,7 +192,7 @@ class BaseSkillsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform delete skill request
 

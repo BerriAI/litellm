@@ -30,7 +30,7 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding: object,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
@@ -38,7 +38,7 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         acompletion: object = None,
         litellm_params=None,
         logger_fn: object = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
         timeout: float | Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         custom_endpoint: bool | None = None,

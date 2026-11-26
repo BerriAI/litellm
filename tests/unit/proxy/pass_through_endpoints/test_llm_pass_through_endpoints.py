@@ -79,7 +79,6 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     openai_proxy_route,
     openrouter_proxy_route,
     relay_nvidia_nim_request,
-    typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -3823,7 +3822,7 @@ class TestMilvusProxyRoute:
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_no_index_registry(self):
         """
-        Test that missing index registry raises HTTPException
+        With no index registry and no DB row, the collection is not a managed index
         """
         from fastapi import HTTPException
 
@@ -3853,8 +3852,10 @@ class TestMilvusProxyRoute:
                     user_api_key_dict=mock_user_api_key_dict,
                 )
 
-            assert exc_info.value.status_code == 500
-            assert "Unable to find Milvus vector store index registry" in str(exc_info.value.detail)
+            assert exc_info.value.status_code == 400
+            assert "Collection test-collection is not a litellm managed vector store index" in str(
+                exc_info.value.detail
+            )
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_not_managed_index(self):
@@ -6268,6 +6269,240 @@ class TestAzureProxyRouteCrossIndexAuthorization:
             mock_is_allowed.assert_not_called()
             mock_handler.assert_awaited_once()
             assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
+
+
+def _serve_proxy_with_vector_store_tables(
+    monkeypatch: pytest.MonkeyPatch, index_rows: AsyncMock, store_rows: AsyncMock
+) -> TestClient:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedvectorstoreindextable.find_many = index_rows
+    prisma_client.db.litellm_managedvectorstorestable.find_many = store_rows
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(model_list=[{"model_name": "chat-model", "litellm_params": {"model": "openai/gpt-5.4-mini"}}]),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-virtual", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    return TestClient(proxy_server.app)
+
+
+@pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+class TestManagedIndexCreatedOnAnotherReplica:
+    """A store from POST /vector_store/new and an index from POST /v1/indexes are only in
+    the DB until the periodic registry sync, so every replica has to find both there on
+    the first request, including one that booted with no vector stores at all."""
+
+    def test_azure_ai_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
+
+        index_rows: Final = AsyncMock(return_value=[FakeVectorStoreIndexRow("kb-new", "store-made-on-a")])
+        store_rows: Final = AsyncMock(
+            return_value=[
+                FakeVectorStoreRow(
+                    "store-made-on-a",
+                    "azure_ai",
+                    {"api_base": "https://svc.search.windows.net", "api_key": "search-service-key"},
+                )
+            ]
+        )
+        client: Final = _serve_proxy_with_vector_store_tables(monkeypatch, index_rows, store_rows)
+
+        with respx.mock(assert_all_called=True) as upstream:
+            search: Final = upstream.post("https://svc.search.windows.net/indexes/kb-new/docs/search").mock(
+                return_value=httpx.Response(200, json={"value": [{"id": "doc-1"}]})
+            )
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-1"}]})
+        index_rows.assert_awaited_once_with()
+        assert search.calls.last.request.headers["api-key"] == "search-service-key"
+        assert json.loads(search.calls.last.request.content) == {"search": "refund policy"}
+
+    def test_azure_ai_search_on_an_unregistered_index_without_azure_api_base_answers_404_naming_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(return_value=[]), AsyncMock(return_value=[])
+        )
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-never-created/docs/search?api-version=2024-07-01",
+                json={"search": "refund policy"},
+            )
+
+        assert response.status_code == 404
+        assert response.json()["detail"]["error"] == (
+            "Azure AI Search index 'kb-never-created' is not registered on this proxy"
+        )
+        assert upstream.calls.call_count == 0
+
+    def test_azure_ai_search_without_azure_api_base_answers_503_when_the_index_table_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read vector store index 'kb-new' from the database in time. Retry the request"
+        )
+        assert upstream.calls.call_count == 0
+
+    def test_azure_ai_search_on_a_relay_proxy_relays_the_index_when_the_index_table_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+        monkeypatch.setenv("AZURE_API_BASE", "https://relay.search.windows.net")
+        monkeypatch.setenv("AZURE_API_KEY", "relay-key")
+
+        with respx.mock(assert_all_called=True) as upstream:
+            relayed: Final = upstream.post(url__startswith="https://relay.search.windows.net/").mock(
+                return_value=httpx.Response(200, json={"value": [{"id": "doc-relay"}]})
+            )
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-relay"}]})
+        assert relayed.calls.last.request.url.path.endswith("/indexes/kb-new/docs/search")
+
+    def test_azure_ai_search_on_a_relay_proxy_relays_an_index_the_table_read_did_not_find(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(return_value=[]), AsyncMock(return_value=[])
+        )
+        monkeypatch.setenv("AZURE_API_BASE", "https://relay.search.windows.net")
+        monkeypatch.setenv("AZURE_API_KEY", "relay-key")
+
+        with respx.mock(assert_all_called=True) as upstream:
+            relayed: Final = upstream.post(url__startswith="https://relay.search.windows.net/").mock(
+                return_value=httpx.Response(200, json={"value": [{"id": "doc-relay"}]})
+            )
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-unmanaged/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-relay"}]})
+        assert relayed.calls.last.request.url.path.endswith("/indexes/kb-unmanaged/docs/search")
+
+    def test_milvus_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
+
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch,
+            AsyncMock(return_value=[FakeVectorStoreIndexRow("collection-made-on-a", "milvus-store-made-on-a")]),
+            AsyncMock(
+                return_value=[
+                    FakeVectorStoreRow(
+                        "milvus-store-made-on-a",
+                        "milvus",
+                        {"api_base": "https://milvus.example.test", "api_key": "milvus-key"},
+                    )
+                ]
+            ),
+        )
+
+        with respx.mock(assert_all_called=True) as upstream:
+            search: Final = upstream.post("https://milvus.example.test/vectors/search").mock(
+                return_value=httpx.Response(200, json={"code": 0, "data": []})
+            )
+            response: Final = client.post(
+                "/milvus/vectors/search", json={"collectionName": "collection-made-on-a", "data": [[0.1, 0.2]]}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"code": 0, "data": []})
+        assert search.calls.last.request.headers["authorization"] == "Bearer milvus-key"
+        assert json.loads(search.calls.last.request.content)["collectionName"] == "physical-index"
+
+    def test_opensearch_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
+
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch,
+            AsyncMock(return_value=[FakeVectorStoreIndexRow("docs-made-on-a", "opensearch-store-made-on-a")]),
+            AsyncMock(
+                return_value=[
+                    FakeVectorStoreRow(
+                        "opensearch-store-made-on-a",
+                        "opensearch",
+                        {
+                            "api_base": f"https://{OPENSEARCH_HOST}",
+                            "aws_access_key_id": OPENSEARCH_ACCESS_KEY,
+                            "aws_secret_access_key": OPENSEARCH_SECRET_KEY,
+                        },
+                    )
+                ]
+            ),
+        )
+
+        with respx.mock(assert_all_called=True) as upstream:
+            search: Final = upstream.post(f"https://{OPENSEARCH_HOST}/physical-index/_search").mock(
+                return_value=httpx.Response(200, json={"hits": {"hits": []}})
+            )
+            response: Final = client.post(
+                "/opensearch/docs-made-on-a/_search",
+                content=b'{"query":{"match_all":{}}}',
+                headers={"Content-Type": JSON_TYPE},
+            )
+
+        assert (response.status_code, response.json()) == (200, {"hits": {"hits": []}})
+        assert _verified_sigv4_scope(search.calls.last.request) == ("aoss", "us-east-1")
+
+    def test_milvus_search_answers_503_when_the_index_table_read_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+
+        response: Final = client.post(
+            "/milvus/vectors/search", json={"collectionName": "collection-made-on-a", "data": [[0.1, 0.2]]}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read vector store index 'collection-made-on-a' from the database in time. Retry the request"
+        )
+
+    def test_opensearch_search_answers_503_when_the_index_table_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+
+        response: Final = client.post(
+            "/opensearch/docs-made-on-a/_search",
+            content=b'{"query":{"match_all":{}}}',
+            headers={"Content-Type": JSON_TYPE},
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read vector store index 'docs-made-on-a' from the database in time. Retry the request"
+        )
 
 
 class TestAzureProxyRouteServiceLevelIndexCreate:
@@ -10749,78 +10984,21 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert not google.called
 
 
-class TestTypeSafePassthroughRoute:
-    @staticmethod
-    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
-        request = MagicMock(spec=Request)
-        request.method = "POST"
-        request.query_params = query_params or {}
-        request.json = AsyncMock(return_value=body)
-        return request
-
+class TestDecisionPassthroughTokenLimits:
     @pytest.fixture
     def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         from litellm.proxy.proxy_server import app
 
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
         yield TestClient(app)
-
-    @pytest.mark.parametrize(
-        "method, body",
-        [
-            ("GET", None),
-            ("POST", {"state": "x"}),
-            ("PUT", {"state": "x"}),
-            ("DELETE", None),
-            ("PATCH", {"state": "x"}),
-        ],
-    )
-    def test_forwards_every_method_and_body_upstream(
-        self, client: TestClient, method: str, body: dict[str, str] | None
-    ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            response = client.request(method, "/typesafe/v1/systemone", json=body)
-
-            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
-            sent: Final = route.calls.last.request
-            assert sent.headers["authorization"] == "Bearer typesafe-test-key"
-            assert json.loads(sent.content or b"{}") == (body or {})
-
-    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            client.post(
-                "/typesafe/v1/systemone",
-                json={"state": "x"},
-                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
-            )
-
-            sent: Final = route.calls.last.request.headers
-            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
-
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
         (
-            ("typesafe", "systemone", True),
             ("laya", "systemone", True),
             ("bespoke", "systemone", True),
-            ("typesafe", "systemone/", True),
-            ("typesafe", "systemone?trace=1", True),
-            ("typesafe", "systemone/?trace=1", True),
-            ("typesafe", "systemone/other", False),
-            ("typesafe", "systemone/other/", False),
-            ("typesafe", "systemone-other", False),
-            ("typesafe", "chat/completions?next=/typesafe/v1/systemone", False),
             ("openrouter", "systemone", False),
             ("openrouter", "systemone/", False),
             ("openrouter", "chat/completions", False),
@@ -10832,7 +11010,7 @@ class TestTypeSafePassthroughRoute:
         self,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        provider: Literal["typesafe", "openrouter", "laya", "bespoke"],
+        provider: Literal["openrouter", "laya", "bespoke"],
         endpoint: str,
         is_decision_request: bool,
         quota_scope: Literal["key", "project_output"],
@@ -10852,9 +11030,7 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
-        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(
-            provider, "test-generative-model"
-        )
+        model: Final = {"laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
         permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
@@ -10892,43 +11068,6 @@ class TestTypeSafePassthroughRoute:
         assert response.status_code == (429 if token_limit == 0 else 200), response.text
         assert route.call_count == (0 if token_limit == 0 else 1)
 
-    @pytest.mark.asyncio
-    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
-
-        async def fake_upstream(request, *_args):
-            target: Final = create_route.call_args.kwargs["target"]
-            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
-            return {"upstream_query": parse_qs(upstream_url.query.decode())}
-
-        endpoint_func = AsyncMock(side_effect=fake_upstream)
-        create_route = Mock(return_value=endpoint_func)
-        monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            create_route,
-        )
-
-        request = self._request({"state": "x"}, {"trace": "yes"})
-        result = await typesafe_proxy_route(
-            endpoint="v1/systemone",
-            request=request,
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
-        )
-
-        assert result == {"upstream_query": {"trace": ["yes"]}}
-        endpoint_func.assert_awaited_once()
-        create_route.assert_called_once_with(
-            endpoint="v1/systemone",
-            target="https://typesafe.example/base/v1/systemone",
-            custom_headers={
-                "Authorization": "Bearer typesafe-test-key",
-                "Content-Type": "application/json",
-            },
-            custom_llm_provider="typesafe",
-            is_streaming_request=False,
-        )
 
 
 class _RecordsPreCallModel(CustomLogger):

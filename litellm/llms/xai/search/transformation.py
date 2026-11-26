@@ -50,11 +50,11 @@ class XAISearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment contract
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig.validate_environment contract
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment contract
-    ) -> dict[str, str]:  # mutable-ok: HTTP handler consumes the headers
+    ) -> dict[str, object]:  # mutable-ok: HTTP handler consumes the headers
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,

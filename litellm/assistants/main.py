@@ -14,7 +14,7 @@ from openai.types.beta.assistant_deleted import AssistantDeleted
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
@@ -93,9 +93,9 @@ def get_assistants(
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> SyncCursorPage[Assistant] | Coroutine[None, None, AsyncCursorPage[Assistant]]:
-    aget_assistants: Final[bool | None] = kwargs.pop("aget_assistants", None)
+    aget_assistants: Final = kwargs.pop("aget_assistants", None)
     if aget_assistants is not None and not isinstance(aget_assistants, bool):
         raise Exception("Invalid value passed in for aget_assistants. Only bool or None allowed")
     optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
@@ -113,7 +113,7 @@ def get_assistants(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -261,9 +261,9 @@ def create_assistants(
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Assistant | Coroutine[None, None, Assistant]:
-    async_create_assistants: Final[bool | None] = kwargs.pop("async_create_assistants", None)
+    async_create_assistants: Final = kwargs.pop("async_create_assistants", None)
     if async_create_assistants is not None and not isinstance(async_create_assistants, bool):
         raise ValueError("Invalid value passed in for async_create_assistants. Only bool or None allowed")
     optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
@@ -281,7 +281,7 @@ def create_assistants(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -433,13 +433,13 @@ def delete_assistant(
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AssistantDeleted | Coroutine[None, None, AssistantDeleted]:
     optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
 
     litellm_params_dict: Final = get_litellm_params(**kwargs)
 
-    async_delete_assistants: Final[bool | None] = kwargs.pop("async_delete_assistants", None)
+    async_delete_assistants: Final = kwargs.pop("async_delete_assistants", None)
     if async_delete_assistants is not None and not isinstance(async_delete_assistants, bool):
         raise ValueError("Invalid value passed in for async_delete_assistants. Only bool or None allowed")
 
@@ -455,7 +455,7 @@ def delete_assistant(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -620,7 +620,7 @@ def create_thread(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -769,7 +769,7 @@ def get_thread(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
     api_base: str | None = None
@@ -866,7 +866,7 @@ async def a_add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     client: object | None = None,
     **kwargs: object,
 ) -> OpenAIMessage:
@@ -917,7 +917,7 @@ def add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     client=None,
     **kwargs,
 ) -> OpenAIMessage | Coroutine[None, None, OpenAIMessage]:
@@ -947,7 +947,7 @@ def add_message(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
     api_key: str | None = None
@@ -1099,7 +1099,7 @@ def get_messages(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
 
@@ -1291,7 +1291,7 @@ def run_thread(
         read_timeout: Final = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
     elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)
+        timeout = float_of(timeout)
     elif timeout is None:
         timeout = 600.0
 

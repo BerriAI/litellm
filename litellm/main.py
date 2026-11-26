@@ -72,6 +72,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
+    PLACEHOLDER_API_KEYS,
 )
 from litellm.exceptions import AuthenticationError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -117,6 +118,7 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
 from litellm.litellm_core_utils.health_check_utils import (
+    OPTIONAL_STR,
     _filter_model_params,
     create_health_check_response,
 )
@@ -148,6 +150,7 @@ from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
+from litellm.llms.base_llm.auth.provider_oauth import oauth_credential_free_headers, provider_oauth_token
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
     convert_model_response_to_streaming,
@@ -176,7 +179,6 @@ from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
 )
-from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
@@ -254,9 +256,12 @@ from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    joined,
     keyword_arguments,
     normalize_drop_params,
+    require_attributes,
     safe_deep_copy,
+    subscript,
     without,
 )
 from .litellm_core_utils.fallback_utils import (
@@ -288,7 +293,7 @@ from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
-from .llms.azure.common_utils import default_azure_api_version
+from .llms.azure.common_utils import default_azure_api_version, uses_azure_entra_id_auth
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
@@ -1586,6 +1591,10 @@ def _replayed_as_stream(
     return _replayed_when_done(dispatched, replay)
 
 
+class _MergesMapping(Protocol):
+    def update(self, other: object, /) -> object: ...
+
+
 class _ProxyAuthHeadersProvider(Protocol):
     def get_auth_headers(self) -> Mapping[str, str]: ...
 
@@ -1654,7 +1663,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     dynamic_params = False
@@ -1789,7 +1798,7 @@ def _complete_azure_text(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     api_type: Final = get_secret_str("AZURE_API_TYPE") or "azure"
@@ -2970,17 +2979,54 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
     )
 
 
+def _openai_sdk_client_with_provider_bearer(
+    client: openai.OpenAI | openai.AsyncOpenAI,
+    api_base: str | None,
+    token: str,
+    model: str,
+) -> openai.OpenAI | openai.AsyncOpenAI:
+    if getattr(client, "workload_identity", None) is not None:
+        raise AuthenticationError(
+            message="OAuth client credentials cannot be combined with OpenAI SDK workload identity.",
+            llm_provider="openai",
+            model=model,
+        )
+    return client.with_options(
+        api_key=token,
+        base_url=api_base,
+        set_default_headers={
+            name: value
+            for name, value in oauth_credential_free_headers(client.default_headers).items()
+            if isinstance(value, str)
+        },
+    )
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = _dispatch_client_http(ctx)
+    oauth_token: Final = (
+        provider_oauth_token(ctx.litellm_params, api_base=api_base, provider=ctx.custom_llm_provider, model=ctx.model)
+        if ctx.custom_llm_provider in ("openai", "custom_openai")
+        else None
+    )
+    supplied_client: Final = _dispatch_client_http(ctx)
+    client: Final = (
+        _openai_sdk_client_with_provider_bearer(supplied_client, api_base, oauth_token, ctx.model)
+        if oauth_token is not None and isinstance(supplied_client, (openai.OpenAI, openai.AsyncOpenAI))
+        else supplied_client
+    )
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
-    extra_headers = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
-    headers = ctx.headers
+    configured_extra_headers: Final = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
+    extra_headers = (
+        oauth_credential_free_headers(_FORWARDED_HEADERS_ADAPTER.validate_python(configured_extra_headers))
+        if oauth_token is not None
+        else configured_extra_headers
+    )
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
     logging: Final = ctx.logging
@@ -2997,7 +3043,7 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+    if oauth_token is None and (missing_key_error := _missing_provider_key_error(ctx)) is not None:
         raise missing_key_error
     _validate_vispark_api_key(
         custom_llm_provider,
@@ -3014,12 +3060,14 @@ def _complete_custom_openai(
     openai.organization = organization
     # set API KEY
     api_key = (
-        api_key
+        oauth_token
+        or api_key
         or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
         or _openai_key_fallback(custom_llm_provider)
     )
 
-    headers = with_canonical_authorization(custom_llm_provider, headers or litellm.headers)
+    configured_headers: Final = with_canonical_authorization(custom_llm_provider, ctx.headers or litellm.headers)
+    headers = oauth_credential_free_headers(configured_headers) if oauth_token is not None else configured_headers
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -3100,7 +3148,7 @@ def _complete_custom_openai(
                 stream=stream,
                 api_key=api_key,
                 headers=outbound_headers,
-                client=client,
+                client=supplied_client,
                 provider_config=provider_config,
             )
         else:
@@ -3895,7 +3943,7 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
             if "extra_body" in optional_params:
-                optional_params[k].update(v)
+                require_attributes(optional_params[k], _MergesMapping, "update").update(v)
             else:
                 optional_params[k] = v
         elif k not in optional_params:
@@ -4002,7 +4050,7 @@ def _complete_vercel_ai_gateway(
         if k == "extra_body":
             # we use openai 'extra_body' to pass vercel specific params - providerOptions
             if "extra_body" in optional_params:
-                optional_params[k].update(v)
+                require_attributes(optional_params[k], _MergesMapping, "update").update(v)
             else:
                 optional_params[k] = v
         elif k not in optional_params:
@@ -4105,7 +4153,7 @@ def _complete_vertex_ai_beta(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     vertex_ai_project: Final = (
@@ -4171,7 +4219,7 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -4354,7 +4402,7 @@ def _complete_predibase(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     tenant_id: Final = (
@@ -4414,7 +4462,7 @@ def _complete_text_completion_codestral(
     logging: Final = ctx.logging
     messages: Final = ctx.messages
     model: Final = ctx.model
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -4466,7 +4514,7 @@ def _complete_text_completion_inception(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     text_completion: Final = ctx.text_completion
     timeout: Final = ctx.timeout
 
@@ -4659,7 +4707,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     messages: Final = ctx.messages
     model = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     provider_config = ctx.provider_config
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
@@ -4871,7 +4919,7 @@ def _complete_watsonx_text(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
@@ -5459,7 +5507,7 @@ def _complete_custom(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     )
 
     """
-    prompt: Final = " ".join([message["content"] for message in messages])
+    prompt: Final = joined(" ", [subscript(message, "content") for message in messages])
     resp: Final = litellm.module_level_client.post(
         url,
         headers=headers,
@@ -6539,6 +6587,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    *litellm.types.utils.provider_oauth_litellm_params,
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",
@@ -6763,6 +6812,7 @@ def completion(
             timeout=timeout,
             timeout_for_optional_params=timeout_for_optional_params,
             top_p=top_p,
+            unnarrowed_optional_params=chat_optional_params,
         )
         if custom_llm_provider == "azure":
             # azure configs
@@ -7371,18 +7421,19 @@ def embedding(
         "encoding_format",
     ]
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
+    request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
     non_default_params: Final = filter_out_litellm_params(
-        kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        request_kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final[dict[str, object]] = get_litellm_params(**request_kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
-        litellm_params=GenericLiteLLMParams(**kwargs),
+        litellm_params=GenericLiteLLMParams(**request_kwargs),
     )
 
     if dynamic_api_key is not None:
@@ -7404,7 +7455,7 @@ def embedding(
     )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
-    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
+    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, request_kwargs, "embedding"))
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -9041,7 +9092,7 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**_REQUEST_KWARGS_ADAPTER.validate_python(kwargs))
     configured_base_model: Final = litellm_params_dict.get("base_model")
     pricing_model: Final = (
         configured_base_model.removeprefix(f"{custom_llm_provider}/")
@@ -9349,7 +9400,7 @@ def speech(
     organization: str | None = None,
     project: str | None = None,
     max_retries: int | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | openai.Timeout | None = None,
     response_format: str | None = None,
     speed: int | None = None,
@@ -9373,6 +9424,7 @@ def speech(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider, api_base=caller_api_base
     )
+    provider_api_key: Final = None if dynamic_api_key in PLACEHOLDER_API_KEYS else dynamic_api_key
     kwargs.pop("tags", [])
     stream_audio: Final = stream is True
 
@@ -9392,7 +9444,11 @@ def speech(
     )
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
+    litellm_params_dict: Final = get_litellm_params(
+        metadata=metadata,
+        api_key=api_key or dynamic_api_key,
+        **_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+    )
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(
@@ -9460,21 +9516,25 @@ def speech(
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        provider_api_key: Final = (
-            (api_key or dynamic_api_key) if JSONProviderRegistry.exists(custom_llm_provider) else api_key
+        caller_or_provider_api_key: Final = api_key or (
+            dynamic_api_key if JSONProviderRegistry.exists(custom_llm_provider) else provider_api_key
         )
         if (
             missing_key_error := missing_json_provider_key_error(
-                custom_llm_provider, model, provider_api_key, isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+                custom_llm_provider,
+                model,
+                caller_or_provider_api_key,
+                isinstance(client, openai.OpenAI | openai.AsyncOpenAI),
             )
         ) is not None:
             raise missing_key_error
         # set API KEY
         api_key = (
-            provider_api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            caller_or_provider_api_key
+            or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
+            or dynamic_api_key
         )
 
         organization = (
@@ -9557,18 +9617,24 @@ def speech(
 
             api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
+            request_azure_ad_token: Final = OPTIONAL_STR.validate_python(
+                optional_params.get("extra_body", {}).pop("azure_ad_token", None)
+            )
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            uses_entra_id: Final = request_azure_ad_token is not None or uses_azure_entra_id_auth(
+                request_kwargs, os.environ, litellm.enable_azure_ad_token_refresh is True
+            )
+
             api_key = (
                 api_key
+                or (None if uses_entra_id else provider_api_key)
                 or litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
             )
 
-            azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(
-                "azure_ad_token", None
-            ) or get_secret("AZURE_AD_TOKEN")
-            azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
+            azure_ad_token: Final[str | None] = request_azure_ad_token or get_secret("AZURE_AD_TOKEN")
 
             if extra_headers:
                 optional_params["extra_headers"] = extra_headers
@@ -9582,7 +9648,7 @@ def speech(
                 api_base=api_base,
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
-                azure_ad_token_provider=azure_ad_token_provider,
+                azure_ad_token_provider=kwargs.get("azure_ad_token_provider", None),
                 organization=organization,
                 max_retries=max_retries,
                 timeout=http_timeout,
@@ -9892,7 +9958,6 @@ async def ahealth_check(
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
-    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
     from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)

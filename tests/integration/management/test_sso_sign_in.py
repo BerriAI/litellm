@@ -11,11 +11,12 @@ from typing import Final
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+import jwt
 import pytest
 import yaml
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, gateway_from_environment
+from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
@@ -27,7 +28,7 @@ CLIENT_SECRET: Final = "integration-sso-secret"
 IDP_PROVIDER: Final = "integration-idp"
 
 
-def _idp_reply(request: Request) -> Reply:
+def _idp_reply(request: Request, claims: Mapping[str, Mapping[str, JsonValue]] | None = None) -> Reply:
     target: Final = urlparse(request.target)
     query: Final = parse_qs(target.query)
     if target.path == "/authorize":
@@ -54,6 +55,7 @@ def _idp_reply(request: Request) -> Reply:
                     "provider": IDP_PROVIDER,
                     "dept": _dept(signed_in),
                     "groups": [_group(signed_in)],
+                    **(claims.get(signed_in, {}) if claims is not None else {}),
                 }
             ).encode()
         )
@@ -74,6 +76,8 @@ def _sso_gateway(
     litellm_settings: Mapping[str, JsonValue],
     general_settings: Mapping[str, JsonValue] | None = None,
     db_sso_settings: Mapping[str, JsonValue] | None = None,
+    *,
+    claims: Mapping[str, Mapping[str, JsonValue]] | None = None,
 ) -> Iterator[Gateway]:
     config: Final = directory / "sso_proxy_config.yaml"
     config.write_text(
@@ -89,7 +93,7 @@ def _sso_gateway(
             }
         )
     )
-    with wire_server(_idp_reply) as idp, gateway_from_environment() as rig:
+    with wire_server(partial(_idp_reply, claims=claims)) as idp, gateway_from_environment() as rig:
         environment: Final = {
             "GENERIC_CLIENT_ID": CLIENT_ID,
             "GENERIC_CLIENT_SECRET": CLIENT_SECRET,
@@ -138,6 +142,13 @@ def _sign_in(gateway: Gateway, subject: str) -> httpx.Response:
         return browser.get(at_idp.headers["location"])
 
 
+def _dashboard_session(gateway: Gateway, subject: str) -> dict[str, JsonValue]:
+    callback: Final = _sign_in(gateway, subject)
+    assert callback.status_code == 303, callback.text
+    assert callback.headers["location"].startswith(f"{str(gateway.client.base_url).rstrip('/')}/ui/?login=success")
+    return JSON_OBJECT.validate_python(jwt.decode(callback.cookies["token"], gateway.key, algorithms=["HS256"]))
+
+
 def _delete_user(gateway: Gateway, subject: str) -> None:
     response: Final = gateway.request("POST", "/user/delete", {"user_ids": [subject]})
     assert response.status_code == 200, response.text
@@ -171,6 +182,73 @@ def test_a_first_sso_sign_in_creates_the_user_with_the_default_role(
                 "user_role": expected_role,
                 "metadata": {"auth_provider": IDP_PROVIDER},
             }
+        ]
+
+
+def test_generic_sso_links_a_verified_private_email_to_the_existing_local_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subject: Final = f"directory-{uuid.uuid4().hex}"
+    email: Final = f"Dan-{uuid.uuid4().hex}@Corp.LOCAL"
+    claims: Final[Mapping[str, Mapping[str, JsonValue]]] = {subject: {"email": email, "email_verified": True}}
+    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
+    monkeypatch.setenv("GENERIC_USER_ID_ATTRIBUTE", "sub")
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "corp.local")
+    with _sso_gateway(tmp_path, {}, claims=claims) as gateway, gateway.scenario() as scenario:
+        account: Final = scenario.user(user_email=email.lower(), user_role="internal_user")
+        for _ in range(2):
+            session: Final = _dashboard_session(gateway, subject)
+            assert session["user_id"] == account
+            own: Final = gateway.request("GET", "/user/info", key=string_value(session["key"]))
+            assert own.status_code == 200, own.text
+            assert object_value(JSON_OBJECT.validate_json(own.content)["user_info"])["user_id"] == account
+            assert gateway.rows(
+                'SELECT user_id, user_role, sso_user_id FROM "LiteLLM_UserTable" '
+                "WHERE lower(user_email) = %s OR user_id IN (%s, %s)",
+                (email.lower(), account, subject),
+            ) == [{"user_id": account, "user_role": "internal_user", "sso_user_id": subject}]
+
+
+def test_generic_sso_rejects_a_private_domain_outside_the_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subject: Final = f"directory-{uuid.uuid4().hex}"
+    email: Final = f"{subject}@corp.local"
+    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "example.com")
+    with _sso_gateway(tmp_path, {}, claims={subject: {"email": email, "email_verified": True}}) as gateway:
+        denied: Final = _sign_in(gateway, subject)
+        assert denied.status_code == 401, denied.text
+        assert "email domain=corp.local" in denied.text
+        assert "token" not in denied.cookies
+        assert (
+            gateway.rows(
+                'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s OR lower(user_email) = %s',
+                (subject, email),
+            )
+            == []
+        )
+
+
+@pytest.mark.parametrize("domain", ["example.com", "corp.local"])
+@pytest.mark.parametrize("email_verified,existing_link", [(False, None), (True, "previous-directory-id")])
+def test_generic_sso_preserves_the_email_owner_when_the_directory_identity_cannot_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, domain: str, email_verified: bool, existing_link: str | None
+) -> None:
+    subject: Final = f"directory-{uuid.uuid4().hex}"
+    email: Final = f"member@{domain}"
+    claims: Final[Mapping[str, Mapping[str, JsonValue]]] = {subject: {"email": email, "email_verified": email_verified}}
+    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "false")
+    with _sso_gateway(tmp_path, {}, claims=claims) as gateway, gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_email=email, sso_user_id=existing_link)
+        session: Final = _dashboard_session(gateway, subject)
+        assert session["user_id"] == subject
+        assert gateway.rows(
+            'SELECT user_id, sso_user_id FROM "LiteLLM_UserTable" WHERE lower(user_email) = %s', (email,)
+        ) == [{"user_id": owner, "sso_user_id": existing_link}]
+        assert gateway.rows('SELECT user_email FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)) == [
+            {"user_email": None}
         ]
 
 

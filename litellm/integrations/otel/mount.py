@@ -12,11 +12,13 @@ when the feature gate is off.
 """
 
 import os
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
+from litellm.constants import BODY_READ_AHEAD_NS
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
 if TYPE_CHECKING:
@@ -47,11 +49,17 @@ _DEFAULT_EXCLUDED_URLS: Final = ",".join(_DEFAULT_EXCLUDED_ROUTES)
 
 
 class _RequestTraceExclusionMiddleware:
-    def __init__(self, app: "ASGIApp", excluded_urls: str) -> None:
+    def __init__(
+        self, app: "ASGIApp", excluded_urls: str, max_request_body_bytes: "Callable[[Scope], int | None]"
+    ) -> None:
         from opentelemetry.util.http import parse_excluded_urls
+
+        from litellm.integrations.otel.plumbing.named_trace import LookaheadBudget
 
         self.app = app
         self.excluded_urls = parse_excluded_urls(excluded_urls)
+        self.lookahead_budget: Final = LookaheadBudget()
+        self.max_request_body_bytes: Final = max_request_body_bytes
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] not in ("http", "websocket"):
@@ -65,11 +73,28 @@ class _RequestTraceExclusionMiddleware:
             request_trace_scope,
             request_traces_excluded,
         )
+        from litellm.integrations.otel.plumbing.named_trace import read_named_trace, request_trace_naming
 
         url: Final = str(get_host_port_url_tuple(scope)[2])  # pyright: ignore[reportUnknownArgumentType]  # upstream constructs a str URL but leaves its return type unannotated
         excluded: Final = request_traces_excluded() or self.excluded_urls.url_disabled(url)
-        with request_trace_scope(excluded):
-            await self.app(scope, receive, send)
+        if excluded or scope["type"] != "http":
+            with request_trace_scope(excluded):
+                await self.app(scope, receive, send)
+            return
+        started_ns: Final = time.time_ns()
+        async with read_named_trace(scope, receive, self.lookahead_budget, self.max_request_body_bytes(scope)) as (
+            naming,
+            request_receive,
+        ):
+            _stamp_read_ahead(scope, time.time_ns() - started_ns)
+            with request_trace_scope(excluded), request_trace_naming(naming, started_ns):
+                await self.app(scope, request_receive, send)
+
+
+def _stamp_read_ahead(scope: "Scope", read_ahead_ns: int) -> None:
+    state: Final[object] = scope.setdefault("state", {})
+    if isinstance(state, dict):
+        state[BODY_READ_AHEAD_NS] = read_ahead_ns
 
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
@@ -130,7 +155,11 @@ def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: Mapping[s
         pass
 
 
-def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | None" = None) -> None:
+def instrument_fastapi_app(
+    app: "FastAPI",
+    tracer_provider: "TracerProvider | None" = None,
+    max_request_body_bytes: "Callable[[Scope], int | None]" = lambda _scope: None,
+) -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
@@ -150,6 +179,8 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     ``traceresponse`` from an upstream that restarted the trace becomes a link on the
     server span. The server span also gets ``litellm.call_id`` from the response's
     ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
+    ``max_request_body_bytes`` is the largest body the app accepts for a request, ``None`` for no limit, so
+    the trace a body names is never read past what the app would take.
     """
     try:
         if not is_otel_v2_enabled():
@@ -165,18 +196,21 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
         # base ``litellm[proxy]`` install. Importing it at module top would make
         # ``proxy_server``'s unconditional ``import`` of this module crash when the
         # package is absent, even with the gate off.
+        from opentelemetry import trace
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.propagators import (
             get_global_response_propagator,
             set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
         )
 
+        from litellm.integrations.otel.plumbing.named_trace import ArrivalTimedTracerProvider, forget_named_trace
         from litellm.integrations.otel.trace_response import (
             UpstreamFirstTraceResponsePropagator,
             claim_server_span,
         )
 
         def server_request_hook(span: "Span | None", scope: Mapping[str, object]) -> None:
+            forget_named_trace()
             if span is not None:
                 claim_server_span(span)
             _passthrough_span_name_hook(span, scope)
@@ -184,7 +218,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
         excluded_urls: Final = os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", _DEFAULT_EXCLUDED_URLS)
         FastAPIInstrumentor.instrument_app(
             app,
-            tracer_provider=tracer_provider,
+            tracer_provider=ArrivalTimedTracerProvider(tracer_provider or trace.get_tracer_provider()),
             excluded_urls=excluded_urls,
             server_request_hook=server_request_hook,
             # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they
@@ -195,7 +229,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
         instrumented_stack: Final = app.build_middleware_stack
 
         def build_middleware_stack() -> "ASGIApp":
-            return _RequestTraceExclusionMiddleware(instrumented_stack(), excluded_urls)
+            return _RequestTraceExclusionMiddleware(instrumented_stack(), excluded_urls, max_request_body_bytes)
 
         app.build_middleware_stack = build_middleware_stack  # rebind-ok: wrap the complete ASGI stack
         if get_global_response_propagator() is None:
