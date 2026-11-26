@@ -5593,7 +5593,7 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     images: list[str]  # extracted images from the LLM response - for image guardrails
     tools: list[ChatCompletionToolParam]  # tools sent to the LLM
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]  # tool calls sent from the LLM
-    tool_call_text_offsets: ReadOnly[tuple[int, ...]]  # per tool call, how many texts precede it in the conversation
+    tool_call_text_offsets: tuple[int, ...]  # writable-ok: GenericGuardrailAPIInputs callers use TypedDict.update
     structured_messages: list[
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user

@@ -28,12 +28,14 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import reduce
 from itertools import accumulate, chain, count, groupby, pairwise
+from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import aiohttp
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -452,17 +454,108 @@ async def _anonymized_parts(
     return tuple(anonymized.split(separator))
 
 
+def _tool_call_arguments(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> str | None:
+    arguments: Final = stream_item_field(stream_item_field(tool_call, "function"), "arguments")
+    return arguments if isinstance(arguments, str) else None
+
+
+def _with_tool_call_arguments(
+    tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall, arguments: str
+) -> ChatCompletionToolCallChunk | ChatCompletionMessageToolCall:
+    if isinstance(tool_call, dict):
+        return {**tool_call, "function": {**tool_call["function"], "arguments": arguments}}
+    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"arguments": arguments})})
+
+
 async def _processed_tool_call(
     tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
     process_arguments: Callable[[str], Awaitable[str]],
 ) -> ChatCompletionToolCallChunk | ChatCompletionMessageToolCall:
-    arguments: Final = stream_item_field(stream_item_field(tool_call, "function"), "arguments")
-    if not isinstance(arguments, str):
+    arguments: Final = _tool_call_arguments(tool_call)
+    if arguments is None or not arguments:
         return tool_call
-    processed: Final = await process_arguments(arguments)
-    if isinstance(tool_call, dict):
-        return {**tool_call, "function": {**tool_call["function"], "arguments": processed}}
-    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"arguments": processed})})
+    return _with_tool_call_arguments(tool_call, await process_arguments(arguments))
+
+
+_LITERAL_TOKEN: Final = re.compile(r"<[^<>\s]+_\d+>")
+
+
+@dataclass(frozen=True, slots=True)
+class _TextSlot:
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallSlot:
+    index: int
+
+
+def _literal_tokens(text: str) -> frozenset[str]:
+    return frozenset(text[match.start() : match.end()] for match in _LITERAL_TOKEN.finditer(text))
+
+
+def _segment_literal_tokens(segment: tuple[_TextSlot | _ToolCallSlot, str]) -> frozenset[str]:
+    slot, source = segment
+    if isinstance(slot, _TextSlot):
+        return _literal_tokens(source)
+    tokens: Final = _json_tokens(source)
+    if not tokens or not _is_json_or_cut_json(source, tokens):
+        return _literal_tokens(source)
+    return frozenset(chain.from_iterable(_literal_tokens(token.value) for token in tokens))
+
+
+def _free_token(entity_type: str, numbers: Iterator[int], held: Mapping[str, str], reserved: frozenset[str]) -> str:
+    candidates: Final = (f"<{entity_type}_{number}>" for number in numbers)
+    return next(token for token in candidates if token not in held and token not in reserved)
+
+
+def _conversation_segments(
+    texts: Sequence[str], arguments: Sequence[str | None], tool_call_text_offsets: Sequence[int]
+) -> Iterator[tuple[_TextSlot | _ToolCallSlot, str]]:
+    """Every text and tool call argument string in the order the conversation holds them."""
+    offsets: Final = (
+        tool_call_text_offsets if len(tool_call_text_offsets) == len(arguments) else (len(texts),) * len(arguments)
+    )
+    keyed: Final = sorted(
+        chain(
+            (((index, 1, 0), _TextSlot(index), text) for index, text in enumerate(texts)),
+            (
+                ((offset, 0, index), _ToolCallSlot(index), source)
+                for index, (offset, source) in enumerate(zip(offsets, arguments, strict=True))
+                if source
+            ),
+        ),
+        key=itemgetter(0),
+    )
+    return ((slot, source) for _, slot, source in keyed)
+
+
+def _unmask_exact_pii_text(text: str, pii_tokens: Mapping[str, str]) -> str:
+    return reduce(lambda current, item: current.replace(item[0], item[1]), pii_tokens.items(), text)
+
+
+class _PiiTokensHolder(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    pii_tokens: Mapping[str, str] = MappingProxyType({})
+
+
+def _metadata_pii_tokens(metadata: object) -> Mapping[str, str]:
+    if not metadata:
+        return MappingProxyType({})
+    try:
+        return _PiiTokensHolder.model_validate(metadata).pii_tokens
+    except ValueError:
+        return MappingProxyType({})
+
+
+def _exact_unmask_processor(pii_tokens: Mapping[str, str]) -> _PiiProcessor:
+    async def unmasked_text(text: str) -> str:
+        return _unmask_exact_pii_text(text, pii_tokens)
+
+    async def unmasked_parts(parts: Sequence[_TextPart]) -> tuple[str, ...]:
+        return tuple(_unmask_exact_pii_text(part.text, pii_tokens) for part in parts)
+
+    return _PiiProcessor(unmasked_text, unmasked_parts)
 
 
 async def _coalesce_first_sse_frame(
@@ -1194,6 +1287,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         analyze_results: Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
         request_data: dict | None,
         masked_entity_count: dict[str, int],
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> str:
         # output_parse_pii is True — we need sequentially numbered
         # tokens and a pii_tokens mapping for later unmasking.
@@ -1215,8 +1309,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         runs: Final = _resolve_overlapping_spans(_analyze_items(analyze_results))
         # Every message and content part numbers its runs from 1 into this one map, so a
-        # token another part already holds for a different value takes a spare number.
-        # No token in the map is numbered above its size, so spares start above both.
+        # token another part already holds for a different value, or one the request already
+        # carries as literal text, takes a spare number that is neither held nor reserved.
         spare_numbers: Final = count(max(len(pii_tokens), len(runs)) + 1)
 
         for seq, run in reversed(tuple(enumerate(runs, start=1))):
@@ -1224,8 +1318,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             numbered = f"<{run.entity_type}_{seq}>"
             replacement = (
                 numbered
-                if pii_tokens.get(numbered, original) == original
-                else f"<{run.entity_type}_{next(spare_numbers)}>"
+                if numbered not in reserved_tokens and pii_tokens.get(numbered, original) == original
+                else _free_token(run.entity_type, spare_numbers, pii_tokens, reserved_tokens)
             )
             pii_tokens[replacement] = original
             new_text = new_text[: run.start] + replacement + new_text[run.end :]
@@ -1239,6 +1333,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: bool,
         masked_entity_count: dict[str, int],
         request_data: dict[str, object] | None = None,
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -1258,7 +1353,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return self._finalize_presidio_anonymize_simple(redacted_text, masked_entity_count)
 
             return self._finalize_presidio_anonymize_numbered_tokens(
-                text, analyze_results, request_data, masked_entity_count
+                text, analyze_results, request_data, masked_entity_count, reserved_tokens
             )
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
@@ -1339,11 +1434,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict[str, object],
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
         """
-        (checked,) = await self._check_pii_parts((_TextPart(text),), output_parse_pii, presidio_config, request_data)
+        (checked,) = await self._check_pii_parts(
+            (_TextPart(text),), output_parse_pii, presidio_config, request_data, reserved_tokens
+        )
         return checked
 
     async def _check_pii_parts(
@@ -1352,6 +1450,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict[str, object],  # mutable-ok: the guardrail trace is recorded on the request dict
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> tuple[str, ...]:
         async def anonymized(text: str, results: _Detections) -> str:
             return await self.anonymize_text(
@@ -1360,6 +1459,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 output_parse_pii=output_parse_pii,
                 masked_entity_count=masked_entity_count,
                 request_data=request_data,
+                reserved_tokens=reserved_tokens,
             )
 
         async def detections(text: str) -> _Detections:
@@ -1382,7 +1482,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             else:
                 # First get analysis results
                 analyze_results = await _with_cut_keys_detected(
-                    parts, await detections("".join(part.before + part.text for part in parts)), detections
+                    parts,
+                    await detections("".join(part.before.replace('"', " ") + part.text for part in parts)),
+                    detections,
                 )
 
                 # Then anonymize the text using the analysis results
@@ -1666,7 +1768,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return response
 
     @staticmethod
-    def _unmask_pii_text(text: str, pii_tokens: dict[str, str]) -> str:
+    def _unmask_pii_text(text: str, pii_tokens: Mapping[str, str]) -> str:
         """
         Replace PII tokens in *text* with their original values.
 
@@ -1732,8 +1834,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict[str, object],  # mutable-ok: check_pii records its guardrail trace on the request dict
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> _PiiProcessor:
         async def masked_text(text: str) -> str:
+            if reserved_tokens:
+                return await self.check_pii(
+                    text=text,
+                    output_parse_pii=output_parse_pii,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                    reserved_tokens=reserved_tokens,
+                )
             return await self.check_pii(
                 text=text,
                 output_parse_pii=output_parse_pii,
@@ -1742,7 +1853,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
 
         async def masked_parts(parts: Sequence[_TextPart]) -> tuple[str, ...]:
-            return await self._check_pii_parts(parts, output_parse_pii, presidio_config, request_data)
+            return await self._check_pii_parts(
+                parts, output_parse_pii, presidio_config, request_data, reserved_tokens=reserved_tokens
+            )
 
         return _PiiProcessor(masked_text, masked_parts)
 
@@ -1780,7 +1893,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         processor: Final = self._pii_processor(request_data, mode)
         pii_processed_text: Final = processor.text
-        pii_processed_arguments: Final = processor.json
+        pii_processed_arguments: Final = (
+            _exact_unmask_processor(_metadata_pii_tokens(request_data.get("metadata"))).json
+            if mode == "unmask"
+            else processor.json
+        )
         for choice in response.choices:
             message: Message | None = getattr(choice, "message", None)
             if message is None:
@@ -2206,6 +2323,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
         texts: Final = inputs.get("texts", [])
+        tool_calls: Final = inputs.get("tool_calls") or ()
 
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
@@ -2214,14 +2332,56 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self._callback_role == "restore"
             or (self._callback_role is None and not self.apply_to_output and pii_tokens)
         ):
-            return {**inputs, "texts": [self._unmask_pii_text(text, pii_tokens) for text in texts]}
+            exact_tokens: Final = _metadata_pii_tokens(metadata)
+            unmasked_texts: Final = [self._unmask_pii_text(text, exact_tokens) for text in texts]
+            if not tool_calls or not exact_tokens:
+                return {**inputs, "texts": unmasked_texts}
+            tool_unmasker: Final = _exact_unmask_processor(exact_tokens)
+            unmasked_tool_calls: Final = [await _processed_tool_call(call, tool_unmasker.json) for call in tool_calls]
+            return {
+                **inputs,
+                "texts": unmasked_texts,
+                "tool_calls": cast(  # cast-ok: each call keeps the type it came in as
+                    list[ChatCompletionToolCallChunk], unmasked_tool_calls
+                ),
+            }
 
-        masker: Final = self._pii_masker(self.output_parse_pii, None, request_data)
-        scanned: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": [await masker.text(text) for text in texts]}
-        tool_calls: Final = inputs.get("tool_calls")
-        if input_type == "request" or not self.mask_tool_calls or not tool_calls:
+        scans_tool_calls: Final = (
+            (not self.apply_to_output and bool(self.pii_entities_config))
+            if input_type == "request"
+            else self.mask_tool_calls
+        )
+        scanned_arguments: Final = (
+            tuple(map(_tool_call_arguments, tool_calls)) if scans_tool_calls and tool_calls else ()
+        )
+        segments: Final = tuple(
+            _conversation_segments(texts, scanned_arguments, inputs.get("tool_call_text_offsets", ()))
+        )
+        reserved_by_segment: Final = accumulate(map(_segment_literal_tokens, segments), frozenset[str].union)
+
+        async def rewritten_segment(slot: _TextSlot | _ToolCallSlot, source: str, reserved: frozenset[str]) -> str:
+            masker: Final = self._pii_masker(self.output_parse_pii, None, request_data, reserved_tokens=reserved)
+            return await (masker.json(source) if isinstance(slot, _ToolCallSlot) else masker.text(source))
+
+        rewritten: Final = tuple(
+            [
+                await rewritten_segment(slot, source, reserved)
+                for (slot, source), reserved in zip(segments, reserved_by_segment, strict=True)
+            ]
+        )
+        by_slot: Final[Mapping[_TextSlot | _ToolCallSlot, str]] = MappingProxyType(
+            dict(zip((slot for slot, _ in segments), rewritten, strict=True))
+        )
+        scanned: Final[GenericGuardrailAPIInputs] = {
+            **inputs,
+            "texts": [by_slot[_TextSlot(index)] for index in range(len(texts))],
+        }
+        if not scans_tool_calls or not tool_calls:
             return scanned
-        scanned_tool_calls: Final = [await _processed_tool_call(call, masker.json) for call in tool_calls]
+        scanned_tool_calls: Final = [
+            _with_tool_call_arguments(call, by_slot[_ToolCallSlot(index)]) if _ToolCallSlot(index) in by_slot else call
+            for index, call in enumerate(tool_calls)
+        ]
         return {
             **scanned,
             "tool_calls": cast(  # cast-ok: each call keeps the type it came in as

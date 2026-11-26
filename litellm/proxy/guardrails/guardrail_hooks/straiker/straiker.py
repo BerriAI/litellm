@@ -1432,7 +1432,8 @@ class StraikerGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         parsed: StraikerWebhookResponse,
     ) -> GenericGuardrailAPIInputs:
-        return_inputs: Final[GenericGuardrailAPIInputs] = {**inputs}
+        return_inputs: Final[GenericGuardrailAPIInputs] = {}
+        return_inputs.update(inputs)
         if parsed.texts is not None:
             return_inputs["texts"] = parsed.texts
         return return_inputs
