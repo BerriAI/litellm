@@ -618,13 +618,13 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     @staticmethod
     def get_bedrock_model_id(
-        optional_params: dict,
+        optional_params: dict[str, object],
         provider: BEDROCK_INVOKE_PROVIDERS_LITERAL | None,
         model: str,
     ) -> str:
-        model_id = optional_params.pop("model_id", None)
-        if model_id is not None:
-            model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
+        model_id_param: Final = optional_params.pop("model_id", None)
+        if model_id_param is not None:
+            model_id = BaseAWSLLM.encode_model_id(model_id=str(model_id_param))
         else:
             model_id = model
             # Strip LiteLLM routing prefixes (e.g. "bedrock/", "invoke/",

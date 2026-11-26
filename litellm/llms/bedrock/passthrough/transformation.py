@@ -37,7 +37,9 @@ from ..common_utils import (
     BedrockError,
     BedrockEventStreamDecoderBase,
     BedrockModelInfo,
+    bedrock_capability_model,
     served_service_tier,
+    strip_bedrock_routing_prefix,
 )
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
@@ -687,7 +689,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         else:
             from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
-        from litellm.utils import ProviderConfigManager
+        from litellm.utils import ProviderConfigManager, get_base_model_from_metadata
 
         embedding_response: Final = (
             _invoke_embedding_response(model, httpx_response, has_input_image="inputImage" in request_data)
@@ -697,10 +699,15 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         if embedding_response is not None:
             return embedding_response
 
+        parser_model: Final = (
+            bedrock_capability_model(model, get_base_model_from_metadata(logging_obj.model_call_details))
+            if "invoke" in endpoint
+            else model
+        )
         if "invoke" in endpoint:
-            chat_config_model = "invoke/" + model
+            chat_config_model = "invoke/" + strip_bedrock_routing_prefix(parser_model)
         elif "converse" in endpoint:
-            chat_config_model = "converse/" + model
+            chat_config_model = "converse/" + strip_bedrock_routing_prefix(model)
         else:
             return None
 
@@ -713,7 +720,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             raise ValueError(f"No provider config found for model: {model}")
 
         litellm_model_response: Final[ModelResponse] = provider_chat_config.transform_response(
-            model=model,
+            model=parser_model,
             messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
             raw_response=httpx_response,
             model_response=ModelResponse(),
@@ -736,28 +743,32 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         endpoint: str,
         *,
         response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
+        base_model: str | None = None,
     ) -> PassthroughStreamCollector:
         return BedrockEventStreamCollector(
             parse_event=self._parse_message_from_event,
-            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
+            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint, base_model=base_model),
             service_tier=served_service_tier(response_headers),
         )
 
-    def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:
+    def _get_event_stream_decoder(
+        self, model: str, endpoint: str, base_model: str | None
+    ) -> Optional["AWSEventStreamDecoder"]:
         from litellm.llms.bedrock.chat import get_bedrock_event_stream_decoder
         from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
             AmazonInvokeConfig,
         )
 
         if "invoke" in endpoint:
-            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
+            invoke_model: Final = bedrock_capability_model(model, base_model)
+            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(invoke_model)
             if invoke_provider is None:
                 verbose_logger.warning(
                     "Bedrock passthrough spend tracking skipped: no invoke provider for model %s", model
                 )
                 return None
             return get_bedrock_event_stream_decoder(
-                invoke_provider=invoke_provider, model=model, sync_stream=True, json_mode=False
+                invoke_provider=invoke_provider, model=invoke_model, sync_stream=True, json_mode=False
             )
         if "converse" in endpoint:
             return get_bedrock_event_stream_decoder(

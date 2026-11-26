@@ -23,7 +23,7 @@ from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConf
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.passthrough.utils import CommonUtils, with_pinned_pass_through_profile_id
-from litellm.utils import client
+from litellm.utils import client, get_base_model_from_metadata
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
@@ -69,6 +69,7 @@ class _SpendCollection:
             custom_llm_provider=litellm_logging_obj.model_call_details.get("custom_llm_provider", ""),
             endpoint=litellm_logging_obj.model_call_details.get("endpoint", ""),
             response_headers=response_headers,
+            base_model=get_base_model_from_metadata(litellm_logging_obj.model_call_details),
         )
         self.chunk_count = 0
         self._failed = False
@@ -531,8 +532,8 @@ def llm_passthrough_route(
         litellm_params=litellm_params_dict,
     )
 
-    # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
-    if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
+    # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of an ARN model for bedrock
+    if custom_llm_provider == "bedrock":
         encoded_url_str: Final = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
         updated_url = httpx.URL(encoded_url_str)
 

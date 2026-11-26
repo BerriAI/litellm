@@ -372,7 +372,9 @@ async def aresponses_api_with_mcp(
     # Extract MCP auth headers from request (for dynamic auth when fetching tools)
     secret_fields: Final = kwargs.get("secret_fields")
     mcp_auth_header, mcp_server_auth_headers, _, discovery_raw_headers = (
-        ResponsesAPIRequestUtils.extract_mcp_headers_from_request(secret_fields=secret_fields, tools=tools)
+        ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+            secret_fields=secret_fields, tools=tools, mcp_auth=user_api_key_auth
+        )
         if isinstance(secret_fields, dict) and secret_fields
         else (None, None, None, None)
     )
@@ -524,6 +526,7 @@ async def aresponses_api_with_mcp(
                 ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
                     secret_fields=secret_fields,
                     tools=tools,
+                    mcp_auth=user_api_key_auth,
                 )
 
                 tool_trace_id: Final = _request_trace_id(request_kwargs)

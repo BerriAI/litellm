@@ -73,6 +73,7 @@ class MCPRequestContext:
         cls,
         kwargs: Mapping[str, Any],
         tools: Iterable[object] | None,
+        mcp_auth: "UserAPIKeyAuth | None" = None,
     ) -> "MCPRequestContext":
         """
         Build the context from a gateway handler's kwargs.
@@ -86,13 +87,7 @@ class MCPRequestContext:
         )
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
-        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
-        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
-            kwargs.get("user_api_key_auth")
-            or litellm_metadata.get("user_api_key_auth")
-            or metadata.get("user_api_key_auth")
-        )
+        user_api_key_auth: Final = cls.caller_auth(kwargs)
 
         (
             mcp_auth_header,
@@ -102,6 +97,7 @@ class MCPRequestContext:
         ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
             secret_fields=kwargs.get("secret_fields"),
             tools=tools,
+            mcp_auth=mcp_auth,
         )
 
         return cls(
@@ -114,6 +110,16 @@ class MCPRequestContext:
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             litellm_call_id=kwargs.get("litellm_call_id"),
             guardrail_context=cls.resolve_guardrail_context(kwargs),
+        )
+
+    @staticmethod
+    def caller_auth(kwargs: Mapping[str, Any]) -> "UserAPIKeyAuth | None":
+        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
+        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
+        return (
+            kwargs.get("user_api_key_auth")
+            or litellm_metadata.get("user_api_key_auth")
+            or metadata.get("user_api_key_auth")
         )
 
     @staticmethod
