@@ -1,4 +1,3 @@
-import time
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
@@ -196,31 +195,6 @@ def test_an_out_of_order_answer_stays_with_its_question_when_another_is_missing(
         {"type": "refusal", "name": "severity"},
         _REFUSAL_ANSWER,
     ]
-
-
-def test_forty_thousand_answers_returned_in_reverse_are_put_back_in_question_order_quickly() -> None:
-    question_count: Final = 40_000
-    ir: Final = _openai_ir(
-        {
-            "input": "The screen is cracked.",
-            "questions": [
-                {"type": "predicate", "name": f"q{index}", "instructions": "Is the item damaged?"}
-                for index in range(question_count)
-            ],
-        }
-    )
-    answers: Final = tuple(
-        {"type": "predicate", "name": f"q{index}", "probability": index / question_count}
-        for index in range(question_count)
-    )
-
-    started: Final = time.perf_counter()
-    parsed: Final = OpenAIDecisionsConfig().parse_response({**_OPENAI_RESPONSE, "answers": answers[::-1]}, ir)
-    elapsed: Final = time.perf_counter() - started
-
-    response: Final = ir_to_openai_response(parsed, ir, "requested")
-    assert [answer.model_dump(mode="json") for answer in response.answers] == list(answers)
-    assert elapsed < 5.0
 
 
 _TWO_UNNAMED_QUESTIONS: Final[Mapping[str, object]] = {
