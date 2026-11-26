@@ -137,15 +137,86 @@ def test_max_parallel_requests_client_retains_live_counter_across_ttl_expiry(mak
     limit.acquire()
     assert limit.in_flight == 1
 
-    in_memory = getattr(core.routing_cache, "in_memory_cache", None)
-    if in_memory is not None:
-        in_memory._clock = lambda: 10000000000.0  # pyright: ignore[reportPrivateUsage]
+    core.health().store.in_memory_cache._clock = lambda: 10000000000.0  # pyright: ignore[reportPrivateUsage]  # advance the in-memory clock past finite TTLs
 
     refetched: Final = core.registry().client(entry, client_type="max_parallel_requests")
     assert refetched is limit
     assert refetched.in_flight == 1
     limit.release()
     assert limit.in_flight == 0
+
+
+def test_max_parallel_requests_client_restores_live_counter_after_short_ttl_expiry(make_core: MakeCore) -> None:
+    """An already-expired cache entry is restored from the per-cache weakref registry with its live count."""
+    core: Final = make_core(model_list=[deployment("g", "a", max_parallel_requests=2)])
+    entry: Final = deployment("g", "a", max_parallel_requests=2)
+    store: Final = core.health().store
+    seeded: Final = MaxParallelRequestsLimit(max_parallel_requests=2, model_id="a", model_group="g")
+    store.set_cache(key="a_max_parallel_requests_client", value=seeded, local_only=True, ttl=1)
+
+    fetched: Final = core.registry().client(entry, client_type="max_parallel_requests")
+    assert fetched is seeded
+    seeded.acquire()
+    assert seeded.in_flight == 1
+
+    store.in_memory_cache._clock = lambda: 10000000000.0  # pyright: ignore[reportPrivateUsage]  # expire the seeded short-TTL entry
+    assert store.get_cache(key="a_max_parallel_requests_client", local_only=True) is None
+
+    restored: Final = core.registry().client(entry, client_type="max_parallel_requests")
+    assert restored is seeded
+    assert restored.in_flight == 1
+    assert store.get_cache(key="a_max_parallel_requests_client", local_only=True) is seeded
+    seeded.release()
+    assert seeded.in_flight == 0
+
+
+def test_max_parallel_requests_client_reconciles_updated_limit_and_removal(make_core: MakeCore) -> None:
+    """Changing or removing max_parallel_requests updates the live counter ceiling or clears it without losing in_flight."""
+    core: Final = make_core(model_list=[deployment("g", "a", max_parallel_requests=5)])
+    limit: Final = core.registry().client(
+        deployment("g", "a", max_parallel_requests=5), client_type="max_parallel_requests"
+    )
+    assert isinstance(limit, MaxParallelRequestsLimit)
+    limit.acquire()
+    limit.acquire()
+    assert limit.in_flight == 2
+
+    tightened: Final = core.registry().client(
+        deployment("g", "a", max_parallel_requests=2), client_type="max_parallel_requests"
+    )
+    assert tightened is limit
+    assert tightened.max_parallel_requests == 2
+    assert tightened.in_flight == 2
+    with pytest.raises(litellm.RateLimitError, match="already has max_parallel_requests=2"):
+        tightened.acquire()
+
+    limit.release()
+    limit.release()
+    assert limit.in_flight == 0
+
+    assert core.registry().client(deployment("g", "a"), client_type="max_parallel_requests") is None
+    assert core.health().store.get_cache(key="a_max_parallel_requests_client", local_only=True) is None
+
+
+def test_max_parallel_requests_client_isolates_active_limits_per_router(make_core: MakeCore) -> None:
+    """Separate routers sharing a deployment id never share active counters or ceilings."""
+    core_a: Final = make_core(model_list=[deployment("g", "a", max_parallel_requests=1)])
+    core_b: Final = make_core(model_list=[deployment("g", "a", max_parallel_requests=5)])
+
+    limit_a: Final = core_a.registry().client(
+        deployment("g", "a", max_parallel_requests=1), client_type="max_parallel_requests"
+    )
+    assert isinstance(limit_a, MaxParallelRequestsLimit)
+    limit_a.acquire()
+
+    limit_b: Final = core_b.registry().client(
+        deployment("g", "a", max_parallel_requests=5), client_type="max_parallel_requests"
+    )
+    assert isinstance(limit_b, MaxParallelRequestsLimit)
+    assert limit_b is not limit_a
+    assert limit_b.max_parallel_requests == 5
+    assert limit_b.in_flight == 0
+    limit_a.release()
 
 
 # --- registry().plugins("routing") and zero_cost() ------------------------------------------------

@@ -24,7 +24,19 @@ if TYPE_CHECKING:
     from litellm.router_rust.invoke.endpoints import EndpointCore, Plan
     from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 
-_ACTIVE_LIMITS: Final[weakref.WeakValueDictionary[str, "MaxParallelRequestsLimit"]] = weakref.WeakValueDictionary()
+_ACTIVE_LIMITS_BY_CACHE: Final[
+    weakref.WeakKeyDictionary[object, weakref.WeakValueDictionary[str, "MaxParallelRequestsLimit"]]
+] = weakref.WeakKeyDictionary()
+
+
+def _active_limits_for(cache: object) -> weakref.WeakValueDictionary[str, "MaxParallelRequestsLimit"]:
+    limits: Final = _ACTIVE_LIMITS_BY_CACHE.get(cache)
+    if limits is not None:
+        return limits
+    created: Final = weakref.WeakValueDictionary[str, "MaxParallelRequestsLimit"]()
+    _ACTIVE_LIMITS_BY_CACHE[cache] = created
+    return created
+
 
 # The attempt helpers that run inside `_deployment_slot` (`_acompletion` holds the same slot
 # itself). Sync helpers, rerank, moderation and the search helper hold none.
@@ -60,20 +72,8 @@ def max_parallel_requests_limit(
     span: Final = get_parent_otel_span_from_kwargs(dict(kwargs))
     cache: Final = core.routing_cache
     cached: Final[object] = cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # the cache holds untyped values
-    if isinstance(cached, MaxParallelRequestsLimit):
-        _ACTIVE_LIMITS[key] = cached
-        return cached
-    if cached is not None:
+    if cached is not None and not isinstance(cached, MaxParallelRequestsLimit):
         return cached  # pyright: ignore[reportUnknownVariableType]  # the cache holds untyped values
-    active: Final[MaxParallelRequestsLimit | None] = _ACTIVE_LIMITS.get(key)
-    if active is not None:
-        cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
-            key=key,
-            value=active,
-            local_only=True,
-            ttl=float("inf"),
-        )
-        return active
     params: Final = as_dict(deployment.get("litellm_params"))
     calculated: Final = calculate_max_parallel_requests(
         rpm=params.get("rpm"),  # pyright: ignore[reportArgumentType]  # the configured value, as the Python router reads it
@@ -81,21 +81,37 @@ def max_parallel_requests_limit(
         tpm=params.get("tpm"),  # pyright: ignore[reportArgumentType]  # same
         default_max_parallel_requests=core.endpoints.default_max_parallel_requests,  # pyright: ignore[reportArgumentType]  # the setting as given, as the Python router passes it
     )
-    if calculated:
-        limit: Final = MaxParallelRequestsLimit(
-            max_parallel_requests=calculated,
-            model_id=str(model_id),
-            model_group=str(deployment.get("model_name", "")),
-        )
-        _ACTIVE_LIMITS[key] = limit
-        cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
-            key=key,
-            value=limit,
-            local_only=True,
-            ttl=float("inf"),
-        )
-        return limit
-    return None
+    active_limits: Final = _active_limits_for(cache)
+    if not calculated:
+        if isinstance(cached, MaxParallelRequestsLimit):
+            cache.in_memory_cache.delete_cache(key)
+        active_limits.pop(key, None)
+        return None
+    existing: Final = cached if isinstance(cached, MaxParallelRequestsLimit) else active_limits.get(key)
+    if existing is not None:
+        existing.max_parallel_requests = calculated
+        active_limits[key] = existing
+        if cached is None:
+            cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
+                key=key,
+                value=existing,
+                local_only=True,
+                ttl=float("inf"),
+            )
+        return existing
+    limit: Final = MaxParallelRequestsLimit(
+        max_parallel_requests=calculated,
+        model_id=str(model_id),
+        model_group=str(deployment.get("model_name", "")),
+    )
+    active_limits[key] = limit
+    cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # the routing cache
+        key=key,
+        value=limit,
+        local_only=True,
+        ttl=float("inf"),
+    )
+    return limit
 
 
 def enter_deployment_slot(
