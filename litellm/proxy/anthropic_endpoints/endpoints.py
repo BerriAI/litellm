@@ -55,7 +55,9 @@ from litellm.proxy.common_utils.token_count_log import answered_with_litellm_cal
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.litellm_pre_call_utils import (
+    anthropic_user_profile_id,
     forwarded_anthropic_oauth_token,
+    pinned_anthropic_user_profile_id,
     request_routing_metadata,
     should_auto_drop_params_for_agentic_cli,
 )
@@ -424,12 +426,17 @@ async def _count_tokens(
                 request_model,
             )
 
+        client_oauth_token: Final = forwarded_anthropic_oauth_token(request.headers)
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
-            client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            client_oauth_token=client_oauth_token,
+            pinned_user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
+            client_user_profile_id=anthropic_user_profile_id(
+                user_api_key_dict, request.headers, caller_credential=True
+            ),
             caller=user_api_key_dict,
             request_routing=request_routing_metadata(
                 request, _COUNT_REQUEST_FIELDS.validate_python(data), user_api_key_dict

@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use litellm_host_python::json_from_py;
 use litellm_llms::{
-    anthropic::model_capabilities::{bedrock_model_capabilities, messages_route_capabilities},
+    anthropic::model_capabilities::{
+        bedrock_model_capabilities, messages_route_capabilities, with_base_model_user_profile_id,
+    },
     base_llm::messages::context::{BedrockCapabilities, MessagesModelCapabilities},
     vertex_ai::common_utils::supported_regions,
 };
@@ -79,13 +81,16 @@ pub(super) fn route_capabilities(
     py: Python<'_>,
     model: &str,
     custom_llm_provider: Option<&str>,
+    base_model: Option<&str>,
     model_info: Option<Bound<'_, PyAny>>,
 ) -> PyResult<MessagesModelCapabilities> {
-    Ok(messages_route_capabilities(
-        &*live_catalog(py)?,
-        model,
+    let catalog = live_catalog(py)?;
+    let declared = declared_flags(model_info);
+    Ok(with_base_model_user_profile_id(
+        messages_route_capabilities(&catalog, model, custom_llm_provider, None, &declared),
+        &catalog,
+        base_model,
         custom_llm_provider,
-        None,
-        &declared_flags(model_info),
+        &declared,
     ))
 }

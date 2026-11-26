@@ -321,6 +321,7 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
             (!extra_headers.is_empty()).then(|| ProviderSpecificHeader {
                 custom_llm_provider: provider.into(),
                 extra_headers,
+                ..Default::default()
             })
         })
         .collect();

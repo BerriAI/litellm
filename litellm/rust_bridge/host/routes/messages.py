@@ -53,7 +53,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.exception_mapping_utils import is_aws_credential_error, with_deployment_debug_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, deployment_base_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     _resolve_mantle_region_for_cost,  # pyright: ignore[reportPrivateUsage]  # the region Logging prices a Mantle call under
@@ -1665,6 +1665,9 @@ def _affinity_extra_headers(
             ),
             custom_llm_provider=provider,
             native_anthropic_messages=True,
+            model=model,
+            configured_headers=_merged_headers(headers, extra_headers),
+            base_model=deployment_base_model(request, request.get("model_info")),
         ),
     )
     added: Final = add_provider_affinity_header(merged, _handler_params(request), default_header)

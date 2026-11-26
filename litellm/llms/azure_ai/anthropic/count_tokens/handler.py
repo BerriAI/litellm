@@ -5,6 +5,7 @@ Uses httpx for HTTP requests with Azure authentication.
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -44,6 +45,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         system: object = None,
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
+        extra_headers: Mapping[str, str] = MappingProxyType({}),
     ) -> object:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -92,13 +94,16 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             if context_management is not None or AnthropicModelInfo().thinking_betas(thinking):
                 await aload_beta_headers_config()
             # Get required headers with Azure authentication
-            headers: Final = self.get_required_headers(
-                api_key=api_key,
-                litellm_params=litellm_params,
-                messages=messages,
-                context_management=context_management,
-                thinking=thinking,
-            )
+            headers: Final = {
+                **self.get_required_headers(
+                    api_key=api_key,
+                    litellm_params=litellm_params,
+                    messages=messages,
+                    context_management=context_management,
+                    thinking=thinking,
+                ),
+                **extra_headers,
+            }
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(
                     status_code=401,

@@ -52,6 +52,8 @@ pub struct MessagesModelCapabilities {
     #[serde(default)]
     pub supports_mid_conversation_system: bool,
     #[serde(default)]
+    pub supports_anthropic_user_profile_id: bool,
+    #[serde(default)]
     pub effort_tiers: SupportedEffortTiers,
     #[serde(default)]
     pub bedrock: BedrockCapabilities,
@@ -119,6 +121,7 @@ impl Default for MessagesModelCapabilities {
             supports_sampling_params: true,
             supports_speed: false,
             supports_mid_conversation_system: false,
+            supports_anthropic_user_profile_id: false,
             effort_tiers: SupportedEffortTiers::default(),
             bedrock: BedrockCapabilities::default(),
         }

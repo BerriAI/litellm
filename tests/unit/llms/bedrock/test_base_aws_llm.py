@@ -26,6 +26,7 @@ from botocore.credentials import Credentials
 from botocore.exceptions import ClientError, NoCredentialsError
 
 import litellm
+from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
@@ -803,6 +804,60 @@ def test_get_request_headers_preserves_bearer_payload(from_environment):
     assert result.body == b'{"prompt": "test"}'
     assert result.url == "https://api.example.com"
     assert result.method == "POST"
+
+
+@pytest.mark.parametrize("route", ["invoke", "converse"])
+@pytest.mark.parametrize("bearer", [False, True])
+@pytest.mark.parametrize("profile_source", ["pin", "caller-header", "no-pin"])
+def test_bedrock_runtime_requests_do_not_forward_user_profiles(
+    monkeypatch: pytest.MonkeyPatch, route: str, bearer: bool, profile_source: str
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    proxy_data: Final[dict[str, object]] = {}  # mutable-ok: the forwarding helper writes into the request
+    add_provider_specific_headers_to_request(
+        data=proxy_data, headers={}, user_profile_id="uprof_bad" if profile_source == "pin" else None
+    )
+    reply: Final = (
+        {
+            "id": "msg_test",
+            "model": "claude-haiku-4-5-20251001",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        if route == "invoke"
+        else {
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+    )
+    respond: Final = MagicMock(side_effect=lambda _request: httpx.Response(200, json=reply))
+
+    litellm.completion(
+        model=f"bedrock/{route}/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-bearer" if bearer else None,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        extra_headers={
+            "x-other": "keep",
+            **({"Anthropic-User-Profile-Id": "uprof_caller"} if profile_source == "caller-header" else {}),
+        },
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **proxy_data,
+    )
+
+    sent: Final = respond.call_args.args[0]
+    assert sent.url.path.endswith(f"/{route}")
+    assert "anthropic-user-profile-id" not in sent.headers
+    assert sent.headers["x-other"] == "keep"
+    body: Final = json.loads(sent.content)
+    assert "user_profile_id" not in body
+    assert "user_profile_id" not in body.get("additionalModelRequestFields", {})
 
 
 def test_get_request_headers_with_sigv4():

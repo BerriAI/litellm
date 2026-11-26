@@ -184,6 +184,12 @@ pub(super) async fn provider_call(
     // environment, not the call's secrets.
     let process_env = |key: &str| std::env::var(key).ok();
 
+    let forwarded = forwarded_headers(
+        provider,
+        shaping.capabilities.supports_anthropic_user_profile_id,
+        extra_headers,
+        provider_specific_header.as_ref(),
+    )?;
     let effective = effective_request(
         provider,
         MessagesRequest { model, ..body },
@@ -210,11 +216,7 @@ pub(super) async fn provider_call(
         CallAuthInput {
             provider,
             request: &trimmed,
-            forwarded: forwarded_headers(
-                provider,
-                extra_headers,
-                provider_specific_header.as_ref(),
-            )?,
+            forwarded,
             configured_key: configured_key(
                 api_key.as_deref(),
                 shaping.settings.module_api_key.as_ref(),
@@ -518,12 +520,20 @@ fn logged_params(
 
 fn forwarded_headers(
     provider: MessagesProvider,
+    takes_user_profile_id: bool,
     extra_headers: Option<Map<String, Value>>,
     provider_specific_header: Option<&ProviderSpecificHeaders>,
 ) -> Result<Headers, Error> {
+    let configured_headers = extra_headers.unwrap_or_default();
+    let scoped = get_provider_specific_headers(
+        provider_specific_header,
+        provider.as_str(),
+        takes_user_profile_id,
+        &configured_headers,
+    );
     string_headers(Some(merge_messages_header_sources([
-        extra_headers.unwrap_or_default(),
-        get_provider_specific_headers(provider_specific_header, provider.as_str()),
+        configured_headers,
+        scoped,
     ])))
 }
 

@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     get_provider_affinity_header,
 )
+from litellm.litellm_core_utils.get_provider_specific_headers import deployment_base_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
@@ -1766,6 +1767,9 @@ def responses(
             extra_headers=extra_headers,
             provider_specific_header=attribute_or_none(litellm_params, "provider_specific_header"),
             custom_llm_provider=custom_llm_provider,
+            model=model,
+            base_model=deployment_base_model(request_kwargs, request_kwargs.get("model_info")),
+            client_headers=_STR_MAPPING.validate_python(client_headers) if isinstance(client_headers, dict) else None,
         )
         local_vars["extra_headers"] = provider_headers
 

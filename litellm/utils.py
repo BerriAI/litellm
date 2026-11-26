@@ -3892,7 +3892,7 @@ def _supports_provider_info_factory(model: str, custom_llm_provider: str | None,
     return None
 
 
-def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
+def supports_factory(model: str, custom_llm_provider: str | None, key: str, *, catalog_only: bool = False) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
@@ -3918,7 +3918,9 @@ def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> b
                 model=model, custom_llm_provider=custom_llm_provider
             )
 
-        model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, catalog_only=catalog_only
+        )
 
         if model_info.get(key, False) is True:
             return True
@@ -4175,6 +4177,15 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
 def supports_anthropic_thinking_payload(model: str, custom_llm_provider: str | None = None) -> bool:
     return supports_factory(
         model=model, custom_llm_provider=custom_llm_provider, key="supports_anthropic_thinking_payload"
+    )
+
+
+def supports_anthropic_user_profile_id(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_anthropic_user_profile_id",
+        catalog_only=True,
     )
 
 
@@ -8203,6 +8214,7 @@ def _look_up_model_info(
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
+                supports_anthropic_user_profile_id=_model_info.get("supports_anthropic_user_profile_id", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),

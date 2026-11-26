@@ -7,6 +7,7 @@ their respective publisher-specific count-tokens endpoints.
 """
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter
@@ -185,6 +186,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         model: str,
         request_data: Mapping[str, object],
         litellm_params: dict[str, Any],
+        extra_headers: Mapping[str, str] = MappingProxyType({}),
     ) -> dict[str, object]:
         """
         Handle token counting request for a Vertex AI partner model.
@@ -193,6 +195,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             model: The model name
             request_data: Request payload (Anthropic Messages API format)
             litellm_params: LiteLLM parameters containing credentials, project, location
+            extra_headers: Headers sent beside the Vertex auth headers, such as the Claude user profile id
 
         Returns:
             Dict containing token count information
@@ -258,7 +261,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         if request_data.get("context_management") is not None:
             await aload_beta_headers_config()
-        headers: Final = dict(count_tokens_headers(access_token, request_data))
+        headers: Final = {**count_tokens_headers(access_token, request_data), **extra_headers}
 
         # Get async HTTP client
         from litellm import LlmProviders

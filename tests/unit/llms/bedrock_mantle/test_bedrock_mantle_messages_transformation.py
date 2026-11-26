@@ -147,6 +147,27 @@ class TestRequestBody:
         assert body["max_tokens"] == 8
         assert "anthropic_version" not in body
 
+    @pytest.mark.parametrize(
+        "headers,expected_fields",
+        [
+            ({"Anthropic-User-Profile-Id": "uprof_sdk"}, {"user_profile_id": "uprof_sdk"}),
+            ({"anthropic-user-profile-id": ""}, {}),
+            ({}, {}),
+        ],
+        ids=["header-in-any-case", "empty-header", "no-profile"],
+    )
+    def test_the_user_profile_header_becomes_the_body_field(
+        self, headers: dict[str, str], expected_fields: dict[str, str]
+    ) -> None:
+        body: Final = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "ping"}],
+            anthropic_messages_optional_request_params={"max_tokens": 8},
+            litellm_params=GenericLiteLLMParams(),
+            headers=headers,
+        )
+        assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields
+
     def test_body_omits_stream_when_not_streaming(self):
         config = BedrockMantleAnthropicMessagesConfig()
         body = config.transform_anthropic_messages_request(

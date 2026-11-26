@@ -112,6 +112,10 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    deployment_base_model,
+    takes_anthropic_user_profile_id,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -792,7 +796,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    anthropic_user_profile_id,
+    anthropic_user_profile_id_in_headers,
     parse_litellm_settings_drop_params,
+    pinned_anthropic_user_profile_id,
     request_routing_metadata,
     request_served_model,
     sanitize_for_log,
@@ -15376,9 +15383,12 @@ async def run_thread(
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
+from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
@@ -15403,12 +15413,60 @@ from litellm.responses.litellm_completion_transformation.count_request import (
 _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROUTER})
 
 
-def _with_client_oauth_token(
-    counter: BaseTokenCounter | None, client_oauth_token: str | None
+def _counts_with_user_profile_id(deployment_litellm_params: Mapping[str, object], base_model: str | None) -> bool:
+    model: Final = deployment_litellm_params.get("model")
+    provider: Final = deployment_litellm_params.get("custom_llm_provider")
+    return takes_anthropic_user_profile_id(
+        model if isinstance(model, str) else None, provider if isinstance(provider, str) else None, base_model
+    )
+
+
+def _count_user_profile_id(
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
+    base_model: str | None,
+) -> str | None:
+    if not _counts_with_user_profile_id(deployment_litellm_params, base_model):
+        return None
+    return (
+        pinned_user_profile_id
+        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+        or client_user_profile_id
+    )
+
+
+def _with_client_identity(
+    counter: BaseTokenCounter | None,
+    client_oauth_token: str | None,
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
+    base_model: str | None,
 ) -> BaseTokenCounter | None:
-    if client_oauth_token is None or not isinstance(counter, AnthropicTokenCounter):
-        return counter
-    return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
+    counted_client_user_profile_id: Final = (
+        client_user_profile_id if _counts_with_user_profile_id(deployment_litellm_params, base_model) else None
+    )
+    user_profile_id: Final = _count_user_profile_id(
+        pinned_user_profile_id, client_user_profile_id, deployment_litellm_params, base_model
+    )
+    match counter:
+        case AnthropicTokenCounter() if client_oauth_token is not None:
+            return AnthropicTokenCounter(
+                client_oauth_token=client_oauth_token,
+                user_profile_id=user_profile_id,
+                client_user_profile_id=counted_client_user_profile_id,
+            )
+        case AnthropicTokenCounter() if user_profile_id:
+            return AnthropicTokenCounter(user_profile_id=user_profile_id)
+        case AzureAIAnthropicTokenCounter() if user_profile_id:
+            return AzureAIAnthropicTokenCounter(user_profile_id=user_profile_id)
+        case BedrockTokenCounter() if user_profile_id:
+            return BedrockTokenCounter(user_profile_id=user_profile_id)
+        case VertexAITokenCounter() if user_profile_id:
+            return VertexAITokenCounter(user_profile_id=user_profile_id)
+        case _:
+            return counter
 
 
 def _get_provider_token_counter(
@@ -15429,7 +15487,7 @@ def _get_provider_token_counter(
 
     try:
         # Use existing LiteLLM logic to determine provider
-        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+        model, custom_llm_provider, _, _ = get_llm_provider(
             model=full_model,
             custom_llm_provider=deployment.get("litellm_params", {}).get("custom_llm_provider"),
             api_base=deployment.get("litellm_params", {}).get("api_base"),
@@ -16414,7 +16472,8 @@ async def token_counter(
         \f
         http_request: carries the call id to the error handler when the count fails
         fastapi_response: answers the x-litellm-call-id header the count's log line names
-        user_api_key_dict: the caller, whose team picks the deployment the count runs on
+        user_api_key_dict: the caller, whose team picks the deployment the count runs on and whose pinned
+            Anthropic user profile id the count sends
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     match google_token_count_request(request):
@@ -16431,6 +16490,10 @@ async def token_counter(
                         else {"additional_drop_params": counted_request.additional_drop_params}
                     ),
                     litellm_call_id=call_id,
+                    pinned_user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
+                    client_user_profile_id=anthropic_user_profile_id(
+                        user_api_key_dict, http_request.headers, caller_credential=True
+                    ),
                     caller=user_api_key_dict,
                     request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
                 ),
@@ -16451,6 +16514,8 @@ async def count_request_tokens(
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    pinned_user_profile_id: str | None = None,
+    client_user_profile_id: str | None = None,
     caller: UserAPIKeyAuth | None = None,
     request_routing: Mapping[str, object] = MappingProxyType({}),
 ) -> TokenCountResponse:
@@ -16473,6 +16538,8 @@ async def count_request_tokens(
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
         count_options=count_options,
+        pinned_user_profile_id=pinned_user_profile_id,
+        client_user_profile_id=client_user_profile_id,
     )
     return await logged_token_count(
         _with_content_errors(count, request, responses_request),
@@ -16614,6 +16681,8 @@ async def _count_request_tokens(
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
     count_options: Mapping[str, JsonValue],
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -16656,7 +16725,15 @@ async def _count_request_tokens(
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
-        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
+        counted_litellm_params: Final = _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+        provider_counter = _with_client_identity(
+            routed_counter,
+            client_oauth_token,
+            pinned_user_profile_id,
+            client_user_profile_id,
+            counted_litellm_params,
+            deployment_base_model(counted_litellm_params, model_info),
+        )
         if _model is not None:
             model_to_use = _model
 
@@ -16803,7 +16880,15 @@ async def _count_request_tokens(
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
             forwards_request_fields=(context_edits is not None and edited_request is None)
-            or bool(forwarded_count_options),
+            or bool(forwarded_count_options)
+            or bool(
+                _count_user_profile_id(
+                    pinned_user_profile_id,
+                    client_user_profile_id,
+                    count_litellm_params,
+                    deployment_base_model(count_litellm_params, model_info),
+                )
+            ),
         )
     )
     if isinstance(ladder, TokenCountResponse):

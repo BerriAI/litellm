@@ -250,6 +250,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]
     supports_anthropic_compaction: ReadOnly[bool | None]
+    supports_anthropic_user_profile_id: ReadOnly[bool | None]
     supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -5104,8 +5105,15 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
-    extra_headers: dict
+    extra_headers: ReadOnly[dict[str, str]]
     native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
+    user_profile_id_models_only: NotRequired[ReadOnly[bool]]
+    non_user_profile_id_models_only: NotRequired[ReadOnly[bool]]
+    yields_to_configured: NotRequired[ReadOnly[bool]]
+    configured_credential_headers: NotRequired[ReadOnly[tuple[str, ...]]]
+    configured_credential_prefix: NotRequired[ReadOnly[str]]
+    caller_credentials: NotRequired[ReadOnly[tuple[str, ...]]]
+    without_configured_credential: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):

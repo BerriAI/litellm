@@ -1029,6 +1029,30 @@ class TestMergeProviderSpecificHeaders:
 
         assert merged == {"Authorization": "Bearer chatgpt-token"}
 
+    def test_scoped_header_replaces_a_caller_header_spelled_in_another_case(self) -> None:
+        merged = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers={"Anthropic-User-Profile-Id": "uprof_other", "originator": "codex_cli_rs"},
+            provider_specific_header={
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        assert merged == {"originator": "codex_cli_rs", "anthropic-user-profile-id": "uprof_pinned"}
+
+    def test_caller_beta_in_another_case_is_sent_beside_the_scoped_beta(self) -> None:
+        merged = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers={"Anthropic-Beta": "caller-beta"},
+            provider_specific_header={
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"anthropic-beta": "client-header-beta"},
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        assert merged == {"Anthropic-Beta": "caller-beta", "anthropic-beta": "client-header-beta"}
+
     def test_no_scoped_headers_returns_extra_headers_unchanged(self):
         assert ResponsesAPIRequestUtils.merge_provider_specific_headers(
             extra_headers=None, provider_specific_header=None, custom_llm_provider="chatgpt"

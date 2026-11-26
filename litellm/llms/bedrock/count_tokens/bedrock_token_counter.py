@@ -100,6 +100,12 @@ def _deployment_chat_config(litellm_params: Mapping[str, object]) -> BaseConfig 
     return None if route is None else litellm.ProviderConfigManager.get_provider_chat_config(*route)
 
 
+def _infers_on_mantle(deployment_config: BaseConfig | None) -> bool:
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    return isinstance(deployment_config, AmazonMantleConfig)
+
+
 def _claude_messages_translator(litellm_params: Mapping[str, object]) -> "AnthropicMessagesConfig":
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
     from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
@@ -214,10 +220,12 @@ class BedrockTokenCounter(BaseTokenCounter):
         runtime_handler: BedrockCountTokensHandler | None = None,
         mantle_handler: BedrockMantleCountTokensHandler | None = None,
         client: AsyncHTTPHandler | None = None,
+        user_profile_id: str | None = None,
     ) -> None:
         self._runtime_handler: Final = runtime_handler or BedrockCountTokensHandler()
         self._mantle_handler: Final = mantle_handler or BedrockMantleCountTokensHandler()
         self._client: Final = client
+        self._user_profile_id: Final = user_profile_id
 
     def should_use_token_counting_api(
         self,
@@ -351,7 +359,12 @@ class BedrockTokenCounter(BaseTokenCounter):
             ),
             **native_context_management,
         }
-        mantle_request: Final = {**runtime_request, **options}
+        profile_fields: Final = (
+            {"user_profile_id": self._user_profile_id}
+            if self._user_profile_id and _infers_on_mantle(deployment_config)
+            else {}
+        )
+        mantle_request: Final = {**runtime_request, **options, **profile_fields}
 
         primary: Final = (
             await self._count_with(

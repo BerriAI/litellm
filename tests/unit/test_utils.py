@@ -1238,6 +1238,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "comment": {"type": "string"},
             "supports_assistant_prefill": {"type": "boolean"},
             "supports_anthropic_compaction": {"type": "boolean"},
+            "supports_anthropic_user_profile_id": {"type": "boolean"},
             "supports_audio_input": {"type": "boolean"},
             "supports_audio_output": {"type": "boolean"},
             "gemini_native_audio": {"type": "boolean"},

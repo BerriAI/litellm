@@ -63,6 +63,8 @@ const MANTLE_API_BASE_ENV: &str = "BEDROCK_MANTLE_API_BASE";
 const MANTLE_OPENAI_BASE_SUFFIXES: [&str; 2] = ["/openai/v1", "/v1"];
 const DEFAULT_ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const MANTLE_ALLOWED_TOP_LEVEL_FIELDS: [&str; 1] = ["service_tier"];
+const USER_PROFILE_ID_HEADER: &str = "anthropic-user-profile-id";
+const USER_PROFILE_ID_FIELD: &str = "user_profile_id";
 const BEDROCK_MANTLE_DEFAULT_REGION: &str = "us-east-1";
 /// Python's `AmazonBedrockGlobalConfig().get_all_regions()`, which `BEDROCK_REGIONS` freezes.
 const BEDROCK_REGIONS: [&str; 23] = [
@@ -638,9 +640,24 @@ fn move_betas_into_header(request: &MessagesRequest, headers: Headers) -> Result
     })
 }
 
+/// Python's `bedrock_user_profile_fields` with the signing strip: Mantle takes the profile id as a body
+/// field, so every casing of the header leaves the headers and a non-empty first value is returned.
+fn take_user_profile_id(headers: Headers) -> (Option<String>, Headers) {
+    let (profile, headers): (Headers, Headers) = headers
+        .into_iter()
+        .partition(|(name, _)| name.eq_ignore_ascii_case(USER_PROFILE_ID_HEADER));
+    let profile_id = profile
+        .into_iter()
+        .next()
+        .map(|(_, value)| value)
+        .filter(|value| !value.is_empty());
+    (profile_id, headers)
+}
+
 /// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_request` up to the body: the
 /// Invoke transform runs on `model_id` with the Mantle overrides, then the betas move into the
-/// header. The request keeps its own model, which `wire_body` turns into `model_id`.
+/// header and the user profile id into the body. The request keeps its own model, which `wire_body`
+/// turns into `model_id`.
 fn transform_mantle_messages_request(
     request: MessagesRequest,
     model_id: String,
@@ -659,15 +676,23 @@ fn transform_mantle_messages_request(
         settings,
     )?;
     let headers = move_betas_into_header(&request, headers)?;
+    let (profile_id, headers) = take_user_profile_id(headers);
     let stream = request
         .params
         .stream
         .filter(|stream| *stream == Recognized::Known(true));
+    let extra = request
+        .params
+        .extra
+        .into_iter()
+        .chain(profile_id.map(|id| (USER_PROFILE_ID_FIELD.to_string(), Value::String(id))))
+        .collect();
     Ok((
         MessagesRequest {
             model,
             params: MessagesOptionalParams {
                 stream,
+                extra,
                 ..request.params
             },
             ..request
@@ -1534,6 +1559,35 @@ mod tests {
         )
         .unwrap();
         assert!(header(&headers, "anthropic-beta").is_empty());
+    }
+
+    #[rstest]
+    #[case::lowercase(&[("anthropic-user-profile-id", "uprof_caller")], Some("uprof_caller"))]
+    #[case::mixed_case(&[("Anthropic-User-Profile-Id", "uprof_caller")], Some("uprof_caller"))]
+    #[case::empty(&[("anthropic-user-profile-id", "")], None)]
+    #[case::absent(&[], None)]
+    fn the_user_profile_header_becomes_the_body_field(
+        #[values(&BEDROCK_MANTLE_MESSAGES_CONFIG, &BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
+        config: &dyn BaseMessagesConfig,
+        #[case] profile: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let forwarded = profile
+            .iter()
+            .chain(&[("x-other", "keep")])
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let (body, headers) = sent(config, request("claude-test", json!({})), forwarded).unwrap();
+        assert_eq!(
+            body.get("user_profile_id").and_then(Value::as_str),
+            expected
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("anthropic-user-profile-id"))
+        );
+        assert_eq!(header(&headers, "x-other"), vec!["keep"]);
     }
 
     #[rstest]

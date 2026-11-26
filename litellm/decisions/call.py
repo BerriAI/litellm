@@ -15,7 +15,11 @@ import litellm
 from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ProviderSpecificHeaderUtils,
+    deployment_base_model,
+    override_headers,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -714,15 +718,19 @@ def _request_extra_headers(extra_headers: object, drops_params: bool) -> Mapping
 
 
 def decisions_outbound_headers(
-    extra_headers: object, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: object, custom_llm_provider: str, kwargs: Mapping[str, object], model: str | None = None
 ) -> Mapping[str, str]:
+    request_headers: Final = _request_extra_headers(extra_headers, _drops_params(kwargs))
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
             kwargs.get("provider_specific_header")
         ),
         custom_llm_provider=custom_llm_provider,
+        model=model,
+        configured_headers=request_headers,
+        base_model=deployment_base_model(kwargs, kwargs.get("model_info")),
     )
-    return MappingProxyType({**_request_extra_headers(extra_headers, _drops_params(kwargs)), **forwarded})
+    return MappingProxyType(override_headers(request_headers, forwarded))
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -794,7 +802,7 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
+        headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs, upstream_model)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_breakpoints(

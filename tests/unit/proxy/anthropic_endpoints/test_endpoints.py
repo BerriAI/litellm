@@ -1098,22 +1098,30 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
     assert counter.await_args.kwargs["request"].tools is None
 
 
+_ANTHROPIC_CLAUDE: Final = MappingProxyType(
+    {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
+)
+
+
 def _count_on_claude(
     monkeypatch: pytest.MonkeyPatch,
     peer: Callable[[httpx.Request], httpx.Response],
     headers: Mapping[str, str],
     extra_body: Mapping[str, object] = MappingProxyType({}),
+    caller: UserAPIKeyAuth | None = None,
+    claude: Mapping[str, str] = _ANTHROPIC_CLAUDE,
+    model_info: Mapping[str, str] = MappingProxyType({}),
 ) -> httpx.Response:
     from fastapi import FastAPI
 
     import litellm.proxy.proxy_server as proxy_server
     from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_handler
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.endpoints import router
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    claude: Final = {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
     monkeypatch.setattr(
         proxy_server,
         "llm_router",
@@ -1122,12 +1130,12 @@ def _count_on_claude(
                 {
                     "model_name": "count-log-claude",
                     "litellm_params": {**claude, "order": 2},
-                    "model_info": {"id": "count-log-fallback-deployment"},
+                    "model_info": {**model_info, "id": "count-log-fallback-deployment"},
                 },
                 {
                     "model_name": "count-log-claude",
                     "litellm_params": {**claude, "order": 1},
-                    "model_info": {"id": "count-log-routed-deployment"},
+                    "model_info": {**model_info, "id": "count-log-routed-deployment"},
                 },
             ]
         ),
@@ -1137,9 +1145,14 @@ def _count_on_claude(
         "get_async_httpx_client",
         lambda *args, **kwargs: AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
     )
+    monkeypatch.setattr(
+        azure_ai_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    )
     app: Final = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    app.dependency_overrides[user_api_key_auth] = lambda: caller or UserAPIKeyAuth()
     return TestClient(app).post(
         "/v1/messages/count_tokens",
         json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}], **extra_body},
@@ -1289,6 +1302,147 @@ def test_count_tokens_returns_the_context_management_the_provider_applied(monkey
         "context_management": applied,
         "litellm_count_source": "provider",
     }, response.text
+
+
+_CALLER_OAUTH_HEADERS: Final = MappingProxyType(
+    {"x-litellm-api-key": "Bearer sk-proxy", "authorization": "Bearer sk-ant-oat01-caller"}
+)
+
+
+def _count_api_expecting(sent_profile_id: str | None) -> Callable[[httpx.Request], httpx.Response]:
+    def peer(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get("anthropic-user-profile-id")
+        return (
+            httpx.Response(200, json={"input_tokens": 77}, request=request)
+            if received == sent_profile_id
+            else httpx.Response(
+                400,
+                json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+                request=request,
+            )
+        )
+
+    return peer
+
+
+@pytest.mark.parametrize(
+    "key_metadata,client_headers,sent_profile_id",
+    [
+        ({}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_client"),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_pinned"),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ({}, {}, None),
+        (
+            {"anthropic_user_profile_id": "uprof_pinned"},
+            {**_CALLER_OAUTH_HEADERS, "anthropic-user-profile-id": "uprof_client"},
+            "uprof_client",
+        ),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, _CALLER_OAUTH_HEADERS, None),
+    ],
+    ids=[
+        "client_header",
+        "key_pin_over_client",
+        "key_pin_alone",
+        "neither",
+        "caller_oauth_keeps_its_own_id",
+        "caller_oauth_without_an_id_gets_no_pin",
+    ],
+)
+@pytest.mark.parametrize("configured_api_key", [False, True], ids=["caller_credential", "configured_credential"])
+def test_count_tokens_sends_the_user_profile_id_inference_would_send(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: Mapping[str, str],
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+    configured_api_key: bool,
+) -> None:
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    expected_profile: Final = (
+        key_metadata.get("anthropic_user_profile_id")
+        if configured_api_key and "authorization" in client_headers
+        else sent_profile_id
+    )
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _count_api_expecting(expected_profile),
+        client_headers,
+        caller=UserAPIKeyAuth(metadata=dict(key_metadata)),
+        claude={
+            name: value
+            for name, value in {**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-sonnet-5-5"}.items()
+            if configured_api_key or "authorization" not in client_headers or name != "api_key"
+        },
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+
+
+@pytest.mark.parametrize(
+    "key_metadata,client_headers",
+    [({"anthropic_user_profile_id": "uprof_pinned"}, {}), ({}, {"anthropic-user-profile-id": "uprof_client"})],
+    ids=["key_pin", "client_header"],
+)
+def test_count_tokens_sends_no_user_profile_id_to_a_claude_named_model_the_cost_map_does_not_flag(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: Mapping[str, str], client_headers: Mapping[str, str]
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _count_api_expecting(None),
+        client_headers,
+        caller=UserAPIKeyAuth(metadata=dict(key_metadata)),
+        claude={**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-unlisted-deployment"},
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+
+
+@pytest.mark.parametrize(
+    "litellm_params,model_info,sent_profile_id",
+    [
+        ({}, {"base_model": "anthropic/claude-sonnet-5-5"}, "uprof_pinned"),
+        ({"base_model": "anthropic/claude-sonnet-5-5"}, {}, "uprof_pinned"),
+        ({}, {}, None),
+    ],
+    ids=["model_info_base_model_flagged", "litellm_params_base_model_flagged", "no_base_model"],
+)
+def test_count_tokens_pins_an_unlisted_claude_whose_base_model_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: Mapping[str, str],
+    model_info: Mapping[str, str],
+    sent_profile_id: str | None,
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _count_api_expecting(sent_profile_id),
+        {},
+        caller=UserAPIKeyAuth(metadata={"anthropic_user_profile_id": "uprof_pinned"}),
+        claude={**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-unlisted-deployment", **litellm_params},
+        model_info=model_info,
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+
+
+@pytest.mark.parametrize(
+    "client_headers",
+    [{**_CALLER_OAUTH_HEADERS, "anthropic-user-profile-id": "uprof_client"}, _CALLER_OAUTH_HEADERS],
+    ids=["caller_oauth_with_its_own_id", "caller_oauth_without_an_id"],
+)
+def test_count_tokens_on_foundry_keeps_the_pinned_user_profile_id_beside_a_caller_oauth_token(
+    monkeypatch: pytest.MonkeyPatch, client_headers: Mapping[str, str]
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _count_api_expecting("uprof_pinned"),
+        client_headers,
+        caller=UserAPIKeyAuth(metadata={"anthropic_user_profile_id": "uprof_pinned"}),
+        claude={"model": "azure_ai/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
 
 
 def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_error(

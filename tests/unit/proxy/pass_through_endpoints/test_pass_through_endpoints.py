@@ -33,7 +33,11 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import (
+    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
+    ANTHROPIC_MAX_USER_ID_LENGTH,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM
@@ -6541,6 +6545,18 @@ def _relay_client_request(method: str = "GET", headers: Mapping[str, str] | None
     return cast(Request, mock_request)
 
 
+def _configured_route_request(method: str = "GET", headers: Mapping[str, str] | None = None) -> Request:
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+    def configured_route_endpoint() -> None:
+        return None
+
+    setattr(configured_route_endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    request: Final = _relay_client_request(method=method, headers=headers)
+    request.scope = {"endpoint": configured_route_endpoint}
+    return request
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
 async def test_pass_through_request_propagates_active_trace_context(span_source: str):
@@ -6639,6 +6655,371 @@ async def test_pass_through_request_without_caller_trace_headers_still_propagate
     propagated = get_current_span(TraceContextTextMapPropagator().extract(upstream_headers))
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
     assert upstream_headers["anthropic-beta"] == "beta-1"
+
+
+_SERVER_ANTHROPIC_KEY: Final = {"x-api-key": "server-anthropic-key"}
+_PINNED_KEY_METADATA: Final = {"anthropic_user_profile_id": "uprof_key"}
+_PROXY_MASTER_KEY: Final = "sk-proxy-master"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "route_headers", "inbound_headers", "forward_headers", "sent_profile_id"),
+    [
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_key",
+            id="pin-replaces-x-pass-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"Anthropic-User-Profile-Id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="pin-replaces-forwarded-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-api-key": "caller-anthropic-key", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="route-credential-replaces-the-callers-so-the-pin-applies",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"api-key": "unrelated-caller-value", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="caller-credential-beside-the-route-credential-gets-the-pin",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"Authorization": "Bearer sk-test", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="forwarded-proxy-key-is-no-caller-credential",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-litellm-api-key": _PROXY_MASTER_KEY, "api-key": _PROXY_MASTER_KEY, "anthropic-user-profile-id": "x"},
+            True,
+            "uprof_key",
+            id="forwarded-master-key-is-no-caller-credential",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"x-api-key": "caller-anthropic-key", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_caller",
+            id="forwarded-caller-credential-keeps-its-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"Authorization": "Bearer sk-ant-oat01-caller", "x-pass-anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_caller",
+            id="forwarded-caller-oauth-keeps-its-id",
+        ),
+        pytest.param(_PINNED_KEY_METADATA, _SERVER_ANTHROPIC_KEY, {}, False, None, id="pin-adds-nothing"),
+        pytest.param(
+            {},
+            _SERVER_ANTHROPIC_KEY,
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_caller",
+            id="no-pin",
+        ),
+    ],
+)
+async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, str],
+    route_headers: dict[str, str],
+    inbound_headers: dict[str, str],
+    forward_headers: bool,
+    sent_profile_id: str | None,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    captured: Final[dict[str, httpx.Headers]] = {}  # mutable-ok: the mock transport records the upstream headers
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            request: Final = _configured_route_request(method="POST", headers=inbound_headers)
+            response: Final = await pass_through_request(
+                request=request,
+                target="http://internal-api.test/v1/messages",
+                custom_headers=dict(route_headers),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=forward_headers,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, captured["headers"].get_list("anthropic-user-profile-id")) == (
+        200,
+        [] if sent_profile_id is None else [sent_profile_id],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_route", "route_headers", "inbound_headers", "model", "custom_llm_provider", "sent_profile_id"),
+    [
+        pytest.param(
+            True, _SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", None, ["uprof_key"], id="claude-body-gets-the-pin"
+        ),
+        pytest.param(
+            True,
+            _SERVER_ANTHROPIC_KEY,
+            {},
+            "claude-unlisted-deployment",
+            None,
+            [],
+            id="unmapped-claude-name-gets-nothing",
+        ),
+        pytest.param(True, _SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", None, [], id="other-model-gets-nothing"),
+        pytest.param(
+            True,
+            {},
+            {"x-api-key": "caller-anthropic-key"},
+            "claude-haiku-5-5",
+            None,
+            [],
+            id="caller-credential-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            _SERVER_ANTHROPIC_KEY,
+            {},
+            "claude-haiku-5-5",
+            "azure_ai",
+            ["uprof_key"],
+            id="foundry-route-gets-the-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-openrouter-key"},
+            {},
+            "anthropic/claude-haiku-5-5",
+            "openrouter",
+            [],
+            id="vendor-route-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-openrouter-key"},
+            {"anthropic-user-profile-id": "uprof_caller"},
+            "anthropic/claude-haiku-5-5",
+            "openrouter",
+            ["uprof_caller"],
+            id="vendor-route-keeps-the-callers-id",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-mistral-key"},
+            {},
+            "claude-haiku-5-5",
+            None,
+            [],
+            id="built-in-route-without-a-provider-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-mistral-key"},
+            {"anthropic-user-profile-id": "uprof_caller"},
+            "claude-haiku-5-5",
+            None,
+            ["uprof_caller"],
+            id="built-in-route-without-a-provider-keeps-the-callers-id",
+        ),
+    ],
+)
+async def test_pass_through_request_adds_the_pin_to_a_claude_request_without_a_profile_id(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_route: bool,
+    route_headers: dict[str, str],
+    inbound_headers: dict[str, str],
+    model: str,
+    custom_llm_provider: str | None,
+    sent_profile_id: list[str],
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    captured: Final[dict[str, httpx.Headers]] = {}  # mutable-ok: the mock transport records the upstream headers
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    body: Final = {"model": model, "max_tokens": 8}
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=(_configured_route_request if configured_route else _relay_client_request)(
+                    method="POST", headers=inbound_headers
+                ),
+                target="http://internal-api.test/v1/messages",
+                custom_headers=dict(route_headers),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=_PINNED_KEY_METADATA),
+                forward_headers=True,
+                custom_body=body,
+                custom_llm_provider=custom_llm_provider,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, captured["headers"].get_list("anthropic-user-profile-id")) == (
+        200,
+        sent_profile_id,
+    )
+
+
+_SERVER_MANTLE_KEY: Final = {"Authorization": "Bearer server-mantle-key"}
+_MANTLE_CLAUDE: Final = "anthropic.claude-opus-5-5"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "route_headers", "inbound_headers", "body", "sent_body_profile_id"),
+    [
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": _MANTLE_CLAUDE, "user_profile_id": "uprof_caller"},
+            "uprof_key",
+            id="claude-body-id-gets-the-pin",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": "claude-unlisted-deployment", "user_profile_id": "uprof_caller"},
+            "uprof_caller",
+            id="unmapped-model-keeps-its-body-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"user_profile_id": "own-api-user-42"},
+            "own-api-user-42",
+            id="non-claude-api-keeps-its-own-user-profile-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": _MANTLE_CLAUDE},
+            None,
+            id="pin-adds-no-body-field",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"Authorization": "Bearer caller-mantle-key"},
+            {"model": _MANTLE_CLAUDE, "user_profile_id": "uprof_caller"},
+            "uprof_caller",
+            id="caller-credential-keeps-its-body-id",
+        ),
+        pytest.param(
+            {},
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": _MANTLE_CLAUDE, "user_profile_id": "uprof_caller"},
+            "uprof_caller",
+            id="no-pin-keeps-the-body-id",
+        ),
+    ],
+)
+async def test_pass_through_request_replaces_a_sent_body_profile_id_with_the_pin(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, str],
+    route_headers: dict[str, str],
+    inbound_headers: dict[str, str],
+    body: dict[str, str],
+    sent_body_profile_id: str | None,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    captured: Final[dict[str, bytes]] = {}  # mutable-ok: the mock transport records the upstream body
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["body"] = upstream_request.content
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=_configured_route_request(method="POST", headers=inbound_headers),
+                target="http://internal-api.test/anthropic/v1/messages",
+                custom_headers=dict(route_headers),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=True,
+                custom_body=body,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    upstream_body: Final = TypeAdapter(dict[str, object]).validate_json(captured["body"])
+    assert (response.status_code, upstream_body.get("user_profile_id")) == (200, sent_body_profile_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata",
+    [pytest.param(_PINNED_KEY_METADATA, id="pinned-key"), pytest.param({}, id="unpinned-key")],
+)
+async def test_pass_through_request_fetches_no_model_config_for_a_caller_named_model(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, str],
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    body: Final = {"model": "huggingface/attacker/repo", "user_profile_id": "own-api-user-42"}
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        httpx.MockTransport(lambda upstream_request: httpx.Response(200, json={"ok": True}, request=upstream_request)),
+        timeout=None,
+    )
+    try:
+        with respx.mock(assert_all_called=False) as respx_mock, ExitStack() as stack:
+            hf_config: Final = respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+                json={"max_position_embeddings": 512}
+            )
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=_configured_route_request(method="POST", headers={}),
+                target="http://internal-api.test/v1/users",
+                custom_headers=dict(_SERVER_MANTLE_KEY),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=True,
+                custom_body=body,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, hf_config.call_count) == (200, 0)
 
 
 @pytest.mark.asyncio
@@ -7025,7 +7406,9 @@ async def test_pass_through_forwards_only_an_acceptable_user_id_to_anthropic_mes
     relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
 
     assert relayed == (
-        body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
+        body_without_metadata
+        if forwarded_metadata is None
+        else {**body_without_metadata, "metadata": forwarded_metadata}
     )
 
 
@@ -7117,7 +7500,9 @@ async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
         guardrail_name="pii-guard", default_on=default_on, event_hook=event_hook, stream_scope=stream_scope
     )
     client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}, **client_fields})
-    body_without_client_fields: Final = {k: v for k, v in client_body.items() if k not in ("metadata", "litellm_metadata")}
+    body_without_client_fields: Final = {
+        k: v for k, v in client_body.items() if k not in ("metadata", "litellm_metadata")
+    }
 
     with patch.object(litellm, "callbacks", [guardrail]):
         relayed: Final = await _relay_through_pass_through(
@@ -8748,9 +9133,7 @@ class ScriptedUpstreamWebSocket:
         return frame
 
 
-def _turn_taking_client(
-    frames: Sequence[str], answered_by: str, answers_due: Sequence[int] | None = None
-) -> MagicMock:
+def _turn_taking_client(frames: Sequence[str], answered_by: str, answers_due: Sequence[int] | None = None) -> MagicMock:
     """A client that sends each frame, and then leaves, once the answers due by then reached it (by default the
     answer to every earlier frame), and that Starlette refuses to send to once it is closed"""
     from starlette.websockets import WebSocketState
@@ -8819,14 +9202,11 @@ def _responses_turn_started(model: str) -> str:
 
 
 def _responses_turn_ended(model: str) -> str:
-    return (
-
-        json.dumps(
-            {
-                "type": "response.completed",
-                "response": {"model": model, "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12}},
-            }
-        )
+    return json.dumps(
+        {
+            "type": "response.completed",
+            "response": {"model": model, "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12}},
+        }
     )
 
 
@@ -8848,7 +9228,9 @@ async def test_websocket_passthrough_logs_each_turn_on_its_own_row_charged_to_th
         ],
         answered_by='"response.completed"',
     )
-    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini"), _responses_turn("gpt-5.4")])
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        replies=[_responses_turn("gpt-5.4-mini"), _responses_turn("gpt-5.4")]
+    )
 
     relayed: Final = await _relay_turns(client, upstream_ws, gate)
 
@@ -9666,7 +10048,9 @@ async def test_websocket_passthrough_charges_realtime_turns_to_the_session_the_k
 async def test_websocket_passthrough_logs_no_spend_row_for_a_session_refused_before_any_answer():
     """A session refused at its first frame ran nothing, so its only record is the refusal, not an extra $0 row"""
     gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
-    client: Final = _turn_taking_client([json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"error"')
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"error"'
+    )
 
     relayed: Final = await _relay_turns(client, ScriptedUpstreamWebSocket(), gate)
 
@@ -9693,7 +10077,10 @@ async def test_websocket_passthrough_logs_the_unfinished_turn_a_client_walked_ou
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate())
 
     assert [
-        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
+        [
+            json.loads(frame)["type"] if isinstance(frame, str) else frame["type"]
+            for frame in logged.kwargs["response_body"]
+        ]
         for logged in relayed.success_handler.call_args_list
     ] == [["response.created", "response.completed"], ["response.created"]]
 
@@ -9810,7 +10197,10 @@ async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_once_
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
 
     assert [
-        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
+        [
+            json.loads(frame)["type"] if isinstance(frame, str) else frame["type"]
+            for frame in logged.kwargs["response_body"]
+        ]
         for logged in relayed.success_handler.call_args_list
     ] == [["response.created", "response.output_text.delta", "response.completed"]]
     upstream_ws.close.assert_awaited()
@@ -9995,8 +10385,7 @@ async def test_websocket_passthrough_logs_no_extra_row_for_what_the_provider_sen
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
 
     assert [
-        [frame["type"] for frame in logged.kwargs["response_body"]]
-        for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
     ] == [["session.created", "response.done"]]
 
 
@@ -10018,8 +10407,7 @@ async def test_websocket_passthrough_carries_the_session_the_provider_opened_int
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
 
     assert [
-        [frame["type"] for frame in logged.kwargs["response_body"]]
-        for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
     ] == [["session.created", "response.done"], ["session.created", "response.done"]]
 
 
@@ -10040,8 +10428,7 @@ def _transcription_session_update(frame_type: str, model: str) -> str:
 
 def _logged_frame_types(relayed: SimpleNamespace) -> list[list[str]]:
     return [
-        [frame["type"] for frame in logged.kwargs["response_body"]]
-        for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
     ]
 
 
@@ -10204,8 +10591,7 @@ async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_lat
         "error",
     ]
     assert [
-        [frame["type"] for frame in logged.kwargs["response_body"]]
-        for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
     ] == [["response.created", "response.completed"]]
     relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
 
@@ -10320,7 +10706,9 @@ class _LengthMeter:
         return len(client_text)
 
     def price(self, total: int) -> WebSocketSessionUsage:
-        return WebSocketSessionUsage(model="voice-1", custom_llm_provider="tts-provider", response_cost=total * self.rate)
+        return WebSocketSessionUsage(
+            model="voice-1", custom_llm_provider="tts-provider", response_cost=total * self.rate
+        )
 
 
 @pytest.mark.asyncio
@@ -11377,7 +11765,9 @@ async def _billed_metadata(gate: WebsocketFrameModelGate) -> Mapping[str, object
 async def test_websocket_session_is_charged_to_the_group_its_frames_were_authorized_through():
     """A websocket names its model in a frame, long after the relay built its logging metadata, so the
     groups the gate matched have to be picked up at the end or the group pays for nothing it allowed."""
-    metadata: Final = await _billed_metadata(RecordingFrameModelGate(groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",)})))
+    metadata: Final = await _billed_metadata(
+        RecordingFrameModelGate(groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",)}))
+    )
 
     assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
     assert metadata["user_api_key"] == "hashed-key"
@@ -12049,9 +12439,7 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
         ' "generationConfig": {"temperature": 0}, "litellm_trace_id": "trace-a"}'
     )
 
-    assert frozenset(split.litellm_params) == frozenset(
-        ("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS)
-    )
+    assert frozenset(split.litellm_params) == frozenset(("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS))
     assert tuple(split.litellm_params[k] for k in ("ttl", "num_retries", "litellm_trace_id")) == (30, 2, "trace-a")
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -14332,13 +14720,23 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
-        request: Final = Request({
-            "type": "http", "method": "GET", "path": "/passthrough-relay/results",
-            "headers": [], "query_string": b"", "scheme": "http", "server": ("test", 80),
-        })
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/passthrough-relay/results",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("test", 80),
+            }
+        )
         result: Final = await pass_through_request(
-            request=request, target="http://cost-upstream.invalid/results", custom_headers={},
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
+            request=request,
+            target="http://cost-upstream.invalid/results",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"),
+            cost_per_request=flat_cost,
         )
         if delivery != "json":
             assert isinstance(result, StreamingResponse)

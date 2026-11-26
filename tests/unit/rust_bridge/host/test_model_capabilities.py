@@ -35,6 +35,7 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
         supports_xhigh_reasoning_effort=True,
         supports_sampling_params=False,
         supports_mid_conversation_system=True,
+        supports_anthropic_user_profile_id=True,
     )
 
     capabilities: Final = anthropic_model_capabilities("anthropic/claude-test-adaptive", None)
@@ -42,6 +43,7 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     assert capabilities["supports_adaptive_thinking"]
     assert capabilities["supports_output_config"]
     assert capabilities["supports_mid_conversation_system"]
+    assert capabilities["supports_anthropic_user_profile_id"]
     assert not capabilities["supports_legacy_thinking"]
     assert not capabilities["supports_sampling_params"]
     assert capabilities["effort_tiers"] == {
@@ -54,6 +56,21 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     }
 
 
+@pytest.mark.parametrize(
+    ("base_model", "takes_profile_id"),
+    [("anthropic/claude-test-profile", True), (None, False)],
+    ids=["base_model_flagged", "no_base_model"],
+)
+def test_an_unlisted_model_takes_the_user_profile_id_its_base_model_is_flagged_for(
+    monkeypatch: pytest.MonkeyPatch, base_model: str | None, takes_profile_id: bool
+) -> None:
+    _flag_model(monkeypatch, "claude-test-profile", supports_anthropic_user_profile_id=True)
+
+    capabilities: Final = anthropic_model_capabilities("anthropic/claude-test-unlisted", None, base_model)
+
+    assert capabilities["supports_anthropic_user_profile_id"] is takes_profile_id
+
+
 def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
     capabilities: Final = anthropic_model_capabilities("anthropic/not-a-real-model", None)
 
@@ -61,6 +78,7 @@ def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> Non
     assert not capabilities["supports_reasoning"]
     assert not capabilities["supports_adaptive_thinking"]
     assert not capabilities["supports_mid_conversation_system"]
+    assert not capabilities["supports_anthropic_user_profile_id"]
     assert capabilities["effort_tiers"] == dict.fromkeys(("minimal", "low", "medium", "high", "xhigh", "max"), False)
 
 

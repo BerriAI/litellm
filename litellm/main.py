@@ -6271,13 +6271,9 @@ def completion(
             drop_params=drop_unsupported_reasoning,
         )
 
-        if provider_specific_header is not None:
-            headers.update(
-                ProviderSpecificHeaderUtils.get_provider_specific_headers(
-                    provider_specific_header=provider_specific_header,
-                    custom_llm_provider=custom_llm_provider,
-                )
-            )
+        headers = ProviderSpecificHeaderUtils.with_provider_specific_headers(  # rebind-ok: legacy request headers
+            headers, provider_specific_header, custom_llm_provider, model, base_model, deployment_model_info
+        )
 
         if model_response is not None and hasattr(model_response, HIDDEN_PARAMS_ATTR):
             model_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior

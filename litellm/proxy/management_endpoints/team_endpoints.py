@@ -128,6 +128,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
+    validate_anthropic_user_profile_id_metadata,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2764,6 +2765,7 @@ async def update_team(
             premium_user=premium_user,
         )
 
+        validate_anthropic_user_profile_id_metadata(data, "team")
         existing_team_row = await _raw_team_db(TeamRepository(prisma_client)).find_unique(
             where={"team_id": data.team_id}
         )

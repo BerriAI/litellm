@@ -44,6 +44,19 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 _SUPPORTED = frozenset({"tpm_limit", "rpm_limit", "team_alias"})
 
 
+@pytest.mark.parametrize("stored,sent", [(None, "uprof_other"), ("uprof_admin", "uprof_other"), ("uprof_admin", None)])
+def test_team_admin_cannot_change_profile_mapping(stored: str | None, sent: str | None) -> None:
+    data: Final = UpdateTeamRequest(
+        team_id="team-1", metadata={} if sent is None else {"anthropic_user_profile_id": sent}
+    )
+    existing: Final = LiteLLM_TeamTable(
+        team_id="team-1", metadata={} if stored is None else {"anthropic_user_profile_id": stored}
+    )
+    assert team_admin_edit_verdict(data, existing, frozenset({"metadata"})) == TeamAdminMetadataKeyProxyControlled(
+        key="anthropic_user_profile_id"
+    )
+
+
 def test_generic_metadata_delegation_does_not_allow_team_admins_to_change_lens_logging() -> None:
     verdict: Final = team_admin_edit_verdict(
         UpdateTeamRequest(team_id="team-1", metadata={"lens_enabled": False}),
@@ -332,6 +345,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "enforced_file_expires_after",
     "enforced_batch_output_expires_after",
     "allowed_s3_buckets",
+    "anthropic_user_profile_id",
     "require_trace_id",
     "allowed_passthrough_routes",
     "denied_passthrough_routes",

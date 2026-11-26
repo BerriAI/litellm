@@ -353,7 +353,7 @@ class TestVertexAIPassThroughHandler:
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
-                    user_api_key_dict={"api_key": "test-key"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 )
             except Exception as e:
                 print(f"Error: {e}")
@@ -446,7 +446,7 @@ class TestVertexAIPassThroughHandler:
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
-                    user_api_key_dict={"api_key": "test-key"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 )
             except Exception as e:
                 print(f"Error: {e}")
@@ -5759,7 +5759,8 @@ class TestAnthropicPassthroughVirtualKeyLeak:
             headers=dict(captured["custom_headers"] or {}),
             forward_headers=captured.get("_forward_headers", False),
         )
-        return raised, upstream
+        filtered: Final = captured.get("upstream_headers_filter", lambda headers: headers)(upstream)
+        return raised, filtered
 
     @staticmethod
     def _blob(forwarded: dict) -> str:
@@ -6017,6 +6018,44 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         assert "content-length" not in forwarded
         assert "host" not in forwarded
         assert "accept-encoding" not in forwarded
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,team_metadata,pinned",
+        [
+            ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
+            ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+            ({}, {}, None),
+        ],
+    )
+    @pytest.mark.parametrize("override", [b"uprof_other", b""])
+    @pytest.mark.parametrize("proxy_api_key", [None, "sk-ant-api03-proxy-key"])
+    async def test_expanded_profile_headers_cannot_replace_an_admin_pin(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        metadata: dict[str, str],
+        team_metadata: dict[str, str],
+        pinned: str | None,
+        override: bytes,
+        proxy_api_key: str | None,
+    ) -> None:
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (b"anthropic-user-profile-id", b"uprof_client"),
+                (b"x-pass-anthropic-user-profile-id", override),
+                (b"x-pass-anthropic-beta", b"interleaved-thinking-2025-05-14"),
+            ],
+            proxy_api_key=proxy_api_key,
+            authenticated=UserAPIKeyAuth(api_key=self.VKEY, metadata=metadata, team_metadata=team_metadata),
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert [value for name, value in forwarded.items() if name.lower() == "anthropic-user-profile-id"] == [
+            pinned if pinned is not None and proxy_api_key is not None else override.decode()
+        ]
+        assert forwarded["anthropic-beta"] == "interleaved-thinking-2025-05-14"
 
 
 class TestVertexPassthroughDefaultLocationOnShortRoutes:
@@ -7609,6 +7648,33 @@ class TestAnthropicProxyRoute:
 _HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07})
 
 
+@pytest.mark.parametrize(
+    "metadata,team_metadata,expected",
+    [
+        ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
+        ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+        ({}, {}, "uprof_client"),
+    ],
+)
+@pytest.mark.parametrize("proxy_auth", [None, {"x-api-key": "sk-upstream"}])
+def test_anthropic_passthrough_honors_profile_mapping(
+    metadata: dict[str, str], team_metadata: dict[str, str], expected: str, proxy_auth: dict[str, str] | None
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "headers": [(b"anthropic-user-profile-id", b"uprof_client"), (b"x-api-key", b"sk-caller-upstream")],
+        }
+    )
+    headers: Final = _upstream_headers_for_anthropic_route(
+        request, UserAPIKeyAuth(api_key="hashed-key", metadata=metadata, team_metadata=team_metadata), proxy_auth
+    )
+    assert headers["anthropic-user-profile-id"] == (expected if proxy_auth is not None else "uprof_client")
+
+
 def _anthropic_deployment(
     deployment_id: str,
     model_name: str = "claude-haiku-5-5",
@@ -7931,7 +7997,7 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
 
         return Request(scope, receive)
 
-    async def _upstream_headers(self, request: Request) -> dict:
+    async def _upstream_headers(self, request: Request, caller: UserAPIKeyAuth | None = None) -> dict:
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             anthropic_proxy_route,
         )
@@ -7966,7 +8032,7 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
                 endpoint="v1/messages",
                 request=request,
                 fastapi_response=MagicMock(spec=Response),
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+                user_api_key_dict=caller or UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
             )
 
         assert httpx_client.send.called
@@ -8089,6 +8155,165 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         assert sent["x-api-key"] == "sk-ant-caller-owned"
         assert sent["anthropic-version"] == "2023-06-01"
         assert "authorization" not in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,team_metadata,sent_profile_id",
+        [
+            ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
+            ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+            ({"anthropic_user_profile_id": ""}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+            ({}, {}, "uprof_caller"),
+        ],
+        ids=["key_pin", "team_pin", "empty_key_pin", "no_pin"],
+    )
+    async def test_server_credential_sends_the_pinned_user_profile_id_over_the_callers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        metadata: Mapping[str, str],
+        team_metadata: Mapping[str, str],
+        sent_profile_id: str,
+    ) -> None:
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
+
+        sent: Final = await self._upstream_headers(
+            self._request({"content-type": "application/json", "Anthropic-User-Profile-Id": "uprof_caller"}),
+            UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata=dict(metadata), team_metadata=dict(team_metadata)),
+        )
+
+        assert sent["anthropic-user-profile-id"] == sent_profile_id
+
+    @pytest.mark.asyncio
+    async def test_byok_caller_keeps_its_own_user_profile_id_over_a_key_pin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._clear_anthropic_env(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request({"x-api-key": "sk-ant-caller-owned", "anthropic-user-profile-id": "uprof_caller"}),
+            UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata={"anthropic_user_profile_id": "uprof_key"}),
+        )
+
+        assert sent["anthropic-user-profile-id"] == "uprof_caller"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,sent_profile_id",
+        [({"anthropic_user_profile_id": "uprof_key"}, "uprof_key"), ({}, "uprof_forwarded")],
+        ids=["key_pin", "no_pin"],
+    )
+    async def test_server_credential_pin_wins_over_an_x_pass_user_profile_id(
+        self, monkeypatch: pytest.MonkeyPatch, metadata: Mapping[str, str], sent_profile_id: str
+    ) -> None:
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
+
+        sent: Final = await self._upstream_headers(
+            self._request({"content-type": "application/json", "x-pass-anthropic-user-profile-id": "uprof_forwarded"}),
+            UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata=dict(metadata)),
+        )
+
+        assert sent["anthropic-user-profile-id"] == sent_profile_id
+
+
+class TestRouterModelRelayUnderAUserProfilePin:
+    def _request(self, model_group: str) -> Request:
+        async def receive() -> dict:
+            return {"type": "http.request", "body": json.dumps({"model": model_group}).encode(), "more_body": False}
+
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/azure_ai/openai/deployments/{model_group}/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"x-pass-anthropic-user-profile-id", b"uprof_forwarded"),
+                ],
+            },
+            receive,
+        )
+
+    def _route_foundry_models(self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
+        import litellm.proxy.proxy_server as proxy_server
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        upstream: Final = respx_mock.route(host="example.services.ai.azure.com").respond(json={"ok": True})
+        monkeypatch.setattr(
+            proxy_server,
+            "llm_router",
+            litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "foundry-claude",
+                        "litellm_params": {
+                            "model": "azure_ai/claude-sonnet-5-5",
+                            "api_base": "https://example.services.ai.azure.com/anthropic",
+                            "api_key": "sk-foundry",
+                        },
+                    },
+                    {
+                        "model_name": "foundry-gpt",
+                        "litellm_params": {
+                            "model": "azure_ai/gpt-5",
+                            "api_base": "https://example.services.ai.azure.com/models",
+                            "api_key": "sk-foundry",
+                        },
+                    },
+                ]
+            ),
+        )
+        return upstream
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model_group,metadata,forwarded_profile_id",
+        [
+            ("foundry-claude", {"anthropic_user_profile_id": "uprof_key"}, "uprof_key"),
+            ("foundry-gpt", {"anthropic_user_profile_id": "uprof_key"}, "uprof_forwarded"),
+            ("foundry-claude", {}, "uprof_forwarded"),
+            ("foundry-gpt", {}, "uprof_forwarded"),
+        ],
+        ids=["claude_key_pin", "non_claude_key_pin", "claude_no_pin", "non_claude_no_pin"],
+    )
+    async def test_a_pinned_key_sends_its_pin_to_a_claude_router_model_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        model_group: str,
+        metadata: Mapping[str, str],
+        forwarded_profile_id: str,
+    ) -> None:
+        upstream: Final = self._route_foundry_models(monkeypatch, respx_mock)
+
+        await azure_proxy_route(
+            endpoint=f"openai/deployments/{model_group}/chat/completions",
+            request=self._request(model_group),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata=dict(metadata)),
+        )
+
+        assert upstream.call_count == 1
+        assert upstream.calls[0].request.headers.get_list("anthropic-user-profile-id") == [forwarded_profile_id]
+
+    @pytest.mark.asyncio
+    async def test_a_pinned_key_sends_its_pin_through_the_vllm_route_to_a_claude_router_model(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ) -> None:
+        upstream: Final = self._route_foundry_models(monkeypatch, respx_mock)
+
+        await vllm_proxy_route(
+            endpoint="chat/completions",
+            request=self._request("foundry-claude"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-caller-virtual-key", metadata={"anthropic_user_profile_id": "uprof_key"}
+            ),
+        )
+
+        assert upstream.call_count == 1
+        assert upstream.calls[0].request.headers.get_list("anthropic-user-profile-id") == ["uprof_key"]
 
 
 class TestPassthroughRouterModelBudgetReservation:

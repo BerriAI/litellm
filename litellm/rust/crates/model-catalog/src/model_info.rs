@@ -165,6 +165,7 @@ pub struct ModelInfoFields {
     pub supports_mid_conversation_system: Option<bool>,
     pub supports_anthropic_thinking_payload: Option<bool>,
     pub supports_anthropic_compaction: Option<bool>,
+    pub supports_anthropic_user_profile_id: Option<bool>,
     pub supports_none_reasoning_effort: Option<bool>,
     pub supports_minimal_reasoning_effort: Option<bool>,
     pub supports_low_reasoning_effort: Option<bool>,

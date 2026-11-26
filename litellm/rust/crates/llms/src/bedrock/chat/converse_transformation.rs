@@ -269,6 +269,10 @@ impl BaseConfig for AmazonConverseConfig {
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
+        let headers = headers
+            .into_iter()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("anthropic-user-profile-id"))
+            .collect();
         let bearer = match api_key {
             Some(key) => Some(key.to_string()),
             None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
@@ -858,6 +862,34 @@ mod tests {
             } => Err(region),
             other => panic!("unexpected auth {other:?}"),
         }
+    }
+
+    #[rstest]
+    #[case::lowercase("anthropic-user-profile-id", "uprof_bad")]
+    #[case::mixed_case("Anthropic-User-Profile-Id", "uprof_bad")]
+    #[case::empty("anthropic-user-profile-id", "")]
+    #[case::invalid_value("anthropic-user-profile-id", "\n")]
+    fn runtime_does_not_forward_user_profile_headers(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[values(None, Some("test-token"))] api_key: Option<&str>,
+    ) {
+        let validated = BEDROCK_CHAT_COMPLETIONS_CONFIG
+            .validate_environment(
+                vec![
+                    (name.into(), value.into()),
+                    ("x-other".into(), "keep".into()),
+                ],
+                api_key,
+                "anthropic.claude-3",
+                &Map::new(),
+                &|_| None,
+            )
+            .unwrap();
+        assert_eq!(
+            validated.headers,
+            vec![("x-other".to_string(), "keep".to_string())]
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id, pinned_anthropic_user_profile_id
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -504,6 +505,8 @@ async def _google_count_tokens(
             request=token_request,
             call_endpoint=True,
             litellm_call_id=litellm_call_id,
+            pinned_user_profile_id=pinned_anthropic_user_profile_id(caller),
+            client_user_profile_id=anthropic_user_profile_id(caller, request.headers, caller_credential=True),
             caller=caller,
             request_routing=request_routing_metadata(request, _COUNT_REQUEST_FIELDS.validate_python(data), caller),
         )

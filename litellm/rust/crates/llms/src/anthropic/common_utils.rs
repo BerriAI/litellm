@@ -3470,6 +3470,7 @@ mod tests {
                 supports_sampling_params: true,
                 supports_speed: false,
                 supports_mid_conversation_system: false,
+                supports_anthropic_user_profile_id: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
                 bedrock: Default::default(),
             }

@@ -96,6 +96,7 @@ pub fn anthropic_model_capabilities(
         supports_speed: provider == "anthropic"
             && flag(exact(catalog, name), "supports_speed") == Some(true),
         supports_mid_conversation_system: probe.supports("supports_mid_conversation_system"),
+        supports_anthropic_user_profile_id: probe.supports("supports_anthropic_user_profile_id"),
         effort_tiers: SupportedEffortTiers {
             minimal: probe.supports("supports_minimal_reasoning_effort"),
             low: probe.supports("supports_low_reasoning_effort"),
@@ -178,6 +179,24 @@ pub fn messages_route_capabilities(
         &invoke,
         invoke.bedrock,
     )
+}
+
+pub fn with_base_model_user_profile_id(
+    capabilities: MessagesModelCapabilities,
+    catalog: &Catalog,
+    base_model: Option<&str>,
+    custom_llm_provider: Option<&str>,
+    declared: &dyn Fn(&str) -> Option<bool>,
+) -> MessagesModelCapabilities {
+    let supports_anthropic_user_profile_id = capabilities.supports_anthropic_user_profile_id
+        || base_model.is_some_and(|base_model| {
+            messages_route_capabilities(catalog, base_model, custom_llm_provider, None, declared)
+                .supports_anthropic_user_profile_id
+        });
+    MessagesModelCapabilities {
+        supports_anthropic_user_profile_id,
+        ..capabilities
+    }
 }
 
 pub fn bedrock_model_capabilities(
@@ -981,6 +1000,10 @@ mod tests {
                     (
                         "supports_mid_conversation_system",
                         capabilities.supports_mid_conversation_system,
+                    ),
+                    (
+                        "supports_anthropic_user_profile_id",
+                        capabilities.supports_anthropic_user_profile_id,
                     ),
                     (
                         "supports_xhigh_reasoning_effort",

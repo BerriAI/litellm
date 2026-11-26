@@ -813,6 +813,91 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
 
 
+_VERTEX_PINNED_PROFILE: Final = {"anthropic_user_profile_id": "uprof_key"}
+_VERTEX_GEMINI_PATH: Final = (
+    "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-omni-1.2-flash:generateContent"
+)
+_VERTEX_CLAUDE_COUNT_TOKENS_PATH: Final = (
+    "v1/projects/deployment-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict"
+)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "model_path", "caller_headers", "profile_header", "sent_profile_id"),
+    [
+        pytest.param({}, _VERTEX_DEPLOYMENT_PATH, {}, "anthropic-user-profile-id", "uprof_caller", id="no-pin"),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_DEPLOYMENT_PATH,
+            {},
+            "anthropic-user-profile-id",
+            "uprof_key",
+            id="pin-over-the-callers-header",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_DEPLOYMENT_PATH,
+            {},
+            "x-pass-anthropic-user-profile-id",
+            "uprof_key",
+            id="pin-over-the-callers-x-pass-header",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_CALLER_PATH,
+            {"Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+            "anthropic-user-profile-id",
+            "uprof_caller",
+            id="caller-credentials-keep-their-own-id",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_CLAUDE_COUNT_TOKENS_PATH,
+            {},
+            "anthropic-user-profile-id",
+            "uprof_key",
+            id="pin-on-claude-count-tokens",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE, _VERTEX_GEMINI_PATH, {}, "anthropic-user-profile-id", None, id="gemini-gets-no-pin"
+        ),
+        pytest.param({}, _VERTEX_GEMINI_PATH, {}, "anthropic-user-profile-id", None, id="gemini-gets-no-callers-id"),
+        pytest.param(
+            {}, _VERTEX_GEMINI_PATH, {}, "x-pass-anthropic-user-profile-id", None, id="gemini-gets-no-x-pass-id"
+        ),
+    ],
+)
+def test_vertex_pass_through_sends_the_pinned_user_profile_id_or_the_callers(
+    vertex_proxy: TestClient,
+    respx_mock: "respx.MockRouter",
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: Mapping[str, str],
+    model_path: str,
+    caller_headers: dict[str, str],
+    profile_header: str,
+    sent_profile_id: str | None,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def authenticate(request: object, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key=api_key, metadata=dict(metadata))
+
+    monkeypatch.setattr(proxy_server, "user_custom_auth", authenticate)
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{model_path}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+    )
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{model_path}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", profile_header: "uprof_caller", **caller_headers},
+    )
+
+    assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
+    assert upstream.calls.last.request.headers.get("anthropic-user-profile-id") == sent_profile_id
+
+
 @pytest.mark.parametrize(
     "configured",
     [[f" {_VERTEX_REJECTED_BETA} "], [f"{_VERTEX_REJECTED_BETA},afk-mode-2026-01-31"]],

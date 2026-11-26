@@ -29,12 +29,70 @@ from litellm.llms.anthropic.count_tokens.transformation import (
 from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import (
     AzureAIAnthropicTokenCounter,
 )
+from litellm.proxy.proxy_server import _with_client_identity
 from litellm.types.llms.anthropic import ANTHROPIC_OAUTH_BETA_HEADER
 from litellm.types.utils import TokenCountResponse
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
 FAKE_REGULAR_KEY = "sk-ant-api03-regular-key-for-testing-123456789"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 401])
+@pytest.mark.parametrize(
+    "deployment_key,caller_token,caller_profile,expected_profile",
+    [
+        (FAKE_REGULAR_KEY, FAKE_OAUTH_TOKEN, "uprof_caller", "uprof_admin"),
+        (FAKE_REGULAR_KEY, FAKE_OAUTH_TOKEN, None, "uprof_admin"),
+        (None, FAKE_OAUTH_TOKEN, "uprof_caller", "uprof_caller"),
+        (None, FAKE_OAUTH_TOKEN, None, None),
+        (FAKE_REGULAR_KEY, None, "uprof_caller", "uprof_admin"),
+    ],
+)
+async def test_count_tokens_profile_matches_the_credential_actually_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport_clients: None,
+    status: int,
+    deployment_key: str | None,
+    caller_token: str | None,
+    caller_profile: str | None,
+    expected_profile: str | None,
+) -> None:
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    counter: Final = _with_client_identity(
+        AnthropicTokenCounter(),
+        caller_token,
+        "uprof_admin",
+        caller_profile,
+        {"model": "anthropic/claude-sonnet-4-5"},
+        None,
+    )
+    assert counter is not None
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://api.anthropic.com/v1/messages/count_tokens").respond(
+            status,
+            json={"input_tokens": 17}
+            if status == 200
+            else {"type": "error", "error": {"type": "authentication_error", "message": "invalid credential"}},
+        )
+        result: Final = await counter.count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": deployment_key}},
+        )
+    assert result is not None
+    assert (result.error, result.total_tokens) == (status != 200, 17 if status == 200 else 0)
+    sent: Final = route.calls.last.request.headers
+    assert sent.get("anthropic-user-profile-id") == expected_profile
+    assert (sent.get("x-api-key"), sent.get("authorization")) == (
+        (deployment_key, None) if deployment_key is not None else (None, f"Bearer {caller_token}")
+    )
+
 
 FEDERATED_DEPLOYMENT = {
     "litellm_params": {

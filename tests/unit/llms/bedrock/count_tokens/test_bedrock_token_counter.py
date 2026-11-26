@@ -1939,3 +1939,41 @@ async def test_explicit_mantle_failure_does_not_probe_runtime() -> None:
     assert result.status_code == 404
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert bedrock.posted_hosts() == (MANTLE_HOST,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_to_use", "deployment_model", "sent_profile_id"),
+    (
+        ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock_mantle/anthropic.claude-opus-5-5", "uprof_01"),
+        ("mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5", "uprof_01"),
+        ("us.anthropic.claude-opus-5-5", "bedrock/us.anthropic.claude-opus-5-5", None),
+        ("bedrock_mantle/us.anthropic.claude-opus-5-5", "bedrock/us.anthropic.claude-opus-5-5", None),
+    ),
+    ids=(
+        "mantle_provider_deployment",
+        "bedrock_mantle_route_after_runtime_rejects",
+        "converse_deployment_retried_on_mantle",
+        "converse_deployment_counted_on_mantle",
+    ),
+)
+async def test_mantle_count_sends_the_user_profile_id_only_when_the_deployment_infers_on_mantle(
+    model_to_use: str, deployment_model: str, sent_profile_id: str | None
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 271}))
+    counter: Final = BedrockTokenCounter(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)), user_profile_id="uprof_01"
+    )
+
+    result: Final = await counter.count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=_deployment(deployment_model),
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 271)
+    assert bedrock.posted_hosts()[-1] == MANTLE_HOST
+    assert _JSON_BODY.validate_json(bedrock.requests[-1].content).get("user_profile_id") == sent_profile_id

@@ -33,6 +33,11 @@ _COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mappin
 _TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
+def _user_profile_fields(request_data: Mapping[str, object]) -> Mapping[str, str]:
+    profile_id: Final = request_data.get("user_profile_id")
+    return {"user_profile_id": profile_id} if isinstance(profile_id, str) and profile_id else {}
+
+
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
     """Counts tokens through Anthropic's count_tokens on the bedrock-mantle endpoint.
 
@@ -98,7 +103,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                     **({"anthropic-beta": ",".join(betas)} if betas else {}),
                 },
                 optional_params=litellm_params,
-                request_data=body,
+                request_data={**body, **_user_profile_fields(request_data)},
                 api_base=endpoint_url,
                 model=resolved_model,
                 api_key=api_key if isinstance(api_key, str) else None,

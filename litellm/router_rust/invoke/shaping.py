@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     clientside_credential_keys,
     get_dynamic_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
+    uses_provider_oauth,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping, without
@@ -671,15 +672,25 @@ def attempt_inherited_request(
     return _without_forwarded_headers(inherited, stamp, removed)
 
 
-def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:
+def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> str | None:
     """The caller's ``Authorization`` a credential-isolating provider sends instead of the deployment's key."""
-    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+    from litellm.litellm_core_utils.get_provider_specific_headers import (
+        ProviderSpecificHeaderUtils,
+        deployment_base_model,
+    )
 
+    deployment_params: Final = as_dict(deployment.get("litellm_params"))
     provider: Final = deployment_provider(deployment_params)
     if provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
         return None
     header: Final = kwargs.get("provider_specific_header")
-    return ProviderSpecificHeaderUtils.forwarded_authorization(header, provider)
+    model: Final = deployment_params.get("model")
+    return ProviderSpecificHeaderUtils.forwarded_authorization(
+        header,
+        provider,
+        model if isinstance(model, str) else None,
+        deployment_base_model(deployment_params, deployment.get("model_info")),
+    )
 
 
 def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:
@@ -687,7 +698,7 @@ def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[
     value (``api_key: null`` leaves the deployment's own auth in use), or a forwarded ``Authorization``."""
     return (
         any(kwargs.get(key) is not None for key in clientside_credential_keys)
-        or forwarded_caller_authorization(kwargs, as_dict(deployment.get("litellm_params"))) is not None
+        or forwarded_caller_authorization(kwargs, deployment) is not None
     )
 
 
@@ -704,6 +715,13 @@ def update_kwargs_with_deployment(
 ) -> None:
     """``_update_kwargs_with_deployment``, in place on the attempt's kwargs."""
     deployment_params: Final = as_dict(deployment.get("litellm_params"))
+    if uses_provider_oauth(deployment_params) and kwargs.get("provider_specific_header") is not None:
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            where_only_the_deployment_credential_authenticates,
+        )
+
+        scoped: Final = where_only_the_deployment_credential_authenticates(kwargs["provider_specific_header"])
+        kwargs["provider_specific_header"] = scoped  # rebind-ok: the attempt's kwargs are shaped in place
     for key in _forwarded_alias_marker_keys_the_deployment_sets(
         deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
     ):
@@ -720,7 +738,7 @@ def update_kwargs_with_deployment(
     deployment_model_name: Final = deployment.get("model_name")
     for key in _malformed_request_params_the_deployment_sets(deployment_params, defaults, kwargs):
         kwargs.pop(key)
-    forwarded_authorization: Final = forwarded_caller_authorization(kwargs, deployment_params)
+    forwarded_authorization: Final = forwarded_caller_authorization(kwargs, deployment)
     if is_clientside_credential(request_kwargs=dict(kwargs)) or forwarded_authorization is not None:
         model_info, deployment_model, deployment_api_base = (  # rebind-ok: rebound as the Python router rebinds it
             _clientside_deployment(
