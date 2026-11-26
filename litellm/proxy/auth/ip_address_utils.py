@@ -7,7 +7,7 @@ External callers (public IPs) only see servers with available_on_public_internet
 
 import ipaddress
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 from urllib.parse import urlparse
@@ -34,11 +34,12 @@ _warned_xff_without_trusted_ranges = False
 _warned_xff_present_but_disabled = False
 
 _NUM_TRUSTED_HOPS_ADAPTER: Final = TypeAdapter(int)
+_TRUSTED_RANGES_ADAPTER: Final = TypeAdapter(list[str])
 
 
 @dataclass(frozen=True, slots=True)
 class _HopCountUnset:
-    """mcp_xff_num_trusted_hops is absent: keep the legacy leftmost-XFF path."""
+    """mcp_xff_num_trusted_hops is absent: walk the chain right to left past trusted proxies."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,15 +122,11 @@ class IPAddressUtils:
         """
         Check if a client IP is from an internal/private network.
 
-        Handles X-Forwarded-For comma chains (takes leftmost = original client).
-        Fails closed: empty/invalid IPs are treated as external.
+        Expects a single resolved address (see ``get_mcp_client_ip``).
+        Fails closed: empty/invalid IPs and unresolved comma chains are treated as external.
         """
-        if not client_ip:
+        if not client_ip or "," in client_ip:
             return False
-
-        # X-Forwarded-For may contain comma-separated chain; leftmost is original client
-        if "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
 
         networks: Final = internal_networks or IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
 
@@ -256,6 +253,56 @@ class IPAddressUtils:
         return candidate
 
     @staticmethod
+    def get_xff_chain(request: Request) -> str:
+        """Every X-Forwarded-For header line joined in arrival order, as one chain."""
+        return ", ".join(request.headers.getlist("x-forwarded-for"))
+
+    @staticmethod
+    def extract_client_ip_from_trusted_chain(
+        xff_header: str,
+        trusted_networks: Sequence[ipaddress.IPv4Network | ipaddress.IPv6Network],
+    ) -> str | None:
+        """
+        Resolve the client IP by walking the X-Forwarded-For chain right to
+        left, skipping addresses inside ``trusted_networks``: the first
+        untrusted address is the client. When every entry is a trusted proxy
+        the leftmost one is the client.
+
+        Returns None when the chain is empty or the selected entry is not a
+        valid IP, so callers can fail closed.
+        """
+        entries: Final = tuple(part.strip() for part in xff_header.split(",") if part.strip())
+        for position, entry in enumerate(reversed(entries)):
+            try:
+                addr = ipaddress.ip_address(entry)
+            except ValueError:
+                return None
+            if position == len(entries) - 1 or not any(addr in network for network in trusted_networks):
+                return str(addr)
+        return None
+
+    @staticmethod
+    def _walk_trusted_chain(xff_chain: str, general_settings: Mapping[str, object]) -> str:
+        """Client IP from the right-to-left trusted-proxy walk, or "" to fail closed."""
+        raw_trusted_ranges: Final = general_settings.get("mcp_trusted_proxy_ranges")
+        try:
+            trusted_ranges: Final = _TRUSTED_RANGES_ADAPTER.validate_python(raw_trusted_ranges)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Invalid mcp_trusted_proxy_ranges %r: expected a list of CIDR strings; failing closed",
+                raw_trusted_ranges,
+            )
+            return ""
+        trusted_networks: Final = IPAddressUtils.parse_trusted_proxy_networks(trusted_ranges)
+        client_ip: Final = IPAddressUtils.extract_client_ip_from_trusted_chain(xff_chain, trusted_networks)
+        if client_ip is None:
+            verbose_proxy_logger.warning(
+                "X-Forwarded-For chain is empty or its first untrusted entry is not a valid address; failing closed"
+            )
+            return ""
+        return client_ip
+
+    @staticmethod
     def _resolve_num_trusted_hops(raw_num_trusted_hops: object) -> _HopCountSetting:
         if raw_num_trusted_hops is None:
             return _HopCountUnset()
@@ -265,7 +312,7 @@ class IPAddressUtils:
             verbose_proxy_logger.warning(
                 "Invalid mcp_xff_num_trusted_hops value %r; failing closed for "
                 "MCP client IP resolution. Set it to a positive integer, or "
-                "remove the setting to restore the legacy X-Forwarded-For path",
+                "remove the setting to use the right-to-left trusted-proxy walk",
                 raw_num_trusted_hops,
             )
             return _HopCountInvalid()
@@ -273,8 +320,8 @@ class IPAddressUtils:
             verbose_proxy_logger.warning(
                 "mcp_xff_num_trusted_hops=%s is below the minimum of 1; failing "
                 "closed for MCP client IP resolution. Set it to a positive "
-                "integer, or remove the setting to restore the legacy "
-                "X-Forwarded-For path",
+                "integer, or remove the setting to use the right-to-left "
+                "trusted-proxy walk",
                 num_hops,
             )
             return _HopCountInvalid()
@@ -292,11 +339,12 @@ class IPAddressUtils:
         1. use_x_forwarded_for is enabled in settings
         2. The direct connection is from a trusted proxy (if mcp_trusted_proxy_ranges configured)
 
-        When ``mcp_xff_num_trusted_hops`` is set, the client IP is read that many
-        entries from the right of the chain instead of the spoofable leftmost
-        value, defeating append-style X-Forwarded-For forgery. A present-but-invalid
-        value (non-integer or below 1) fails closed rather than silently reverting
-        to the legacy path, so a config typo cannot quietly weaken access control.
+        The chain is every X-Forwarded-For header line combined. When
+        ``mcp_xff_num_trusted_hops`` is set, the client IP is read that many
+        entries from the right of the chain. Otherwise the chain is walked right
+        to left past addresses inside ``mcp_trusted_proxy_ranges`` and the first
+        untrusted address is the client. A present-but-invalid hops value
+        (non-integer or below 1) fails closed rather than falling back to the walk.
 
         Args:
             request: FastAPI request object
@@ -353,13 +401,12 @@ class IPAddressUtils:
                 # returning it would mis-classify external callers as internal.
                 # Fail closed for access control.
                 return ""
+            xff_chain: Final = IPAddressUtils.get_xff_chain(request)
             match IPAddressUtils._resolve_num_trusted_hops(general_settings.get("mcp_xff_num_trusted_hops")):
                 case _HopCountInvalid():
                     return ""
                 case _HopCount(value=num_trusted_hops):
-                    client_ip: Final = IPAddressUtils.extract_client_ip_from_xff_hops(
-                        request.headers["x-forwarded-for"], num_trusted_hops
-                    )
+                    client_ip: Final = IPAddressUtils.extract_client_ip_from_xff_hops(xff_chain, num_trusted_hops)
                     if client_ip is None:
                         verbose_proxy_logger.warning(
                             "X-Forwarded-For chain has fewer than "
@@ -369,6 +416,8 @@ class IPAddressUtils:
                         )
                         return ""
                     return client_ip
+                case _HopCountUnset() if use_xff is True:
+                    return IPAddressUtils._walk_trusted_chain(xff_chain, general_settings)
                 case _HopCountUnset():
                     pass
         return get_request_ip_address(request, use_x_forwarded_for=use_xff is True)
