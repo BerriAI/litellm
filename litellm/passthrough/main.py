@@ -447,7 +447,7 @@ def llm_passthrough_route(
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
     guardrailConfig: object = None,
-    **kwargs,
+    **kwargs: object,
 ) -> (
     httpx.Response
     | Coroutine[object, object, httpx.Response]

@@ -904,3 +904,79 @@ def test_custom_image_handler_is_not_handed_additional_drop_params(
         litellm.image_generation(**request)
 
     assert _caller_params(custom_image_params.get_nowait()) == {"n": 2, "size": "1024x1536", "quality": "low"}
+
+
+@pytest.mark.parametrize("wrong_typed", ["organization", "base_model"])
+def test_image_generation_ignores_a_non_string_organization_or_base_model(
+    wrong_typed: str, respx_mock: respx.MockRouter
+) -> None:
+    api_base: Final = "http://localhost:12350/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/images/generations.*").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+    )
+
+    response: Final = litellm.image_generation(
+        model="openai/gpt-image-1",
+        prompt="a red circle",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        **{wrong_typed: 123},
+    )
+
+    assert mock_route.called
+    request: Final = respx_mock.calls[0].request
+    assert json.loads(request.content)["model"] == "gpt-image-1"
+    assert "openai-organization" not in request.headers, request.headers
+    assert response.data[0].b64_json == "aW1n"
+
+
+def test_image_edit_logs_no_call_id_when_the_caller_passes_one_that_is_not_a_string(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1792551838, "data": [{"b64_json": "aW1n"}]})
+    )
+    logging_obj: Final = Logging(
+        model="openai/gpt-image-2.5-sunburst",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.image_edit.value,
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="caller-made-logging-object",
+        function_id="image-edit-call-id",
+    )
+
+    litellm.image_edit(
+        model="openai/gpt-image-2.5-sunburst",
+        image=b"\x89PNG\r\n\x1a\nfakepng",
+        prompt="make the circle blue",
+        api_key="sk-test",
+        litellm_call_id=123,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.model_call_details["litellm_params"]["litellm_call_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_azure_image_generation_sends_the_request_when_the_token_provider_is_not_callable() -> None:
+    expected_body: Final = json.loads(
+        (Path(__file__).parent / "request_payloads" / "azure_gpt_image_1.json").read_text()
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+        side_effect=Exception("stop at the provider request"),
+    ) as provider_post:
+        with pytest.raises(litellm.APIConnectionError, match="stop at the provider request"):
+            await litellm.aimage_generation(
+                model="azure/gpt-image-1",
+                prompt="test prompt",
+                api_base="https://example.azure.com",
+                api_key="test-key",
+                api_version="2025-04-01-preview",
+                azure_ad_token_provider="not-callable",
+            )
+
+    assert provider_post.call_args.kwargs["json"] == expected_body
