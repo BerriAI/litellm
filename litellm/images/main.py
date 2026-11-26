@@ -339,7 +339,7 @@ def image_generation(
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final = require_attributes(kwargs.get("headers", None) or {}, dict[str, str], "update")
         base_model: Final = str_param(kwargs, "base_model")
-        call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
+        call_kwargs: Final[Mapping[str, object]] = kwargs
         max_retries: Final = call_kwargs.get("max_retries")
         is_router_call: Final = any(
             isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
