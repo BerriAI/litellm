@@ -37,6 +37,7 @@ def test_default_tiers_only_admin_manages_access_only_editor_writes_and_usage_vi
     assert DEFAULT_ROLES[ADMIN_ROLE] == frozenset(Scope)
     assert {Scope.DATAPLANES_WRITE, Scope.ROLES_WRITE, Scope.AUDIT_READ}.isdisjoint(DEFAULT_ROLES[EDITOR_ROLE])
     assert Scope.PROXY_WRITE in DEFAULT_ROLES[EDITOR_ROLE] and Scope.PROXY_WRITE not in DEFAULT_ROLES[VIEWER_ROLE]
+    assert {role for role, scopes in DEFAULT_ROLES.items() if Scope.FLEET_WRITE in scopes} == {ADMIN_ROLE}
     assert DEFAULT_ROLES[USAGE_VIEWER_ROLE] == frozenset({Scope.USAGE_READ})
 
 

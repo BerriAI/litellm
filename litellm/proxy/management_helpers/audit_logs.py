@@ -3,10 +3,14 @@ Functions to create audit logs for LiteLLM Proxy
 """
 
 import asyncio
+import contextlib
+import functools
 import json
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, TypeVar
+from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
@@ -21,6 +25,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.repositories.table_repositories import AuditLogRepository, NewAuditLog
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.types.utils import StandardAuditLogPayload
 
 if TYPE_CHECKING:
@@ -29,6 +34,10 @@ if TYPE_CHECKING:
 _audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
 _AUDIT_JSON: Final = TypeAdapter(JsonValue)
+_AUDIT_WRITE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 5.0)
+_AUDIT_WRITE_RETRY_BUDGET_SECONDS: Final = 30.0
+_AUDIT_DATABASE_CALLBACK_NAME: Final = "audit_log_database"
+_AUDIT_LOG_PRIMARY_KEY: Final = "LiteLLM_AuditLog_pkey"
 
 
 class _AuditValues(BaseModel):
@@ -171,10 +180,38 @@ _T = TypeVar("_T")
 
 
 class AuditTaskRegistry:
-    __slots__ = ("_pending_tasks",)
+    __slots__ = ("_database_unavailable_at", "_drain_signals", "_pending_tasks", "_retry_locks")
 
     def __init__(self) -> None:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
+        self._retry_locks: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]] = WeakKeyDictionary()
+        self._drain_signals: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Event]] = WeakKeyDictionary()
+        self._database_unavailable_at: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, float]] = WeakKeyDictionary()
+
+    def retry_lock(self) -> asyncio.Lock:
+        return self._retry_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+
+    def database_unavailable_since(self, moment: float) -> bool:
+        unavailable_at: Final = self._database_unavailable_at.get(asyncio.get_running_loop())
+        return unavailable_at is not None and unavailable_at >= moment
+
+    def end_retry_attempt(self, attempt: asyncio.Task[Exception | None]) -> None:
+        self.retry_lock().release()
+        failure: Final = None if attempt.cancelled() else attempt.result()
+        if not (isinstance(failure, NativeDatabaseFailure) and failure.unavailable):
+            return
+        loop: Final = asyncio.get_running_loop()
+        self._database_unavailable_at[loop] = loop.time()
+
+    def _drain_signal(self) -> asyncio.Event:
+        return self._drain_signals.setdefault(asyncio.get_running_loop(), asyncio.Event())
+
+    def draining(self) -> bool:
+        return self._drain_signal().is_set()
+
+    async def wait_unless_draining(self, seconds: float) -> None:
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._drain_signal().wait(), timeout=max(seconds, 0.0))
 
     def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
         if task.done() or task in self._pending_tasks:
@@ -188,6 +225,14 @@ class AuditTaskRegistry:
         _audit_log_task_done_callback(task)
 
     async def drain(self, timeout: float = 5.0) -> None:
+        signal: Final = self._drain_signal()
+        signal.set()
+        try:
+            await self._wait_for_pending_tasks(timeout)
+        finally:
+            signal.clear()
+
+    async def _wait_for_pending_tasks(self, timeout: float) -> None:
         loop: Final = asyncio.get_running_loop()
         deadline: Final = loop.time() + timeout
         while self._pending_tasks:
@@ -213,8 +258,12 @@ async def drain_audit_tasks(timeout: float = 5.0) -> None:
     await _audit_task_registry.drain(timeout=timeout)
 
 
+def _audit_row_label(request_data: LiteLLM_AuditLogs) -> str:
+    return f"{request_data.action} {request_data.table_name.value} {request_data.object_id}"
+
+
 def _audit_task_name(request_data: LiteLLM_AuditLogs, destination: str) -> str:
-    return f"{request_data.action} {request_data.table_name.value} {request_data.object_id} to {destination}"
+    return f"{_audit_row_label(request_data)} to {destination}"
 
 
 async def _dispatch_audit_log_to_callbacks(
@@ -294,12 +343,108 @@ async def create_object_audit_log(
     )
 
 
-async def _insert_audit_logs(insert: Awaitable[object], description: str) -> None:
+@dataclass(frozen=True, slots=True)
+class _AuditWrite:
+    insert: Callable[[], Awaitable[object]]
+    rows: tuple[LiteLLM_AuditLogs, ...]
+
+
+def _audit_write_label(write: _AuditWrite) -> str:
+    return _audit_row_label(write.rows[0]) if len(write.rows) == 1 else f"{len(write.rows)} audit logs"
+
+
+async def _attempt_audit_write(write: _AuditWrite) -> Exception | None:
     try:
-        await insert
+        await write.insert()
     except Exception as e:
-        # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error("Failed Creating %s %s", description, e)
+        return e
+    return None
+
+
+def _is_retryable_audit_failure(failure: Exception) -> bool:
+    return isinstance(failure, NativeDatabaseFailure) and (failure.unavailable or failure.requeue_safe)
+
+
+def _is_stored_by_an_earlier_attempt(failure: Exception) -> bool:
+    return (
+        isinstance(failure, NativeDatabaseFailure)
+        and failure.kind == "data_rejected"
+        and _AUDIT_LOG_PRIMARY_KEY in str(failure)
+    )
+
+
+def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
+    reporter: Final = CustomLogger()
+    for row in write.rows:
+        verbose_proxy_logger.error("Failed Creating audit log for %s: %s", _audit_row_label(row), failure)
+        reporter.handle_callback_failure(callback_name=_AUDIT_DATABASE_CALLBACK_NAME)
+
+
+def _seconds_left(deadline: float) -> float:
+    return deadline - asyncio.get_running_loop().time()
+
+
+def _report_audit_write_stored_late(write: _AuditWrite, attempt: asyncio.Task[Exception | None]) -> None:
+    if attempt.cancelled() or attempt.result() is not None:
+        return
+    for row in write.rows:
+        verbose_proxy_logger.warning(
+            "Audit log for %s was stored after its retry limit, so it was counted as lost but is saved",
+            _audit_row_label(row),
+        )
+
+
+async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline: float) -> Exception | None:
+    queued_at: Final = asyncio.get_running_loop().time()
+    lock: Final = _audit_task_registry.retry_lock()
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=max(_seconds_left(deadline), 0.0))
+    except asyncio.TimeoutError:
+        return failure
+    if _seconds_left(deadline) <= 0 or _audit_task_registry.database_unavailable_since(queued_at):
+        lock.release()
+        return failure
+    attempt: Final = track_audit_task(
+        asyncio.create_task(_attempt_audit_write(write), name=f"attempt of {_audit_write_label(write)} to the database")
+    )
+    attempt.add_done_callback(_audit_task_registry.end_retry_attempt)
+    try:
+        return await asyncio.wait_for(asyncio.shield(attempt), timeout=_seconds_left(deadline))
+    except asyncio.TimeoutError:
+        attempt.add_done_callback(functools.partial(_report_audit_write_stored_late, write))
+        return failure
+
+
+async def _retry_audit_write(
+    write: _AuditWrite, failure: Exception, delays: tuple[float, ...], deadline: float
+) -> None:
+    if not delays or not _is_retryable_audit_failure(failure):
+        _report_failed_audit_write(write, failure)
+        return
+    await _audit_task_registry.wait_unless_draining(min(delays[0], deadline - asyncio.get_running_loop().time()))
+    next_failure: Final = await _attempt_audit_retry(write, failure, deadline)
+    if next_failure is None or _is_stored_by_an_earlier_attempt(next_failure):
+        return
+    await _retry_audit_write(write, next_failure, () if _audit_task_registry.draining() else delays[1:], deadline)
+
+
+async def _insert_audit_logs(write: _AuditWrite) -> None:
+    failure: Final = await _attempt_audit_write(write)
+    if failure is None:
+        return
+    if not _is_retryable_audit_failure(failure):
+        _report_failed_audit_write(write, failure)
+        return
+    verbose_proxy_logger.warning(
+        "Audit log write for %s failed, retrying in the background: %s", _audit_write_label(write), failure
+    )
+    deadline: Final = asyncio.get_running_loop().time() + _AUDIT_WRITE_RETRY_BUDGET_SECONDS
+    track_audit_task(
+        asyncio.create_task(
+            _retry_audit_write(write, failure, _AUDIT_WRITE_RETRY_DELAYS_SECONDS, deadline),
+            name=f"retry of {_audit_write_label(write)} to the database",
+        )
+    )
 
 
 def _json_encoded(request_data: LiteLLM_AuditLogs) -> LiteLLM_AuditLogs:
@@ -379,10 +524,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 
     await track_audit_task(
         asyncio.create_task(
-            _insert_audit_logs(
-                _insert_audit_log(prisma_client, encoded),
-                "audit log",
-            ),
+            _insert_audit_logs(_AuditWrite(insert=lambda: _insert_audit_log(prisma_client, encoded), rows=(encoded,))),
             name=_audit_task_name(encoded, "the database"),
         )
     )
@@ -409,8 +551,7 @@ async def create_audit_logs_for_updates(rows: Sequence[LiteLLM_AuditLogs]) -> No
     await track_audit_task(
         asyncio.create_task(
             _insert_audit_logs(
-                _insert_audit_log_batch(prisma_client, encoded),
-                f"{len(encoded)} audit logs",
+                _AuditWrite(insert=lambda: _insert_audit_log_batch(prisma_client, encoded), rows=encoded)
             ),
             name=f"{len(encoded)} audit logs to the database",
         )

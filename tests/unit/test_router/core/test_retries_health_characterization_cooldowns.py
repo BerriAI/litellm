@@ -5,6 +5,7 @@ success callbacks count, blocked deployments and health-check-driven filtering.
 """
 
 import time
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -25,6 +26,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     not_found,
     permission_denied,
     service_unavailable,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
@@ -640,15 +642,16 @@ async def test_async_success_callback_counts_successes_for_an_untracked_deployme
 @pytest.mark.parametrize("limit", [{"rpm": 100}, {"tpm": 1000}], ids=["rpm", "tpm"])
 @pytest.mark.asyncio
 async def test_a_successful_request_counts_its_tokens_and_one_request_once(
-    make_core: MakeCore, host: ScriptedHost, limit: dict[str, int]
+    make_core: MakeCore, host: ScriptedHost, limit: dict[str, int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core: Final = make_core(model_list=group("a", **limit))
+    started: Final = datetime.now(timezone.utc)
 
     await attempt(core)
     if isinstance(host, BackgroundSuccessLoggingHost):
         await host.drain()
 
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 @pytest.fixture
@@ -660,13 +663,16 @@ def host(request: pytest.FixtureRequest) -> ScriptedHost:
 
 
 @pytest.mark.asyncio
-async def test_a_failed_request_counts_one_request_and_no_tokens(make_core: MakeCore, host: ScriptedHost) -> None:
+async def test_a_failed_request_counts_one_request_and_no_tokens(
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
     core: Final = make_core(model_list=group("a", rpm=100), num_retries=0)
     host.answer("openai/a", fresh(bad_request))
+    started: Final = datetime.now(timezone.utc)
 
     await attempt(core)
 
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
     assert core.health().failures_this_minute("a") == 1
 
 
@@ -756,6 +762,41 @@ async def test_health_check_routing_uses_every_deployment_when_all_are_unhealthy
 
     assert set(host.deployments_called("acompletion")) == {"a", "b"}
     assert await core.health().fully_unhealthy_model_names() == {"g"}
+
+
+@pytest.mark.asyncio
+async def test_health_check_routing_falls_back_to_unhealthy_deployments_beside_an_unprobed_paused_one(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[*group("a"), deployment("g", "p", model_info={"blocked": True})],
+        enable_health_check_routing=True,
+    )
+    core.health().health_checks.set_deployment_health_states(unhealthy("a"))  # pyright: ignore[reportArgumentType]  # health states
+
+    for _ in range(4):
+        await attempt(core)
+
+    assert host.deployments_called("acompletion") == ["a"] * 4
+    assert await core.health().fully_unhealthy_model_names() == {"g"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed", "expected"),
+    [(("p1", "p2"), {"g"}), (("p1",), set())],
+    ids=["all_failed", "one_failed"],
+)
+async def test_a_group_of_only_paused_deployments_is_fully_unhealthy_when_every_one_failed(
+    make_core: MakeCore, failed: tuple[str, ...], expected: set[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", deployment_id, model_info={"blocked": True}) for deployment_id in ("p1", "p2")],
+        enable_health_check_routing=True,
+    )
+    core.health().health_checks.set_deployment_health_states(unhealthy(*failed))  # pyright: ignore[reportArgumentType]  # health states
+
+    assert await core.health().fully_unhealthy_model_names() == expected
 
 
 @pytest.mark.parametrize(

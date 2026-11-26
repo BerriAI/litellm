@@ -30,7 +30,7 @@ from litellm.types.semantic_cache import SemanticCacheParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span: TypeAlias = _Span | Any
+    Span: TypeAlias = _Span
 else:
     Span: TypeAlias = Any
 
@@ -238,6 +238,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # upstream token rather than a LiteLLM credential, so egress forwards it. Stripped from validated
     # input like the markers above: a forged value would forward a LiteLLM credential upstream.
     mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
+    mcp_authorization_is_admission_credential: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     impersonated_by: str | None = Field(default=None, exclude=True)
@@ -309,6 +310,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
         values.pop("mcp_forwards_caller_authorization", None)
+        values.pop("mcp_authorization_is_admission_credential", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)

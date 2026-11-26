@@ -27,7 +27,7 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     messages: ReadOnly[list]
     optional_params: ReadOnly[dict[str, object]]
     litellm_params: ReadOnly[dict[str, object]]
-    headers: ReadOnly[dict]
+    headers: ReadOnly[dict[str, object]]
     model_response: ReadOnly["ModelResponse"]
     logging_obj: ReadOnly["LiteLLMLoggingObj"]
     custom_llm_provider: ReadOnly[str]

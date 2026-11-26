@@ -48,10 +48,12 @@ from claude_code.http_probe import (
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
+# Fable 5.2 is left out: Bedrock's CountTokens answers 404 "The model
+# 'anthropic.claude-fable-5-2' does not exist", so there is nothing to count against.
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.count_tokens.nonstream.works")

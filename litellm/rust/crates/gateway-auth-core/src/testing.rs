@@ -8,11 +8,13 @@ use litellm_config::LitellmRole;
 use serde_json::Value;
 
 use crate::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Refreshed, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
-        key::{CachedTeam, KeyRecord, Keyed},
+        key::{KeyRecord, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -84,6 +86,8 @@ pub(crate) struct ScriptedHost {
     pub(crate) delegated_team: Option<&'static str>,
     /// The JWT `finish_jwt` last finished an auto-registered key for.
     pub(crate) finished_mapping: Mutex<Option<MappedJwt<String>>>,
+    /// Stored credentials by name.
+    pub(crate) credentials: HashMap<&'static str, Params>,
     pub(crate) calls: Mutex<Vec<String>>,
 }
 
@@ -191,16 +195,20 @@ impl AuthHost for ScriptedHost {
     async fn evict_key(&self, hash: &KeyHash) -> Result<(), Error> {
         self.step("evict", format!("evict {hash}"))
     }
-    async fn cached_team(&self, team_id: &str) -> Result<Option<CachedTeam<String>>, Error> {
+    async fn cached_team(&self, team_id: &str) -> Result<Option<Refreshed<String>>, Error> {
         self.step("cached_team", format!("cached_team {team_id}"))?;
-        Ok(Some(CachedTeam {
-            refreshed_at: self.team_refreshed_at,
+        Ok(Some(Refreshed {
+            at: self.team_refreshed_at,
             row: format!("cached-team {team_id}"),
         }))
     }
     async fn with_team(&self, key: &String, team: &String) -> Result<String, Error> {
         self.step("with_team", format!("with_team {key} {team}"))?;
         Ok(format!("{key}+team"))
+    }
+    async fn credential(&self, name: &str) -> Result<Option<Params>, Error> {
+        self.step("credential", format!("credential {name}"))?;
+        Ok(self.credentials.get(name).cloned())
     }
     async fn db_key(&self, _: &KeyHash, end_user: &String) -> Result<Option<Keyed<String>>, Error> {
         self.step("db_key", format!("db_key {end_user}"))?;

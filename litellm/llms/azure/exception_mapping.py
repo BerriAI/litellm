@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -58,7 +59,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> tuple[dict[str, object], object]:
+    ) -> tuple[Mapping[str, object], object]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:
@@ -71,7 +72,7 @@ class AzureOpenAIExceptionMapping:
             return {}, None
 
         # Some SDKs place the payload under "error".
-        azure_error: dict[str, object]
+        azure_error: Mapping[str, object]
         if isinstance(body_dict.get("error"), dict):
             azure_error = body_dict.get("error", {})
         else:

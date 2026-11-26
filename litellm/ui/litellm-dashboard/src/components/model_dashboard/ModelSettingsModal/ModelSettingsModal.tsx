@@ -1,7 +1,7 @@
 "use client";
 
 import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
-import { StoreModelInDBParams, useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
+import { useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { FieldGroup } from "@/components/ui/field";
@@ -12,9 +12,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useMemo } from "react";
-import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { configToModelSettings } from "./mapper";
+import { modelSettingsSchema, type ModelSettingsFields } from "./schema";
 
 interface ModelSettingsModalProps {
   isVisible: boolean;
@@ -44,24 +46,10 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
     }
   }, [isVisible, refetch]);
 
-  // Compute initial values from fetched config data
-  const initialValues = useMemo<StoreModelInDBParams>(() => {
-    if (!proxyConfigData) {
-      return {
-        store_model_in_db: false,
-      };
-    }
+  const initialValues = useMemo(() => configToModelSettings(proxyConfigData), [proxyConfigData]);
+  const form = useZodForm(modelSettingsSchema, { defaultValues: initialValues, values: initialValues });
 
-    const storeModelField = proxyConfigData.find((field) => field.field_name === "store_model_in_db");
-
-    return {
-      store_model_in_db: storeModelField?.field_value ?? false,
-    };
-  }, [proxyConfigData]);
-
-  const form = useForm<StoreModelInDBParams>({ defaultValues: initialValues, values: initialValues });
-
-  const handleFormSubmit = async (formValues: StoreModelInDBParams) => {
+  const handleFormSubmit = async (formValues: ModelSettingsFields) => {
     try {
       await mutateAsync(formValues, {
         onSuccess: () => {

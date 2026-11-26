@@ -149,7 +149,12 @@ pub(super) fn parallel_count(
 pub(super) fn token_increment(batch: &RedisBatch, increments: &[Increment]) -> Declared<Vec<f64>> {
     let keys = increments
         .iter()
-        .map(|increment| increment.counter.key())
+        .flat_map(|increment| {
+            [
+                increment.counter.scope.window_key(),
+                increment.counter.key(),
+            ]
+        })
         .collect::<Vec<_>>();
     let args = increments
         .iter()

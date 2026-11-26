@@ -49,7 +49,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol, overload
 
 import litellm
 from litellm._logging import verbose_logger
@@ -73,6 +73,26 @@ class _SupportsTimestamp(Protocol):
 
 class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
+
+
+class _ChoiceFields(Protocol):
+    @overload
+    def get(self, key: Literal["finish_reason"], /) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["message", "delta"], default: None, /) -> Message | Mapping[str, object] | None: ...
+
+
+class _ResponseFields(Protocol):
+    @overload
+    def get(self, key: Literal["id"], /) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["choices"], /) -> Sequence[_ChoiceFields] | None: ...
+
+
+def _response_fields(response_obj: object) -> _ResponseFields:
+    return require_attributes(response_obj, _ResponseFields, "get")
 
 
 class NewRelicLogger(CustomLogger):
@@ -326,7 +346,7 @@ class NewRelicLogger(CustomLogger):
         completion_id = None
 
         if response_obj:
-            completion_id = response_obj.get("id")
+            completion_id = _response_fields(response_obj).get("id")
 
         if not completion_id:
             completion_id = kwargs.get("litellm_call_id")
@@ -407,7 +427,7 @@ class NewRelicLogger(CustomLogger):
 
         Returns "unknown" if choices are not present or finish_reason is not found.
         """
-        choices: Final = response_obj.get("choices") or []
+        choices: Final = _response_fields(response_obj).get("choices") or []
         if choices and len(choices) > 0:
             return choices[0].get("finish_reason") or "unknown"
         return "unknown"
@@ -577,7 +597,7 @@ class NewRelicLogger(CustomLogger):
             sequence += 1
 
         # Extract response messages from choices
-        choices: Final = response_obj.get("choices") or []
+        choices: Final = _response_fields(response_obj).get("choices") or []
         if choices and len(choices) > 0:
             for choice in choices:
                 # Prefer "message" (non-streaming); fall back to "delta" (streaming-assembled)
@@ -737,8 +757,8 @@ class NewRelicLogger(CustomLogger):
         self,
         kwargs: dict,
         response_obj: ModelResponse,
-        start_time: float | None = None,
-        end_time: float | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
     ):
         """
         Core logic for processing successful LLM calls.
@@ -852,7 +872,13 @@ class NewRelicLogger(CustomLogger):
     def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """Unused per spec."""
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         """
         Main success path for non-streaming requests.
 
@@ -865,7 +891,13 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         """
         Main success path for async/streaming requests.
 

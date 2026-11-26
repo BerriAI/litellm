@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 from .base_cache import BaseCache
 
@@ -142,7 +143,9 @@ class InMemoryCache(BaseCache):
                 break
 
         if len(self.expiration_heap) > 2 * self.max_size_in_memory:
-            self.expiration_heap = [entry for entry in self.expiration_heap if self.ttl_dict.get(entry[1]) == entry[0]]
+            self.expiration_heap = [
+                entry for entry in frozenset(self.expiration_heap) if self.ttl_dict.get(entry[1]) == entry[0]
+            ]
             heapq.heapify(self.expiration_heap)
 
         # Step 2: Evict if cache is still full
@@ -173,12 +176,14 @@ class InMemoryCache(BaseCache):
         else:
             return False
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         # Handle the edge case where max_size_in_memory is 0
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
 
         with self._write_lock:
+            if kwargs.get("preserve_newer_response") is True and self._has_newer_response(key, value):
+                return
             # Always prune expired/outdated heap roots before inserting.
             # This keeps expiration_heap bounded even when the live cache stays
             # below max_size_in_memory and keys are reinserted after TTL expiry.
@@ -187,7 +192,7 @@ class InMemoryCache(BaseCache):
                 return
 
             self.cache_dict[key] = value
-            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            if kwargs.get("replace_ttl") is True or self.allow_ttl_override(key):
                 if "ttl" in kwargs and kwargs["ttl"] is not None:
                     self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
@@ -195,19 +200,33 @@ class InMemoryCache(BaseCache):
                     self.ttl_dict[key] = self._clock() + self.default_ttl
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
-    async def async_set_cache(self, key, value, **kwargs):
+    def _has_newer_response(self, key: str, value: object) -> bool:
+        current: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(self.get_cache(key)))
+        incoming: Final = as_str_mapping(value)
+        if current is None or incoming is None:
+            return False
+        current_timestamp: Final = current.get("timestamp")
+        incoming_timestamp: Final = incoming.get("timestamp")
+        return (
+            isinstance(current_timestamp, (int, float))
+            and isinstance(incoming_timestamp, (int, float))
+            and current_timestamp > incoming_timestamp
+        )
+
+    async def async_set_cache(self, key: str, value: object, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
     async def async_set_cache_pipeline(
-        self, cache_list: Iterable[Iterable[object]], ttl: object = None, **kwargs: object
+        self, cache_list: Iterable[tuple[str, object]], ttl: object = None, **kwargs: object
     ):
+        replace_ttl: Final = kwargs.get("replace_ttl") is True
         for cache_key, cache_value in cache_list:
             if ttl is not None:
-                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+                self.set_cache(key=cache_key, value=cache_value, ttl=ttl, replace_ttl=replace_ttl)
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 
-    async def async_set_cache_sadd(self, key, value: Sequence[object], ttl: float | None):
+    async def async_set_cache_sadd(self, key: str, value: Sequence[object], ttl: float | None):
         """
         Add value to set
         """
@@ -245,13 +264,13 @@ class InMemoryCache(BaseCache):
         return None
 
     def batch_get_cache(self, keys: Sequence[object], **kwargs: object):
-        return_val: Final = []
+        return_val: Final[list[object | None]] = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: float, **kwargs: object) -> float:
+    def increment_cache(self, key: str, value: float, **kwargs: object) -> float:
         with self._increment_lock:
             # keep read-modify-write atomic
             init_value: Final = self.get_cache(key=key) or 0
@@ -263,19 +282,19 @@ class InMemoryCache(BaseCache):
         return self.get_cache(key=key, **kwargs)
 
     async def async_batch_get_cache(self, keys: Sequence[object], **kwargs: object):
-        return_val: Final = []
+        return_val: Final[list[object | None]] = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    async def async_increment(self, key, value: float, **kwargs: object) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
         self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs: object
     ) -> list[float] | None:
-        results: Final = []
+        results: Final[list[float]] = []
         for increment in increment_list:
             result = await self.async_increment(
                 increment["key"], increment["increment_value"], ttl=increment["ttl"], **kwargs

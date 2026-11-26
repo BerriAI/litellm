@@ -108,7 +108,7 @@ async fn cached_team_values<H: AuthHost>(
     let Some(team) = Error::absent_unless_declined(host.cached_team(team_id).await)? else {
         return Ok(key);
     };
-    match (team.refreshed_at, key.record.last_refreshed_at) {
+    match (team.at, key.record.last_refreshed_at) {
         (Some(team_refreshed), Some(key_refreshed)) if team_refreshed > key_refreshed => {
             Ok(Keyed {
                 row: host.with_team(&key.row, &team.row).await?,

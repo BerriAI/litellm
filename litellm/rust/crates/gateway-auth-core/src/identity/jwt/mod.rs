@@ -25,7 +25,7 @@ pub use team::{
 pub use user::{TeamSync, team_sync};
 
 use crate::{
-    Rows,
+    Affiliation, Rows,
     authn::{
         jwt::{JwtSettings, MappedJwt, MappedKey},
         key::Keyed,
@@ -144,11 +144,17 @@ pub struct ClaimIdentity<R> {
     pub user: Option<R>,
 }
 
-/// A `JWTAuthBuilderResult`: the ids the core decided and the rows it loaded them from.
+/// A `JWTAuthBuilderResult`: the ids the core decided, what the caller belongs to and the end user
+/// the claims name. The host still builds its token from the ids in `finish_jwt`, so they stay
+/// beside `affiliation` until that build moves into the core.
 #[derive(Clone, Debug, PartialEq)]
 pub struct JwtIdentity<R: Rows> {
     pub claims: Value,
     pub is_proxy_admin: bool,
+    // TODO: `user_id`, `team_id` and `org_id` repeat ids `affiliation` holds. They go with `Rows`
+    // ("Open on the types" item 4 on the Auth High-level Picture page): Python's opaque rows cannot
+    // answer an id, and a provisioned user's row id can differ from the claimed one `mapping.rs`
+    // reads.
     pub user_id: Option<String>,
     pub user_email: Option<String>,
     pub team_id: Option<String>,
@@ -156,30 +162,9 @@ pub struct JwtIdentity<R: Rows> {
     pub end_user_id: Option<String>,
     pub agent_id: Option<String>,
     pub managed_agent: Option<ManagedAgent<R::Agent>>,
-    pub rows: JwtRows<R>,
-}
-
-/// The rows behind a `JwtIdentity`'s ids. The membership is the user's in `team`, and none for a
-/// proxy admin.
-#[derive(Clone, Debug, PartialEq)]
-pub struct JwtRows<R: Rows> {
-    pub user: Option<R::User>,
-    pub team: Option<R::Team>,
-    pub membership: Option<R::Membership>,
-    pub org: Option<R::Org>,
+    /// A JWT has no project, and a proxy admin no membership.
+    pub affiliation: Affiliation<R>,
     pub end_user: Option<R::EndUser>,
-}
-
-impl<R: Rows> Default for JwtRows<R> {
-    fn default() -> Self {
-        Self {
-            user: None,
-            team: None,
-            membership: None,
-            org: None,
-            end_user: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
