@@ -42,6 +42,9 @@ pub struct Refusal {
     pub code: Option<String>,
     /// In the order Python sends them.
     pub headers: Vec<(String, String)>,
+    /// Python raises it while it authenticates the request, before the route's handler runs, so
+    /// its exception handler renders it.
+    pub at_authentication: bool,
 }
 
 impl Refusal {

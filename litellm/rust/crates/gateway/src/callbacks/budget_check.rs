@@ -228,6 +228,7 @@ pub(crate) fn refusal(abort: &Abort) -> Option<Refusal> {
     Some(Refusal {
         kind: Some(BUDGET_EXCEEDED.to_owned()),
         code: abort.code.clone(),
+        at_authentication: true,
         ..Refusal::new(
             StatusCode::from_u16(abort.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             abort.message.clone(),
@@ -341,7 +342,7 @@ mod tests {
         },
     };
     use litellm_gateway_inference::{
-        CallHooks, HookError,
+        CallHooks, Error, HookError,
         record::{self, CallRecord},
     };
     use litellm_redis_store::spend_counters::SpendCounters;
@@ -712,12 +713,10 @@ mod tests {
         let refusal = refused_by_the_stage(budget(MAX, MAX), "held-model").await;
 
         assert_eq!(
-            refusal.map(|refusal| (refusal.status, refusal.message, refusal.kind, refusal.code)),
+            refusal.map(|refusal| (refusal.status, Error::Refused(refusal).body(None).to_string())),
             Some((
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "Budget has been exceeded! Key=key Current cost: 10.0, Max budget: 10.0".to_owned(),
-                Some("budget_exceeded".to_owned()),
-                Some("422".to_owned())
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"Budget has been exceeded! Key=key Current cost: 10.0, Max budget: 10.0","litellm_error_type":"budget_exceeded"}}"#.to_owned(),
             ))
         );
     }
