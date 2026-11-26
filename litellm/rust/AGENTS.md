@@ -16,6 +16,10 @@ For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of 
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
 
+Production code spawns through `litellm_call_scope`, never `tokio::spawn`, `Handle::spawn` or `Runtime::spawn`, which clippy refuses. Use `spawn_in_call` for work done for the call that spawns it, so the task keeps the call's record, and `spawn_detached` for a task that outlives any call, such as a process-wide listener or a loop the first request starts, so it does not keep that call alive. Test code may spawn directly
+
+Run clippy with `make lint-rust-clippy`, not `cargo clippy --all-targets`. It lints production targets and test targets in two passes, with `disallowed_methods` allowed in the second, as CI does
+
 ## Porting from Python
 
 - Put all Python compatibility (truthiness, either-of lookups, Python `str()` formatting and similar) in the `python-compat` crate, never inline in the crate being ported

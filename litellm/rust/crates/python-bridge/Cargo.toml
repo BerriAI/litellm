@@ -20,6 +20,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 fips = ["rustls/fips", "litellm-http/fips"]
 
 [dependencies]
+litellm-call-scope.workspace = true
 litellm-env.workspace = true
 rustls.workspace = true
 litellm-secret-value.workspace = true

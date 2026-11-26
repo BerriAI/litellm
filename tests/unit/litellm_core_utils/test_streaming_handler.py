@@ -44,6 +44,7 @@ from litellm.llms.azure_ai.chat.transformation import AzureAIChatCompletionRespo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.llms.openrouter.chat.transformation import OpenRouterChatCompletionStreamingHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
@@ -3427,6 +3428,84 @@ def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
     assert [read_payload(choice) for choice in streamed_choices if read_payload(choice)] == [expected_payload]
 
 
+_OPENROUTER_REASONING_TEXT: Final = MappingProxyType(
+    {"type": "reasoning.text", "text": "17 times 23", "format": "anthropic-claude-v1", "index": 0}
+)
+_OPENROUTER_REASONING_SIGNATURE: Final = MappingProxyType(
+    {"type": "reasoning.text", "signature": "sig-abc", "format": "anthropic-claude-v1", "index": 0}
+)
+_OPENROUTER_REASONING_ENCRYPTED: Final = MappingProxyType(
+    {"type": "reasoning.encrypted", "data": "blob-xyz", "id": "tool_1", "format": "google-gemini-v1", "index": 0}
+)
+
+
+def _openrouter_sse_line(delta: Mapping[str, object], finish_reason: str | None = None) -> str:
+    chunk: Final = {
+        "id": "gen-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "anthropic/claude-haiku-4.5",
+        "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk)}"
+
+
+_OPENROUTER_REASONING_STREAM: Final = (
+    _openrouter_sse_line(
+        {
+            "content": "",
+            "role": "assistant",
+            "reasoning": _OPENROUTER_REASONING_TEXT["text"],
+            "reasoning_details": [dict(_OPENROUTER_REASONING_TEXT)],
+        }
+    ),
+    _openrouter_sse_line(
+        {"content": "", "role": "assistant", "reasoning_details": [dict(_OPENROUTER_REASONING_SIGNATURE)]}
+    ),
+    _openrouter_sse_line({"content": "", "reasoning": None, "reasoning_details": [dict(_OPENROUTER_REASONING_ENCRYPTED)]}),
+    _openrouter_sse_line({"content": "391", "role": "assistant"}),
+    _openrouter_sse_line({"content": "", "role": "assistant"}, finish_reason="stop"),
+    "data: [DONE]",
+)
+
+
+async def _async_lines(lines: Sequence[str]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iteration", ["sync", "async"])
+async def test_openrouter_stream_keeps_chunks_that_carry_only_reasoning_details(
+    logging_obj: Logging, iteration: Literal["sync", "async"]
+):
+    response: Final = CustomStreamWrapper(
+        completion_stream=OpenRouterChatCompletionStreamingHandler(
+            streaming_response=(
+                iter(_OPENROUTER_REASONING_STREAM) if iteration == "sync" else _async_lines(_OPENROUTER_REASONING_STREAM)
+            ),
+            sync_stream=iteration == "sync",
+        ),
+        model="anthropic/claude-haiku-4.5",
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+    )
+
+    streamed_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    streamed_reasoning_details: Final = tuple(
+        chain.from_iterable(
+            getattr(chunk.choices[0].delta, "reasoning_details", None) or () for chunk in streamed_chunks
+        )
+    )
+    assert streamed_reasoning_details == (
+        dict(_OPENROUTER_REASONING_TEXT),
+        dict(_OPENROUTER_REASONING_SIGNATURE),
+        dict(_OPENROUTER_REASONING_ENCRYPTED),
+    )
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in streamed_chunks) == "391"
+
+
 @pytest.mark.asyncio
 async def test_openrouter_streaming_usage_only_chunk_without_stream_options():
     """
@@ -6076,6 +6155,63 @@ async def test_responses_bridged_tool_call_stream_sets_the_model_on_every_chunk(
         "tool_calls"
     ]
     assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
+
+
+_BRIDGED_REFUSAL: Final = "I can't help with that."
+_BRIDGED_REFUSAL_PART: Final = MappingProxyType({"type": "refusal", "refusal": _BRIDGED_REFUSAL})
+_BRIDGED_REFUSAL_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_MESSAGE, "status": "in_progress", "content": []},
+    },
+    *(
+        {
+            "type": "response.refusal.delta",
+            "sequence_number": 2 + position,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": delta,
+        }
+        for position, delta in enumerate(("I can't ", "help ", "with that."))
+    ),
+    {
+        "type": "response.refusal.done",
+        "sequence_number": 5,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "refusal": _BRIDGED_REFUSAL,
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 6,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [{**_BRIDGED_MESSAGE, "status": "completed", "content": [dict(_BRIDGED_REFUSAL_PART)]}],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_refusal_stream_reaches_the_client_once_as_content(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(
+        _bridged_stream(_BRIDGED_REFUSAL_EVENTS, provider, sync_mode, logging_obj), sync_mode
+    )
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == _BRIDGED_REFUSAL
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+    assert litellm.stream_chunk_builder(chunks=received).choices[0].message.content == _BRIDGED_REFUSAL
 
 
 @pytest.mark.parametrize("provider", ["azure", "azure_ai"])
@@ -10493,6 +10629,7 @@ class TestContinuationDisqualifiers:
             "tool_calls",
             "function_call",
             "reasoning_content",
+            "reasoning_details",
             "thinking_blocks",
             "reasoning_items",
             "audio",

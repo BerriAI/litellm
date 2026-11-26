@@ -105,6 +105,8 @@ from litellm.types.utils import (
     CallTypes,
     CostBreakdown,
     ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     StandardCallbackDynamicParams,
@@ -12541,6 +12543,40 @@ def test_deployment_pricing_model_info_honors_a_200k_tier_batch_override(
     assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 
+def test_deployment_pricing_model_info_keeps_custom_pricing_when_the_id_is_another_providers_builtin_model(
+    _published_batch_model: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm import Router
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    anthropic_model_id: Final = "pinned-anthropic-model"
+    monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, anthropic_model_id})
+    assert get_llm_provider(anthropic_model_id)[1] == "anthropic", "the id alone must read as an anthropic model"
+    declared_rates: Final = MappingProxyType(
+        {
+            "input_cost_per_token": 2.775e-06,
+            "output_cost_per_token": 1.3875e-05,
+            "input_cost_per_token_batches": 1.3875e-06,
+            "output_cost_per_token_batches": 6.9375e-06,
+        }
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "colliding-id",
+                "litellm_params": {"model": f"bedrock/{anthropic_model_id}", "aws_region_name": "us-east-1"},
+                "model_info": {"id": anthropic_model_id, "litellm_provider": "bedrock", **declared_rates},
+            }
+        ]
+    )
+
+    info: Final = deployment_pricing_model_info(anthropic_model_id, f"bedrock/{anthropic_model_id}")
+
+    assert info is not None, f"deployment pricing for id {anthropic_model_id!r} fell back to the global cost map"
+    assert {key: info[key] for key in declared_rates} == dict(declared_rates)
+
+
 def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervened():
     """LIT-6894: a non-blocking flagged verdict must outrank success in the
     request-level guardrail_status but never mask an intervention."""
@@ -16669,6 +16705,58 @@ async def test_a_recovered_attempt_bills_a_failed_agentic_follow_up_but_not_a_fa
     assert own_cost > 0
     assert after_a_dropped_stream == pytest.approx(own_cost)
     assert after_a_failed_follow_up == pytest.approx(own_cost + _FAILED_ATTEMPT[1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "stream", "before_logging"),
+    [
+        pytest.param("aimage_edit", False, lambda logging_obj, served: None, id="edit"),
+        pytest.param(
+            "aimage_edit",
+            False,
+            lambda logging_obj, served: logging_obj.response_cost_calculator(result=served),
+            id="edit_already_priced_for_its_response_headers",
+        ),
+        pytest.param("aimage_generation", True, lambda logging_obj, served: None, id="generation_stream"),
+        pytest.param("aimage_edit", True, lambda logging_obj, served: None, id="edit_stream"),
+    ],
+)
+async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts(
+    call_type: str, stream: bool, before_logging: Callable[[LitellmLogging, ImageResponse], object]
+) -> None:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-image-2",
+        messages=[],
+        stream=stream,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id="recovered-image",
+        function_id="recovered-image",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-image-2", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.record_served_rounds_for_failure((_FAILED_ATTEMPT,))
+    logging_obj.carry_failed_attempt_usage()
+    served: Final = ImageResponse(
+        created=1,
+        data=[],
+        usage=ImageUsage(
+            input_tokens=9,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
+            output_tokens=14,
+            total_tokens=23,
+        ),
+    )
+    before_logging(logging_obj, served)
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(served, now, now)
+
+    combined: Final = logging_obj.model_call_details["combined_usage_object"]
+    logged: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert (combined.prompt_tokens, combined.completion_tokens, combined.total_tokens) == (1009, 514, 1523)
+    assert (logged["prompt_tokens"], logged["completion_tokens"], logged["total_tokens"]) == (1009, 514, 1523)
 
 
 def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_billed_from() -> None:

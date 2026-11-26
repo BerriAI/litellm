@@ -16,6 +16,7 @@ from fractions import Fraction
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
+import httpx
 import pytest
 import redis
 from pydantic import TypeAdapter
@@ -35,6 +36,7 @@ from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.patches import apply_patch
 from litellm.integrations.custom_logger_v2.rust import RustState
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     _release_pre_call_hold,  # pyright: ignore[reportPrivateUsage]  # the proxy's fallback walk releases holds through it
@@ -1645,6 +1647,41 @@ async def test_the_real_dispatcher_registers_one_native_and_limits_like_python(
         429,
         f"429: Rate limit exceeded for api_key: {_KEY}. Limit type: max_parallel_requests. Current limit: 1, Remaining: 0.",
     )
+
+
+@pytest.mark.asyncio
+async def test_a_billed_image_refusal_without_output_keeps_its_tokens_on_the_key_through_the_real_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging._add_proxy_hooks()  # pyright: ignore[reportPrivateUsage]  # the startup registration under test
+    limiter: Final = next(
+        callback for callback in litellm.callbacks if isinstance(callback, PROXY_MaxParallelRequestsHandler_v3)
+    )
+    auth: Final = _auth(tpm_limit=10_000)
+    data: Final = {**_CHAT, "litellm_call_id": "call-refused"}
+    refusal: Final = ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://generativelanguage.googleapis.com")),
+        provider_specific_fields={},
+        billed_answer=None,
+    )
+    context: Final = contextvars.copy_context()
+    await asyncio.create_task(proxy_logging.pre_call_hook(auth, data, "acompletion"), context=context)
+    await asyncio.create_task(
+        proxy_logging.post_call_failure_hook(
+            {**data, "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777)},
+            refusal,
+            auth,
+        ),
+        context=context,
+    )
+
+    tokens: Final = limiter.rate_limits.local((RateLimitScope("api_key", _KEY).counter("tokens"),))[0]
+    assert int(tokens or 0) == 777
 
 
 async def _capped_through_proxy_logging(monkeypatch: pytest.MonkeyPatch) -> object:

@@ -8,6 +8,7 @@ use litellm_gateway_auth_core::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
@@ -437,6 +438,11 @@ impl AuthHost for PythonAuthHost {
     async fn with_team(&self, key: &PyRow, team: &PyRow) -> Result<PyRow, Error> {
         let (key, team) = (key.clone(), team.clone());
         self.ask(|reply| Ask::WithTeam { key, team, reply }).await
+    }
+    // TODO: declined until Python's request body check calls the Rust one, which asks Python's
+    // CredentialAccessor through a `RustAuthStep` added in that change
+    async fn credential(&self, _: &str) -> Result<Option<Params>, Error> {
+        Err(Error::HostDeclined)
     }
     async fn db_key(
         &self,

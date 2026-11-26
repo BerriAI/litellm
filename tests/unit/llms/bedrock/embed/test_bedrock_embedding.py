@@ -2336,6 +2336,88 @@ def _nova_usage_and_cost(
     return response.usage, response._hidden_params["response_cost"]
 
 
+def _nova_deployment_clip_cost(
+    respx_mock: respx.MockRouter, region: str = "us-east-1", model: str = f"bedrock/{_NOVA_MODEL_ID}", **params: object
+) -> float:
+    respx_mock.post(f"https://bedrock-runtime.{region}.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": "0"},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for embedding_type in ("AUDIO", "VIDEO")
+        ]
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "nova",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "test-bearer-token",
+                    "aws_region_name": region,
+                    **params,
+                },
+            }
+        ]
+    )
+    response: Final = router.embedding(
+        model="nova",
+        input=[f"data:audio/wav;base64,{_wav_base64(2.5)}", f"data:video/mp4;base64,{_mp4_base64(1000, 6500)}"],
+    )
+    return response._hidden_params["response_cost"]
+
+
+def test_bedrock_nova_deployment_with_only_a_token_price_bills_clips_by_length_at_the_listed_rates(
+    respx_mock: respx.MockRouter,
+) -> None:
+    listed: Final = litellm.model_cost[_NOVA_MODEL_ID]
+
+    assert _nova_deployment_clip_cost(respx_mock, input_cost_per_token=0.001) == pytest.approx(
+        2.5 * listed["input_cost_per_audio_per_second"] + 6.5 * listed["input_cost_per_video_per_second"]
+    )
+
+
+def test_bedrock_nova_deployment_bills_a_clip_kind_it_does_not_price_at_the_listed_rate(
+    respx_mock: respx.MockRouter,
+) -> None:
+    listed: Final = litellm.model_cost[_NOVA_MODEL_ID]
+
+    assert _nova_deployment_clip_cost(
+        respx_mock, input_cost_per_token=0.001, input_cost_per_audio_per_second=2.0
+    ) == pytest.approx(2.5 * 2.0 + 6.5 * listed["input_cost_per_video_per_second"])
+
+
+def test_bedrock_nova_deployment_with_only_a_token_price_bills_clips_at_its_region_rates(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"bedrock/eu-test-1/{_NOVA_MODEL_ID}",
+        {
+            **litellm.model_cost[_NOVA_MODEL_ID],
+            "input_cost_per_audio_per_second": 3.0,
+            "input_cost_per_video_per_second": 7.0,
+        },
+    )
+
+    expected: Final = pytest.approx(2.5 * 3.0 + 6.5 * 7.0)
+    assert _nova_deployment_clip_cost(respx_mock, "eu-test-1", input_cost_per_token=0.001) == expected
+    assert (
+        _nova_deployment_clip_cost(
+            respx_mock, "eu-test-1", _NOVA_MODEL_ID, custom_llm_provider="bedrock", input_cost_per_token=0.001
+        )
+        == expected
+    )
+
+
+def test_bedrock_nova_deployment_priced_at_zero_per_token_bills_clips_at_nothing(
+    respx_mock: respx.MockRouter,
+) -> None:
+    assert _nova_deployment_clip_cost(respx_mock, input_cost_per_token=0.0) == 0.0
+
+
 def test_bedrock_nova_embedding_bills_inline_audio_by_its_length(respx_mock: respx.MockRouter) -> None:
     usage, cost = _nova_usage_and_cost(
         respx_mock,
@@ -2723,6 +2805,51 @@ def test_marengo_3_async_extra_body_cannot_add_another_input_object_to_the_model
     )
 
     assert json.loads(route.calls.last.request.read())["modelInput"] == {**generated_model_input, "extraOption": 1}
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"inputType": "video", "startSec": 1, "endSec": 9, "embeddingOption": ["visual"], "inferenceId": "abc"},
+        {
+            "inferenceId": "abc",
+            "modelInput": {"inputType": "video", "startSec": 1, "endSec": 9, "embeddingOption": ["visual"]},
+        },
+        {
+            "inferenceId": "abc",
+            "modelInput": {"inputType": "video", "video": {"startSec": 1, "endSec": 9, "embeddingOption": ["visual"]}},
+        },
+    ],
+    ids=["top_level", "model_input", "nested_under_the_input_type"],
+)
+def test_marengo_3_async_extra_body_options_reach_the_video_object_and_an_explicit_argument_wins(
+    respx_mock: respx.MockRouter, extra_body: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+
+    litellm.embedding(
+        model="bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",
+        input=["s3://bucket/video.mp4"],
+        output_s3_uri="s3://bucket/out/",
+        bucketOwner="123456789012",
+        endSec=5,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body=extra_body,
+    )
+
+    assert json.loads(route.calls.last.request.read())["modelInput"] == {
+        "inferenceId": "abc",
+        "inputType": "video",
+        "video": {
+            "mediaSource": {"s3Location": {"uri": "s3://bucket/video.mp4", "bucketOwner": "123456789012"}},
+            "startSec": 1,
+            "endSec": 5,
+            "embeddingOption": ["visual"],
+        },
+    }
 
 
 def test_bedrock_embedding_signs_the_body_it_sends(

@@ -2874,7 +2874,15 @@ def client(original_function):
 
             # MODEL CALL
             call_kwargs: Final = (
-                {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
+                {
+                    **kwargs,
+                    "input": _caching_handler_response.embedding_uncached_input,
+                    **(
+                        {"extra_body": _caching_handler_response.embedding_uncached_extra_body}
+                        if "extra_body" in kwargs
+                        else {}
+                    ),
+                }
                 if _caching_handler_response is not None
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs

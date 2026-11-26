@@ -153,7 +153,10 @@ pub(crate) async fn inference_over(
         shaping,
         routing,
         host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
-    )?;
+    )?
+    .with_body_check(litellm_gateway_inference::BodyCheck::new(
+        &config.general_settings,
+    ));
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
@@ -185,5 +188,9 @@ pub fn router(state: AppState, config: &Config) -> Router {
         state.auth(config),
         litellm_gateway_auth::authenticate::<host::NativeRows>,
     ));
+    let inference = middleware::allowlisted(
+        inference,
+        middleware::request_allowlist::Settings::from_general(&config.general_settings),
+    );
     middleware::inference(inference).merge(health::router(state))
 }
