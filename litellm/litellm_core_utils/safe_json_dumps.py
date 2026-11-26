@@ -1,7 +1,7 @@
 import json
 import math
 from collections.abc import Callable
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Protocol
 
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
@@ -12,9 +12,14 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 UNSERIALIZABLE_OBJECT: Final = "Unserializable Object"
 
 
-@runtime_checkable
 class _Orderable(Protocol):
     def __lt__(self, other: Never, /) -> bool: ...
+
+
+def _orderable(value: object) -> _Orderable:
+    from litellm.litellm_core_utils.attribute_shapes import require_attributes
+
+    return require_attributes(value, _Orderable, "__lt__")
 
 
 def strip_null_bytes(value: str) -> str:
@@ -90,9 +95,7 @@ def safe_json_structure(
             return tuple_result
         elif isinstance(obj, set):
             members: Final = [_serialize(item, seen, depth + 1, key) for item in obj]
-            present: Final = sorted(
-                member for member in members if member is not None and isinstance(member, _Orderable)
-            )
+            present: Final = sorted(_orderable(member) for member in members if member is not None)
             set_result: Final = present + [None] * members.count(None)
             seen.remove(id(obj))
             return set_result

@@ -265,3 +265,22 @@ def test_integer_limit_clamps_both_signs_and_leaves_bools_and_floats_alone() -> 
     assert safe_json_structure(
         {"big": 10**400, "small": -(10**400), "inside": 7, "flag": True, "ratio": 1e300}, integer_limit=100
     ) == {"big": 100, "small": -100, "inside": 7, "flag": True, "ratio": 1e300}
+
+
+class _RefusesOrdering:
+    def __getattribute__(self, name: str) -> object:
+        if name == "__lt__":
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
+
+    def __str__(self) -> str:
+        return "refuses-ordering"
+
+
+def test_a_set_sorts_its_members_and_one_that_cannot_be_ordered_is_never_dropped() -> None:
+    assert json.loads(safe_dumps({"k": {(2, "x"), (1, "y")}})) == {"k": [[1, "y"], [2, "x"]]}
+    assert json.loads(safe_dumps({"k": {_RefusesOrdering(), "a"}})) == {"k": ["a", "refuses-ordering"]}
+    with pytest.raises(TypeError, match="'<' not supported"):
+        safe_dumps({"k": {1, "a"}})
+    with pytest.raises(TypeError, match="'<' not supported"):
+        safe_dumps({"k": {("a",), "a"}})
