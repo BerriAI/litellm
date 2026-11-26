@@ -36647,7 +36647,7 @@
         "supports_tool_choice": true
     },
     "gpt-3.5-turbo-16k": {
-        "successor_model": "gpt-6.1-terra",
+        "successor_model": "gpt-5.6-terra",
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "input_cost_per_token": 3e-06,
@@ -40806,7 +40806,7 @@
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
-        "successor_model": "gpt-5.2-chat-latest",
+        "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
