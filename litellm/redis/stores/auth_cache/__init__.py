@@ -182,5 +182,11 @@ class AuthCacheStore:
     def flush_local(self) -> None:
         self._handle.flush_local()
 
+    def local_generation(self, key: AuthObject) -> int:
+        return self._handle.local_generation(key)
+
+    def set_local_if_current(self, generation: int, key: AuthObject, value: object, ttl: float | None) -> bool:
+        return self._handle.set_local_if_current(generation, key, value, ttl)
+
     def len_local(self) -> LocalSizes:
         return self._handle.len_local()

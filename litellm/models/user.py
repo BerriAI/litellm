@@ -5,12 +5,13 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Final
 
 from pydantic import ConfigDict, Field, model_validator
 
 from litellm.models.budget import active_rollover_credit as calculate_rollover_credit
+from litellm.models.budget import calculate_active_temp_budget_increase
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
@@ -34,6 +35,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     max_budget: float | None = None
     rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    temp_budget_increase: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    temp_budget_expiry: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
     budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     spend: float = 0.0
     user_email: str | None = None
@@ -71,9 +74,19 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             self.max_budget, self.rollover_max_budget, self.budget_duration, self.rollover_credit
         )
 
-    def effective_max_budget(self) -> float | None:
-        credit: Final = self.active_rollover_credit()
-        return self.max_budget if credit is None or self.max_budget is None else self.max_budget + credit
+    def max_budget_with_rollover(self) -> float | None:
+        if self.max_budget is None:
+            return None
+        return self.max_budget + (self.active_rollover_credit() or 0.0)
+
+    def effective_max_budget(self, now: datetime | None = None) -> float | None:
+        budget: Final = self.max_budget_with_rollover()
+        if budget is None:
+            return None
+        increase: Final = calculate_active_temp_budget_increase(
+            self.temp_budget_increase, self.temp_budget_expiry, now or datetime.now(timezone.utc)
+        )
+        return budget + increase
 
     def is_over_budget(self) -> bool:
         max_budget: Final = self.effective_max_budget()

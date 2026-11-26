@@ -2960,7 +2960,12 @@ async def generate_service_account_key_fn(
 
 
 def prepare_metadata_fields(
-    data: BaseModel, non_default_values: dict, existing_metadata: dict, *, logging_references_approved: bool = False
+    data: BaseModel,
+    non_default_values: dict,
+    existing_metadata: dict,
+    *,
+    logging_references_approved: bool = False,
+    exclude_fields: frozenset[str] = frozenset(),
 ) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
@@ -2991,7 +2996,7 @@ def prepare_metadata_fields(
 
     try:
         for k, v in data_json.items():
-            if k in LiteLLM_ManagementEndpoint_MetadataFields:
+            if k in LiteLLM_ManagementEndpoint_MetadataFields and k not in exclude_fields:
                 if isinstance(v, datetime):
                     casted_metadata[k] = v.isoformat()
                 else:

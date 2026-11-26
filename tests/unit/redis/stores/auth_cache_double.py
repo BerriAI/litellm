@@ -11,7 +11,7 @@ from typing import Final, TypeVar
 
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore, AuthObject, WriteBack
-from litellm.rust_bridge._native import LocalSizes, NativeRedisClient
+from litellm.rust_bridge._native import LocalSizes, NativeRedisClient, NativeRedisStoreError
 
 T = TypeVar("T")
 
@@ -64,6 +64,9 @@ class FakeAuthCache:
     attached: bool = True
     clock: Callable[[], float] | None = None
     expires_at: dict[str, float] = field(default_factory=dict)
+    _local_generation: int = 0
+    _local_epoch: int = 0
+    _local_generations: dict[str, int] = field(default_factory=dict)
 
     def _round_trip(self, *command: object) -> None:
         self.commands.append(command)
@@ -112,14 +115,20 @@ class FakeAuthCache:
         self.redis[key.key] = value
 
     async def lease(self, key: AuthObject) -> str | None:
-        self._round_trip("GET_GENERATION", key.key)
+        try:
+            self._round_trip("GET_GENERATION", key.key)
+        except NativeRedisStoreError:
+            return None
         return self.generations.get(key.key)
 
     async def set_leased(
         self, key: AuthObject, lease: str | None, value: object, ttl_seconds: float | None, request: object
     ) -> bool:
         self.requests.append(("set_leased", request))
-        self._round_trip("SET_LEASED", key.key, ttl_seconds)
+        try:
+            self._round_trip("SET_LEASED", key.key, ttl_seconds)
+        except NativeRedisStoreError:
+            return True
         if self.generations.get(key.key) != lease:
             return False
         self.redis[key.key] = value
@@ -247,10 +256,24 @@ class FakeAuthCache:
             self.expires_at[key.key] = self.clock() + ttl_seconds
 
     def delete_local(self, key: str) -> None:
+        self._local_generation += 1
+        self._local_generations[key] = self._local_generation
         self.memory.pop(key, None)
 
     def flush_local(self) -> None:
+        self._local_generation += 1
+        self._local_epoch = self._local_generation
+        self._local_generations.clear()
         self.memory.clear()
+
+    def local_generation(self, key: AuthObject) -> int:
+        return self._local_generations.get(key.key, self._local_epoch)
+
+    def set_local_if_current(self, generation: int, key: AuthObject, value: object, ttl_seconds: float | None) -> bool:
+        if generation != self.local_generation(key):
+            return False
+        self.set_local(key, value, ttl_seconds)
+        return True
 
     def len_local(self) -> LocalSizes:
         return LocalSizes(objects=len(self.memory), key_objects=0)

@@ -1681,6 +1681,33 @@ async def test_update_cache_never_restores_a_team_a_management_write_replaced(
 _CachedSpendObject = LiteLLM_UserTable | LiteLLM_EndUserTable | LiteLLM_TeamTableCachedObj | LiteLLM_TagTable
 
 
+@pytest.mark.asyncio
+async def test_a_spend_update_cannot_restore_a_user_evicted_by_another_worker() -> None:
+    key: Final = AuthObject.user("spend-update-user")
+
+    class EvictOnUserRead(FakeAuthCache):
+        def get_local(self, read_key: AuthObject) -> object:
+            value: Final = super().get_local(read_key)
+            if read_key == key:
+                self.delete_local(key.key)
+            return value
+
+    cache: Final = UserApiKeyCache(auth_cache=EvictOnUserRead().store)
+    cache.set_cache(key=key, value=LiteLLM_UserTable(user_id="spend-update-user", spend=1.0), local_only=True)
+
+    await ps.update_cache(
+        token=None,
+        user_id="spend-update-user",
+        end_user_id=None,
+        team_id=None,
+        response_cost=0.25,
+        parent_otel_span=None,
+        cache=cache,
+    )
+
+    assert cache.get_cache(key=key, local_only=True, model_type=LiteLLM_UserTable) is None
+
+
 def _cached_spend_object(
     kind: Literal["user", "end_user", "team", "tag"], models: list[str]
 ) -> tuple[AuthObject, _CachedSpendObject]:

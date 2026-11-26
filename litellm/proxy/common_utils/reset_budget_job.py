@@ -39,7 +39,7 @@ from litellm.litellm_core_utils.duration_parser import (
     normalize_budget_window_start,
     rolled_budget_window_start,
 )
-from litellm.models.budget import active_rollover_credit
+from litellm.models.budget import active_rollover_credit, calculate_active_temp_budget_increase
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -244,8 +244,12 @@ def _has_personal_rollover(row: object) -> bool:
     return isinstance(row, LiteLLM_UserTable) and row.active_rollover_credit() is not None
 
 
-def _needs_rollover_row_conversion(row: object) -> bool:
-    return not isinstance(row, LiteLLM_UserTable) and getattr(row, "rollover_max_budget", None) is not None
+def _needs_user_budget_row_conversion(row: object) -> bool:
+    if isinstance(row, LiteLLM_UserTable):
+        return False
+    return getattr(row, "rollover_max_budget", None) is not None or (
+        _rollover_enabled() and getattr(row, "temp_budget_expiry", None) is not None
+    )
 
 
 def _rollover_cap(max_budget: float | None) -> float | None:
@@ -1515,7 +1519,9 @@ class ResetBudgetJob:
                     spend_after_reset=float(k.row.spend or 0.0),
                 )
 
-    async def _write_user_reset_updates(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
+    async def _write_user_reset_updates(
+        self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]], *, calculated_at: datetime
+    ) -> None:
         """
         Write per-row {spend, budget_reset_at} updates for users.
 
@@ -1524,16 +1530,27 @@ class ResetBudgetJob:
         (see #27730).
         """
         await self._with_db_write_retry(
-            lambda: self._write_user_reset_updates_once(updated_users),
+            lambda: self._write_user_reset_updates_once(updated_users, calculated_at=calculated_at),
             reason="reset_budget_write_users_failure",
         )
 
-    async def _write_user_reset_updates_once(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
+    async def _write_user_reset_updates_once(
+        self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]], *, calculated_at: datetime
+    ) -> None:
+        rollover_enabled: Final = _rollover_enabled()
         async with (
             db_span("reset_spend_rows", "LiteLLM_UserTable"),
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
             for u in updated_users:
+                expected_temp_budget, require_active_temp_budget = (
+                    (u.row.temp_budget_increase, u.row.temp_budget_expiry) if rollover_enabled else None,
+                    rollover_enabled
+                    and calculate_active_temp_budget_increase(
+                        u.row.temp_budget_increase, u.row.temp_budget_expiry, calculated_at
+                    )
+                    > 0,
+                )
                 if _has_personal_rollover(u.row) and u.row.budget_reset_at is not None:
                     uow.users.queue_credit_reset(
                         user_id=u.row.user_id,
@@ -1542,6 +1559,8 @@ class ResetBudgetJob:
                         closed_spend=u.spend_decrement + u.row.spend,
                         spend_decrement=u.spend_decrement,
                         spend_after_reset=u.row.spend,
+                        expected_temp_budget=expected_temp_budget,
+                        require_active_temp_budget=require_active_temp_budget,
                     )
                     continue
                 uow.users.queue_spend_reset(
@@ -1550,6 +1569,8 @@ class ResetBudgetJob:
                     spend_decrement=u.spend_decrement,
                     expected_reset_at=u.expected_reset_at,
                     spend_after_reset=float(u.row.spend or 0.0),
+                    expected_temp_budget=expected_temp_budget,
+                    require_active_temp_budget=require_active_temp_budget,
                 )
 
     async def _write_team_reset_updates(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
@@ -1746,7 +1767,7 @@ class ResetBudgetJob:
                     try:
                         reset_user = (
                             LiteLLM_UserTable.model_validate(user.model_dump())
-                            if _needs_rollover_row_conversion(user)
+                            if _needs_user_budget_row_conversion(user)
                             else user
                         )
                         pre_reset_spend, expected_reset_at = (
@@ -1779,7 +1800,7 @@ class ResetBudgetJob:
 
                 verbose_proxy_logger.debug("Updated users %s", _LazyJson(updated_users))
                 if updated_users:
-                    await self._write_user_reset_updates(updated_users=updated_users)
+                    await self._write_user_reset_updates(updated_users=updated_users, calculated_at=_as_utc(now))
                     for u in updated_users:
                         user_id = u.row.user_id
                         if user_id:
@@ -2272,7 +2293,9 @@ class ResetBudgetJob:
                 _carried_spend(
                     item.spend,
                     _rollover_cap(
-                        item.effective_max_budget() if isinstance(item, LiteLLM_UserTable) else item.max_budget
+                        item.effective_max_budget(_as_utc(current_time))
+                        if isinstance(item, LiteLLM_UserTable)
+                        else item.max_budget
                     ),
                 )
                 if _rollover_enabled()

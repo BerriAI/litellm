@@ -93,6 +93,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     prefetch_referenced_auth_objects,
     update_key_budget_with_temp_budget_increase,
 )
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
@@ -691,19 +692,16 @@ class PythonAuthHost:
             return None
         return user, membership
 
-    async def _recache_user(self, user: LiteLLM_UserTable) -> LiteLLM_UserTable:
-        await self.user_api_key_cache.async_set_cache(
-            key=AuthObject.user(user.user_id),
-            value=user,
-            model_type=LiteLLM_UserTable,
-            ttl=get_management_object_ttl(self.user_api_key_cache),
-        )
-        return user
-
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def set_user_role(self, user: LiteLLM_UserTable, role: str) -> LiteLLM_UserTable:
+        lease: Final = await self.user_api_key_cache.lease(AuthObject.user(user.user_id))
         stored: Final = await UserRepository(self._db()).set_role(user.user_id, role)
-        return await self._recache_user(stored or user.model_copy(update={"user_role": role}))
+        if stored is None:
+            return user.model_copy(update={"user_role": role})
+        _ = await self.user_api_key_cache.async_set_leased(
+            lease, stored, get_management_object_ttl(self.user_api_key_cache)
+        )
+        return stored
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def patch_team_membership(
@@ -717,7 +715,8 @@ class PythonAuthHost:
             user_id=user.user_id, teams_ids_to_add_user_to=list(add), teams_ids_to_remove_user_from=list(remove)
         )
         kept: Final = tuple(team_id for team_id in dict.fromkeys(user.teams or []) if team_id not in remove)
-        return await self._recache_user(user.model_copy(update={"teams": [*kept, *add]}))
+        await evict_and_broadcast((AuthObject.user(user.user_id).key,), self.user_api_key_cache)
+        return user.model_copy(update={"teams": [*kept, *add]})
 
     async def add_team_member(self, user_id: str, team_id: str) -> None:
         await team_member_add.add_team_member(

@@ -265,7 +265,7 @@ pub(super) async fn resolve_once(
             Ok(Some(user).into())
         }
         Some(user) => Ok(Some(user).into()),
-        None => resolve_by_email(connections, sign_in).await,
+        None => resolve_by_email(connections, sign_in, side).await,
     }
 }
 
@@ -274,6 +274,7 @@ pub(super) async fn resolve_once(
 async fn resolve_by_email(
     connections: &mut impl Connections,
     sign_in: &SignIn,
+    side: Side,
 ) -> Result<Resolved, litellm_db::Error> {
     let Some(user_email) = &sign_in.user_email else {
         return Ok(None.into());
@@ -283,7 +284,7 @@ async fn resolve_by_email(
     }
     let unlinked_only = !sign_in.links_any_user && sign_in.sso_user_id.is_some();
     let by_email = connections
-        .with(Side::Read, async |db| {
+        .with(side, async |db| {
             queries::find_user_by_email(db, user_email, unlinked_only).await
         })
         .await?;

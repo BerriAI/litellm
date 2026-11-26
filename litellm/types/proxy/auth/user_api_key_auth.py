@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
@@ -10,6 +10,7 @@ from typing import (
 from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
+from litellm.models.budget import calculate_active_temp_budget_increase
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -29,6 +30,8 @@ from litellm.types.semantic_cache import SemanticCacheParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+
+    from litellm.models.user import LiteLLM_UserTable
 
     Span: TypeAlias = _Span | Any
 else:
@@ -207,6 +210,35 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_email: str | None = None
     user_spend: float | None = None
     user_max_budget: float | None = None
+    _temporary_user_budget: tuple[float, float, datetime] | None = PrivateAttr(default=None)
+
+    def carry_temporary_user_budget(self, user: "LiteLLM_UserTable | None") -> None:
+        if user is None or user.temp_budget_increase is None or user.temp_budget_expiry is None:
+            self._temporary_user_budget = None
+            return
+        budget: Final = user.max_budget_with_rollover()
+        active: Final = calculate_active_temp_budget_increase(
+            user.temp_budget_increase, user.temp_budget_expiry, datetime.now(timezone.utc)
+        )
+        self._temporary_user_budget = (
+            (budget, active, user.temp_budget_expiry) if budget is not None and active > 0 else None
+        )
+        if self._temporary_user_budget is not None and self.user_spend is None:
+            self.user_spend = user.spend
+
+    def effective_user_max_budget(self) -> float | None:
+        if self._temporary_user_budget is None:
+            return self.user_max_budget
+        budget, increase, expiry = self._temporary_user_budget
+        remaining: Final = calculate_active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc))
+        return budget + remaining if remaining > 0 else self.user_max_budget
+
+    def user_budget_without_temporary_increase(self) -> float | None:
+        if self.user_max_budget is not None or self._temporary_user_budget is None:
+            return self.user_max_budget
+        budget, _, _ = self._temporary_user_budget
+        return budget
+
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.

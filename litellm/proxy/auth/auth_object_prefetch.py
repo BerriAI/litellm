@@ -15,6 +15,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, REGISTRY_ERROR_NEGATIVE_CACHE_TTL
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -26,6 +27,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
+from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.key_owners_repository import KeyOwnersRepository
@@ -132,6 +134,8 @@ async def _fill_from_redis(
     """On the request's native pipeline when one is open; a failed read is a miss, as a failed MGET was."""
     if not entries:
         return
+    user_entry: Final = next((entry for entry in entries if entry.row == "user_row"), None)
+    generation: Final = cache.store.local_generation(user_entry.cache_key) if user_entry is not None else None
     before_read()
     try:
         with service_target(AUTH_OBJECTS_TARGET):
@@ -139,11 +143,15 @@ async def _fill_from_redis(
     except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET
         verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
         return
-    for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
+    for entry, value, ttl in (
+        (entry, found.get(entry.cache_key), cache.default_in_memory_ttl if entry.ttl is None else entry.ttl)
+        for entry in entries
+    ):
         if value is not None:
-            cache.store.set_local(
-                entry.cache_key, value, cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
-            )
+            if entry is user_entry and generation is not None:
+                _ = cache.store.set_local_if_current(generation, entry.cache_key, value, ttl)
+            else:
+                cache.store.set_local(entry.cache_key, value, ttl)
 
 
 def _validate_row(
@@ -188,12 +196,19 @@ async def _fill_from_db(refs: AuthObjectRefs, entries: Sequence[_CacheEntry], ca
     model_for: Final[Mapping[_RowKind, type[BaseModel]]] = MappingProxyType(
         {entry.row: entry.model_type for entry in entries}
     )
-    rows: Final = await _fetch_rows(refs, frozenset(model_for))
+    user_entry: Final = next((entry for entry in entries if entry.row == "user_row"), None)
+    user_lease: Final = await cache.lease(user_entry.cache_key) if user_entry is not None else None
+    rows: Final = await bounded_db_lookup(_fetch_rows(refs, frozenset(model_for)), name="key owners", tracker=None)
     refreshed_at: Final = time.time()
     objects: Final[Mapping[_RowKind, BaseModel | None]] = MappingProxyType(
         {row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()}
     )
-    writes: Final = tuple((entry, value) for entry in entries if (value := objects[entry.row]) is not None)
+    user: Final = objects.get("user_row")
+    if user_lease is not None and user_entry is not None and user is not None:
+        _ = await cache.async_set_leased(user_lease, user, user_entry.ttl)
+    writes: Final = tuple(
+        (entry, value) for entry in entries if entry.row != "user_row" and (value := objects[entry.row]) is not None
+    )
     if writes:
         await _write_back(writes, cache)
 
@@ -212,7 +227,11 @@ async def prefetch_auth_objects(
             await _fill_from_redis(missing, user_api_key_cache, before_read)
         if prisma_client is None:
             return
-        await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache)
+        reader: Final = attribute_or_none(prisma_client, "read_db")
+        has_replica: Final = reader is not None and reader is not prisma_client.writer_db
+        # With a replica, leave a cold user to the writer-first lookup so its fallback has one writer deadline.
+        db_entries: Final = tuple(entry for entry in missing if entry.row != "user_row" or not has_replica)
+        await _fill_from_db(refs, _missing_in_memory(db_entries, user_api_key_cache), user_api_key_cache)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
 

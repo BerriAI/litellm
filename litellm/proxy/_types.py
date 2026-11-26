@@ -3497,6 +3497,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     max_budget: float | None = None
     rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    temp_budget_increase: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    temp_budget_expiry: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
     effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     tpm_limit: int | None = None
     rpm_limit: int | None = None

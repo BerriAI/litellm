@@ -1170,6 +1170,8 @@ export interface UserInfoV2Response {
   max_budget: number | null;
   rollover_max_budget?: number | null;
   rollover_credit?: number | null;
+  temp_budget_increase?: number | null;
+  temp_budget_expiry?: string | null;
   effective_max_budget?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
@@ -1192,10 +1194,18 @@ export interface UserInfoV2Response {
  *
  * @param accessToken - Bearer token for auth
  * @param userId - Optional user ID to look up. If omitted, returns the caller's own info.
+ * @param readAfterWrite - Read the committed row immediately after saving an edit.
  */
-export const userGetInfoV2 = async (accessToken: string, userId?: string): Promise<UserInfoV2Response> => {
+export const userGetInfoV2 = async (
+  accessToken: string,
+  userId?: string,
+  readAfterWrite?: boolean,
+): Promise<UserInfoV2Response> => {
   try {
-    return await apiClient.get(`/v2/user/info`, { accessToken, query: { user_id: userId || undefined } });
+    return await apiClient.get(`/v2/user/info`, {
+      accessToken,
+      query: { user_id: userId || undefined, read_after_write: readAfterWrite },
+    });
   } catch (error) {
     console.error("Failed to fetch user info v2:", error);
     throw error;

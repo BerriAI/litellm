@@ -20901,6 +20901,8 @@ export interface paths {
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
          *         - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus carried allowance. Requires a reset period and must exceed the base budget. Set to null to disable rollover.
+         *         - temp_budget_increase: Optional[float] - Extra USD added to the user budget until expiry (Enterprise only).
+         *         - temp_budget_expiry: Optional[datetime] - UTC expiry for the increase. Set both fields to null to clear it.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -40077,6 +40079,10 @@ export interface components {
              * @default []
              */
             teams: string[];
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -40182,6 +40188,10 @@ export interface components {
              * @default []
              */
             teams: string[];
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -54877,6 +54887,16 @@ export interface components {
             } | null;
             /** Team Id */
             team_id?: string | null;
+            /**
+             * Temp Budget Expiry
+             * @description Expiry for the temporary user budget.
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Extra USD added to the user budget until expiry.
+             */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** User Alias */
@@ -55800,6 +55820,10 @@ export interface components {
              * @default []
              */
             teams: string[];
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -95029,6 +95053,8 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
+                /** @description Read the target user from the writer after saving changes */
+                read_after_write?: boolean;
             };
             header?: never;
             path?: never;

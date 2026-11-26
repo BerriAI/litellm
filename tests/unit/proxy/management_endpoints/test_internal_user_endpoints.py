@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -2519,6 +2519,23 @@ def test_update_internal_user_params_clears_model_budget(cleared_budget: dict[st
     assert update == {"user_id": "user-spruce", "model_max_budget": {}}
 
 
+def test_user_temporary_budget_applies_until_expiry_alongside_rollover() -> None:
+    expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        max_budget=10,
+        budget_duration="30d",
+        rollover_max_budget=15,
+        rollover_credit=3,
+        temp_budget_increase=7,
+        temp_budget_expiry=expiry.replace(tzinfo=None),
+    )
+
+    assert user.effective_max_budget(expiry - timedelta(microseconds=1)) == 20
+    assert user.effective_max_budget(expiry) == 13
+    assert user.max_budget == 10
+
+
 def test_update_internal_user_params_preserves_model_budget_presence_and_neighbors() -> None:
     omitted: Final = UpdateUserRequest(user_id="user-spruce", user_alias="Spruce")
     assert _update_internal_user_params(data_json=omitted.model_dump(), data=omitted) == {
@@ -3700,6 +3717,7 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker: MockerFixture
     class _PrismaClient:
         def __init__(self, db: _Database) -> None:
             self.db = db
+            self.writer_db = _Database(litellm_usertable=_UserTable(find_unique=AsyncMock(side_effect=TimeoutError)))
 
     async def mock_find_unique(*_args: object, **kwargs: object) -> LiteLLM_UserTable | None:
         where: Final = kwargs.get("where")
@@ -3897,7 +3915,6 @@ async def test_user_info_v2_internal_user_cannot_query_other(mocker):
         return None
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
-
     mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(return_value=[])
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -5845,14 +5862,12 @@ _DB_OUTAGE_503_BODY: Final = {
 
 def _user_read_raising(
     mocker: MockerFixture, stores: RustAuthStores, error: Exception
-) -> tuple[MagicMock, MagicMock]:
+) -> tuple[MagicMock, UserApiKeyCache]:
     prisma_client = MagicMock()
+    prisma_client.read_db = prisma_client.writer_db
     stores.user.error = error
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
     mocker.patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True)
-    return prisma_client, cache
+    return prisma_client, UserApiKeyCache()
 
 
 def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:

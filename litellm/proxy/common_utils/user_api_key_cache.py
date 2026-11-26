@@ -39,9 +39,10 @@ class _DecodedModel:
 
 
 class CacheLease:
-    __slots__ = ("__weakref__", "key", "shared")
+    __slots__ = ("__weakref__", "generation", "key", "shared")
 
-    def __init__(self, key: AuthObject, shared: str | None) -> None:
+    def __init__(self, key: AuthObject, shared: str | None, generation: int) -> None:
+        self.generation: Final = generation
         self.key: Final = key
         self.shared: Final = shared
 
@@ -154,16 +155,24 @@ class UserApiKeyCache:
         ``async_set_leased``. Evicting the key voids it: the rows read under it may predate the write behind
         that eviction. With ``enable_redis_auth_cache`` an eviction on any worker voids it. Loads of one key
         on this worker share a lease until an eviction, and it is dropped once none holds it."""
+        generation: Final = self._store.local_generation(key)
         held: Final = self._leases.get(key.key)
-        if held is not None:
+        if held is not None and held.generation == generation:
             return held
         shared: Final = await self._store.lease(key)
-        return self._leases.setdefault(key.key, CacheLease(key, shared))
+        replacement: Final = CacheLease(key, shared, generation)
+        if self._store.local_generation(key) != generation:
+            return replacement
+        existing: Final = self._leases.get(key.key)
+        if existing is not None and existing.generation == generation:
+            return existing
+        self._leases[key.key] = replacement
+        return replacement
 
     async def async_set_leased(self, lease: CacheLease, value: CacheValue, ttl: float | None) -> bool:
         """Caches ``value`` unless the lease's key was evicted since it was taken; False when refused."""
         wire_key: Final = lease.key.key
-        if self._leases.get(wire_key) is not lease:
+        if self._leases.get(wire_key) is not lease or self._store.local_generation(lease.key) != lease.generation:
             return False
         payload: Final[object] = CacheCodec.serialize(value, model_type=None)
         written: Final = await self._store.set_leased(lease.key, lease.shared, payload, ttl)
@@ -172,8 +181,7 @@ class UserApiKeyCache:
         if not written:
             self._void_leases((wire_key,))
             return False
-        self._store.set_local(lease.key, payload, ttl)
-        return True
+        return self._store.set_local_if_current(lease.generation, lease.key, payload, ttl)
 
     def _decoded(self, cached: object, key: AuthObject, model_type: type[BaseModel] | None, method: str) -> object:
         """Without Redis, a read of a payload equal to the one a previous read validated returns a shallow copy of
@@ -250,10 +258,13 @@ class UserApiKeyCache:
         ttl: float | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
+        local_generation: int | None = None,
     ) -> None:
         payload: Final = CacheCodec.serialize(value, model_type=model_type)
         try:
-            if local_only:
+            if local_generation is not None:
+                _ = self._store.set_local_if_current(local_generation, key, payload, ttl)
+            elif local_only:
                 self._store.set_local(key, payload, ttl)
             else:
                 self._store.set_sync(key, payload, ttl)

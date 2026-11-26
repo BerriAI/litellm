@@ -2217,17 +2217,20 @@ async def _sso_user_info_from_db(
     prisma_client: MagicMock,
     cached_user: LiteLLM_UserTable | None = None,
 ) -> LiteLLM_UserTable | NewUserResponse | None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     subject: Final = f"idp-subject-{uuid.uuid4().hex}"
     email: Final = f"{subject}@example.com"
+    cache: Final = UserApiKeyCache()
+    if cached_user is not None:
+        await cache.async_set_cache(AuthObject.user(subject), cached_user, model_type=LiteLLM_UserTable)
+        await cache.async_set_cache(AuthObject.user(cached_user.user_id), cached_user, model_type=LiteLLM_UserTable)
     with patch("litellm.proxy.management_endpoints.ui_sso.new_user", _new_user_during_database_outage):
         return await get_user_info_from_db(
             result=CustomOpenID(id=subject, email=email, provider="generic", team_ids=[]),
             prisma_client=prisma_client,
-            user_api_key_cache=MagicMock(
-                async_get_cache=AsyncMock(return_value=cached_user), async_set_cache=AsyncMock()
-            ),
+            user_api_key_cache=cache,
             proxy_logging_obj=MagicMock(),
             user_email=email,
             user_defined_values={
@@ -2298,7 +2301,7 @@ async def test_get_user_info_from_db_keeps_the_matched_account_when_its_update_h
         }
     )
 
-    assert await _sso_user_info_from_db(None, prisma_client, cached_user=matched) is matched
+    assert await _sso_user_info_from_db(None, prisma_client, cached_user=matched) == matched
 
 
 @pytest.mark.asyncio
@@ -8601,8 +8604,7 @@ class TestSyncUserRoleFromJwtRoleMap:
         assert sso_values["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
 
     @pytest.mark.asyncio
-    async def test_existing_user_role_updated_in_db_and_cache(self):
-        """Existing user with stale role gets updated in DB and cache."""
+    async def test_existing_user_role_is_updated_and_its_cached_snapshot_is_evicted(self):
         from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
@@ -8637,8 +8639,7 @@ class TestSyncUserRoleFromJwtRoleMap:
         )
         assert existing_user.user_role == LitellmUserRoles.PROXY_ADMIN.value
         assert sso_values["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
-        cached: Final = await cache.async_get_cache(AuthObject.user(user_id), model_type=LiteLLM_UserTable)
-        assert cached is not None and cached.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        assert await cache.async_get_cache(AuthObject.user(user_id), model_type=LiteLLM_UserTable) is None
 
     @pytest.mark.asyncio
     async def test_same_role_no_db_write(self):
@@ -11584,4 +11585,3 @@ async def test_sso_sign_in_with_custom_values_missing_user_id_finds_the_existing
     )
 
     assert getattr(user, "user_id", None) == "idp-new"
-

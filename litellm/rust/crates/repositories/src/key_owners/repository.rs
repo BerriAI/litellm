@@ -35,9 +35,15 @@ impl KeyOwnersRepository {
 
     /// The rows `ids` names; the membership is the one of `membership_user_id` in `team_id`.
     pub async fn find(&self, ids: KeyOwnerIds<'_>) -> Result<KeyOwners, litellm_db::Error> {
+        // Refill user auth caches from the writer so a lagging replica cannot restore a cleared budget.
+        let side = if ids.user_id.is_some() {
+            Side::Writer
+        } else {
+            Side::Read
+        };
         self.database
             .run(PREFETCH_AUTH_OBJECTS, || async {
-                let mut session = self.database.session(Side::Read).await?;
+                let mut session = self.database.session(side).await?;
                 queries::find_key_owners(
                     session.executor(),
                     ids.user_id,

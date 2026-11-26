@@ -107,6 +107,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
@@ -2247,11 +2248,7 @@ async def _sync_user_role_from_jwt_role_map(
         )
         user_info.user_role = mapped_role.value
         if user_info.user_id is not None:
-            await user_api_key_cache.async_set_cache(
-                key=AuthObject.user(user_info.user_id),
-                value=user_info,
-                model_type=LiteLLM_UserTable,
-            )
+            await evict_and_broadcast((AuthObject.user(user_info.user_id).key,), user_api_key_cache)
 
 
 def apply_user_info_values_to_sso_user_defined_values(

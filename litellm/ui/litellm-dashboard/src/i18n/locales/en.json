@@ -21122,6 +21122,7 @@
         "deleted": "User deleted successfully",
         "deleteFailed": "Failed to delete user",
         "updated": "User updated successfully",
+        "updatedRefreshFailed": "User saved. Reload the details to see the latest budget.",
         "updateFailed": "Failed to update user"
       },
       "backToUsers": "Back to Users",
@@ -21205,6 +21206,13 @@
         "submit": "Add to Team",
         "submitting": "Adding..."
       }
+    },
+    "temporaryBudget": {
+      "increase": "Temporary Budget Increase (USD)",
+      "expiry": "Temporary Budget Expiry (UTC)",
+      "active": "Active",
+      "expired": "Expired",
+      "effective": "Effective Budget"
     },
     "editView": {
       "errors": {

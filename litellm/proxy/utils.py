@@ -6916,7 +6916,7 @@ class PrismaClient:
                 elif query_type == "find_all" and key_val is not None:
                     response = await UserRepository(self).table.find_many(where=key_val)
                 elif query_type == "find_all" and reset_at is not None:
-                    response = await UserRepository(self).table.find_many(
+                    response = await UserRepository(self, use_writer=litellm.budget_rollover is True).table.find_many(
                         take=limit,
                         where={
                             # A user seeded from default_internal_user_params
