@@ -1062,7 +1062,9 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             yield
         finally:
-            self.litellm_params[CallTypes.acompletion.value] = acompletion
+            logged_params: Final[object] = self.model_call_details.get("litellm_params")
+            if is_str_keyed_dict(logged_params):
+                logged_params[CallTypes.acompletion.value] = acompletion
 
     def update_from_kwargs(
         self,
