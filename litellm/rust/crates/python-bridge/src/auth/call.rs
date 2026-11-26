@@ -3,10 +3,10 @@ use jiff::Timestamp;
 use litellm_config::RouteList;
 use litellm_gateway_auth_core::{
     self as core, AgentIdentityFailure, BudgetExceeded, Error, Identity, JwtDenial, KeyHash,
-    Outcome, PublicDenial, Request, Token, VerifyDenial,
+    Outcome, PublicDenial, Refreshed, Request, Token, VerifyDenial,
     authn::{
         jwt::{self, Expected, KeyMappingWrite, KeyOrigin, MappedJwt, MappedKey},
-        key::{CachedTeam, KeyRecord, Keyed},
+        key::{KeyRecord, Keyed},
     },
     identity::{
         jwt::{
@@ -1605,8 +1605,8 @@ impl AuthCall {
 
     #[pyo3(signature = (row = None, *, refreshed_at = None))]
     fn cached_team(&self, row: Option<Py<PyAny>>, refreshed_at: Option<f64>) -> PyResult<()> {
-        let team = row.map(|row| CachedTeam {
-            refreshed_at: refreshed_at.map(timestamp),
+        let team = row.map(|row| Refreshed {
+            at: refreshed_at.map(timestamp),
             row: PyRow::new(row),
         });
         self.stepper.answer("a cached team", |ask| match ask {
