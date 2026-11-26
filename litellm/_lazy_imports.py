@@ -137,13 +137,16 @@ _LITELLM_FACTORIES: Final[Mapping[str, Callable[[], object]]] = MappingProxyType
 )
 
 
-# Hosts whose lazy attributes `litellm` re-exports, cached on the host that owns them
-_LITELLM_REEXPORTS: Final = ("litellm.utils",)
+# Other hosts each module falls back to, cached on the host that owns the attribute. `litellm.utils` keeps resolving
+# every `litellm` attribute, as it has since `litellm.utils.__getattr__` was added
+_FALLBACK_HOSTS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {"litellm": ("litellm.utils",), "litellm.utils": ("litellm",)}
+)
 
 
 def resolve_lazy_attribute(module_name: str, name: str) -> object:
     """Import, cache and return `name`, the way `module_name.__getattr__` would."""
-    hosts: Final = (module_name, *_LITELLM_REEXPORTS) if module_name == "litellm" else (module_name,)
+    hosts: Final = (module_name, *_FALLBACK_HOSTS.get(module_name, ()))
     for host in hosts:
         location = LAZY_ATTRIBUTES.get(host, {}).get(name)
         if location is not None:
