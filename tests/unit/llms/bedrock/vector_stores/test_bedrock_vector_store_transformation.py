@@ -314,6 +314,18 @@ S3_VECTORS_METADATA: Final = {
             "https://docs.example.com/",
         ),
         (
+            {"type": "WEB", "webLocation": {"url": "http://[::1/broken"}},
+            S3_VECTORS_METADATA,
+            "http://[::1/broken",
+            "http://[::1/broken",
+        ),
+        (
+            {"type": "KENDRA", "kendraDocumentLocation": {"uri": "/"}},
+            S3_VECTORS_METADATA,
+            "bedrock-kb-document-CYQOANZ7OJ",
+            "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
+        ),
+        (
             {"type": "SQL", "sqlLocation": {"query": "SELECT * FROM policies"}},
             S3_VECTORS_METADATA,
             "bedrock-kb-document-CYQOANZ7OJ",
