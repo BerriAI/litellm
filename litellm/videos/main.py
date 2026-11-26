@@ -15,7 +15,7 @@ from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.litellm_core_utils.core_helpers import iter_items, keyword_arguments
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of, optional_str
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.main import base_llm_http_handler
@@ -201,7 +201,7 @@ def video_generation(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
@@ -210,8 +210,8 @@ def video_generation(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -256,7 +256,7 @@ def video_generation(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=model,
             user=user,
@@ -269,7 +269,7 @@ def video_generation(
         )
 
         # Set the correct call type for video generation
-        litellm_logging_obj.call_type = CallTypes.create_video.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.create_video.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_generation_handler(
@@ -279,12 +279,12 @@ def video_generation(
             video_generation_optional_request_params=video_generation_request_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -308,7 +308,7 @@ def video_content(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> bytes | Coroutine[object, object, bytes]:
     """
     Download video content from OpenAI's video API.
@@ -341,8 +341,8 @@ def video_content(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Try to decode provider from video_id if not explicitly provided
@@ -370,10 +370,10 @@ def video_content(
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(video_content_request_params),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -388,10 +388,10 @@ def video_content(
             video_content_provider_config=video_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             extra_headers=extra_headers,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
             variant=variant,
         )
@@ -592,7 +592,7 @@ def video_remix(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
     Maps the https://api.openai.com/v1/videos/{video_id}/remix endpoint.
@@ -601,8 +601,8 @@ def video_remix(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -641,10 +641,10 @@ def video_remix(
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(video_remix_request_params),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -654,7 +654,7 @@ def video_remix(
         )
 
         # Set the correct call type for video remix
-        litellm_logging_obj.call_type = CallTypes.video_remix.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_remix.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_remix_handler(
@@ -663,12 +663,12 @@ def video_remix(
             video_remix_provider_config=video_remix_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -809,7 +809,7 @@ def video_list(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> list[VideoObject] | Coroutine[object, object, list[VideoObject]]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
@@ -818,8 +818,8 @@ def video_list(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -857,10 +857,10 @@ def video_list(
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(video_list_request_params),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -870,7 +870,7 @@ def video_list(
         )
 
         # Set the correct call type for video list
-        litellm_logging_obj.call_type = CallTypes.video_list.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_list.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_list_handler(
@@ -880,12 +880,12 @@ def video_list(
             video_list_provider_config=video_list_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -1008,7 +1008,7 @@ def video_status(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
     Retrieve video status from OpenAI's video API.
@@ -1039,8 +1039,8 @@ def video_status(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -1078,10 +1078,10 @@ def video_status(
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(video_status_request_params),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -1091,7 +1091,7 @@ def video_status(
         )
 
         # Set the correct call type for video status
-        litellm_logging_obj.call_type = CallTypes.video_retrieve.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_retrieve.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_status_handler(
@@ -1099,12 +1099,12 @@ def video_status(
             video_status_provider_config=video_status_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -1181,7 +1181,7 @@ def video_create_character(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CharacterObject | Coroutine[object, object, CharacterObject]:
     """
     Create a character from an uploaded video file.
@@ -1189,8 +1189,8 @@ def video_create_character(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         mock_response = kwargs.get("mock_response", None)
@@ -1217,15 +1217,15 @@ def video_create_character(
         local_vars.update(kwargs)
         request_params: Final[Mapping[str, object]] = {"name": name}
 
-        litellm_logging_obj.update_environment_variables(
+        logging_obj_of(litellm_logging_obj).update_environment_variables(
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(request_params),
             litellm_params={"litellm_call_id": litellm_call_id, **request_params},
             custom_llm_provider=custom_llm_provider,
         )
 
-        litellm_logging_obj.call_type = CallTypes.video_create_character.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_create_character.value
 
         return base_llm_http_handler.video_create_character_handler(
             name=name,
@@ -1233,11 +1233,11 @@ def video_create_character(
             video_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -1308,7 +1308,7 @@ def video_get_character(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CharacterObject | Coroutine[object, object, CharacterObject]:
     """
     Retrieve a character by ID.
@@ -1316,8 +1316,8 @@ def video_get_character(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         mock_response = kwargs.get("mock_response", None)
@@ -1344,26 +1344,26 @@ def video_get_character(
         local_vars.update(kwargs)
         request_params: Final[Mapping[str, object]] = {"character_id": character_id}
 
-        litellm_logging_obj.update_environment_variables(
+        logging_obj_of(litellm_logging_obj).update_environment_variables(
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(request_params),
             litellm_params={"litellm_call_id": litellm_call_id, **request_params},
             custom_llm_provider=custom_llm_provider,
         )
 
-        litellm_logging_obj.call_type = CallTypes.video_get_character.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_get_character.value
 
         return base_llm_http_handler.video_get_character_handler(
             character_id=character_id,
             video_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -1442,7 +1442,7 @@ def video_edit(
     extra_body: dict[str, object] | None = None,
     *,
     video: FileContent | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
     Create a video edit job.
@@ -1450,8 +1450,8 @@ def video_edit(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         mock_response = kwargs.get("mock_response", None)
@@ -1477,15 +1477,15 @@ def video_edit(
         local_vars.update(kwargs)
         request_params: Final[Mapping[str, object]] = {"video_id": video_id, "prompt": prompt}
 
-        litellm_logging_obj.update_environment_variables(
+        logging_obj_of(litellm_logging_obj).update_environment_variables(
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(request_params),
             litellm_params={"litellm_call_id": litellm_call_id, **request_params},
             custom_llm_provider=custom_llm_provider,
         )
 
-        litellm_logging_obj.call_type = CallTypes.video_edit.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_edit.value
 
         return base_llm_http_handler.video_edit_handler(
             prompt=prompt,
@@ -1494,12 +1494,12 @@ def video_edit(
             video_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
@@ -1576,7 +1576,7 @@ def video_extension(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
     Create a video extension.
@@ -1584,8 +1584,8 @@ def video_extension(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         mock_response = kwargs.get("mock_response", None)
@@ -1615,15 +1615,15 @@ def video_extension(
             "seconds": seconds,
         }
 
-        litellm_logging_obj.update_environment_variables(
+        logging_obj_of(litellm_logging_obj).update_environment_variables(
             model="",
-            user=kwargs.get("user"),
+            user=optional_str(kwargs.get("user")),
             optional_params=dict(request_params),
             litellm_params={"litellm_call_id": litellm_call_id, **request_params},
             custom_llm_provider=custom_llm_provider,
         )
 
-        litellm_logging_obj.call_type = CallTypes.video_extension.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.video_extension.value
 
         return base_llm_http_handler.video_extension_handler(
             prompt=prompt,
@@ -1632,12 +1632,12 @@ def video_extension(
             video_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
     except Exception as e:
