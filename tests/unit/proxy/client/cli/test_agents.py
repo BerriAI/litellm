@@ -1654,7 +1654,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
             which=lambda name: "/usr/local/bin/opencode",
-            run=_OpencodeVersion(),
+            run=_OpencodeService(),
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1679,7 +1679,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=fake_sync,
             which=lambda name: "/usr/local/bin/opencode",
-            run=_OpencodeVersion(),
+            run=_OpencodeService(),
             verify=lambda *a: order.append("verify"),
             launcher=lambda p, a, e: order.append("launch"),
         )
@@ -1728,7 +1728,7 @@ class TestRunAgent:
             sync_models=fake_sync,
             warn=warnings.append,
             which=lambda name: "/usr/local/bin/opencode",
-            run=_OpencodeVersion(),
+            run=_OpencodeService(),
             verify=lambda *a: pytest.fail("--skip-verify must not verify"),
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1746,7 +1746,7 @@ class TestRunAgent:
             sync_models=lambda *a: ModelSyncSkipped("proxy said no"),
             warn=lambda message: calls.setdefault("warned", message),
             which=lambda name: "/usr/local/bin/opencode",
-            run=_OpencodeVersion(),
+            run=_OpencodeService(),
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -2658,9 +2658,8 @@ class TestRunAgent:
         assert order == ["launch"]
 
 
-class _OpencodeVersion:
-    def __init__(self, stdout="opencode v2.4.1\n", returncode=0, raises=None):
-        self.stdout = stdout
+class _OpencodeService:
+    def __init__(self, returncode=0, raises=None):
         self.returncode = returncode
         self.raises = raises
         self.calls = []
@@ -2669,91 +2668,62 @@ class _OpencodeVersion:
         self.calls.append(tuple(args))
         if self.raises is not None:
             raise self.raises
-        return subprocess.CompletedProcess(args, self.returncode, self.stdout, "")
+        return subprocess.CompletedProcess(args, self.returncode, None, None)
 
 
-def _launched_args(command, run, **kwargs):
-    launched = {}
+def _launch_recording_order(command, run):
+    events = []
+
+    def recording_run(args, **kwargs):
+        events.append(("run", tuple(args), dict(kwargs["env"])))
+        return run(args, **kwargs)
+
     run_agent(
         "http://localhost:4000",
         "sk-current",
         command,
-        base_env={},
+        base_env={"OPENAI_API_KEY": "sk-stale"},
         which=lambda name: f"/usr/local/bin/{name}",
         verify=lambda *a: None,
-        sync_models=lambda *a: ModelSyncSkipped("not needed"),
+        sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
         warn=lambda message: None,
-        launcher=lambda p, a, e: launched.update(args=tuple(a), env=dict(e)),
+        launcher=lambda p, a, e: events.append(("launch", tuple(a), dict(e))),
         preparers={},
-        run=run,
-        **kwargs,
+        run=recording_run,
     )
-    return launched["args"], launched["env"]
+    return events
 
 
-class TestOpencodeStandalone:
+class TestOpencodeServiceRestart:
+    @pytest.mark.parametrize("user_args", [["run", "x"], ["service", "stop"], []], ids=["run", "service_stop", "tui"])
+    def test_the_background_server_restarts_with_the_launch_env_before_opencode_opens(self, user_args):
+        events = _launch_recording_order(["opencode", *user_args], _OpencodeService())
+        (restart_kind, restart_args, restart_env), (launch_kind, launch_args, launch_env) = events
+        assert (restart_kind, restart_args) == ("run", ("/usr/local/bin/opencode", "service", "restart"))
+        assert (launch_kind, launch_args) == ("launch", ("opencode", *user_args))
+        assert restart_env == launch_env
+        assert launch_env["OPENAI_API_KEY"] == "sk-current"
+        assert launch_env["OPENCODE_CONFIG_CONTENT"] == '{"provider":{}}'
+
     @pytest.mark.parametrize(
-        ("run", "standalone"),
+        "run",
         [
-            (_OpencodeVersion("opencode v2.4.1\n"), True),
-            (_OpencodeVersion("opencode v10.0.0\n"), True),
-            (_OpencodeVersion("2.0.0\n"), True),
-            (_OpencodeVersion("1.19.6\n"), False),
-            (_OpencodeVersion("opencode v2.4.1\n", returncode=1), False),
-            (_OpencodeVersion("dev\n"), False),
-            (_OpencodeVersion(""), False),
-            (_OpencodeVersion(raises=OSError("not executable")), False),
-            (_OpencodeVersion(raises=subprocess.TimeoutExpired("opencode", 10)), False),
+            _OpencodeService(returncode=1),
+            _OpencodeService(raises=OSError("not executable")),
+            _OpencodeService(raises=subprocess.TimeoutExpired("opencode", 10)),
         ],
-        ids=[
-            "opencode_2",
-            "opencode_10",
-            "bare_2",
-            "opencode_1",
-            "version_check_fails",
-            "unparseable",
-            "no_output",
-            "cannot_run",
-            "times_out",
-        ],
+        ids=["no_service_command", "cannot_run", "times_out"],
     )
-    def test_only_an_opencode_2_or_later_launch_gets_its_own_server(self, run, standalone):
-        args, env = _launched_args(["opencode", "run", "hi"], run)
-        assert args == (("opencode", "--standalone", "run", "hi") if standalone else ("opencode", "run", "hi"))
-        assert env["OPENAI_API_KEY"] == "sk-current"
-        assert run.calls[0][0] == "/usr/local/bin/opencode"
-
-    @pytest.mark.parametrize(
-        "user_args",
-        [["--server", "http://127.0.0.1:4096"], ["--server=http://127.0.0.1:4096"], ["--standalone", "run", "hi"]],
-        ids=["server", "server_equals", "standalone"],
-    )
-    def test_a_server_the_user_picked_is_kept(self, user_args):
-        run = _OpencodeVersion()
-        args, _ = _launched_args(["opencode", *user_args], run)
-        assert args == ("opencode", *user_args)
-
-    @pytest.mark.parametrize(
-        ("user_args", "standalone"),
-        [
-            (["service", "stop"], False),
-            (["serve"], False),
-            (["upgrade"], False),
-            (["debug", "paths"], False),
-            (["run", "service"], True),
-        ],
-        ids=["service_stop", "serve", "upgrade", "debug", "run"],
-    )
-    def test_subcommands_that_reject_the_flag_launch_as_before(self, user_args, standalone):
-        args, _ = _launched_args(["opencode", *user_args], _OpencodeVersion())
-        assert args == (("opencode", "--standalone", *user_args) if standalone else ("opencode", *user_args))
+    def test_a_failed_restart_still_launches_unchanged(self, run):
+        events = _launch_recording_order(["opencode", "run", "x"], run)
+        assert events[-1][:2] == ("launch", ("opencode", "run", "x"))
 
     @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
-    def test_other_agents_never_get_the_flag(self, agent):
-        run = _OpencodeVersion()
-        args, _ = _launched_args([agent], run)
-        assert "--standalone" not in args
+    def test_other_agents_never_restart_it(self, agent):
+        run = _OpencodeService()
+        events = _launch_recording_order([agent], run)
         assert run.calls == []
+        assert [kind for kind, *_ in events] == ["launch"]
 
 
 _WINDOWS_CLAUDE_EXE = "C:\\Program Files\\Claude\\claude.exe"

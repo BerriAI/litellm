@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -12,18 +14,25 @@ _LITE: Final = (
     f"import sys; sys.path.insert(0, {str(Path(litellm.__file__).resolve().parents[1])!r}); "
     "from litellm.proxy.client.cli.main import cli; cli()"
 )
+_RECORD_INVOCATION: Final = """
+import hashlib, json, os, sys
+key = os.environ.get("OPENAI_API_KEY", "")
+with open(os.environ["STAND_IN_LOG"], "a") as log:
+    log.write(json.dumps({"argv": sys.argv[1:], "key_sha256": hashlib.sha256(key.encode()).hexdigest()}) + "\\n")
+if sys.argv[1:] == ["service", "restart"]:
+    print("http://127.0.0.1:4096")
+    print("restart notice", file=sys.stderr)
+"""
 
 
-def _launch_lite_opencode(tmp_path: Path, version_line: str, *args: str) -> list[str]:
+def _invocations_of_lite_opencode(tmp_path: Path, *args: str) -> list[dict[str, object]]:
     bin_dir: Final = tmp_path / "bin"
     bin_dir.mkdir()
-    argv_file: Final = tmp_path / "argv"
+    log: Final = tmp_path / "invocations.jsonl"
+    recorder: Final = tmp_path / "record.py"
+    recorder.write_text(_RECORD_INVOCATION)
     opencode: Final = bin_dir / "opencode"
-    opencode.write_text(
-        "#!/bin/sh\n"
-        f'if [ "$1" = "--version" ]; then echo "{version_line}"; exit 0; fi\n'
-        f'printf "%s\\n" "$@" > "{argv_file}"\n'
-    )
+    opencode.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{recorder}" "$@"\n')
     opencode.chmod(0o700)
     lite: Final = subprocess.run(
         [
@@ -47,28 +56,23 @@ def _launch_lite_opencode(tmp_path: Path, version_line: str, *args: str) -> list
             **os.environ,
             "HOME": str(tmp_path),
             "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "OPENAI_API_KEY": "sk-stale",
+            "STAND_IN_LOG": str(log),
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         },
     )
     assert lite.returncode == 0, lite.stderr
-    return argv_file.read_text().splitlines()
+    assert "4096" not in lite.stdout and "restart notice" not in lite.stderr
+    return [json.loads(line) for line in log.read_text().splitlines()]
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="the stand-in opencode is a POSIX shell script")
-@pytest.mark.parametrize(
-    ("version_line", "expected"),
-    [
-        ("opencode v2.4.1", ["--standalone", "run", "hello"]),
-        ("1.19.6", ["run", "hello"]),
-    ],
-    ids=["opencode_2_gets_a_private_server", "opencode_1_has_no_shared_server"],
-)
-def test_lite_opencode_runs_opencode_2_with_its_own_server_so_the_launch_key_is_used(
-    tmp_path: Path, version_line: str, expected: list[str]
+@pytest.mark.parametrize("user_args", [("run", "hello"), ("service", "stop")], ids=["run", "service_stop"])
+def test_lite_opencode_restarts_the_background_server_with_the_launch_key_before_opening_it(
+    tmp_path: Path, user_args: tuple[str, ...]
 ):
-    assert _launch_lite_opencode(tmp_path, version_line, "run", "hello") == expected
-
-
-@pytest.mark.skipif(sys.platform.startswith("win"), reason="the stand-in opencode is a POSIX shell script")
-def test_lite_opencode_service_stop_launches_without_the_flag_opencode_rejects_there(tmp_path: Path):
-    assert _launch_lite_opencode(tmp_path, "opencode v2.4.1", "service", "stop") == ["service", "stop"]
+    launch_key: Final = hashlib.sha256(b"sk-current").hexdigest()
+    assert _invocations_of_lite_opencode(tmp_path, *user_args) == [
+        {"argv": ["service", "restart"], "key_sha256": launch_key},
+        {"argv": list(user_args), "key_sha256": launch_key},
+    ]
