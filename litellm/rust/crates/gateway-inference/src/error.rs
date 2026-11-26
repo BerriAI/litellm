@@ -1,20 +1,28 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
     Json,
-    response::{IntoResponse, Response},
+    response::{AppendHeaders, IntoResponse, Response},
 };
+use litellm_gateway_auth_core::AuthzDenial;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
+use litellm_llms_types::formats::messages::MessagesErrorType;
+use litellm_python_compat::{Value as PyValue, repr::repr};
+use litellm_router_core::FailureKind;
 use serde_json::{Map, Value, json};
+
+use crate::{
+    headers::Routing,
+    hooks::{HookError, Refusal},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Auth(#[from] litellm_gateway_auth::Error),
+    /// The auth core found a model list of the caller's that does not reach the model.
+    #[error("operation is not permitted")]
+    ModelAccess(#[from] AuthzDenial),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
-    #[error("invalid path parameter")]
-    InvalidPath(#[source] axum::extract::rejection::PathRejection),
     #[error(
         "{route}: Invalid model name passed in model={model}. Call `/v1/models` to view available models for your key."
     )]
@@ -23,12 +31,56 @@ pub enum Error {
     Route(#[from] InferenceError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
-    #[error("{0} is not implemented by the Rust gateway")]
-    Unsupported(String),
+    #[error(transparent)]
+    NoDeployments(#[from] NoDeployments),
+    #[error(transparent)]
+    Routing(litellm_router_core::Error),
+    #[error("{}", .0.message)]
+    Refused(Refusal),
+    #[error(transparent)]
+    Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
     #[error("unexpected HTTP host operation")]
     Internal,
+}
+
+/// Python's `RouterRateLimitError`, in its words: no deployment of `model` takes a call now.
+#[derive(Debug, PartialEq)]
+pub struct NoDeployments {
+    pub model: String,
+    /// Seconds until a deployment of the model is tried again.
+    pub cooldown: f64,
+    /// Every deployment of the model is cooling down.
+    pub all_cooling: bool,
+    pub pre_call_checks: bool,
+    /// The ids of every deployment that is cooling down, of any model.
+    pub cooling: Vec<String>,
+}
+
+impl std::error::Error for NoDeployments {}
+
+impl std::fmt::Display for NoDeployments {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let whole = self.cooldown.fract() == 0.0 && self.cooldown.abs() < i64::MAX as f64;
+        let seconds = match whole {
+            true => PyValue::Int((self.cooldown as i64).into()),
+            false => PyValue::Float(self.cooldown),
+        };
+        let reason = match self.all_cooling {
+            true => " All deployments for selected model are in cooldown.",
+            false => "",
+        };
+        let cooling = PyValue::List(self.cooling.iter().cloned().map(PyValue::Str).collect());
+        write!(
+            formatter,
+            "No deployments available for selected model, Try again in {} seconds.{reason} Passed model={}. pre-call-checks={}, cooldown_list={}",
+            repr(&seconds),
+            self.model,
+            repr(&PyValue::Bool(self.pre_call_checks)),
+            repr(&cooling),
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +111,59 @@ impl IntoResponse for Error {
     }
 }
 
+/// The error a request ended on, with what the router did for the call it ended: the deployment
+/// the router says raised it, or everything it did for a stream the provider failed before any
+/// content and no other attempt answered for.
+#[derive(Debug)]
+pub struct Ended {
+    pub error: Box<Error>,
+    pub routing: Option<Routing>,
+    /// The deployment whose attempt raised `error`, which names its timeout as Python's
+    /// `failure.timeout` does. It differs from `routing` when a retry that took over a failed
+    /// stream raised the error, since the call keeps the routing of the stream that failed.
+    pub raised_on: Option<String>,
+}
+
+impl<E: Into<Error>> From<E> for Ended {
+    fn from(error: E) -> Self {
+        Self {
+            error: Box::new(error.into()),
+            routing: None,
+            raised_on: None,
+        }
+    }
+}
+
+/// The envelope a route answers an error in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ErrorFormat {
+    Anthropic,
+    OpenAi,
+}
+
+impl Ended {
+    pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
+        match format {
+            ErrorFormat::OpenAi => (*self.error).into_response(),
+            ErrorFormat::Anthropic => (
+                self.error.status(),
+                AppendHeaders(self.error.retry_after()),
+                Json(self.error.body(request_id)),
+            )
+                .into_response(),
+        }
+    }
+}
+
+impl From<HookError> for Error {
+    fn from(ended: HookError) -> Self {
+        match ended {
+            HookError::Refused(refusal) => Self::Refused(refusal),
+            HookError::Failed(failure) => Self::Callback(failure),
+        }
+    }
+}
+
 impl From<litellm_host_http::Error<InferenceError>> for Error {
     fn from(error: litellm_host_http::Error<InferenceError>) -> Self {
         match error {
@@ -71,40 +176,87 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::Auth(error) => error.status(),
-            Self::InvalidPath(rejection) => rejection.status(),
-            Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
+            Self::ModelAccess(_) => StatusCode::FORBIDDEN,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::Internal | Self::Callback(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
+            Self::Routing(error) => routing_status(error),
+            Self::Refused(refusal) => refusal.status,
+        }
+    }
+
+    /// Whether the proxy raises this error inside the route's handler, where its response carries
+    /// the proxy's error headers. A model the caller may not reach and a body that cannot be read
+    /// are refused before the handler runs.
+    pub(crate) fn in_handler(&self) -> bool {
+        !matches!(
+            self,
+            Self::ModelAccess(_) | Self::InvalidBody(_) | Self::BodyTooLarge
+        )
+    }
+
+    pub(crate) fn raised_by_provider(&self) -> bool {
+        matches!(self, Self::Route(_) | Self::Ocr(_))
+    }
+
+    /// The provider's response headers on the error, empty for an error no provider responded.
+    pub(crate) fn provider_headers(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Route(error) => error.upstream_headers().to_vec(),
+            Self::Ocr(error) => error
+                .upstream_response()
+                .into_iter()
+                .flat_map(|(_, _, headers)| headers.iter())
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
     pub fn openai_response(self) -> Response {
-        (self.status(), Json(self.openai_body())).into_response()
+        let body = Json(self.openai_body());
+        match self {
+            Self::Refused(refusal) => (
+                refusal.status,
+                AppendHeaders(crate::rate_limited::header_pairs(refusal.headers)),
+                body,
+            )
+                .into_response(),
+            other => (other.status(), AppendHeaders(other.retry_after()), body).into_response(),
+        }
     }
 
-    /// The OpenAI envelope as an `event: error` frame, for a stream that fails after its
-    /// headers went out.
-    pub fn responses_sse_frame(&self) -> String {
-        let event = json!({
-            "type": "error",
-            "code": self.status().as_u16().to_string(),
-            "message": self.message(),
-            "param": null,
-        });
-        format!("event: error\ndata: {event}\n\n")
+    /// `retry-after` in whole seconds on a refusal the router made itself, as it refuses a
+    /// deployment past its declared rate limits.
+    pub(crate) fn retry_after(&self) -> Option<(HeaderName, HeaderValue)> {
+        let Self::Routing(error) = self else {
+            return None;
+        };
+        let after = error.refused()?.resets_in;
+        let seconds = after.as_secs() + u64::from(after.subsec_nanos() > 0);
+        Some((RETRY_AFTER, HeaderValue::from(seconds)))
     }
 
+    /// A refusal names its own `type` and `code` when the proxy's exception does.
     fn openai_body(&self) -> Value {
         let status = self.status();
+        let (kind, code) = match self {
+            Self::Refused(refusal) => (refusal.kind.clone(), refusal.code.clone()),
+            _ => (None, None),
+        };
         json!({"error": {
             "message": self.message(),
-            "type": error_type(status),
+            "type": kind.map_or_else(
+                || json!(MessagesErrorType::for_status(status.as_u16())),
+                Value::from,
+            ),
             "param": null,
-            "code": status.as_u16(),
+            "code": code.map_or_else(|| json!(status.as_u16()), Value::from),
         }})
     }
 
@@ -135,17 +287,28 @@ impl Error {
 
     fn message(&self) -> String {
         match self {
-            Self::Auth(error) => error.to_string(),
+            Self::Refused(refusal) => refusal.message.clone(),
+            Self::ModelAccess(_) => self.to_string(),
+            Self::Routing(error) if let Some(refused) = rate_limit_refusal(error) => refused,
             Self::InvalidBody(_)
-            | Self::InvalidPath(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
-            | Self::Unsupported(_)
+            | Self::NoDeployments(_)
+            | Self::Routing(_)
+            | Self::Callback(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
     }
+}
+
+/// The message Python's proxy answers a pre-call check's `RateLimitError` with.
+fn rate_limit_refusal(error: &litellm_router_core::Error) -> Option<String> {
+    error.refused()?;
+    let failure = error.attempt()?;
+    let detail = failure.detail.as_deref()?;
+    (failure.kind == FailureKind::RateLimit).then(|| format!("litellm.{}: {detail}", failure.kind))
 }
 
 fn route_status(error: &InferenceError) -> StatusCode {
@@ -155,6 +318,9 @@ fn route_status(error: &InferenceError) -> StatusCode {
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     }
+    if error.timeout().is_some() {
+        return StatusCode::REQUEST_TIMEOUT;
+    }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;
     }
@@ -162,6 +328,17 @@ fn route_status(error: &InferenceError) -> StatusCode {
         return StatusCode::BAD_REQUEST;
     }
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/// The status of an error the router made itself: the status of the exception it stands for.
+fn routing_status(error: &litellm_router_core::Error) -> StatusCode {
+    let status = match error {
+        litellm_router_core::Error::Attempt { failure, .. } => failure.status,
+        other => other.pick_failure().and_then(|failure| failure.status),
+    };
+    status
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn ocr_status(error: &OcrError) -> StatusCode {
@@ -177,25 +354,12 @@ fn ocr_status(error: &OcrError) -> StatusCode {
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-fn error_type(status: StatusCode) -> &'static str {
-    match status.as_u16() {
-        400 => "invalid_request_error",
-        401 => "authentication_error",
-        403 => "permission_error",
-        404 => "not_found_error",
-        413 => "request_too_large",
-        429 => "rate_limit_error",
-        529 => "overloaded_error",
-        _ => "api_error",
-    }
-}
-
 fn envelope(status: StatusCode, message: &str) -> Map<String, Value> {
     Map::from_iter([
         ("type".to_owned(), Value::from("error")),
         (
             "error".to_owned(),
-            json!({"type": error_type(status), "message": message}),
+            json!({"type": MessagesErrorType::for_status(status.as_u16()), "message": message}),
         ),
     ])
 }
@@ -322,10 +486,54 @@ mod tests {
     }
 
     #[rstest]
+    #[case::every_deployment_cooling(
+        NoDeployments {
+            model: "primary".into(),
+            cooldown: 30.0,
+            all_cooling: true,
+            pre_call_checks: false,
+            cooling: vec!["primary-1".into(), "primary-2".into()],
+        },
+        "No deployments available for selected model, Try again in 30 seconds. All deployments for selected model are in cooldown. Passed model=primary. pre-call-checks=False, cooldown_list=['primary-1', 'primary-2']"
+    )]
+    #[case::another_models_deployment_cooling(
+        NoDeployments {
+            model: "primary".into(),
+            cooldown: 2.5,
+            all_cooling: false,
+            pre_call_checks: true,
+            cooling: vec!["other-1".into()],
+        },
+        "No deployments available for selected model, Try again in 2.5 seconds. Passed model=primary. pre-call-checks=True, cooldown_list=['other-1']"
+    )]
+    #[case::nothing_cooling(
+        NoDeployments {
+            model: "primary".into(),
+            cooldown: 5.0,
+            all_cooling: false,
+            pre_call_checks: false,
+            cooling: vec![],
+        },
+        "No deployments available for selected model, Try again in 5 seconds. Passed model=primary. pre-call-checks=False, cooldown_list=[]"
+    )]
+    fn no_deployments_reads_as_pythons_router_rate_limit_error(
+        #[case] refused: NoDeployments,
+        #[case] message: &str,
+    ) {
+        let error = Error::from(refused);
+
+        assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            error.body(None),
+            json!({"type": "error", "error": {"type": "rate_limit_error", "message": message}})
+        );
+    }
+
+    #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::declined(
-        Error::Route(InferenceError::from(litellm_http::Error::computed_header(
-            "authorization"
+        Error::Route(InferenceError::Declined(litellm_core_utils::decline::Decline::new(
+            "unrecognized request parameter"
         ))),
         StatusCode::NOT_IMPLEMENTED
     )]
@@ -354,7 +562,6 @@ mod tests {
     #[case::missing_model(BodyError::MissingModel.into(), StatusCode::BAD_REQUEST)]
     #[case::unknown_model(unknown_model(), StatusCode::BAD_REQUEST)]
     #[case::oversized_body(Error::BodyTooLarge, StatusCode::PAYLOAD_TOO_LARGE)]
-    #[case::unserved_path(Error::Unsupported("/v1/completions".into()), StatusCode::NOT_IMPLEMENTED)]
     #[case::host_protocol(
         litellm_host_http::Error::<InferenceError>::Protocol.into(),
         StatusCode::INTERNAL_SERVER_ERROR
@@ -388,39 +595,5 @@ mod tests {
         assert_eq!(message.matches(&cause).count(), 1, "{message}");
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], 400);
-    }
-
-    fn auth_outage() -> Error {
-        Error::Auth(litellm_gateway_auth::Error::Unavailable(
-            litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
-        ))
-    }
-
-    #[rstest]
-    #[case::openai(auth_outage().openai_body()["error"]["message"].clone())]
-    #[case::anthropic(auth_outage().body(None)["error"]["message"].clone())]
-    #[case::responses_sse(Value::from(auth_outage().responses_sse_frame()))]
-    #[case::anthropic_sse(Value::from(auth_outage().sse_frame()))]
-    fn an_auth_failure_hides_its_backend_cause(#[case] rendered: Value) {
-        let top = auth_outage().to_string();
-        let rendered = rendered.to_string();
-        assert!(rendered.contains(&top), "{rendered}");
-        assert!(!rendered.contains("private-backend-detail"), "{rendered}");
-    }
-
-    #[rstest]
-    #[case::provider_answer(upstream(429, "slow down"))]
-    #[case::caller_fault(invalid_json())]
-    #[case::host_bug(litellm_host_http::Error::<InferenceError>::Protocol.into())]
-    fn the_responses_sse_frame_is_the_responses_error_event(#[case] error: Error) {
-        let frame = error.responses_sse_frame();
-        let data = frame
-            .strip_prefix("event: error\ndata: ")
-            .and_then(|data| data.strip_suffix("\n\n"))
-            .unwrap_or_else(|| panic!("an event: error frame, got {frame:?}"));
-        let event = serde_json::from_str::<Value>(data).unwrap();
-        assert_eq!(event["type"], "error");
-        assert_eq!(event["code"], error.status().as_u16().to_string());
-        assert_eq!(event["message"], error.openai_body()["error"]["message"]);
     }
 }

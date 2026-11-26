@@ -6,9 +6,13 @@ use std::{
 
 use crate::{
     error::Error,
+    phases::ConnectBound,
     proxy::EnvironmentProxies,
     settings::{HttpSettings, SslVerify, TcpKeepalive},
-    tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
+    tls::{
+        CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported, approved, unapproved,
+        without_chacha20,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -71,25 +75,37 @@ impl From<&HttpSettings> for Resolution {
             .as_deref()
             .map(CipherSelection::from)
             .unwrap_or_default();
-        Self {
-            config: HttpClientConfig {
-                verify: Verify::from(settings),
-                client_certificate: settings.ssl_certificate.clone().map(ClientIdentity::Pem),
-                key_exchange_group: curve.clone().ok().flatten(),
-                tls12_cipher_suites: ciphers.tls12_cipher_suites,
-                force_ipv4: settings.force_ipv4,
-                http2: settings.http2,
-                user_agent: settings.user_agent.clone(),
-                proxies: if settings.trust_proxy_env {
-                    settings.proxies.clone()
-                } else {
-                    EnvironmentProxies::default()
-                },
-                connect_timeout: settings.connect_timeout,
-                tcp_keepalive: settings.tcp_keepalive,
-                pool_idle_timeout: settings.pool_idle_timeout,
+        let mut config = HttpClientConfig {
+            verify: Verify::from(settings),
+            client_certificate: settings.ssl_certificate.clone().map(ClientIdentity::Pem),
+            key_exchange_group: curve.clone().ok().flatten(),
+            tls12_cipher_suites: if settings.chacha20_excluded {
+                Some(without_chacha20(ciphers.tls12_cipher_suites))
+            } else {
+                ciphers.tls12_cipher_suites
             },
-            unsupported: curve.err().into_iter().chain(ciphers.unsupported).collect(),
+            force_ipv4: settings.force_ipv4,
+            http2: settings.http2,
+            user_agent: settings.user_agent.clone(),
+            proxies: if settings.trust_proxy_env {
+                settings.proxies.clone()
+            } else {
+                EnvironmentProxies::default()
+            },
+            connect_timeout: settings.connect_timeout,
+            tcp_keepalive: settings.tcp_keepalive,
+            pool_idle_timeout: settings.pool_idle_timeout,
+        };
+        let unsupported = curve
+            .err()
+            .into_iter()
+            .chain(ciphers.unsupported)
+            .chain(unapproved(&config))
+            .collect();
+        config.tls12_cipher_suites = approved(config.tls12_cipher_suites);
+        Self {
+            unsupported,
+            config,
         }
     }
 }
@@ -102,7 +118,7 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
     fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
         let base = reqwest::Client::builder()
             .tls_backend_preconfigured(rustls::ClientConfig::try_from(config)?)
-            .connect_timeout(config.connect_timeout)
+            .connector_layer(ConnectBound::new(config.connect_timeout))
             .pool_idle_timeout(config.pool_idle_timeout)
             .referer(false)
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS));
@@ -174,7 +190,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::x25519("X25519", Some(KeyExchangeGroup::X25519))]
+    #[cfg_attr(
+        not(feature = "fips"),
+        case::x25519("X25519", Some(KeyExchangeGroup::X25519))
+    )]
     #[case::openssl_p256("prime256v1", Some(KeyExchangeGroup::Secp256r1))]
     #[case::p384("secp384r1", Some(KeyExchangeGroup::Secp384r1))]
     fn ecdh_curve_selects_the_single_key_exchange_group(
@@ -188,6 +207,45 @@ mod tests {
         let resolution = Resolution::from(&settings);
         assert_eq!(resolution.config.key_exchange_group, expected);
         assert_eq!(resolution.unsupported, []);
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest]
+    #[case::x25519("X25519", "ssl_ecdh_curve X25519")]
+    fn fips_build_reports_an_unapproved_curve(#[case] curve: &str, #[case] reported: &str) {
+        let settings = HttpSettings {
+            ssl_ecdh_curve: Some(curve.into()),
+            ..HttpSettings::default()
+        };
+        assert_eq!(
+            Resolution::from(&settings).unsupported,
+            [Unsupported::NotFipsApproved(reported.into())]
+        );
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest]
+    #[case::only_chacha20("ECDHE-RSA-CHACHA20-POLY1305", None)]
+    #[case::mixed(
+        "ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-GCM-SHA256",
+        Some(vec![Tls12CipherSuite::EcdheRsaAes128Gcm])
+    )]
+    fn fips_build_keeps_only_approved_tls12_suites(
+        #[case] ssl_security_level: &str,
+        #[case] expected: Option<Vec<Tls12CipherSuite>>,
+    ) {
+        let settings = HttpSettings {
+            ssl_security_level: Some(ssl_security_level.into()),
+            ..HttpSettings::default()
+        };
+        let resolution = Resolution::from(&settings);
+        assert_eq!(resolution.config.tls12_cipher_suites, expected);
+        assert_eq!(
+            resolution.unsupported,
+            [Unsupported::NotFipsApproved(
+                "cipher suite EcdheRsaChacha20".into()
+            )]
+        );
     }
 
     #[rstest]

@@ -1,8 +1,13 @@
 use std::collections::BTreeSet;
 
+use std::fmt::Display;
+
 use litellm_llms_types::{
-    formats::messages::{ContentBlock, ContentBlockType, Message, MessageContent},
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
+    formats::messages::{
+        ContentBlock, ContentBlockType, Message, MessageContent, MessagesOptionalParams,
+        MessagesRequest, ThinkingConfig,
+    },
+    providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
 };
 use serde_json::{Map, Value};
@@ -16,15 +21,20 @@ const CONTENT: &str = "content";
 const TYPE: &str = "type";
 const OUTPUT_CONFIG: &str = "output_config";
 const TOOL_CHANGE_BLOCK_TYPES: [&str; 2] = ["tool_addition", "tool_removal"];
+const BLOCK_BINDING: &str = "block_binding";
+const DISPLAY: &str = "display";
+const DISPLAY_UPDATES: &str = "updates";
 
-/// The mid-conversation system fields of Python's `BETA_GATED_FIELDS`, named as Python's warning
-/// names them and declared in the order it sorts those names.
+/// The fields of Python's `BETA_GATED_FIELDS`, named as Python's warning names them and declared
+/// in the order it sorts those names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum GatedField {
     Emptied,
     ClearAt,
     ToolChanges,
     OutputConfig,
+    BlockBinding,
+    DisplayUpdates,
 }
 
 impl GatedField {
@@ -34,6 +44,8 @@ impl GatedField {
             Self::ClearAt => "messages[].system.clear_at",
             Self::ToolChanges => "messages[].system.content[].tool_addition|tool_removal",
             Self::OutputConfig => "messages[].system.output_config",
+            Self::BlockBinding => "thinking.block_binding",
+            Self::DisplayUpdates => "thinking.display=updates",
         }
     }
 
@@ -49,6 +61,8 @@ impl GatedField {
                 AnthropicBeta::MidConversationOutputConfig20260701,
                 AnthropicBeta::PerTurnControl20260701,
             ],
+            Self::BlockBinding => &[AnthropicBeta::ThinkingBindingControls20260801],
+            Self::DisplayUpdates => &[AnthropicBeta::ThinkingDisplayUpdates20260818],
         }
     }
 
@@ -82,11 +96,98 @@ pub fn strip_beta_gated_system_messages(
     active: &BetaSet,
     drops_unsupported_params: bool,
     model: &str,
-    provider: BetaProvider,
+    provider: impl Display,
 ) -> Vec<Recognized<Message>> {
     if !drops_unsupported_params {
         return messages;
     }
+    let (messages, gated) = stripped_system_messages(messages, active);
+    log_beta_gated_strips(&gated, model, provider);
+    messages
+}
+
+/// Python's `strip_beta_gated_native_request` and `log_beta_gated_strips`, run once the final
+/// `anthropic-beta` values are known: under drop_params the `thinking` fields and the system
+/// message fields no beta in `active` unlocks are dropped, and one warning names them all.
+pub fn strip_beta_gated_request(
+    request: MessagesRequest,
+    active: &BetaSet,
+    drops_unsupported_params: bool,
+    provider: impl Display,
+) -> MessagesRequest {
+    if !drops_unsupported_params {
+        return request;
+    }
+    let (thinking, thinking_gated) = stripped_thinking(request.params.thinking, active);
+    let (messages, messages_gated) = stripped_system_messages(request.messages, active);
+    log_beta_gated_strips(
+        &thinking_gated.union(&messages_gated).copied().collect(),
+        &request.model,
+        provider,
+    );
+    MessagesRequest {
+        messages,
+        params: MessagesOptionalParams {
+            thinking,
+            ..request.params
+        },
+        ..request
+    }
+}
+
+fn log_beta_gated_strips(gated: &BTreeSet<GatedField>, model: &str, provider: impl Display) {
+    if gated.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        "Dropped {} for model={model} provider={provider} because drop_params is on and the provider would reject them on this request, either since this provider leg does not send that anthropic-beta (see anthropic_beta_headers_config.json) or since the model turns mid-conversation system messages into user messages.",
+        gated
+            .iter()
+            .copied()
+            .map(GatedField::described)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
+/// Python's `strip_beta_gated_thinking`, which reads `thinking` as any mapping.
+fn stripped_thinking(
+    thinking: Option<Recognized<ThinkingConfig>>,
+    active: &BetaSet,
+) -> (Option<Recognized<ThinkingConfig>>, BTreeSet<GatedField>) {
+    let Some(Value::Object(fields)) = thinking.as_ref().and_then(|t| serde_json::to_value(t).ok())
+    else {
+        return (thinking, BTreeSet::new());
+    };
+    let binding_gated =
+        fields.contains_key(BLOCK_BINDING) && GatedField::BlockBinding.gated(active);
+    let display_gated = fields.get(DISPLAY).and_then(Value::as_str) == Some(DISPLAY_UPDATES)
+        && GatedField::DisplayUpdates.gated(active);
+    if !binding_gated && !display_gated {
+        return (thinking, BTreeSet::new());
+    }
+    let kept: Map<String, Value> = fields
+        .into_iter()
+        .filter(|(key, _)| {
+            !((binding_gated && key == BLOCK_BINDING) || (display_gated && key == DISPLAY))
+        })
+        .collect();
+    let gated = [
+        (binding_gated, GatedField::BlockBinding),
+        (display_gated, GatedField::DisplayUpdates),
+    ]
+    .into_iter()
+    .filter_map(|(gated, field)| gated.then_some(field))
+    .collect();
+    let thinking = serde_json::from_value(Value::Object(kept.clone()))
+        .unwrap_or(Recognized::Unrecognized(Value::Object(kept)));
+    (Some(thinking), gated)
+}
+
+fn stripped_system_messages(
+    messages: Vec<Recognized<Message>>,
+    active: &BetaSet,
+) -> (Vec<Recognized<Message>>, BTreeSet<GatedField>) {
     let stripped: Vec<(Option<Recognized<Message>>, Vec<GatedField>)> = messages
         .iter()
         .cloned()
@@ -112,24 +213,16 @@ pub fn strip_beta_gated_system_messages(
         .flat_map(|(_, gated)| gated.iter().copied())
         .collect();
     if gated.is_empty() {
-        return messages;
+        return (messages, gated);
     }
     let kept: Vec<Recognized<Message>> = stripped
         .into_iter()
         .filter_map(|(message, _)| message)
         .collect();
     if ends_on_assistant(&kept) && !ends_on_assistant(&messages) {
-        return messages;
+        return (messages, BTreeSet::new());
     }
-    litellm_tracing::warn!(
-        "Dropped {} for model={model} provider={provider} because drop_params is on and the provider would reject them on this request, either since this provider leg does not send that anthropic-beta (see anthropic_beta_headers_config.json) or since the model turns mid-conversation system messages into user messages.",
-        gated
-            .into_iter()
-            .map(GatedField::described)
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    kept
+    (kept, gated)
 }
 
 fn strip_system_message(message: Message, active: &BetaSet) -> (Option<Message>, Vec<GatedField>) {
@@ -250,7 +343,7 @@ fn is_raw_tool_change_block(block: &Value) -> bool {
 
 fn is_tool_change_block(block: &ContentBlock) -> bool {
     matches!(
-        &block.block_type,
+        block.known_type(),
         Some(ContentBlockType::Other(block_type))
             if TOOL_CHANGE_BLOCK_TYPES.contains(&block_type.as_str())
     )
@@ -263,14 +356,14 @@ fn ends_on_assistant(messages: &[Recognized<Message>]) -> bool {
 #[cfg(test)]
 mod tests {
     use litellm_llms_types::{
-        formats::messages::Message,
+        formats::messages::{Message, MessagesRequest},
         providers::anthropic::{BetaProvider, BetaSet},
         recognized::Recognized,
     };
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    use super::strip_beta_gated_system_messages;
+    use super::{strip_beta_gated_request, strip_beta_gated_system_messages};
 
     fn strip(
         messages: Vec<Recognized<Message>>,
@@ -443,6 +536,99 @@ mod tests {
             {"role": "system", "content": [tool_addition()], "clear_at": {"type": "turns", "value": 1}}
         ]));
         assert_eq!(strip(sent.clone(), &BetaSet::default(), true), sent);
+    }
+
+    fn thinking_request(thinking: Value, system: Value) -> MessagesRequest {
+        serde_json::from_value(json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "messages": conversation(system),
+            "thinking": thinking,
+        }))
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::block_binding_without_its_beta(
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}),
+        "",
+        json!({"type": "adaptive"})
+    )]
+    #[case::block_binding_with_its_beta(
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}),
+        "thinking-binding-controls-2026-08-01",
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}})
+    )]
+    #[case::display_updates_without_its_beta(
+        json!({"type": "adaptive", "display": "updates"}),
+        "",
+        json!({"type": "adaptive"})
+    )]
+    #[case::display_updates_with_its_beta(
+        json!({"type": "adaptive", "display": "updates"}),
+        "thinking-display-updates-2026-08-18",
+        json!({"type": "adaptive", "display": "updates"})
+    )]
+    #[case::another_display(
+        json!({"type": "adaptive", "display": "summarized"}),
+        "",
+        json!({"type": "adaptive", "display": "summarized"})
+    )]
+    #[case::both_on_enabled_thinking(
+        json!({"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": {}}),
+        "",
+        json!({"type": "enabled", "budget_tokens": 1024})
+    )]
+    fn gated_thinking_fields_are_dropped(
+        #[case] thinking: Value,
+        #[case] active: &str,
+        #[case] expected: Value,
+    ) {
+        let stripped = strip_beta_gated_request(
+            thinking_request(thinking, json!({"role": "user", "content": "more"})),
+            &betas(active),
+            true,
+            "test",
+        );
+        assert_eq!(
+            serde_json::to_value(stripped.params.thinking).unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn the_request_strip_drops_gated_thinking_and_system_fields_together() {
+        let stripped = strip_beta_gated_request(
+            thinking_request(
+                json!({"type": "adaptive", "display": "updates"}),
+                json!({"role": "system", "content": "note", "clear_at": {"type": "turns"}}),
+            ),
+            &BetaSet::default(),
+            true,
+            "test",
+        );
+        assert_eq!(
+            (
+                serde_json::to_value(stripped.params.thinking).unwrap(),
+                stripped.messages
+            ),
+            (
+                json!({"type": "adaptive"}),
+                messages(conversation(json!({"role": "system", "content": "note"})))
+            )
+        );
+    }
+
+    #[rstest]
+    fn without_drop_params_the_request_is_sent_as_is() {
+        let sent = thinking_request(
+            json!({"type": "adaptive", "display": "updates", "block_binding": {}}),
+            json!({"role": "system", "content": "note", "clear_at": {"type": "turns"}}),
+        );
+        assert_eq!(
+            strip_beta_gated_request(sent.clone(), &BetaSet::default(), false, "test"),
+            sent
+        );
     }
 
     #[rstest]

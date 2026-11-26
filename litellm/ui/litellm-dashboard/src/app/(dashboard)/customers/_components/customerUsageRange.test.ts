@@ -34,14 +34,27 @@ describe("customer usage calendar ranges", () => {
     ["?range=2024-02-01..2024-02-29&period=previous", "2024-02-01..2024-02-29", "previous"],
     ["?from=2024-02-01&to=2024-02-29", "2024-02-01..2024-02-29", null],
     ["?range=MTD&from=2024-01-01&to=2024-01-03", "2024-03-01..2024-03-01", "MTD"],
-    ["?range=garbage", "2024-03-01..2024-03-31", "month"],
-    ["?from=2024-02-30&to=2024-03-02", "2024-03-01..2024-03-31", "month"],
-    ["?from=2024-03-02&to=2024-03-01", "2024-03-01..2024-03-31", "month"],
-    ["?from=2024-01-01&to=2025-02-05", "2024-03-01..2024-03-31", "month"],
+    ["?range=month", "2024-03-01..2024-03-31", "month"],
+    ["?range=garbage", "2024-03-01..2024-03-01", "MTD"],
+    ["?from=2024-02-30&to=2024-03-02", "2024-03-01..2024-03-01", "MTD"],
+    ["?from=2024-03-02&to=2024-03-01", "2024-03-01..2024-03-01", "MTD"],
+    ["?from=2024-01-01&to=2025-02-05", "2024-03-01..2024-03-01", "MTD"],
   ])("resolves saved links and falls back for invalid dates in %s", (query, expected, preset) => {
     const selection = customerDateSelection(loadDates(query), new Date("2024-03-01T00:30:00Z"));
     expect(customerRangeParser.serialize(selection.dateValue)).toBe(expected);
     expect(selection.preset).toBe(preset);
+  });
+
+  it.each([
+    ["2026-11-15T12:00:00Z", "2026-11-01..2026-11-15"],
+    ["2026-11-01T00:30:00+02:00", "2026-10-01..2026-10-31"],
+    ["2026-10-31T23:30:00-02:00", "2026-11-01..2026-11-01"],
+  ])("defaults an absent date query to UTC month to date at %s", (now, expected) => {
+    const selection = customerDateSelection(loadDates(""), new Date(now));
+    const expectedPatch = { range: "MTD", period: null, from: null, to: null };
+    expect(customerRangeParser.serialize(selection.dateValue)).toBe(expected);
+    expect(selection.preset).toBe("MTD");
+    expect(customerDatePatch(selection.dateValue, selection.preset)).toEqual(expectedPatch);
   });
 
   it("keeps saved calendar dates when their preset label is stale", () => {

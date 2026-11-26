@@ -14,7 +14,7 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast
+from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -26,7 +26,11 @@ from litellm.caching.affinity_cache import (
     claim_affinity_pin,
     set_local_affinity_pin,
 )
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import (
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.routing_common_utils import deployment_ids_failed_in_request
 from litellm.redis.stores.router_session_pins import (
@@ -38,6 +42,8 @@ from litellm.redis.stores.router_session_pins import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
+
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
@@ -199,7 +205,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return remainder
 
     @staticmethod
-    def _get_model_map_key_from_deployment(deployment: dict) -> str | None:
+    def _get_model_map_key_from_deployment(deployment: Mapping[str, object]) -> str | None:
         """
         Derive a stable model-map key from a router deployment dict.
 
@@ -234,7 +240,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _get_stable_model_map_key_from_deployments(
-        healthy_deployments: list[dict],
+        healthy_deployments: Sequence[Mapping[str, object]],
     ) -> str | None:
         """
         Only use model-map key scoping when it is stable across the deployment set.
@@ -324,7 +330,19 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
+        metadata_dicts: Final = DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs)
+        conversation_id: Final = next(
+            (
+                value
+                for metadata in metadata_dicts
+                if isinstance(value := metadata.get(SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY), str)
+                and value
+            ),
+            None,
+        )
+        if conversation_id is not None:
+            return conversation_id
+        for metadata in metadata_dicts:
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
                 return session_id
@@ -363,7 +381,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return self._pinned_model_id(winner)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(healthy_deployments: Sequence[_DeploymentT], model_id: str) -> _DeploymentT | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -381,7 +399,7 @@ class DeploymentAffinityCheck(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         Optionally filter healthy deployments based on:
         1. `previous_response_id` (Responses API continuity) [highest priority]
@@ -581,7 +599,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Persist/update the API-key -> deployment mapping for this request.
 

@@ -21,6 +21,7 @@ from litellm.proxy.health_check import (
     resolve_health_check_mode,
     update_litellm_params_for_health_check,
 )
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 from tests.unit.proxy.conftest import VERTEX_CLAUDE_REPLY
 
 
@@ -566,32 +567,27 @@ def test_native_messages_default_is_scoped_to_mantle_claude(deployment_model):
 
 
 @pytest.mark.asyncio
-async def test_run_model_health_check_probes_mantle_claude_over_messages(monkeypatch):
+async def test_run_model_health_check_probes_mantle_claude_over_messages():
     """The deployment the ticket describes, probed end to end through the proxy's health runner.
 
     Before the fix the probe went to /v1/chat/completions, which Mantle answers with a
     validation_error for Claude ids, so every such deployment showed unhealthy.
     """
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    with respx.mock(assert_all_called=False) as respx_mock:
-        messages_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
-            json=_mantle_anthropic_response()
-        )
-        chat_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions").respond(
-            status_code=400, json={"type": "error", "error": {"type": "validation_error"}}
-        )
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=_mantle_anthropic_response())
         result = await hc_module._run_model_health_check(
-            {"litellm_params": dict(_MANTLE_CLAUDE_DEPLOYMENT_PARAMS), "model_info": {}}
+            {
+                "litellm_params": {**_MANTLE_CLAUDE_DEPLOYMENT_PARAMS, "api_base": server.base_url},
+                "model_info": {},
+            }
         )
 
     assert "error" not in result, result
-    assert chat_route.call_count == 0
-    assert messages_route.call_count == 1
-    sent = messages_route.calls.last.request
+    assert [request.path for request in server.requests] == ["/anthropic/v1/messages"]
+    sent = server.requests[0]
     assert sent.headers["authorization"] == "Bearer test-bearer"
-    body = json.loads(sent.content)
+    body = sent.body
+    assert isinstance(body, dict)
     assert body["model"] == "anthropic.claude-haiku-4-5"
     assert body["max_tokens"] == 16
     assert [message["role"] for message in body["messages"]] == ["user"]

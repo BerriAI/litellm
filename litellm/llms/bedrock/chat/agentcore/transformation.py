@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
@@ -56,7 +56,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
@@ -68,11 +68,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to AgentCore params
         """
@@ -83,8 +83,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -222,10 +222,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request to AgentCore format.
 
@@ -256,7 +256,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         prompt: Final = convert_content_list_to_str(messages[-1])
 
         # Create the payload - this is what goes in the body (raw JSON)
-        payload: Final[dict] = {"prompt": prompt}
+        payload: Final[dict[str, object]] = {"prompt": prompt}
 
         # Opt-in: when forward_multimodal_content is set, forward the OpenAI content
         # list verbatim under "content" so an attachment-aware agent can read the raw
@@ -287,7 +287,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         return payload
 
     @staticmethod
-    def _should_forward_multimodal_content(optional_params: dict, litellm_params: dict) -> bool:
+    def _should_forward_multimodal_content(
+        optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
         """Whether to forward raw OpenAI content blocks under ``payload["content"]``.
 
         Opt-in via the ``forward_multimodal_content`` litellm param (default ``False``)
@@ -307,7 +309,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return bool(value)
         return False
 
-    def _extract_sse_json(self, line: str) -> dict | None:
+    def _extract_sse_json(self, line: str) -> dict[str, object] | None:
         """Extract and parse JSON from an SSE data line."""
         if not line.startswith("data:"):
             return None
@@ -672,9 +674,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: Mapping[str, object],
+        messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -902,9 +904,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: Mapping[str, object],
+        messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -1034,10 +1036,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -1097,17 +1099,19 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(

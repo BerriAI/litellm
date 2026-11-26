@@ -1,10 +1,12 @@
 import json
 from typing import Final
 
+import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -144,12 +146,16 @@ class ModelResponseIterator:
             async for raw_chunk in self.async_response_iterator:
                 if sse_data := _sse_data(raw_chunk):
                     return sse_data
+        except httpx.TimeoutException:
+            raise
         except Exception as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
         raise StopAsyncIteration
 
 
 def _sse_data(raw_chunk: str) -> str:
+    if not is_sse_payload_line(raw_chunk):
+        return ""
     return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
 
 

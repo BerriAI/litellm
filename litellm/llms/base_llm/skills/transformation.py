@@ -3,6 +3,7 @@ Base configuration class for Skills API
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -79,8 +80,8 @@ class BaseSkillsAPIConfig(ABC):
         self,
         create_request: CreateSkillRequest,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform create skill request to provider-specific format
 
@@ -115,8 +116,8 @@ class BaseSkillsAPIConfig(ABC):
         self,
         list_params: ListSkillsParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform list skills request parameters
 
@@ -152,8 +153,8 @@ class BaseSkillsAPIConfig(ABC):
         skill_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform get skill request
 
@@ -190,8 +191,8 @@ class BaseSkillsAPIConfig(ABC):
         skill_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform delete skill request
 

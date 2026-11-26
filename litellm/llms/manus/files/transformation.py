@@ -11,8 +11,8 @@ Reference: https://open.manus.im/docs/openai-compatibility#file-management
 """
 
 import time
-from collections.abc import Iterable, Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final, Protocol
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -20,6 +20,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes, require_get
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
 )
@@ -43,9 +44,14 @@ from litellm.types.utils import LlmProviders
 
 MANUS_API_BASE: Final = "https://api.manus.im"
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+class _ReplaceableText(Protocol):
+    def replace(self, old: str, new: str, /) -> str: ...
 
 
 class ManusFilesConfig(BaseFilesConfig):
@@ -69,14 +75,14 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Manus API.
 
@@ -109,11 +115,11 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Manus-specific parameters.
         Manus is OpenAI-compatible, so no special mapping needed.
@@ -125,8 +131,8 @@ class ManusFilesConfig(BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -149,7 +155,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         """
         Return the appropriate error class for Manus API errors.
@@ -165,7 +171,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
     ) -> TwoStepFileUploadConfig:
         """
@@ -227,7 +233,7 @@ class ManusFilesConfig(BaseFilesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """
         Transform Manus's file upload response into OpenAI-style FileObject.
@@ -248,25 +254,28 @@ class ManusFilesConfig(BaseFilesConfig):
         """
         try:
             # For two-step uploads, get the initial response from litellm_params
-            initial_response_data: Final = litellm_params.get("initial_file_response")
+            file_params: Final[Mapping[str, object]] = litellm_params
+            initial_response_data: Final = file_params.get("initial_file_response")
             if initial_response_data:
                 response_json = initial_response_data
             else:
                 # Log raw response for debugging
                 verbose_logger.debug("Manus raw response text: %s", raw_response.text)
-                response_json = raw_response.json()
+                response_json = _DECODED_JSON.validate_python(raw_response.json())
 
             verbose_logger.debug("Manus file response: %s", response_json)
+            file_fields: Final = require_get(response_json)
 
             # Parse created_at timestamp
-            created_at_str: Final = response_json.get("created_at", "")
+            created_at_str: Final = file_fields.get("created_at", "")
             if created_at_str:
                 try:
                     # Try parsing ISO format
+                    created_at_text: Final = require_attributes(created_at_str, _ReplaceableText, "replace")
                     created_at = int(
                         time.mktime(
                             time.strptime(
-                                created_at_str.replace("Z", "+00:00")[:19],
+                                created_at_text.replace("Z", "+00:00")[:19],
                                 "%Y-%m-%dT%H:%M:%S",
                             )
                         )
@@ -276,15 +285,17 @@ class ManusFilesConfig(BaseFilesConfig):
             else:
                 created_at = int(time.time())
 
-            return OpenAIFileObject(
-                id=response_json.get("id", ""),
-                bytes=response_json.get("bytes", 0),
-                created_at=created_at,
-                filename=response_json.get("filename", ""),
-                object="file",
-                purpose=response_json.get("purpose", "assistants"),
-                status="uploaded",  # After successful upload, status is uploaded
-                status_details=response_json.get("status_details"),
+            return OpenAIFileObject.model_validate(
+                {
+                    "id": file_fields.get("id", ""),
+                    "bytes": file_fields.get("bytes", 0),
+                    "created_at": created_at,
+                    "filename": file_fields.get("filename", ""),
+                    "object": "file",
+                    "purpose": file_fields.get("purpose", "assistants"),
+                    "status": "uploaded",  # After successful upload, status is uploaded
+                    "status_details": file_fields.get("status_details"),
+                }
             )
         except Exception as e:
             verbose_logger.exception("Error parsing Manus file response: %s", e)
@@ -293,9 +304,9 @@ class ManusFilesConfig(BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Get URL and params for retrieving a file."""
         api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
@@ -311,7 +322,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """Transform retrieve file response."""
         return self.transform_create_file_response(
@@ -324,9 +335,9 @@ class ManusFilesConfig(BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Get URL and params for deleting a file."""
         api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
@@ -342,7 +353,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         """Transform delete file response."""
         return FileDeleted.model_validate(_JSON_OBJECT.validate_python(raw_response.json()))
@@ -350,9 +361,9 @@ class ManusFilesConfig(BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Get URL and params for listing files."""
         api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
@@ -361,7 +372,7 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        params: Final = {}
+        params: Final[dict[str, object]] = {}
         if purpose:
             params["purpose"] = purpose
         return api_base, params
@@ -370,7 +381,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:
         """Transform list files response."""
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
@@ -412,9 +423,9 @@ class ManusFilesConfig(BaseFilesConfig):
     def transform_file_content_request(
         self,
         file_content_request: FileContentRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Get URL and params for retrieving file content."""
         file_id: Final = file_content_request.get("file_id")
         api_base: Final = self.get_complete_url(
@@ -431,7 +442,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         """Transform file content response."""
         return HttpxBinaryResponseContent(response=raw_response)

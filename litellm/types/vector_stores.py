@@ -398,12 +398,12 @@ OpenAIVectorStoreFilter: TypeAlias = Annotated[
 class VectorStoreToolParams:
     """Parameters extracted from a file_search tool definition"""
 
-    filters: dict | None = None
+    filters: Mapping[str, object] | None = None
     max_num_results: int | None = None
-    ranking_options: dict | None = None
+    ranking_options: Mapping[str, object] | None = None
     rewrite_query: bool | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Convert to dict, excluding None values"""
         return {
             k: v

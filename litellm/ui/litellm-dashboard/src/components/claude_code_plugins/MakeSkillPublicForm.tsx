@@ -9,6 +9,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/cva.config";
 import { enableClaudeCodePlugin, disableClaudeCodePlugin } from "../networking";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toSkillPublicationChanges } from "./makeSkillPublicMapper";
+import { makeSkillPublicSchema } from "./makeSkillPublicSchema";
 import { Plugin } from "./types";
 
 const STEP_TITLE_KEYS: readonly ParseKeys[] = [
@@ -33,17 +36,18 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 }) => {
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
-  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
+  const { getValues, setValue, watch } = useZodForm(makeSkillPublicSchema, { defaultValues: { skillNames: [] } });
+  const selectedSkills = new Set(watch("skillNames"));
   const [loading, setLoading] = useState(false);
 
   const handleClose = () => {
     setCurrentStep(0);
-    setSelectedSkills(new Set());
+    setValue("skillNames", []);
     onClose();
   };
 
   const handleNext = () => {
-    if (selectedSkills.size === 0) {
+    if (!makeSkillPublicSchema.safeParse(getValues()).success) {
       toast.fromError(t("claudeCodePlugins.makePublic.toasts.selectAtLeastOne"));
       return;
     }
@@ -57,44 +61,37 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
     } else {
       next.delete(name);
     }
-    setSelectedSkills(next);
+    setValue("skillNames", Array.from(next));
   };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedSkills(new Set(skillsList.map((s) => s.name)));
+      setValue("skillNames", Array.from(new Set(skillsList.map((s) => s.name))));
     } else {
-      setSelectedSkills(new Set());
+      setValue("skillNames", []);
     }
   };
 
   // Pre-check already-published skills when modal opens
   useEffect(() => {
     if (visible && skillsList.length > 0) {
-      setSelectedSkills(new Set(skillsList.filter((s) => s.enabled).map((s) => s.name)));
+      setValue("skillNames", Array.from(new Set(skillsList.filter((s) => s.enabled).map((s) => s.name))));
     }
-  }, [visible, skillsList]);
+  }, [visible, skillsList, setValue]);
 
   const handleSubmit = async () => {
-    if (selectedSkills.size === 0) {
+    const result = makeSkillPublicSchema.safeParse(getValues());
+    if (!result.success) {
       toast.fromError(t("claudeCodePlugins.makePublic.toasts.selectAtLeastOne"));
       return;
     }
 
     setLoading(true);
     try {
-      const selectedSet = selectedSkills;
       await Promise.all(
-        skillsList.map((skill) => {
-          const shouldBePublic = selectedSet.has(skill.name);
-          if (shouldBePublic && !skill.enabled) {
-            return enableClaudeCodePlugin(accessToken, skill.name);
-          }
-          if (!shouldBePublic && skill.enabled) {
-            return disableClaudeCodePlugin(accessToken, skill.name);
-          }
-          return Promise.resolve();
-        }),
+        toSkillPublicationChanges(result.data, skillsList).map(({ name, enable }) =>
+          (enable ? enableClaudeCodePlugin : disableClaudeCodePlugin)(accessToken, name),
+        ),
       );
 
       toast.success(t("claudeCodePlugins.makePublic.toasts.published", { count: selectedSkills.size }));

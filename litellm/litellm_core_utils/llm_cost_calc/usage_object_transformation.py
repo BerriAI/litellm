@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, Protocol
 
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_attributes
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
@@ -89,9 +89,9 @@ def _google_search_query_count(usage_object: Mapping[str, object]) -> int:
     if not isinstance(entries, Sequence):
         return 0
     return sum(
-        _token_count(entry.get("count"))
+        _token_count(mapping.get("count"))
         for entry in entries
-        if isinstance(entry, Mapping) and entry.get("type") == "google_search"
+        if (mapping := as_str_mapping(entry)) is not None and mapping.get("type") == "google_search"
     )
 
 

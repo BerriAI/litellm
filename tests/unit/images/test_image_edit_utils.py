@@ -132,6 +132,28 @@ class TestImageEditRequestUtilsDropParams:
         assert "size" in result
         assert "unsupported_param" not in result
 
+    def test_drop_params_sent_as_a_form_string(self):
+        optional_params: ImageEditOptionalRequestParams = {
+            "size": "1024x1024",
+            "unsupported_param": "value",
+        }
+
+        result = ImageEditRequestUtils.get_optional_params_image_edit(
+            model=self.model,
+            image_edit_provider_config=self.config,
+            image_edit_optional_params=optional_params,
+            drop_params="true",
+        )
+        assert result == {"size": "1024x1024"}
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            ImageEditRequestUtils.get_optional_params_image_edit(
+                model=self.model,
+                image_edit_provider_config=self.config,
+                image_edit_optional_params=optional_params,
+                drop_params="false",
+            )
+
     def test_additional_drop_params(self):
         litellm.drop_params = False
         optional_params: ImageEditOptionalRequestParams = {

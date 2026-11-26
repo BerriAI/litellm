@@ -11,17 +11,42 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.utils import declared_value_factory, is_explicitly_disabled_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _PERPLEXITY_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = MappingProxyType({"X-Pplx-Integration": "litellm"})
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_BASE_PARAMS: Final = (
+    "frequency_penalty",
+    "max_tokens",
+    "max_completion_tokens",
+    "presence_penalty",
+    "response_format",
+    "stream",
+    "temperature",
+    "top_p",
+    "max_retries",
+    "extra_headers",
+)
+_TOOL_PARAMS: Final = ("tools", "tool_choice", "parallel_tool_calls")
+
+
+def _accepts_tools(model: str, provider: str | None) -> bool:
+    """Every Agent API (`mode: responses`) model takes function tools, so a row that leaves the flag unset
+    defaults to yes. An explicit `supports_function_calling: false` still wins, and Sonar chat rows stay off."""
+    if litellm.supports_function_calling(model, provider):
+        return True
+    return declared_value_factory(model, provider, "mode") == "responses" and not is_explicitly_disabled_factory(
+        model, provider, "supports_function_calling"
+    )
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
@@ -46,40 +71,15 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def get_supported_openai_params(self, model: str) -> list:
-        """
-        Perplexity supports a subset of OpenAI params
-
-        Ref: https://docs.perplexity.ai/api-reference/chat-completions
-
-        Eg. Perplexity does not support tools, tool_choice, function_call, functions, etc.
-        """
-        base_openai_params: Final = [
-            "frequency_penalty",
-            "max_tokens",
-            "max_completion_tokens",
-            "presence_penalty",
-            "response_format",
-            "stream",
-            "temperature",
-            "top_p",
-            "max_retries",
-            "extra_headers",
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        """Ref: https://docs.perplexity.ai/api-reference/chat-completions"""
+        provider: Final = self.custom_llm_provider
+        return [
+            *_BASE_PARAMS,
+            *(("reasoning_effort",) if litellm.supports_reasoning(model, provider) else ()),
+            *(("web_search_options",) if litellm.supports_web_search(model, provider) else ()),
+            *(_TOOL_PARAMS if _accepts_tools(model, provider) else ()),
         ]
-
-        try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_openai_params.append("reasoning_effort")
-        except Exception as e:
-            verbose_logger.debug("Error checking if model supports reasoning: %s", e)
-
-        try:
-            if litellm.supports_web_search(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_openai_params.append("web_search_options")
-        except Exception as e:
-            verbose_logger.debug("Error checking if model supports web search: %s", e)
-
-        return base_openai_params
 
     def transform_response(
         self,
@@ -87,10 +87,10 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -168,7 +168,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             if num_search_queries is not None and num_search_queries > 0:
                 usage.prompt_tokens_details.web_search_requests = num_search_queries
 
-    def _add_citations_as_annotations(self, model_response: ModelResponse, raw_response_json: dict) -> None:
+    def _add_citations_as_annotations(
+        self, model_response: ModelResponse, raw_response_json: Mapping[str, object]
+    ) -> None:
         """
         Extract citations and search_results from Perplexity API response
         and add them as ChatCompletionAnnotation objects to the message.
@@ -182,7 +184,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             return
 
         message: Final = choice.message
-        annotations: Final = []
+        annotations: Final[list[ChatCompletionAnnotation]] = []
 
         # Extract citations from the response
         citations: Final = raw_response_json.get("citations", [])
@@ -190,7 +192,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Create a mapping of URLs to search result titles
         url_to_title: Final = {}
-        for result in search_results:
+        for result in iter_items(search_results):
             if isinstance(result, dict) and "url" in result and "title" in result:
                 url_to_title[result["url"]] = result["title"]
 
@@ -206,8 +208,8 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         citation_matches: Final = list(re.finditer(citation_pattern, content))
 
         # Create a mapping of citation numbers to URLs
-        citation_number_to_url: Final = {}
-        for i, citation in enumerate(citations):
+        citation_number_to_url: Final[dict[int, str]] = {}
+        for i, citation in enumerate(iter_items(citations)):
             if isinstance(citation, str):
                 citation_number_to_url[i + 1] = citation  # 1-indexed
 

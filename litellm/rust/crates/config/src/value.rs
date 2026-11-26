@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, fmt, ops::Deref};
 use serde::{Deserialize, Deserializer};
 
 pub type Value = serde_yaml_ng::Value;
-pub type AdditionalFields = BTreeMap<String, Value>;
+/// The keys a config section has beyond its typed fields, printed as keys only.
+pub type AdditionalFields = Object;
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(transparent)]
@@ -24,6 +25,12 @@ impl Object {
 
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+}
+
+impl FromIterator<(String, Value)> for Object {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(fields: I) -> Self {
+        Self(fields.into_iter().collect())
     }
 }
 

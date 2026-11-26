@@ -1,10 +1,7 @@
-use crate::cache::{CacheCall, PythonCache, Selection};
+use crate::cache::PythonCache;
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use parking_lot::Mutex;
 
 use bytes::Bytes;
 use litellm_host::protocol::Reply;
@@ -12,15 +9,21 @@ use litellm_host_python::{
     InvokeError, PythonBinding, effective_py_args, from_py, json_from_py, to_py,
 };
 use litellm_inference_messages::{
-    DecodingError, Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader,
-    litellm_params, messages_body,
+    DecodingError, Error, MessagesCall, MessagesHostCall, MessagesSettings, MessagesShaping,
+    UnencodableHeader, UnsendableUrl, VertexShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
+    anthropic::model_capabilities::with_invoke_flags,
     azure_ai::common_utils::{
         CALLABLE_TOKEN_PROVIDER, CALLER_TOKEN_PROVIDER_PARAM, ENTRA_ID_PARAMS,
     },
     base_llm::messages::context::MessagesModelCapabilities,
+    bedrock::chat::invoke_handler::BedrockStreamRaise,
+    bedrock::messages::claude_platform::transformation::{
+        is_claude_platform_route, is_missing_region, logged_model as claude_platform_logged_model,
+    },
+    bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},
 };
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
@@ -35,10 +38,11 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use super::agentic::HookedRequest;
-use super::safeguards::{SafeguardsCall, SafeguardsHost};
-use super::transport::{HostedTransport, Selected, TransportCall, python_failure};
+use super::plan::MessagesPlan;
+use super::safeguards::SafeguardsHost;
+use super::transport::{HostedTransport, python_failure};
 use crate::{
-    errors::{RequestMarker, route_failure},
+    errors::{RequestMarker, raises_bad_request, route_failure},
     marshal::{
         ArgumentError, optional_timeout, project_optional_fields, public_json_response,
         python_timeout_seconds,
@@ -51,24 +55,46 @@ type MergedHeaders = (Option<Map<String, Value>>, Option<Vec<u8>>);
 
 const ANTHROPIC_BETA_HEADER: &str = "anthropic-beta";
 
-/// Python filters `anthropic-beta` before its client encodes it, so the wire check decides it.
-/// Only for `azure_ai`: by the owner's ruling `anthropic` keeps main's hold-back of the header.
+/// A config whose `should_filter_anthropic_beta_headers` holds filters `anthropic-beta` before
+/// Python's client encodes it, so the wire check decides it.
 fn is_filtered_beta_header(
     name: &Bound<'_, PyAny>,
     value: &Bound<'_, PyAny>,
-    provider_filters_beta: bool,
+    filters_beta: bool,
 ) -> bool {
-    provider_filters_beta
+    filters_beta
         && name
             .extract::<String>()
             .is_ok_and(|name| name.eq_ignore_ascii_case(ANTHROPIC_BETA_HEADER))
         && value.call_method1("encode", ("utf-8",)).is_ok()
 }
 
+const VERTEX_LABELS_HEADER: &str = "X-Vertex-AI-Labels";
+
+/// The caller headers the provider settles before Python's client encodes them, so a value it
+/// cannot encode never reaches the ASCII check.
+#[derive(Clone, Copy, Debug, Default)]
+struct SettledHeaders {
+    /// The provider filters `anthropic-beta`.
+    filters_beta: bool,
+    /// `vertex_ai` with `vertex_request_label_fields` set: the proxy replaces every caller
+    /// `X-Vertex-AI-Labels`, and one Python cannot decode adds no labels.
+    replaces_labels: bool,
+}
+
+impl SettledHeaders {
+    fn replaces(self, name: &Bound<'_, PyAny>) -> bool {
+        self.replaces_labels
+            && name
+                .extract::<String>()
+                .is_ok_and(|name| name.eq_ignore_ascii_case(VERTEX_LABELS_HEADER))
+    }
+}
+
 fn ascii_headers<'py>(
     headers: &Bound<'py, PyAny>,
     unencodable: &mut Option<Vec<u8>>,
-    provider_filters_beta: bool,
+    settled: SettledHeaders,
 ) -> PyResult<Bound<'py, PyAny>> {
     let Ok(headers) = headers.cast::<PyDict>() else {
         return Ok(headers.clone());
@@ -77,11 +103,19 @@ fn ascii_headers<'py>(
     let kept = PyDict::new(py);
     for (name, value) in headers.iter() {
         if value.is_instance_of::<PyString>()
-            && !is_filtered_beta_header(&name, &value, provider_filters_beta)
+            && !is_filtered_beta_header(&name, &value, settled.filters_beta)
             && let Err(error) = value.call_method1("encode", ("ascii",))
         {
             if !error.is_instance_of::<PyUnicodeEncodeError>(py) {
                 return Err(error);
+            }
+            if settled.replaces(&name) {
+                // Kept while it is text, so it still stands as the caller's labels header the
+                // replacement reads, and refuses, first; a value that is not text just goes.
+                if value.call_method1("encode", ("utf-8",)).is_ok() {
+                    kept.set_item(name, value)?;
+                }
+                continue;
             }
             if unencodable.is_none() {
                 let sent = value.call_method1("encode", ("utf-8", "surrogatepass"))?;
@@ -99,7 +133,7 @@ const PROVIDER_SPECIFIC_HEADERS_MODULE: &str =
 
 fn ascii_scoped_headers<'py>(
     value: &Bound<'py, PyAny>,
-    provider_filters_beta: bool,
+    settled: SettledHeaders,
 ) -> PyResult<Bound<'py, PyAny>> {
     let ascii_entry = |entry: Bound<'py, PyAny>| -> PyResult<Bound<'py, PyAny>> {
         let Ok(entry) = entry.cast::<PyDict>() else {
@@ -111,7 +145,7 @@ fn ascii_scoped_headers<'py>(
         let kept = entry.copy()?;
         kept.set_item(
             "extra_headers",
-            ascii_headers(&headers, &mut None, provider_filters_beta)?,
+            ascii_headers(&headers, &mut None, settled)?,
         )?;
         Ok(kept.into_any())
     };
@@ -146,7 +180,22 @@ fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
 }
 
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
-const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
+const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
+/// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
+const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
+/// The model a refusal names when it differs from the call's, as for a missing Claude Platform region.
+const MESSAGES_RAISED_MODEL: &str = "messages_raised_model";
+/// The model Python's handler logs a Mantle call under before the config transforms the request.
+const MESSAGES_LOGGED_MODEL: &str = "messages_logged_model";
+/// The provider litellm's error names when it is not the route's: none for a call refused while
+/// resolving its provider, as Python's `get_llm_provider` raises it, and `bedrock` for a Mantle
+/// refusal the inherited Bedrock invoke transform raises as `BadRequestError`.
+const MESSAGES_PROVIDER: &str = "messages_provider";
+const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+const REPLAYED_CREDENTIAL_FAILURE: &str = "replay";
+/// No usable credentials, which the host raises as botocore's `NoCredentialsError` unless an STS call failed.
+const UNAVAILABLE_CREDENTIALS: &str = "unavailable";
+pub(super) const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -162,15 +211,212 @@ const FEDERATING_PROVIDER: &str = "anthropic";
 const AZURE_AI_PROVIDER: &str = "azure_ai";
 const ENABLE_TOKEN_REFRESH: &str = "enable_azure_ad_token_refresh";
 
-fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
+const BEDROCK_PROVIDER: &str = "bedrock";
+const BEDROCK_PASSTHROUGH_PARAMS: [&str; 2] = ["model_id", "guardrailConfig"];
+const BEDROCK_METADATA_PARAMS: [&str; 2] = ["metadata", "litellm_metadata"];
+const BEDROCK_SPEND_LOGS_METADATA: &str = "spend_logs_metadata";
+const BEDROCK_REQUEST_METADATA_FIELDS: &str = "bedrock_request_metadata_fields";
+
+const VERTEX_AI_PROVIDER: &str = "vertex_ai";
+const VERTEX_REQUEST_LABEL_FIELDS: &str = "vertex_request_label_fields";
+const VERTEX_LABELS_METADATA: &str = "litellm_metadata";
+
+fn text_pairs(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
+    let Ok(mapping) = value.cast::<PyMapping>() else {
+        return Ok(Map::new());
+    };
+    mapping
+        .items()?
+        .iter()
+        .filter_map(|item| {
+            let (key, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = match item.extract() {
+                Ok(pair) => pair,
+                Err(error) => return Some(Err(error)),
+            };
+            let key = key.cast::<PyString>().ok()?.to_str().ok()?.to_string();
+            if key == BEDROCK_SPEND_LOGS_METADATA {
+                return Some(text_pairs(&value).map(|pairs| (key, Value::Object(pairs))));
+            }
+            let value = value.cast::<PyString>().ok()?.to_str().ok()?.to_string();
+            Some(Ok((key, Value::String(value))))
+        })
+        .collect()
+}
+
+fn bedrock_litellm_params<'py>(
+    py: Python<'py>,
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Map<String, Value>> {
+    let mut extra = project_optional_fields(BEDROCK_PASSTHROUGH_PARAMS, &argument)?;
+    for name in BEDROCK_METADATA_PARAMS {
+        if let Some(value) = argument(name)? {
+            extra.insert(name.to_string(), Value::Object(text_pairs(&value)?));
+        }
+    }
+    if let Some(configured) = module_global(py, BEDROCK_REQUEST_METADATA_FIELDS)?
+        && (configured.is_instance_of::<PyList>() || configured.is_instance_of::<PyTuple>())
+    {
+        let fields = configured
+            .try_iter()?
+            .map(|field| Ok(Value::String(field?.str()?.to_str()?.to_string())))
+            .collect::<PyResult<Vec<Value>>>()?;
+        extra.insert(
+            BEDROCK_REQUEST_METADATA_FIELDS.to_string(),
+            Value::Array(fields),
+        );
+    }
+    Ok(extra)
+}
+
+fn bedrock_session_identity<'py>(
+    params: &mut LitellmParams,
+    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> PyResult<()> {
+    use litellm_llms::bedrock::session_identity::{
+        REQUIRE_SESSION_ATTRIBUTION, SessionIdentity, session_identity,
+    };
+
+    let fields = |name| -> PyResult<Vec<String>> {
+        global(name)?
+            .filter(|value| !value.is_none())
+            .map(|value| value.extract())
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let source = |name| {
+        params
+            .extra
+            .get(name)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_owned())))
+            .collect()
+    };
+    let identity = SessionIdentity {
+        tag_fields: fields("bedrock_session_tag_fields")?,
+        name_fields: fields("bedrock_session_name_fields")?,
+        metadata: source("metadata"),
+        litellm_metadata: source("litellm_metadata"),
+    };
+    let aws = session_identity(&params.aws, &identity, env);
+    let derived_name = params.aws.aws_session_name.is_none()
+        && env("AWS_SESSION_NAME").is_none()
+        && aws.aws_session_name.is_some();
+    params.extra = params
+        .extra
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .chain(std::iter::once((
+            REQUIRE_SESSION_ATTRIBUTION.to_owned(),
+            Value::Bool(derived_name),
+        )))
+        .collect();
+    params.aws = aws;
+    Ok(())
+}
+
+/// Python's `vertex_request_label_fields()`: a non-empty string names one field, a list or tuple
+/// its string members. With fields set, the call's `litellm_metadata` goes along as the labels'
+/// source.
+fn vertex_litellm_params<'py>(
+    py: Python<'py>,
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Map<String, Value>> {
+    let fields = vertex_label_fields(py)?;
+    if fields.is_empty() {
+        return Ok(Map::new());
+    }
+    let metadata = argument(VERTEX_LABELS_METADATA)?
+        .map(|value| text_pairs(&value))
+        .transpose()?;
+    Ok([(
+        VERTEX_REQUEST_LABEL_FIELDS.to_string(),
+        Value::Array(fields),
+    )]
+    .into_iter()
+    .chain(metadata.map(|pairs| (VERTEX_LABELS_METADATA.to_string(), Value::Object(pairs))))
+    .collect())
+}
+
+fn vertex_label_fields(py: Python<'_>) -> PyResult<Vec<Value>> {
+    Ok(match module_global(py, VERTEX_REQUEST_LABEL_FIELDS)? {
+        Some(configured) if configured.is_instance_of::<PyString>() => {
+            let field = configured.cast::<PyString>()?.to_str()?.to_string();
+            (!field.is_empty())
+                .then_some(Value::String(field))
+                .into_iter()
+                .collect()
+        }
+        Some(configured)
+            if configured.is_instance_of::<PyList>() || configured.is_instance_of::<PyTuple>() =>
+        {
+            configured
+                .try_iter()?
+                .filter_map(|field| match field {
+                    Ok(field) => field
+                        .cast::<PyString>()
+                        .ok()
+                        .map(|text| Ok(Value::String(text.to_str()?.to_string()))),
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<PyResult<_>>()?
+        }
+        _ => Vec::new(),
+    })
+}
+
+fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
+    Ok(module_global(py, "drop_params")?.is_some_and(|value| value.is(PyBool::new(py, true))))
+}
+
+fn anthropic_auth_fields(py: Python<'_>) -> PyResult<&'static [String]> {
     static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
     FIELDS
         .get_or_try_init(py, || {
             py.import(ROUTE_HOST_MODULE)?
-                .getattr("WORKLOAD_IDENTITY_FIELDS")?
+                .getattr("ANTHROPIC_AUTH_FIELDS")?
                 .extract()
         })
         .map(Vec::as_slice)
+}
+
+/// Installs the beta map once Python has loaded it. Loading starts only when a filter has a beta
+/// to filter, off the calling thread, so a call that sends no beta never fetches the remote map.
+fn install_loaded_beta_headers_config(py: Python<'_>) -> PyResult<()> {
+    static INSTALLED: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+    litellm_llms::anthropic::beta_headers::on_beta_headers_config_needed(
+        request_beta_headers_config,
+    );
+    let loaded = py
+        .import(ROUTE_HOST_MODULE)?
+        .getattr("loaded_beta_headers_config")?
+        .call0()?;
+    if loaded.is_none() {
+        return Ok(());
+    }
+    if INSTALLED
+        .lock()
+        .as_ref()
+        .is_some_and(|source| source.bind(py).is(&loaded))
+    {
+        return Ok(());
+    }
+    litellm_llms::anthropic::beta_headers::install_beta_headers_config(from_py(&loaded)?);
+    *INSTALLED.lock() = Some(loaded.unbind());
+    Ok(())
+}
+
+fn request_beta_headers_config() {
+    Python::attach(|py| {
+        if let Err(error) = py
+            .import(ROUTE_HOST_MODULE)
+            .and_then(|module| module.call_method0("load_beta_headers_config_in_background"))
+        {
+            error.write_unraisable(py, None);
+        }
+    });
 }
 
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -257,38 +503,6 @@ fn azure_module_settings<'py>(
     })
 }
 
-pub(super) struct MessagesHosted;
-
-impl litellm_host::protocol::Protocol for MessagesHosted {
-    type Request = (MessagesCall, Selection, Selected);
-    type Response = <Messages as litellm_host::protocol::Protocol>::Response;
-    type Error = Error;
-    type HostCall = MessagesHostCall;
-    type Chunk = Bytes;
-    type StreamHead = MessagesStreamHead;
-}
-
-pub(super) enum MessagesHostCall {
-    Answer { stream: bool, reply: Reply<()> },
-    Intercept { stream: bool, reply: Reply<bool> },
-    Cache(CacheCall),
-    PreRequest(Reply<Result<MessagesCall, Error>>),
-    Safeguards(SafeguardsCall),
-    Transport(TransportCall),
-}
-
-impl From<CacheCall> for MessagesHostCall {
-    fn from(call: CacheCall) -> Self {
-        Self::Cache(call)
-    }
-}
-
-impl From<TransportCall> for MessagesHostCall {
-    fn from(call: TransportCall) -> Self {
-        Self::Transport(call)
-    }
-}
-
 enum Answered {
     Stream,
     Whole { verbatim: bool },
@@ -310,7 +524,6 @@ pub(super) struct MessagesPythonHost {
     cache: PythonCache,
     transport: HostedTransport,
     safeguards: SafeguardsHost,
-    classifies: Arc<AtomicBool>,
     awaiting_safeguards: bool,
     stream_cost_model: Option<String>,
     asynchronous: bool,
@@ -325,6 +538,7 @@ pub(super) struct MessagesPythonHost {
     pending_short_circuit: Option<(bool, Reply<bool>)>,
     answer: Option<Py<PyAny>>,
     answered: Option<Answered>,
+    stream_opened: bool,
 }
 
 impl MessagesPythonHost {
@@ -332,14 +546,12 @@ impl MessagesPythonHost {
         view: RequestView,
         asynchronous: bool,
         hooked_request: HookedRequest,
-        classifies: Arc<AtomicBool>,
     ) -> Self {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
             transport: HostedTransport::default(),
             safeguards: SafeguardsHost::default(),
-            classifies,
             awaiting_safeguards: false,
             stream_cost_model: None,
             asynchronous,
@@ -354,6 +566,7 @@ impl MessagesPythonHost {
             pending_short_circuit: None,
             answer: None,
             answered: None,
+            stream_opened: false,
         }
     }
 
@@ -486,12 +699,13 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        shapes_invoke_tools: bool,
     ) -> PyResult<Map<String, Value>> {
         let request = effective_py_args(self.view.request(py)?, arguments)?;
         let params = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("body_params")?
-            .call1((request, self.asynchronous, self.hooked))?
+            .call1((request, self.asynchronous, self.hooked, shapes_invoke_tools))?
             .cast_into::<PyMapping>()?;
         params
             .items()?
@@ -520,7 +734,29 @@ impl MessagesPythonHost {
         };
         let model = settings.model;
         let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let mut fields = self.body_params(py, arguments)?;
+        let api_key = string("api_key")?;
+        let api_base = string("api_base")?;
+        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
+        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
+        let custom_llm_provider = match string("custom_llm_provider")? {
+            Some(provider) => Some(provider),
+            None => py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("inferred_provider")?
+                .call1((&model, api_base.as_deref()))?
+                .extract()?,
+        };
+        let mantle = custom_llm_provider
+            .as_deref()
+            .and_then(|provider| mantle_capability_lookup(provider, &model));
+        // Python's Bedrock invoke transform shapes the caller's own tool dicts in place; Rust logs
+        // the tools it shapes for the Mantle routes instead.
+        let claude_platform = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER)
+            && is_claude_platform_route(&model);
+        let shapes_invoke_tools = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER)
+            && mantle.is_none()
+            && !claude_platform;
+        let mut fields = self.body_params(py, arguments, shapes_invoke_tools)?;
         let prepared = fields.remove("messages");
         let presanitized = prepared.is_some();
         let messages = match prepared {
@@ -538,96 +774,141 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let api_key = string("api_key")?;
-        let api_base = string("api_base")?;
-        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
-        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
-        let custom_llm_provider = match string("custom_llm_provider")? {
-            Some(provider) => Some(provider),
-            None => py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("inferred_provider")?
-                .call1((&model, api_base.as_deref()))?
-                .extract()?,
+        let filters_beta: bool = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("filters_beta_headers")?
+            .call1((&model, custom_llm_provider.as_deref(), api_base.as_deref()))?
+            .extract()?;
+        install_loaded_beta_headers_config(py)?;
+        let settled_headers = SettledHeaders {
+            filters_beta,
+            replaces_labels: custom_llm_provider.as_deref() == Some(VERTEX_AI_PROVIDER)
+                && !vertex_label_fields(py)?.is_empty(),
         };
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
-            None => self.merged_headers(
-                py,
-                arguments,
-                custom_llm_provider.as_deref() == Some(AZURE_AI_PROVIDER),
-            )?,
+            None => self.merged_headers(py, arguments, settled_headers)?,
         };
         let provider_specific_header = self.provider_specific_header(
             py,
             arguments,
             custom_llm_provider.as_deref(),
+            settled_headers,
             &mut unencodable_request_header,
         )?;
         let azure = match custom_llm_provider.as_deref() {
             Some(AZURE_AI_PROVIDER) => Some(azure_module_settings(|name| module_global(py, name))?),
             _ => None,
         };
+        let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let base_model: Option<String> =
+            argument("base_model")?.and_then(|value| value.extract().ok());
+        let capabilities = match &mantle {
+            Some(_) => super::model_catalog::route_capabilities(
+                py,
+                &model,
+                custom_llm_provider.as_deref(),
+                argument("model_info")?,
+            )?,
+            None if bedrock => {
+                let requested = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
+                MessagesModelCapabilities {
+                    bedrock: with_invoke_flags(
+                        super::model_catalog::bedrock_capabilities(
+                            py,
+                            &model,
+                            base_model.as_deref(),
+                            argument("model_info")?,
+                        )?,
+                        &requested,
+                    ),
+                    ..requested
+                }
+            }
+            None => self.capabilities(py, &model, custom_llm_provider.as_deref())?,
+        };
+        let vertex = match custom_llm_provider.as_deref() {
+            Some(VERTEX_AI_PROVIDER) => VertexShaping {
+                supported_regions: super::model_catalog::vertex_supported_regions(py, &model)?,
+            },
+            _ => VertexShaping::default(),
+        };
         let shaping = MessagesShaping {
-            capabilities: self.capabilities(py, &model, custom_llm_provider.as_deref())?,
+            capabilities,
+            vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
+                inject_stream_cost: settings.stream_cost_model.is_some()
+                    && settings.settings.pricing.is_some(),
                 presanitized,
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
+                global_drop_params: global_drop_params(py)?,
+                base_model,
                 ..settings.settings
             },
         };
         let provider_fields: Vec<&str> = match custom_llm_provider.as_deref() {
-            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?
+            Some(FEDERATING_PROVIDER) => anthropic_auth_fields(py)?
                 .iter()
                 .map(String::as_str)
                 .collect(),
             Some(AZURE_AI_PROVIDER) => ENTRA_ID_PARAMS.to_vec(),
             _ => Vec::new(),
         };
-        let settled = match azure {
-            Some(azure) => azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?,
-            None => Map::new(),
+        let settled = match (azure, bedrock) {
+            (Some(azure), _) => {
+                azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?
+            }
+            (None, true) => bedrock_litellm_params(py, argument)?,
+            (None, false) if custom_llm_provider.as_deref() == Some(VERTEX_AI_PROVIDER) => {
+                vertex_litellm_params(py, argument)?
+            }
+            (None, false) => Map::new(),
         };
-        let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
-            module_global(py, name)
-        })?;
-        Ok(
-            messages_body(body, custom_llm_provider.as_deref()).and_then(|body| {
-                Ok(MessagesCall {
-                    body,
-                    api_key,
-                    api_base,
-                    extra_headers,
-                    provider_specific_header,
-                    custom_llm_provider,
-                    litellm_params: litellm_params?,
-                    timeout: optional_timeout(timeout),
-                    shaping,
-                })
-            }),
-        )
+        let mut litellm_params =
+            project_litellm_params(provider_fields, settled, argument, |name| {
+                module_global(py, name)
+            })?;
+        if bedrock && let Ok(params) = litellm_params.as_mut() {
+            bedrock_session_identity(params, |name| module_global(py, name), &|name| {
+                std::env::var(name).ok()
+            })?;
+        }
+        // Python's Claude Platform config falls back to `litellm.api_base` before its env bases.
+        let api_base = match (api_base, claude_platform) {
+            (None, true) => module_global(py, "api_base")?
+                .and_then(|base| base.extract::<String>().ok())
+                .filter(|base| !base.is_empty()),
+            (api_base, _) => api_base,
+        };
+        Ok(messages_body(body).and_then(|body| {
+            Ok(MessagesCall {
+                body,
+                api_key,
+                api_base,
+                extra_headers,
+                provider_specific_header,
+                custom_llm_provider,
+                litellm_params: litellm_params?,
+                timeout: optional_timeout(timeout),
+                shaping,
+            })
+        }))
     }
 
     fn merged_headers(
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-        provider_filters_beta: bool,
+        settled: SettledHeaders,
     ) -> PyResult<MergedHeaders> {
         let mut unencodable = None;
         let mut mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
             self.view
                 .argument(py, arguments, name)?
-                .map(|value| {
-                    from_py(&ascii_headers(
-                        &value,
-                        &mut unencodable,
-                        provider_filters_beta,
-                    )?)
-                })
+                .map(|value| from_py(&ascii_headers(&value, &mut unencodable, settled)?))
                 .transpose()
         };
         let headers = mapping("headers")?;
@@ -640,6 +921,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         provider: Option<&str>,
+        settled: SettledHeaders,
         unencodable: &mut Option<Vec<u8>>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
         let Some(value) = self
@@ -655,13 +937,9 @@ impl MessagesPythonHost {
                 .getattr("ProviderSpecificHeaderUtils")?
                 .call_method1("get_provider_specific_headers", (&value, provider, true))
         {
-            ascii_headers(&scoped, unencodable, provider == AZURE_AI_PROVIDER)?;
+            ascii_headers(&scoped, unencodable, settled)?;
         }
-        from_py(&ascii_scoped_headers(
-            &value,
-            provider == Some(AZURE_AI_PROVIDER),
-        )?)
-        .map(Some)
+        from_py(&ascii_scoped_headers(&value, settled)?).map(Some)
     }
 
     fn capabilities(
@@ -675,6 +953,36 @@ impl MessagesPythonHost {
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
         )
+    }
+
+    /// The model Python's handler logs a refused `bedrock/claude_platform/` call under.
+    fn claude_platform_model(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let Some(model) = self.view.request(py)?.get_item("model")? else {
+            return Ok(None);
+        };
+        let Ok(model) = model.extract::<String>() else {
+            return Ok(None);
+        };
+        Ok(
+            (self.provider(py) == BEDROCK_PROVIDER && is_claude_platform_route(&model))
+                .then(|| claude_platform_logged_model(&model).to_string()),
+        )
+    }
+
+    fn mantle_models(&self, py: Python<'_>) -> PyResult<Option<MantleModels>> {
+        let Some(model) = self.view.request(py)?.get_item("model")? else {
+            return Ok(None);
+        };
+        let Ok(model) = model.extract::<String>() else {
+            return Ok(None);
+        };
+        let provider = self.provider(py);
+        Ok(mantle_capability_lookup(&provider, &model)
+            .zip(mantle_logged_model(&provider, &model))
+            .map(|(lookup, logged)| MantleModels {
+                sent: lookup.model,
+                logged,
+            }))
     }
 
     fn provider(&self, py: Python<'_>) -> String {
@@ -723,6 +1031,168 @@ impl MessagesPythonHost {
             Err(_) => error,
         }
     }
+
+    fn bedrock_stream_raise(&self, py: Python<'_>, raise: &BedrockStreamRaise) -> PyResult<PyErr> {
+        let (kind, arguments) = match raise {
+            BedrockStreamRaise::ChecksumMismatch {
+                expected,
+                calculated,
+            } => (
+                "ChecksumMismatch",
+                serde_json::json!([expected, calculated]),
+            ),
+            BedrockStreamRaise::InvalidHeadersLength(length) => {
+                ("InvalidHeadersLength", serde_json::json!([length]))
+            }
+            BedrockStreamRaise::InvalidPayloadLength(length) => {
+                ("InvalidPayloadLength", serde_json::json!([length]))
+            }
+            BedrockStreamRaise::DuplicateHeader(name) => {
+                ("DuplicateHeader", serde_json::json!([name]))
+            }
+            BedrockStreamRaise::InvalidJson(text) => ("InvalidJson", serde_json::json!([text])),
+            BedrockStreamRaise::NotAnObject(chunk) => ("NotAnObject", serde_json::json!([chunk])),
+        };
+        let raised = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("bedrock_stream_raise")?
+            .call1((kind, to_py(py, &arguments)?))?;
+        Ok(PyErr::from_value(raised))
+    }
+
+    fn mapped_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+        if let Some(raise) = litellm_error::find::<BedrockStreamRaise>(&error) {
+            return self.bedrock_stream_raise(py, raise);
+        }
+        if let Some((raised, raw)) = python_failure(py, &error) {
+            return if raw {
+                Ok(raised)
+            } else {
+                self.map_transport_failure(py, raised)
+            };
+        }
+        if let Some(raised) = super::workload_identity::python_error(py, &error)
+            .or_else(|| super::workload_identity::entra_token_error(py, &error))
+        {
+            let mapped = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("map_token_failure")?
+                .call1((
+                    raised.value(py),
+                    self.view.request(py)?,
+                    self.provider(py),
+                    self.asynchronous,
+                ))?;
+            return Ok(PyErr::from_value(mapped));
+        }
+        if let Some(unencodable) = litellm_error::find::<UnencodableHeader>(&error) {
+            let (value, received) = match unencodable {
+                UnencodableHeader::Sent(value) => (value, false),
+                UnencodableHeader::Received(value) => (value, true),
+            };
+            let raised = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("unencodable_header")?
+                .call1((PyBytes::new(py, value), received))?;
+            return self.map_transport_failure(py, PyErr::from_value(raised));
+        }
+        if let Some(UnsendableUrl(message)) = litellm_error::find::<UnsendableUrl>(&error) {
+            let raised = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("unsendable_url")?
+                .call1((message.as_str(),))?;
+            return self.map_transport_failure(py, PyErr::from_value(raised));
+        }
+        if let Some(undecodable) = litellm_error::find::<DecodingError>(&error) {
+            let raised = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("decoding_failure")?
+                .call1((
+                    undecodable.to_string(),
+                    self.view.request(py)?,
+                    self.provider(py),
+                ))?;
+            return Ok(PyErr::from_value(raised));
+        }
+        let unresolved_provider = refused_resolving_provider(&error);
+        let bad_request = raises_bad_request(&error);
+        let missing_platform_region = matches!(
+            &error,
+            Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth)) if is_missing_region(auth)
+        );
+        route_failure(py, error, RequestMarker::Messages, |native| {
+            if self.stream_opened {
+                native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
+            }
+            if unresolved_provider {
+                // Python never resolved the provider, so its error names the model as requested.
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER, "")?;
+                if let Some(model) = self.view.request(py)?.get_item("model")? {
+                    value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                }
+            } else if let Some(model) = self.claude_platform_model(py)? {
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                if missing_platform_region {
+                    value.setattr(crate::errors::MESSAGES_LATE_REJECTION, true)?;
+                    value.setattr(MESSAGES_RAISED_MODEL, "")?;
+                }
+                if value
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)?
+                    .is_some_and(|kind| kind.eq(REPLAYED_CREDENTIAL_FAILURE).unwrap_or(false))
+                {
+                    value.setattr(MESSAGES_CREDENTIAL_FAILURE, UNAVAILABLE_CREDENTIALS)?;
+                }
+            } else if let Some(models) = self.mantle_models(py)? {
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER_MODEL, models.sent)?;
+                value.setattr(MESSAGES_LOGGED_MODEL, models.logged)?;
+                if bad_request {
+                    // Python's Mantle configs inherit the Bedrock invoke transform, which raises
+                    // its `BadRequestError` naming `bedrock`.
+                    value.setattr(MESSAGES_PROVIDER, BEDROCK_PROVIDER)?;
+                }
+                // The Mantle routes map a credential Rust could not acquire from a fixed class
+                // list, never by running Python's signing again.
+                if value
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)?
+                    .is_some_and(|kind| kind.eq(REPLAYED_CREDENTIAL_FAILURE).unwrap_or(false))
+                {
+                    value.setattr(MESSAGES_CREDENTIAL_FAILURE, UNAVAILABLE_CREDENTIALS)?;
+                }
+            }
+            Ok(self.map_failure(py, native))
+        })
+    }
+}
+
+fn runs_pre_request_hooks(py: Python<'_>) -> PyResult<bool> {
+    py.import(ROUTE_HOST_MODULE)?
+        .getattr("runs_pre_request_hooks")?
+        .call0()?
+        .extract()
+}
+
+/// The models a Mantle route's errors name: the one Python's handler logs the call under before
+/// its config transforms the request, and the model id that transform sends.
+struct MantleModels {
+    logged: String,
+    sent: String,
+}
+
+/// Whether Rust refused the call where Python's `get_llm_provider` refuses it, before any provider
+/// is resolved: a `bedrock_mantle/` region that is not a valid AWS region.
+fn refused_resolving_provider(error: &Error) -> bool {
+    matches!(
+        error
+            .rejected_request()
+            .and_then(|rejection| rejection.downcast_ref::<litellm_llms::ErrorDetail>()),
+        Some(litellm_llms::ErrorDetail::InvalidMantleRegion {
+            check: litellm_llms::MantleRegionCheck::ProviderResolution,
+            ..
+        })
+    )
 }
 
 impl MessagesPythonHost {
@@ -734,7 +1204,10 @@ impl MessagesPythonHost {
         let settings = self
             .host_settings(py, arguments)
             .map_err(InvokeError::Python)?;
-        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.stream_cost_model = settings
+            .stream_cost_model
+            .clone()
+            .filter(|_| settings.settings.pricing.is_none());
         self.projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
@@ -790,14 +1263,15 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = MessagesHosted;
+    type Protocol = Messages;
     type Failure = PyErr;
+    type Decoded = MessagesPlan;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection, Selected), InvokeError<Error>> {
+    ) -> Result<MessagesPlan, InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
@@ -805,29 +1279,35 @@ impl PythonBinding for MessagesPythonHost {
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.call_method0("cached_function"))
             .map_err(InvokeError::Python)?;
-        let selection = crate::cache::configure(&mut self.cache, py, arguments, &function)
+        let cache = crate::cache::configure(&mut self.cache, py, arguments, &function)
             .map_err(InvokeError::Python)?;
         let effective = self
             .view
             .request(py)
             .and_then(|request| effective_py_args(request, arguments))
             .map_err(InvokeError::Python)?;
-        let classifies = self
+        let safeguards = self
             .safeguards
             .configure(py, &effective)
             .map_err(InvokeError::Python)?;
-        self.classifies.store(classifies, Ordering::Release);
         self.requested_stream = arguments
             .get_item("stream")
             .map_err(InvokeError::Python)?
             .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
         self.arguments = Some(arguments.clone().unbind());
-        let request = self.decode_call(py, arguments)?;
+        let call = self.decode_call(py, arguments)?;
         let transport = self
             .transport
             .select(py, self.view.request(py).map_err(InvokeError::Python)?)
             .map_err(InvokeError::Python)?;
-        Ok((request, selection, transport))
+        let pre_request_hooks = runs_pre_request_hooks(py).map_err(InvokeError::Python)?;
+        Ok(MessagesPlan {
+            call,
+            cache,
+            transport,
+            safeguards,
+            pre_request_hooks,
+        })
     }
 
     fn encode_response(
@@ -839,6 +1319,9 @@ impl PythonBinding for MessagesPythonHost {
             return Ok(answer);
         }
         let public = public_json_response(py, ROUTE_HOST_MODULE, &response)?;
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("record_guardrail")?
+            .call1((&public, self.view.request(py)?))?;
         self.safeguards.published(py, public)
     }
 
@@ -859,15 +1342,12 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         head: MessagesStreamHead,
     ) -> PyResult<Py<PyAny>> {
+        self.stream_opened = true;
         let module = py.import(ROUTE_HOST_MODULE)?;
         let head = module
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))?;
-        if let Some(arguments) = self
-            .arguments
-            .as_ref()
-            .filter(|_| self.asynchronous && self.provider(py) == AZURE_AI_PROVIDER)
-        {
+            .call1((to_py(py, &head.headers)?, head.unobserved_tail.is_some()))?;
+        if let Some(arguments) = self.arguments.as_ref().filter(|_| self.asynchronous) {
             module
                 .getattr("python_stream_types")?
                 .call1((&head, arguments))?;
@@ -896,52 +1376,15 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Some((raised, raw)) = python_failure(py, &error) {
-            return if raw {
-                Ok(raised)
-            } else {
-                self.map_transport_failure(py, raised)
-            };
+        let mapped = self.mapped_error(py, error)?;
+        if !self.stream_opened {
+            return Ok(mapped);
         }
-        if let Some(raised) = super::workload_identity::python_error(py, &error)
-            .or_else(|| super::workload_identity::entra_token_error(py, &error))
-        {
-            let mapped = py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("map_token_failure")?
-                .call1((
-                    raised.value(py),
-                    self.view.request(py)?,
-                    self.provider(py),
-                    self.asynchronous,
-                ))?;
-            return Ok(PyErr::from_value(mapped));
-        }
-        if let Some(unencodable) = litellm_error::find::<UnencodableHeader>(&error) {
-            let (value, received) = match unencodable {
-                UnencodableHeader::Sent(value) => (value, false),
-                UnencodableHeader::Received(value) => (value, true),
-            };
-            let raised = py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("unencodable_header")?
-                .call1((PyBytes::new(py, value), received))?;
-            return self.map_transport_failure(py, PyErr::from_value(raised));
-        }
-        if let Some(undecodable) = litellm_error::find::<DecodingError>(&error) {
-            let raised = py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("decoding_failure")?
-                .call1((
-                    undecodable.to_string(),
-                    self.view.request(py)?,
-                    self.provider(py),
-                ))?;
-            return Ok(PyErr::from_value(raised));
-        }
-        route_failure(py, error, RequestMarker::Messages, |native| {
-            Ok(self.map_failure(py, native))
-        })
+        let described = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("stream_failure")?
+            .call1((mapped.value(py), self.view.request(py)?, self.provider(py)))?;
+        Ok(PyErr::from_value(described))
     }
 
     fn host_error(error: &PyErr) -> Error {
@@ -949,7 +1392,7 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
+impl PythonHostCalls<Messages> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,
@@ -1059,6 +1502,51 @@ mod tests {
     }
 
     #[rstest]
+    #[case::metadata("metadata")]
+    #[case::litellm_metadata("litellm_metadata")]
+    fn bedrock_identity_settings_project_into_aws_credentials(#[case] bucket: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = to_py(
+                py,
+                &json!({
+                    "bedrock_session_tag_fields": ["user_api_key_alias"],
+                    "bedrock_session_name_fields": ["user_api_key_alias"],
+                }),
+            )
+            .unwrap()
+            .into_bound(py)
+            .cast_into::<PyDict>()
+            .unwrap();
+            let mut params = litellm_params(map(json!({
+                "model": "m", "aws_role_name": "arn:aws:iam::123456789012:role/invocation",
+                (bucket): {"user_api_key_alias": "agent"},
+            })))
+            .unwrap();
+            bedrock_session_identity(&mut params, |name| globals.get_item(name), &|_| None)
+                .unwrap();
+            assert_eq!(params.aws.aws_session_name.as_deref(), Some("agent"));
+            assert_eq!(
+                params
+                    .aws
+                    .aws_session_tags
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+                    .collect::<Vec<_>>(),
+                [("user_api_key_alias", "agent")]
+            );
+            assert_eq!(
+                params
+                    .extra
+                    .get(litellm_llms::bedrock::session_identity::REQUIRE_SESSION_ATTRIBUTION),
+                Some(&Value::Bool(true))
+            );
+        });
+    }
+
+    #[rstest]
     #[case::extra_over_forwarded(
         Some(json!({"X-Priority": "forwarded", "X-Forwarded-Only": "keep"})),
         Some(json!({"X-Priority": "extra", "X-Extra-Only": "also-keep"})),
@@ -1082,40 +1570,67 @@ mod tests {
         );
     }
 
+    const BETA_FILTERED: SettledHeaders = SettledHeaders {
+        filters_beta: true,
+        replaces_labels: false,
+    };
+    const LABELS_REPLACED: SettledHeaders = SettledHeaders {
+        filters_beta: true,
+        replaces_labels: true,
+    };
+
     #[rstest]
     #[case::a_beta_is_left_to_the_provider_filter(
         c"{'anthropic-beta': 'ZWJ\\u200djoined'}",
-        true,
+        BETA_FILTERED,
         json!({"anthropic-beta": "ZWJ\u{200d}joined"}),
         None
     )]
     #[case::in_any_spelling(
         c"{'Anthropic-Beta': 'ZWJ\\u200djoined'}",
-        true,
+        BETA_FILTERED,
         json!({"Anthropic-Beta": "ZWJ\u{200d}joined"}),
         None
     )]
     #[case::a_beta_held_back_where_the_provider_does_not_filter_it(
         c"{'anthropic-beta': 'ZWJ\\u200djoined', 'x-note': 'caf\\xe9', 'x-kept': 'b'}",
-        false,
+        SettledHeaders::default(),
         json!({"x-kept": "b"}),
         Some("ZWJ\u{200d}joined".as_bytes().to_vec())
     )]
     #[case::a_beta_python_cannot_hand_over_as_text(
         c"{'anthropic-beta': 'a\\ud800', 'x-kept': 'b'}",
-        true,
+        BETA_FILTERED,
         json!({"x-kept": "b"}),
         Some(b"a\xed\xa0\x80".to_vec())
     )]
     #[case::any_other_header(
         c"{'x-note': 'ZWJ\\u200d', 'x-kept': 'b'}",
-        true,
+        BETA_FILTERED,
         json!({"x-kept": "b"}),
         Some("ZWJ\u{200d}".as_bytes().to_vec())
     )]
-    fn a_header_python_cannot_encode_is_held_back_unless_the_provider_filters_it(
+    #[case::vertex_labels_the_proxy_replaces(
+        c"{'X-Vertex-AI-Labels': 'ZWJ\\u200djoined', 'x-kept': 'b'}",
+        LABELS_REPLACED,
+        json!({"X-Vertex-AI-Labels": "ZWJ\u{200d}joined", "x-kept": "b"}),
+        None
+    )]
+    #[case::in_any_spelling_and_gone_when_not_text(
+        c"{'x-vertex-ai-labels': 'a\\ud800', 'x-kept': 'b'}",
+        LABELS_REPLACED,
+        json!({"x-kept": "b"}),
+        None
+    )]
+    #[case::vertex_labels_the_caller_still_owns(
+        c"{'X-Vertex-AI-Labels': 'ZWJ\\u200djoined', 'x-kept': 'b'}",
+        BETA_FILTERED,
+        json!({"x-kept": "b"}),
+        Some("ZWJ\u{200d}joined".as_bytes().to_vec())
+    )]
+    fn a_header_python_cannot_encode_is_held_back_unless_the_provider_settles_it(
         #[case] headers: &std::ffi::CStr,
-        #[case] provider_filters_beta: bool,
+        #[case] settled: SettledHeaders,
         #[case] kept: Value,
         #[case] unencodable: Option<Vec<u8>>,
     ) {
@@ -1124,8 +1639,7 @@ mod tests {
             let headers = py.eval(headers, None, None).unwrap();
             let mut held_back = None;
             let sent: Value =
-                from_py(&ascii_headers(&headers, &mut held_back, provider_filters_beta).unwrap())
-                    .unwrap();
+                from_py(&ascii_headers(&headers, &mut held_back, settled).unwrap()).unwrap();
             assert_eq!((sent, held_back), (kept, unencodable));
         });
     }
@@ -1142,6 +1656,14 @@ mod tests {
     #[case::vertex_keys_are_projected_in_both_spellings(
         json!({"model": "m", "vertex_project": "p", "vertex_ai_location": "us-east5", "vertex_credentials": {"type": "service_account"}}),
         Ok(json!({"model": "m", "vertex_project": "p", "vertex_ai_location": "us-east5", "vertex_credentials": {"type": "service_account"}})),
+    )]
+    #[case::aws_session_tags_are_projected(
+        json!({"model": "m", "aws_role_name": "r", "aws_session_tags": [{"Key": "team", "Value": "genai"}]}),
+        Ok(json!({"model": "m", "aws_role_name": "r", "aws_session_tags": [{"Key": "team", "Value": "genai"}]})),
+    )]
+    #[case::malformed_aws_session_tags_are_a_request_error(
+        json!({"model": "m", "aws_session_tags": [{"Key": "team"}]}),
+        Err(()),
     )]
     #[case::an_explicit_none_is_absent(json!({"model": "m", "aws_region_name": null}), Ok(json!({"model": "m"})))]
     #[case::a_wrong_type_is_a_request_error(json!({"model": "m", "aws_region_name": 7}), Err(()))]

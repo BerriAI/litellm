@@ -456,7 +456,7 @@ def _get_llm_provider(
                         dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
                     elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
                         custom_llm_provider = json_provider.slug
-                        dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
+                        dynamic_api_key = api_key if api_key is not None else json_provider.api_key_from(get_secret_str)
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")
@@ -657,7 +657,7 @@ def _get_openai_compatible_provider_info(
         if provider_config is None:
             raise ValueError(f"Provider {custom_llm_provider} not found")
         config_class: Final = create_config_class(provider_config)
-        api_base, dynamic_api_key = config_class().get_openai_compatible_provider_info(api_base, api_key)
+        api_base, dynamic_api_key = config_class().get_model_provider_info(model, api_base, api_key)
         return model, custom_llm_provider, dynamic_api_key, api_base
 
     if custom_llm_provider == "perplexity":

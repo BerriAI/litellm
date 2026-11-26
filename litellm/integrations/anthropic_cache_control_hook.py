@@ -112,8 +112,13 @@ def _live_cost_map_unless(model_cost: CostMap | None) -> CostMap:
 
 
 def declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) -> bool | None:
-    declared: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    declared: Final = None if model_info is None else _openai_breakpoint_flag(model_info)
     return declared if isinstance(declared, bool) else None
+
+
+def _openai_breakpoint_flag(entry: Mapping[str, object]) -> object:
+    dedicated: Final = entry.get("supports_openai_prompt_cache_breakpoint")
+    return entry.get("supports_prompt_cache_breakpoint") if dedicated is None else dedicated
 
 
 def routed_cost_map() -> CostMap:
@@ -140,7 +145,13 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
-_MessageT: Final = TypeVar("_MessageT")
+def _message_dict(message: AllMessageValues | BaseModel) -> AllMessageValues:
+    if isinstance(message, BaseModel):
+        return cast(AllMessageValues, message.model_dump())  # cast-ok: SDK messages dump to chat message fields
+    return message
+
+
+_MessageT = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
 
@@ -429,12 +440,12 @@ def _named_model_breakpoint_support(model: str) -> bool | None:
 def _model_map_prompt_cache_breakpoint_flag(model: str, model_cost: CostMap | None = None) -> bool | None:
     cost_map: Final = _live_cost_map_unless(model_cost)
     entries: Final = (cost_map.get(key) for key in (model, model.rsplit("/", 1)[-1]))
-    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, Mapping))
+    flags: Final = (_openai_breakpoint_flag(entry) for entry in entries if isinstance(entry, Mapping))
     return next((flag is True for flag in flags if flag is not None), None)
 
 
 def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
-    flag: Final = entry.get("supports_prompt_cache_breakpoint")
+    flag: Final = _openai_breakpoint_flag(entry)
     entry_provider: Final = entry.get("litellm_provider")
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
@@ -504,11 +515,10 @@ def _declared_hosted_flag(
     declared: bool, model: str, provider: str | None, model_cost: CostMap, deployment_provider: object
 ) -> bool | None:
     """
-    A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
-    request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
-    a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
-    the Anthropic mark. A gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass
-    the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
+    A deployment's own ``supports_openai_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
+    request goes out OpenAI-shaped. Bedrock decides Converse ``cachePoint`` blocks on every route, and a
+    provider building Anthropic messages takes ``cache_control``, so both keep the Anthropic mark. A
+    gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
     map, or the deployment's own ``litellm_provider``, lists under that provider.
     """
     if provider is None or provider == "openai":
@@ -826,16 +836,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Apply cache control directives based on specified injection points.
 
@@ -852,6 +862,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
+        message_dicts: Final = [_message_dict(message) for message in messages]
         message_points: Final = tuple(
             cast(CacheControlMessageInjectionPoint, point)
             for point in injection_points
@@ -875,9 +886,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         )
         processed_messages = copy.deepcopy(
-            [without_prompt_cache_breakpoints(message) for message in messages]
+            [without_prompt_cache_breakpoints(message) for message in message_dicts]
             if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
-            else messages
+            else message_dicts
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
@@ -1385,12 +1396,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def apply_to_anthropic_messages_request(
-        messages: list[dict],
+        messages: list[dict[str, object]],
         system: str | list | None,
         injection_points: Sequence[CacheControlInjectionPoint],
         openai_dialect: bool = False,
         external_breakpoints: int = 0,
-    ) -> tuple[list[dict], str | list | None, list[CacheControlInjectionPoint]]:
+    ) -> tuple[list[dict[str, object]], str | list | None, list[CacheControlInjectionPoint]]:
         """Apply cache control injection for the Anthropic-native v1/messages endpoint.
 
         ``external_breakpoints`` is the client's breakpoint count outside ``messages`` and
@@ -1544,8 +1555,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _request_has_cache_control(
         messages: list[AllMessageValues],
-        system: str | list | None,
-        tools: list | None = None,
+        system: str | Sequence[object] | None,
+        tools: Sequence[object] | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
         on_messages_route: bool = False,
@@ -1570,10 +1581,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def get_default_injection_points(
         messages: list[AllMessageValues],
-        system: str | list | None,
+        system: str | Sequence[object] | None,
         model: str,
         custom_llm_provider: str | None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         enable_prompt_caching: bool | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
@@ -1671,7 +1682,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         model: str,
         custom_llm_provider: str | None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
         model_info: Mapping[str, object] | None = None,
@@ -1802,9 +1813,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         kwargs: dict[str, object],
         model: str | None = None,
         custom_llm_provider: str | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         api_base: str | None = None,
-    ) -> tuple[list[dict], str | list | None]:
+    ) -> tuple[list[dict[str, object]], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
         Configured points are applied even when the client marked its own
@@ -1888,7 +1899,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -1905,7 +1916,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -1925,18 +1936,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """Async version - delegates to sync since no async operations needed."""
         return self.get_chat_completion_prompt(
             model=model,
@@ -1953,14 +1964,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
-    def should_use_anthropic_cache_control_hook(non_default_params: dict) -> bool:
+    def should_use_anthropic_cache_control_hook(non_default_params: Mapping[str, object]) -> bool:
         if non_default_params.get("cache_control_injection_points", None):
             return True
         return False
 
     @staticmethod
     def get_custom_logger_for_anthropic_cache_control_hook(
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
     ) -> CustomLogger | None:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,

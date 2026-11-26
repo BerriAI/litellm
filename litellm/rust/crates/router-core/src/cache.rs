@@ -5,12 +5,12 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
     hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use litellm_cache::Error;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -51,49 +51,103 @@ pub struct Outcomes {
     pub fails: u64,
 }
 
-#[async_trait]
+/// What a [`LimitCounter`] counts, as the model rate limit check names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::IntoStaticStr, strum::VariantArray)]
+pub enum LimitKind {
+    #[strum(serialize = "tpm")]
+    Tpm,
+    #[strum(serialize = "rpm")]
+    Rpm,
+    #[strum(serialize = "tpd")]
+    Tpd,
+    #[strum(serialize = "rpd")]
+    Rpd,
+}
+
+/// A deployment's counter the model rate limit check reads (`UsageCounter.for_deployment`):
+/// `window` is `HH-MM` in UTC for a per-minute kind, the day for a per-day one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LimitCounter {
+    pub deployment_id: String,
+    pub model: String,
+    pub kind: LimitKind,
+    pub window: String,
+}
+
 pub trait RouterCache: Send + Sync {
     /// The stored cooldown of each of `ids`, in order, `None` for one without.
-    async fn cooldowns(&self, ids: &[String]) -> Result<Vec<Option<CooldownValue>>, Error>;
+    fn cooldowns(
+        &self,
+        ids: &[String],
+    ) -> impl Future<Output = Result<Vec<Option<CooldownValue>>, Error>> + Send;
 
-    async fn put_cooldown(
+    fn put_cooldown(
         &self,
         id: &str,
         cooldown: &CooldownValue,
         ttl: Duration,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Count one more failure against `id`'s allowed fails (per `suffix` when one is given) and
     /// return the count. `ttl` applies when the counter is created.
-    async fn increment_allowed_fails(
+    fn increment_allowed_fails(
         &self,
         id: &str,
         suffix: Option<&str>,
         ttl: Duration,
-    ) -> Result<f64, Error>;
+    ) -> impl Future<Output = Result<f64, Error>> + Send;
 
     /// `_increment_deployment_usage`'s write: tokens and requests in one round trip.
-    async fn add_usage(
+    fn add_usage(
         &self,
         window: &UsageWindow,
         tokens: f64,
         requests: f64,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// One more request on `window`.
-    async fn add_request(&self, window: &UsageWindow) -> Result<(), Error>;
+    fn add_request(&self, window: &UsageWindow) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn usage(&self, window: &UsageWindow) -> Result<UsageCounts, Error>;
+    fn usage(
+        &self,
+        window: &UsageWindow,
+    ) -> impl Future<Output = Result<UsageCounts, Error>> + Send;
 
     /// The background health checks' latest state of each deployment they checked, by id.
-    async fn health_states(&self) -> Result<HashMap<String, HealthState>, Error>;
+    fn health_states(
+        &self,
+    ) -> impl Future<Output = Result<HashMap<String, HealthState>, Error>> + Send;
 
     /// `id`'s outcomes in this worker, which no other worker sees.
-    async fn outcomes(&self, id: &str) -> Result<Outcomes, Error>;
+    fn outcomes(&self, id: &str) -> impl Future<Output = Result<Outcomes, Error>> + Send;
 
-    async fn count_success(&self, id: &str) -> Result<(), Error>;
+    fn count_success(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn count_failure(&self, id: &str) -> Result<(), Error>;
+    fn count_failure(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send;
+
+    /// The model rate limit check's current count (`RouterUsage.current`): this worker's when it
+    /// already reaches `limit`, else every worker's. `None` for a counter nothing has written.
+    fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> impl Future<Output = Result<Option<f64>, Error>> + Send;
+
+    /// Add `amount` to `counter`, which lives for `ttl` from its first write, and answer its
+    /// total, `None` when it could not be counted.
+    fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> impl Future<Output = Result<Option<f64>, Error>> + Send;
+
+    /// Add every increment in one round trip, answering their totals. Redis batches refresh each
+    /// counter's TTL on every write; memory keeps the deadline from its first write.
+    fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> impl Future<Output = Result<Option<Vec<f64>>, Error>> + Send;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -103,6 +157,7 @@ enum Counter {
     Requests(UsageWindow),
     Successes(String),
     Fails(String),
+    Limit(LimitCounter),
 }
 
 struct Expiring<T> {
@@ -127,7 +182,7 @@ struct State {
     health_states: HashMap<String, HealthState>,
 }
 
-/// An in-process [`RouterCache`], for tests.
+/// An in-process [`RouterCache`]: one process's routing state, shared with no other worker.
 #[derive(Clone, Default)]
 pub struct InMemoryRouterCache {
     state: Arc<Mutex<State>>,
@@ -167,7 +222,6 @@ impl InMemoryRouterCache {
     }
 }
 
-#[async_trait]
 impl RouterCache for InMemoryRouterCache {
     async fn cooldowns(&self, ids: &[String]) -> Result<Vec<Option<CooldownValue>>, Error> {
         let mut state = self.state.lock();
@@ -244,6 +298,37 @@ impl RouterCache for InMemoryRouterCache {
         self.increment(Counter::Fails(id.to_owned()), 1.0, MINUTE);
         Ok(())
     }
+
+    async fn limit_usage(&self, counter: &LimitCounter, _limit: f64) -> Result<Option<f64>, Error> {
+        Ok(self.count(&Counter::Limit(counter.clone())))
+    }
+
+    async fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> Result<Option<f64>, Error> {
+        Ok(Some(self.increment(
+            Counter::Limit(counter.clone()),
+            amount as f64,
+            ttl,
+        )))
+    }
+
+    async fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, Error> {
+        Ok(Some(
+            increments
+                .iter()
+                .map(|(counter, amount, ttl)| {
+                    self.increment(Counter::Limit(counter.clone()), *amount as f64, *ttl)
+                })
+                .collect(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -269,5 +354,30 @@ mod tests {
         let expires = |counter: Counter| state.counters[&counter].expires <= within_a_minute;
         assert!(expires(Counter::Tokens(window.clone())));
         assert!(expires(Counter::Requests(window)));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn limit_counters_add_up_apart_from_each_other() {
+        let cache = InMemoryRouterCache::default();
+        let counter = |kind, window: &str| LimitCounter {
+            deployment_id: "dep-1".to_owned(),
+            model: "gpt".to_owned(),
+            kind,
+            window: window.to_owned(),
+        };
+        let rpm = counter(LimitKind::Rpm, "12-00");
+        let rpd = counter(LimitKind::Rpd, "2026-01-01");
+
+        let charged = cache
+            .add_limit_usages(&[(rpm.clone(), 1, MINUTE), (rpd.clone(), 1, 1440 * MINUTE)])
+            .await
+            .unwrap();
+        let recharged = cache.add_limit_usage(&rpm, 2, MINUTE).await.unwrap();
+
+        assert_eq!((charged, recharged), (Some(vec![1.0, 1.0]), Some(3.0)));
+        assert_eq!(cache.limit_usage(&rpd, 5.0).await.unwrap(), Some(1.0));
+        let unwritten = counter(LimitKind::Tpm, "12-00");
+        assert_eq!(cache.limit_usage(&unwritten, 5.0).await.unwrap(), None);
     }
 }

@@ -19,13 +19,20 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
+    JWTIssuerConfig,
+    LiteLLM_JWTAuth,
+    ProxyErrorTypes,
+    ProxyException,
+)
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
 from litellm.proxy.auth.customer_spend import current_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.customer_usage import CustomerIdentifier
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -37,9 +44,12 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_now,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
+from litellm.rust_bridge._native import jwt_claims
 from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerBudgetWindowUsage,
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
     CustomerRequestIdentity,
@@ -122,50 +132,97 @@ class CustomerBudgetExceededError(litellm.BudgetExceededError):
         self.customer_hierarchy: Final = hierarchy
 
 
-def customer_member_cache_key(customer_member_id: str) -> str:
-    return f"customer_member_id:{customer_member_id}"
-
-
-def customer_org_alias_cache_key(customer_org_alias: str) -> str:
-    return f"customer_org_alias:{customer_org_alias}"
-
-
 def _header_value(headers: Mapping[str, object] | None, header: str) -> str | None:
     if headers is None:
         return None
+    lower_header: Final = header.lower()
     values: Final = tuple(
         value.strip()
         for name, value in headers.items()
-        if name.lower() == header and isinstance(value, str) and value.strip()
+        if name.lower() == lower_header and isinstance(value, str) and value.strip()
     )
     return values[0] if values else None
 
 
-def customer_member_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_MEMBER_ID_HEADER)
+def validate_required_customer_headers_metadata(metadata: Mapping[str, object] | None) -> None:
+    specified: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING) if metadata else None
+    if specified is None:
+        return
+    try:
+        REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified)
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "metadata.required_customer_headers must be a list of valid HTTP header names."},
+        ) from error
 
 
-def customer_org_alias_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_ORG_ALIAS_HEADER)
+@dataclass(frozen=True, slots=True)
+class CustomerIdentityHeaderNames:
+    org_alias: str = CUSTOMER_ORG_ALIAS_HEADER
+    member_id: str = CUSTOMER_MEMBER_ID_HEADER
+
+    @classmethod
+    def from_settings(cls, settings: Mapping[str, object]) -> "CustomerIdentityHeaderNames":
+        org_alias: Final = settings.get("customer_org_alias_header")
+        member_id: Final = settings.get("customer_member_id_header")
+        return cls(
+            org_alias=org_alias if isinstance(org_alias, str) else CUSTOMER_ORG_ALIAS_HEADER,
+            member_id=member_id if isinstance(member_id, str) else CUSTOMER_MEMBER_ID_HEADER,
+        )
 
 
-def customer_team_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_TEAM_ID_HEADER)
+DEFAULT_CUSTOMER_HEADER_NAMES: Final = CustomerIdentityHeaderNames()
 
 
-def customer_identity_from_headers(headers: Mapping[str, object] | None) -> CustomerRequestIdentity | None:
+def customer_identity_from_headers(
+    headers: Mapping[str, object] | None, *, names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES
+) -> CustomerRequestIdentity | None:
     """The customer the request named, or None when it carried neither customer header."""
     identity: Final = CustomerRequestIdentity(
-        customer_member_id=customer_member_id_from_headers(headers),
-        customer_org_alias=customer_org_alias_from_headers(headers),
-        customer_team_id=customer_team_id_from_headers(headers),
+        customer_member_id=_header_value(headers, names.member_id),
+        customer_org_alias=_header_value(headers, names.org_alias),
+        customer_team_id=_header_value(headers, CUSTOMER_TEAM_ID_HEADER),
     )
     if identity.customer_member_id is None and identity.customer_org_alias is None:
         return None
     return identity
 
 
-def _scope(
+def _maps_customer_claims(mapping: LiteLLM_JWTAuth | JWTIssuerConfig) -> bool:
+    return any(
+        field is not None
+        for field in (
+            mapping.customer_org_alias_jwt_field,
+            mapping.customer_member_id_jwt_field,
+            mapping.customer_team_id_jwt_field,
+        )
+    )
+
+
+def customer_identity_from_request(
+    headers: Mapping[str, object] | None,
+    verified_claims: Mapping[str, object] | None,
+    settings: LiteLLM_JWTAuth,
+    *,
+    names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
+) -> CustomerRequestIdentity | None:
+    """With customer claims mapped, a verified JWT alone names the customer and the headers are ignored."""
+    claims_name_customer: Final = verified_claims is not None and (
+        _maps_customer_claims(settings) or any(_maps_customer_claims(issuer) for issuer in settings.issuers or ())
+    )
+    if not claims_name_customer or verified_claims is None:
+        return customer_identity_from_headers(headers, names=names)
+    mapped: Final = jwt_claims(dict(verified_claims), settings)
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias=mapped.customer_org_alias or None,
+        customer_member_id=mapped.customer_member_id or None,
+        customer_team_id=mapped.customer_team_id or None,
+    )
+    return identity if identity.customer_member_id is not None or identity.customer_org_alias is not None else None
+
+
+def customer_scope(
     key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget | None, budget_reset_at: datetime | None = None
 ) -> CustomerScopeAuth:
     if budget is None:
@@ -189,7 +246,7 @@ def _scope(
 def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
     budget: Final = related_budget(team.budget, now)
     override: Final = related_budget(team.budget_override, now, budget.max_budget if budget is not None else None)
-    return _scope(
+    return customer_scope(
         "customer_team",
         team.customer_team_id,
         team.spend,
@@ -201,7 +258,8 @@ def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
 def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime) -> CustomerHierarchyAuth:
     """The org, team and member scopes of one member row loaded with ``_MEMBER_INCLUDE`` plus its ``teams`` rows.
     The member's limits are its effective budget: the selected organization template under any unexpired override.
-    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another."""
+    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another.
+    """
     member: Final = _MemberRow.model_validate(row)
     organization: Final = member.parent_org
     template: Final = related_budget(member.budget, now)
@@ -218,7 +276,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -226,7 +284,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 customer_row_reset_at(organization, now),
             ),
             *team_scopes[:1],
-            _scope(
+            customer_scope(
                 "customer_member",
                 member.customer_member_id,
                 member.spend,
@@ -259,7 +317,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -289,7 +347,7 @@ async def get_customer_hierarchy(
     user_api_key_cache: UserApiKeyCache,
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | None:
-    cache_key: Final = customer_member_cache_key(customer_member_id)
+    cache_key: Final = AuthObject.customer_member(customer_member_id)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
@@ -365,7 +423,7 @@ async def _accounting_scope(
     if row is None:
         return None
     values: Final = row.model_dump()
-    return _scope(
+    return customer_scope(
         key, entity_id, _SPEND.validate_python(values.get("spend", 0)), related_budget(values.get("budget"), now)
     )
 
@@ -378,7 +436,7 @@ async def get_customer_organization_hierarchy(
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | AmbiguousOrganizationAlias | None:
     """The organization-only hierarchy behind an alias, None when no organization carries it."""
-    cache_key: Final = customer_org_alias_cache_key(customer_org_alias)
+    cache_key: Final = AuthObject.customer_org_alias(customer_org_alias)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
@@ -441,61 +499,109 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
             )
 
 
+async def _read_customer_hierarchy_windows(
+    hierarchy: CustomerHierarchyAuth,
+    now: datetime | None = None,
+) -> tuple[CustomerHierarchyAuth, ProxyException | None]:
+    """The hierarchy with every level's budget windows read, so one refused level still reports the others, and the
+    first window that could not be read. Windows are read in enforcement order and the ones before a failed read keep
+    their readings, so a cap already exhausted there is still refused as a budget error."""
+    from itertools import accumulate, chain
+
+    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
+    from litellm.proxy.spend_tracking.budget_reservation import BudgetCounter, customer_window_counters
+    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
+
+    async def usage(counter: BudgetCounter) -> CustomerBudgetWindowUsage | ProxyException:
+        if counter.window_start is None or counter.window_duration is None:
+            return ProxyException(
+                message="Customer budget window is unavailable.",
+                type=ProxyErrorTypes.internal_server_error,
+                param="budget_limits",
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        try:
+            spend: Final = await get_current_spend(
+                counter_key=counter.counter_key,
+                fallback_spend=0.0,
+                max_budget=counter.max_budget,
+                window_entity_type=counter.entity_type,
+                window_entity_id=counter.entity_id,
+                window_duration=counter.window_duration,
+                window_start=counter.window_start,
+                require_authoritative_window=True,
+            )
+        except HTTPException:
+            return ProxyException(
+                message="Customer budget window spend is unavailable.",
+                type=ProxyErrorTypes.internal_server_error,
+                param="budget_limits",
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return CustomerBudgetWindowUsage(
+            budget_duration=counter.window_duration,
+            spend=spend,
+            max_budget=counter.max_budget,
+            reset_at=counter.reset_at,
+        )
+
+    counters: Final = tuple(
+        customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in hierarchy.scopes
+    )
+    flat: Final = tuple(chain.from_iterable(counters))
+    with spend_counter_batch_scope(
+        spend_counter_store, counter_keys=frozenset(counter.counter_key for counter in flat)
+    ):
+        readings: Final = tuple([await usage(counter) for counter in flat])
+    failed: Final = next(
+        (index for index, reading in enumerate(readings) if isinstance(reading, ProxyException)), len(readings)
+    )
+    offsets: Final = tuple(accumulate((len(level) for level in counters), initial=0))
+    return (
+        hierarchy.model_copy(
+            update={
+                "scopes": tuple(
+                    scope.model_copy(
+                        update={
+                            "budget_window_usage": tuple(
+                                reading
+                                for reading in readings[start : min(end, failed)]
+                                if isinstance(reading, CustomerBudgetWindowUsage)
+                            )
+                        }
+                    )
+                    for scope, start, end in zip(hierarchy.scopes, offsets, offsets[1:], strict=False)
+                )
+            }
+        ),
+        next((reading for reading in readings[failed:] if isinstance(reading, ProxyException)), None),
+    )
+
+
 async def check_customer_hierarchy_windows(
     hierarchy: CustomerHierarchyAuth,
     now: datetime | None = None,
-) -> None:
-    from itertools import chain
+) -> CustomerHierarchyAuth:
+    measured, unavailable = await _read_customer_hierarchy_windows(hierarchy, now)
+    _check_customer_window_usage(measured)
+    if unavailable is not None:
+        raise unavailable
+    return measured
 
-    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
-    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
-    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
 
-    counters: Final = tuple(
-        chain.from_iterable(
-            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now)
-            for scope in hierarchy.scopes
-        )
-    )
-    with spend_counter_batch_scope(
-        spend_counter_store, counter_keys=frozenset(counter.counter_key for counter in counters)
-    ):
-        for counter in counters:
-            if counter.window_start is None:
-                raise ProxyException(
-                    message="Customer budget window is unavailable.",
-                    type=ProxyErrorTypes.internal_server_error,
-                    param="budget_limits",
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            try:
-                spend = await get_current_spend(
-                    counter_key=counter.counter_key,
-                    fallback_spend=0.0,
-                    max_budget=counter.max_budget,
-                    window_entity_type=counter.entity_type,
-                    window_entity_id=counter.entity_id,
-                    window_duration=counter.window_duration,
-                    window_start=counter.window_start,
-                    require_authoritative_window=True,
-                )
-            except HTTPException as error:
-                raise ProxyException(
-                    message="Customer budget window spend is unavailable.",
-                    type=ProxyErrorTypes.internal_server_error,
-                    param="budget_limits",
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                ) from error
-            if spend >= counter.max_budget:
+def _check_customer_window_usage(hierarchy: CustomerHierarchyAuth) -> None:
+    for scope in hierarchy.scopes:
+        for window in scope.budget_window_usage:
+            if window.spend >= window.max_budget:
                 raise litellm.BudgetExceededError(
-                    current_cost=spend,
-                    max_budget=counter.max_budget,
+                    current_cost=window.spend,
+                    max_budget=window.max_budget,
                     message=(
-                        f"ExceededBudget: {counter.entity_type}={counter.entity_id} over {counter.window_duration} budget."
-                        f"{cap_policy_hint(hierarchy, counter.entity_type, counter.entity_id)}"
+                        f"ExceededBudget: {scope.key}={scope.entity_id} over {window.budget_duration} budget."
+                        f"{cap_policy_hint(hierarchy, scope.key, scope.entity_id)}"
                     ),
-                    entity_type=counter.entity_type,
-                    entity_id=counter.entity_id,
+                    entity_type=scope.key,
+                    entity_id=scope.entity_id,
                 )
 
 
@@ -512,7 +618,8 @@ def check_customer_hierarchy_model_access(
 
 def _untracked(message: str, header: str) -> None:
     """An id the proxy does not know is logged and the request runs without that customer level, never refused:
-    the headers are attribution, and a customer whose rows are not set up yet must keep working."""
+    the headers are attribution, and a customer whose rows are not set up yet must keep working.
+    """
     verbose_proxy_logger.warning("Customer %s not tracked, %s", header, message)
 
 
@@ -520,7 +627,9 @@ OrganizationRegistrar: TypeAlias = Callable[[str, "PrismaClient"], Awaitable[Org
 
 
 def _organization_from_lookup(
-    customer_org_alias: str, organization: CustomerHierarchyAuth | AmbiguousOrganizationAlias | None
+    customer_org_alias: str,
+    organization: CustomerHierarchyAuth | AmbiguousOrganizationAlias | None,
+    org_alias_header: str,
 ) -> CustomerHierarchyAuth | None:
     if organization is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
@@ -528,7 +637,7 @@ def _organization_from_lookup(
         raise ProxyException(
             message=f"Customer organization alias is not unique: {customer_org_alias}",
             type=ProxyErrorTypes.bad_request_error,
-            param=CUSTOMER_ORG_ALIAS_HEADER,
+            param=org_alias_header,
             code=status.HTTP_400_BAD_REQUEST,
         )
     return organization
@@ -540,15 +649,17 @@ async def _register_organization(
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
     key_metadata: Mapping[str, object],
+    header_names: CustomerIdentityHeaderNames,
 ) -> CustomerHierarchyAuth | None:
     """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
-    request is charged to it instead of running untracked. A key pinned to another organization is refused first."""
+    request is charged to it instead of running untracked. A key pinned to another organization is refused first.
+    """
     if not _registrable(customer_org_alias):
         verbose_proxy_logger.warning(
             "Could not register customer organization: alias is not a valid customer identifier"
         )
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
-    _check_key_scope(customer_org_alias, key_metadata)
+    _check_key_scope(customer_org_alias, key_metadata, header_names.member_id)
     registered: Final = await register(customer_org_alias, prisma_client)
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
@@ -565,6 +676,7 @@ async def _register_organization(
     return _organization_from_lookup(
         customer_org_alias,
         await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache),
+        header_names.org_alias,
     )
 
 
@@ -574,15 +686,16 @@ async def _organization_named_by_alias(
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
     key_metadata: Mapping[str, object],
+    header_names: CustomerIdentityHeaderNames,
 ) -> CustomerHierarchyAuth | None:
     if prisma_client is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     found: Final = await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
     if found is None:
         return await _register_organization(
-            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata
+            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata, header_names
         )
-    return _organization_from_lookup(customer_org_alias, found)
+    return _organization_from_lookup(customer_org_alias, found, header_names.org_alias)
 
 
 MemberRegistrar: TypeAlias = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
@@ -608,7 +721,7 @@ async def _register_member(
 ) -> CustomerHierarchyAuth | None:
     """A member the request named for the first time joins the aliased organization's default team. Without an
     alias there is no organization to place it in, and the member stays unknown."""
-    if organization is None:
+    if organization is None or organization.customer_org_id is None:
         return None
     if not _registrable(customer_member_id):
         verbose_proxy_logger.warning(
@@ -665,20 +778,28 @@ async def load_customer_hierarchy(
     register: MemberRegistrar = ensure_customer_member,
     key_metadata: Mapping[str, object] = MappingProxyType({}),
     register_organization: OrganizationRegistrar = ensure_customer_organization,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> CustomerHierarchyAuth | None:
     """The hierarchy the headers name, or None when the proxy knows none of the ids, in which case the request runs
     untracked. An alias the proxy has never seen is registered as a new organization first. A member header next to an alias header must name a member of that organization; a member the
     organization has never seen is registered in its default team first, and when that fails the organization
-    alone is charged. A key pinned to another organization is refused before any row is created."""
+    alone is charged. A key pinned to another organization is refused before any row is created.
+    """
     organization: Final = (
         await _organization_named_by_alias(
-            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
+            identity.customer_org_alias,
+            prisma_client,
+            user_api_key_cache,
+            register_organization,
+            key_metadata,
+            header_names,
         )
         if identity.customer_org_alias is not None
         else None
     )
     if organization is not None:
-        check_customer_hierarchy_key_scope(organization, key_metadata)
+        check_customer_hierarchy_key_scope(organization, key_metadata, member_header=header_names.member_id)
     if identity.customer_member_id is None:
         if identity.customer_team_id is not None:
             raise _forbidden("a customer team header needs a customer member header", CUSTOMER_TEAM_ID_HEADER)
@@ -692,7 +813,7 @@ async def load_customer_hierarchy(
         raise _forbidden(
             f"Customer member {identity.customer_member_id} does not belong to the organization "
             f"aliased {identity.customer_org_alias}",
-            CUSTOMER_ORG_ALIAS_HEADER,
+            header_names.org_alias,
         )
     if identity.customer_team_id is None or hierarchy.customer_member_id is None:
         return hierarchy
@@ -719,23 +840,34 @@ async def resolve_customer_hierarchy(
     key_metadata: Mapping[str, object] | None = None,
     register: MemberRegistrar = ensure_customer_member,
     register_organization: OrganizationRegistrar = ensure_customer_organization,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
-    ``request_model`` is the model the route will actually serve, which may differ from the body."""
+    ``request_model`` is the model the route will actually serve, which may differ from the body.
+    """
     from litellm.proxy.proxy_server import get_current_spend
 
     metadata: Final = key_metadata or {}
     cached: Final = await load_customer_hierarchy(
-        identity, prisma_client, user_api_key_cache, register, metadata, register_organization
+        identity,
+        prisma_client,
+        user_api_key_cache,
+        register,
+        metadata,
+        register_organization,
+        header_names=header_names,
     )
     if cached is None:
         return None
-    hierarchy: Final = await current_customer_spend(cached, get_current_spend)
-    try:
-        await check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
-    except litellm.BudgetExceededError as error:
-        raise CustomerBudgetExceededError(hierarchy, error) from error
-    return hierarchy
+    return await check_customer_hierarchy_access(
+        await current_customer_spend(cached, get_current_spend),
+        llm_router,
+        request_model,
+        route,
+        key_metadata,
+        member_header=header_names.member_id,
+    )
 
 
 async def check_customer_hierarchy_access(
@@ -744,32 +876,54 @@ async def check_customer_hierarchy_access(
     request_model: str | Sequence[str] | None,
     route: str,
     key_metadata: Mapping[str, object] | None = None,
-) -> None:
-    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
+    *,
+    member_header: str = CUSTOMER_MEMBER_ID_HEADER,
+    now: datetime | None = None,
+) -> CustomerHierarchyAuth:
+    """The admitted hierarchy with its budget windows read. A level over budget raises
+    ``CustomerBudgetExceededError`` carrying the same readings."""
+    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {}, member_header=member_header)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:
             check_customer_hierarchy_model_access(hierarchy, model, llm_router)
     if RouteChecks.is_info_route(route):
-        return
-    check_customer_hierarchy_budget(hierarchy)
-    if any(scope.budget_limits for scope in hierarchy.scopes):
-        await check_customer_hierarchy_windows(hierarchy)
+        return hierarchy
+    measured, unavailable = (
+        await _read_customer_hierarchy_windows(hierarchy, now)
+        if any(scope.budget_limits for scope in hierarchy.scopes)
+        else (hierarchy, None)
+    )
+    try:
+        check_customer_hierarchy_budget(measured)
+        _check_customer_window_usage(measured)
+    except litellm.BudgetExceededError as error:
+        raise CustomerBudgetExceededError(measured, error) from error
+    if unavailable is not None:
+        raise unavailable
+    return measured
 
 
-def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
+def check_customer_hierarchy_key_scope(
+    hierarchy: CustomerHierarchyAuth,
+    key_metadata: Mapping[str, object],
+    *,
+    member_header: str = CUSTOMER_MEMBER_ID_HEADER,
+) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
-    _check_key_scope(hierarchy.customer_org_id, key_metadata)
+    if hierarchy.customer_org_id is None:
+        return
+    _check_key_scope(hierarchy.customer_org_id, key_metadata, member_header)
 
 
-def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -> None:
+def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object], member_header: str) -> None:
     key_customer_org_id: Final = key_metadata.get("customer_org_id")
     if key_customer_org_id is None or key_customer_org_id == customer_org_id:
         return
     raise ProxyException(
         message="API key is not allowed to act for this customer member's organization",
         type=ProxyErrorTypes.auth_error,
-        param=CUSTOMER_MEMBER_ID_HEADER,
+        param=member_header,
         code=status.HTTP_403_FORBIDDEN,
     )
 
@@ -777,7 +931,7 @@ def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def forget_customer_hierarchies(customer_member_ids: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
     """Drop the cached hierarchies of members whose own, team, org or template budget changed so auth reloads them."""
-    await evict_and_broadcast(tuple(customer_member_cache_key(m) for m in customer_member_ids), user_api_key_cache)
+    await evict_and_broadcast(tuple(AuthObject.customer_member(m).key for m in customer_member_ids), user_api_key_cache)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -785,6 +939,6 @@ async def forget_customer_organization_aliases(
     aliases: Sequence[str | None], user_api_key_cache: UserApiKeyCache
 ) -> None:
     """Drop the cached organization hierarchies behind aliases whose organization changed so request auth reloads them."""
-    keys: Final = tuple(customer_org_alias_cache_key(alias) for alias in dict.fromkeys(aliases) if alias)
+    keys: Final = tuple(AuthObject.customer_org_alias(alias).key for alias in dict.fromkeys(aliases) if alias)
     if keys:
         await evict_and_broadcast(keys, user_api_key_cache)

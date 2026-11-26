@@ -1,3 +1,4 @@
+mod enqueued;
 mod keys;
 mod lua;
 mod scripts;
@@ -7,6 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_redis_client::{Declared, RedisBatch, RedisClient, Slot};
 
+pub use self::enqueued::EnqueuedReply;
 pub use self::keys::{Counter, Entry, Kind, Scope};
 pub use self::types::{
     AcquireReply, Applied, AtomicCounter, AtomicReply, Gauge, GuardedIncrement, GuardedReply,
@@ -15,10 +17,12 @@ pub use self::types::{
 use crate::{
     Error, Number, Pending, RequestRedis, Send,
     dual_cache::{DualCache, MemorySettings, PipelineIncrement},
-    memory::{Clock, system_clock},
+    memory::{Clock, UpdateGuard, UpdateLock, system_clock},
     remote::{Remote, RemoteSlot},
     request::pending,
 };
+
+const MEMORY_ENTRIES: usize = 10_000;
 
 /// The v3 rate limiter's keyspace: its memory tier, its Lua scripts and the plain counter writes
 /// `DualCache` made for it on `main`. The admission logic stays with the caller. A script needs
@@ -39,7 +43,7 @@ impl RateLimits {
             cache: DualCache::new(
                 Arc::new(RemoteSlot::new(remote)),
                 MemorySettings {
-                    entries: None,
+                    entries: Some(MEMORY_ENTRIES),
                     ttl: backfill_ttl,
                 },
                 now,
@@ -82,6 +86,14 @@ impl RateLimits {
             .collect()
     }
 
+    pub fn memory_guard(&self) -> UpdateGuard<'_> {
+        self.cache.memory().guard()
+    }
+
+    pub fn memory_updates(&self) -> &UpdateLock {
+        self.cache.memory().updates()
+    }
+
     pub fn get_local(&self, entry: &Entry) -> Result<Option<Local>, Error> {
         Ok(self.cache.memory().get(&entry.key())?)
     }
@@ -93,6 +105,10 @@ impl RateLimits {
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
         Ok(self.cache.memory().set(&entry.key(), value, ttl)?)
+    }
+
+    pub fn refresh_local(&self, entry: &Entry, value: Local, ttl: Duration) -> Result<(), Error> {
+        Ok(self.cache.memory().refresh(&entry.key(), value, ttl)?)
     }
 
     /// `DualCache.async_get_cache`, backfilling memory for `backfill_ttl` or the store's default.
@@ -220,6 +236,35 @@ impl RateLimits {
                 "TTL preservation failed, falling back to regular pipeline"
             );
             store.increment_many(&increments).await;
+        });
+        true
+    }
+
+    pub fn guarded_increment_post_call(
+        self: &Arc<Self>,
+        request: &RequestRedis,
+        increment: GuardedIncrement,
+        failed: String,
+    ) -> bool {
+        let Some(batch) = self.batch(Send::PostCall(request)) else {
+            return false;
+        };
+        let declared = scripts::guarded_increment(&batch, &increment);
+        let store = Arc::clone(self);
+        request.spawn(async move {
+            let Err(error) = declared.settled().await else {
+                return;
+            };
+            crate::failure_log::redis_failure!(&error, failed);
+            if increment.amount.as_f64() > 0.0 {
+                store
+                    .increment(&Increment {
+                        counter: increment.counter,
+                        amount: increment.amount,
+                        ttl: increment.ttl,
+                    })
+                    .await;
+            }
         });
         true
     }

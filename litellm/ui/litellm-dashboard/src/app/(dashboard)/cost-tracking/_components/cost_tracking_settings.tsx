@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from "react";
+import { useController } from "react-hook-form";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react";
+import { BarChart3, ChevronDown, Lock } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -22,12 +25,17 @@ import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
 import PricingCalculator from "./pricing_calculator/index";
 import { DocsMenu } from "@/components/DocsMenu";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
 import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { addDiscountSchema, addMarginSchema } from "./schema";
+import { discountToAddArgs, emptyDiscount, emptyMargin, marginToAddArgs } from "./mapper";
 
 const DOCS_LINKS: readonly { labelKey: ParseKeys; href: string }[] = [
   {
@@ -56,7 +64,7 @@ interface PendingRemoval {
 
 const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-6 py-4 text-left";
 
-const SectionHeader: React.FC<{ title: string; description: string }> = ({ title, description }) => (
+const SectionHeader: React.FC<{ title: React.ReactNode; description: string }> = ({ title, description }) => (
   <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
     <div className="flex flex-col items-start w-full">
       <span className="block text-lg font-semibold text-foreground">{title}</span>
@@ -68,16 +76,18 @@ const SectionHeader: React.FC<{ title: string; description: string }> = ({ title
 
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();
-  const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
-  const [newDiscount, setNewDiscount] = useState<string>("");
-  const [modelPattern, setModelPattern] = useState<string>("");
+  const discountForm = useZodForm(addDiscountSchema, { defaultValues: emptyDiscount });
+  const { field: discountProvider } = useController({ control: discountForm.control, name: "provider" });
+  const { field: discount } = useController({ control: discountForm.control, name: "discount" });
+  const { field: pattern } = useController({ control: discountForm.control, name: "pattern" });
   const [isFetching, setIsFetching] = useState(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isMarginModalVisible, setIsMarginModalVisible] = useState(false);
-  const [selectedMarginProvider, setSelectedMarginProvider] = useState<string | undefined>(undefined);
-  const [marginType, setMarginType] = useState<"percentage" | "fixed">("percentage");
-  const [percentageValue, setPercentageValue] = useState<string>("");
-  const [fixedAmountValue, setFixedAmountValue] = useState<string>("");
+  const marginForm = useZodForm(addMarginSchema, { defaultValues: emptyMargin });
+  const { field: marginProvider } = useController({ control: marginForm.control, name: "provider" });
+  const { field: marginType } = useController({ control: marginForm.control, name: "marginType" });
+  const { field: percentage } = useController({ control: marginForm.control, name: "percentageValue" });
+  const { field: fixedAmount } = useController({ control: marginForm.control, name: "fixedAmountValue" });
   const [models, setModels] = useState<string[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -95,6 +105,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
   const {
     marginConfig,
+    isConfigOwned,
     fetchMarginConfig,
     handleAddMargin: addMargin,
     handleRemoveMargin: removeMargin,
@@ -128,20 +139,17 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }, [accessToken, fetchDiscountConfig, fetchMarginConfig, fetchBlockUnpriced]);
 
   const handleAddProvider = async () => {
-    const success = await addProvider(selectedProvider, newDiscount, modelPattern);
+    const values = addDiscountSchema.parse(discountForm.getValues());
+    const success = await addProvider(...discountToAddArgs(values));
     if (success) {
-      setSelectedProvider(undefined);
-      setNewDiscount("");
-      setModelPattern("");
+      discountForm.reset();
       setIsModalVisible(false);
     }
   };
 
   const handleModalCancel = () => {
     setIsModalVisible(false);
-    setSelectedProvider(undefined);
-    setNewDiscount("");
-    setModelPattern("");
+    discountForm.reset();
   };
 
   const handleRemoveProvider = (provider: string, providerDisplayName: string) => {
@@ -164,27 +172,17 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   };
 
   const handleAddMargin = async () => {
-    const success = await addMargin({
-      selectedProvider: selectedMarginProvider,
-      marginType,
-      percentageValue,
-      fixedAmountValue,
-    });
+    const values = addMarginSchema.parse(marginForm.getValues());
+    const success = await addMargin(marginToAddArgs(values));
     if (success) {
-      setSelectedMarginProvider(undefined);
-      setPercentageValue("");
-      setFixedAmountValue("");
-      setMarginType("percentage");
+      marginForm.reset();
       setIsMarginModalVisible(false);
     }
   };
 
   const handleMarginModalCancel = () => {
     setIsMarginModalVisible(false);
-    setSelectedMarginProvider(undefined);
-    setPercentageValue("");
-    setFixedAmountValue("");
-    setMarginType("percentage");
+    marginForm.reset();
   };
 
   const handleRemoveMargin = (provider: string, providerDisplayName: string) => {
@@ -196,20 +194,23 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }
 
   return (
-    <div className="w-full p-8">
-      {/* Header Section - Outside the card */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2">
-            <p className="text-xl font-medium text-foreground">{t("costTracking.settings.title")}</p>
-            <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
-          </div>
-          <p className="text-muted-foreground mt-1">{t("costTracking.settings.description")}</p>
+    <>
+      <PageHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <PageHeaderTitle>
+            <BarChart3 />
+            {t("costTracking.settings.title")}
+          </PageHeaderTitle>
+          <DocsMenu
+            className="ml-auto sm:ml-0"
+            items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))}
+          />
         </div>
-      </div>
+        <PageHeaderDescription>{t("costTracking.settings.description")}</PageHeaderDescription>
+      </PageHeader>
 
       {/* Main Content Card with Accordions */}
-      <div className="bg-card rounded-lg shadow-sm w-full max-w-full space-y-4">
+      <PageContent className="gap-4 rounded-lg bg-card shadow-sm">
         {/* Accordion 1: Provider Discounts - Only for proxy admins */}
         {isProxyAdmin && (
           <Collapsible className="rounded-lg border">
@@ -283,13 +284,26 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         {isProxyAdmin && (
           <Collapsible className="rounded-lg border">
             <SectionHeader
-              title={t("costTracking.settings.margins.title")}
+              title={
+                <>
+                  {t("costTracking.settings.margins.title")}
+                  {isConfigOwned && (
+                    <Tooltip>
+                      <TooltipTrigger render={<Badge variant="outline" className="ml-2 align-middle" />}>
+                        <Lock aria-hidden />
+                        config.yaml
+                      </TooltipTrigger>
+                      <TooltipContent>{t("costTracking.settings.margins.configOwnedHint")}</TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
+              }
               description={t("costTracking.settings.margins.description")}
             />
             <CollapsibleContent className="px-0">
               <div className="p-6">
                 <div className="flex justify-end mb-4">
-                  <Button onClick={() => setIsMarginModalVisible(true)}>
+                  <Button disabled={isConfigOwned} onClick={() => setIsMarginModalVisible(true)}>
                     {t("costTracking.settings.margins.addButton")}
                   </Button>
                 </div>
@@ -299,6 +313,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                   </div>
                 ) : Object.keys(marginConfig).length > 0 ? (
                   <ProviderMarginTable
+                    disabled={isConfigOwned}
                     marginConfig={marginConfig}
                     onMarginChange={handleMarginChange}
                     onRemoveProvider={handleRemoveMargin}
@@ -368,7 +383,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             </div>
           </CollapsibleContent>
         </Collapsible>
-      </div>
+      </PageContent>
 
       {pendingRemoval && (
         <AlertDialog open onOpenChange={(open) => !open && !isRemoving && setPendingRemoval(null)}>
@@ -407,12 +422,12 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             </p>
             <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
               <AddProviderForm
-                selectedProvider={selectedProvider}
-                newDiscount={newDiscount}
-                modelPattern={modelPattern}
-                onProviderChange={setSelectedProvider}
-                onDiscountChange={setNewDiscount}
-                onModelPatternChange={setModelPattern}
+                selectedProvider={discountProvider.value ?? undefined}
+                newDiscount={discount.value}
+                modelPattern={pattern.value}
+                onProviderChange={(value) => discountProvider.onChange(value ?? null)}
+                onDiscountChange={discount.onChange}
+                onModelPatternChange={pattern.onChange}
                 onAddProvider={handleAddProvider}
               />
             </form>
@@ -434,21 +449,21 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
               <AddMarginForm
                 marginConfig={marginConfig}
-                selectedProvider={selectedMarginProvider}
-                marginType={marginType}
-                percentageValue={percentageValue}
-                fixedAmountValue={fixedAmountValue}
-                onProviderChange={setSelectedMarginProvider}
-                onMarginTypeChange={setMarginType}
-                onPercentageChange={setPercentageValue}
-                onFixedAmountChange={setFixedAmountValue}
+                selectedProvider={marginProvider.value ?? undefined}
+                marginType={marginType.value}
+                percentageValue={percentage.value}
+                fixedAmountValue={fixedAmount.value}
+                onProviderChange={(value) => marginProvider.onChange(value ?? null)}
+                onMarginTypeChange={marginType.onChange}
+                onPercentageChange={percentage.onChange}
+                onFixedAmountChange={fixedAmount.onChange}
                 onAddProvider={handleAddMargin}
               />
             </form>
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 };
 

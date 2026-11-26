@@ -39,6 +39,7 @@ class DailySpendTable:
     # included) stored in ``id``, so three long customer ids never exceed an index entry
     # and rows already written under that identity keep accumulating.
     hashed_identity: bool = False
+    records_cache_cost: bool = False
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
@@ -46,15 +47,23 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
         "customer_member": DailySpendTable(
             name="LiteLLM_DailyCustomerMemberSpend",
             entity_id_column="customer_member_id",
-            parent_id_columns=("customer_team_id", "customer_org_id"),
+            parent_id_columns=("customer_team_id", "customer_org_id", "app_id", "app_group_id"),
             hashed_identity=True,
+            records_cache_cost=True,
         ),
         "user": DailySpendTable(name="LiteLLM_DailyUserSpend", entity_id_column="user_id"),
         "team": DailySpendTable(name="LiteLLM_DailyTeamSpend", entity_id_column="team_id"),
-        "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
+        "org": DailySpendTable(
+            name="LiteLLM_DailyOrganizationSpend",
+            entity_id_column="organization_id",
+        ),
         "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
         "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
-        "tag": DailySpendTable(name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True),
+        "tag": DailySpendTable(
+            name="LiteLLM_DailyTagSpend",
+            entity_id_column="tag",
+            carries_request_id=True,
+        ),
     }
 )
 
@@ -119,12 +128,15 @@ _SPEND_COLUMNS: Final = (
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
     "guardrail_spend",
+    "customer_margin_spend",
 )
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         **{column: "bigint" for column in _COUNTER_COLUMNS},
         **{column: "double precision" for column in _SPEND_COLUMNS},
+        "cache_cost": "double precision",
+        "priced_cache_tokens": "bigint",
     }
 )
 
@@ -161,17 +173,29 @@ def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ..
 
 def hashed_row_id(table: DailySpendTable, key: tuple[str, ...]) -> str:
     """The ``id`` of a hashed-identity row, identical for every writer of the same identity."""
-    pairs: Final = sorted(zip(_identity_columns(table), key, strict=True))
+    pairs: Final = sorted(
+        (column, value)
+        for column, value in zip(_identity_columns(table), key, strict=True)
+        if column not in ("app_id", "app_group_id") or value
+    )
     return sha256(dumps(pairs, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _merge(group: Sequence[SpendRow]) -> SpendRow:
+def _merge(table: DailySpendTable, group: Sequence[SpendRow]) -> SpendRow:
     if len(group) == 1:
         return group[0]
     return {
         **group[0],
         **{column: sum(_as_int(row.get(column)) for row in group) for column in _COUNTER_COLUMNS},
         **{column: sum(_as_float(row.get(column)) for row in group) for column in _SPEND_COLUMNS},
+        **(
+            {
+                "cache_cost": sum(_as_float(row.get("cache_cost")) for row in group),
+                "priced_cache_tokens": sum(_as_int(row.get("priced_cache_tokens")) for row in group),
+            }
+            if table.records_cache_cost
+            else {}
+        ),
     }
 
 
@@ -188,7 +212,9 @@ def merge_by_conflict_key(
     key keeps concurrent writers taking row locks in the same sequence.
     """
     ordered: Final = sorted(transactions, key=lambda transaction: conflict_key(table, transaction))
-    return tuple((key, _merge(tuple(group))) for key, group in groupby(ordered, key=lambda t: conflict_key(table, t)))
+    return tuple(
+        (key, _merge(table, tuple(group))) for key, group in groupby(ordered, key=lambda t: conflict_key(table, t))
+    )
 
 
 def _row_params(
@@ -204,6 +230,11 @@ def _row_params(
         _as_text(model_group) if table.hashed_identity or model_group is not None else None,
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
+        *(
+            (_as_float(transaction.get("cache_cost")), _as_int(transaction.get("priced_cache_tokens")))
+            if table.records_cache_cost
+            else ()
+        ),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
     )
 
@@ -217,6 +248,7 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
         "model_group",
         *_COUNTER_COLUMNS,
         *_SPEND_COLUMNS,
+        *(("cache_cost", "priced_cache_tokens") if table.records_cache_cost else ()),
         *(("request_id",) if table.carries_request_id else ()),
     )
 
@@ -238,8 +270,7 @@ def build_bulk_upsert(
         for row_index in range(len(batch))
     )
     increments: Final = ", ".join(
-        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"'
-        for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS)
+        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"' for column in columns if column in _CASTS
     )
     # request_id names one arbitrary contributing request, so an entry carrying none must
     # not blank out the one already recorded.

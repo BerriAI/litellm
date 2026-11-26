@@ -581,6 +581,50 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
     assert_eq!(sent["top_k"], 3);
 }
 
+#[rstest]
+#[case::claude_base_model(Some("anthropic/claude-sonnet-4-5"), json!([]))]
+#[case::open_base_model(Some("deepseek/deepseek-v4-pro"), json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[case::no_base_model(None, json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[tokio::test]
+async fn unsigned_thinking_is_dropped_for_an_alias_whose_base_model_names_claude(
+    call: MessagesCall,
+    #[case] base_model: Option<&str>,
+    #[case] sent_thinking: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([
+        {"role": "user", "content": "plan it"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "plan", "signature": ""}]},
+        {"role": "user", "content": "go on"}
+    ]);
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                base_model: base_model.map(str::to_owned),
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(call, json!({"model": "prod-sonnet", "messages": history}))
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    let thinking: Vec<Value> = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "thinking")
+        .cloned()
+        .collect();
+    assert_eq!(Value::from(thinking), sent_thinking);
+}
+
 fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));
@@ -873,6 +917,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
+                    vertex: Default::default(),
                     capabilities,
                     settings: MessagesSettings {
                         drop_params,
@@ -920,13 +965,12 @@ impl litellm_tracing::Sink for Warnings {
 }
 
 #[rstest]
-#[case::anthropic_logs_as_main("anthropic", false)]
-#[case::azure_ai_logs_python_s_warning("azure_ai", true)]
+#[case::anthropic("anthropic")]
+#[case::azure_ai("azure_ai")]
 #[tokio::test]
-async fn a_speed_dropped_under_drop_params_is_logged_only_on_azure_ai(
+async fn a_speed_dropped_under_drop_params_logs_python_s_warning(
     call: MessagesCall,
     #[case] provider: &str,
-    #[case] logged: bool,
 ) {
     let upstream = upstream([message_response()]).await;
     let warnings = Warnings::default();
@@ -956,11 +1000,7 @@ async fn a_speed_dropped_under_drop_params_is_logged_only_on_azure_ai(
         .filter(|message| message.starts_with("Dropping unsupported `speed`"))
         .cloned()
         .collect();
-    assert_eq!(
-        speed_warnings.len(),
-        usize::from(logged),
-        "{speed_warnings:?}"
-    );
+    assert_eq!(speed_warnings.len(), 1, "{speed_warnings:?}");
 }
 
 #[rstest]
@@ -972,6 +1012,7 @@ async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: M
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
+            vertex: Default::default(),
             capabilities: sampling_removed(),
             settings: MessagesSettings {
                 additional_drop_params: vec!["top_k".into()],
@@ -1005,6 +1046,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
+                vertex: Default::default(),
                 settings: MessagesSettings {
                     reasoning_auto_summary: true,
                     ..MessagesSettings::default()
@@ -1134,6 +1176,35 @@ async fn replayed_history_is_cleaned_before_sending(
 }
 
 #[rstest]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
 #[case::deepseek("deepseek")]
@@ -1196,6 +1267,27 @@ async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator
     );
 }
 
+async fn run_with_google_token(call: MessagesCall) -> Result<MessagesOutput, Error> {
+    let route = messages_route_with_auth(
+        Arc::new(RecordingSecrets::empty()),
+        litellm_auth::AuthServices {
+            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::new(Arc::new(
+                litellm_auth_gcp::google::OnGce {
+                    project: "token-project",
+                    token: "google-token",
+                },
+            )),
+            ..litellm_auth::AuthServices::default()
+        },
+    );
+    let host = LocalMessagesHost::new(call);
+    litellm_host_native::in_process::run_hosted(
+        route.machine(host.request()?, None),
+        host.runtime(),
+    )
+    .await
+}
+
 #[rstest]
 #[case::not_streaming(false, ":rawPredict")]
 #[case::streaming(true, ":streamRawPredict?alt=sse")]
@@ -1211,7 +1303,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
     );
     let upstream = upstream([if stream { streamed } else { message_response() }]).await;
 
-    run(with_fields(
+    run_with_google_token(with_fields(
         MessagesCall {
             custom_llm_provider: Some("vertex_ai".into()),
             litellm_params: LitellmParams {
@@ -1238,7 +1330,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
             "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
         )
     );
-    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("authorization"), Some("Bearer google-token"));
     assert_eq!(request.header("anthropic-version"), None);
     let body = request.json();
     assert_eq!(body.get("model"), None);

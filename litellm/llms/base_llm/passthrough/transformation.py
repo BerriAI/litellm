@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
+    from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
@@ -72,7 +72,7 @@ def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None
         return None
 
 
-def relayed_body(httpx_response: Response) -> str | dict:
+def relayed_body(httpx_response: Response) -> str | dict[str, object]:
     try:
         body: Final = _DECODED_JSON.validate_python(httpx_response.json())
     except ValueError:
@@ -135,12 +135,22 @@ class RawBytesStreamCollector:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LoggedPassthroughRequest:
+    messages: tuple[AllMessageValues, ...]
+    model_parameters: Mapping[str, object]
+
+
 class BasePassthroughConfig(BaseLLMModelInfo):
     @abstractmethod
-    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+    def is_streaming_request(self, endpoint: str, request_data: dict[str, object]) -> bool:
         """
         Check if the request is a streaming request
         """
+
+    def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+        """The prompt and settings of a provider-native request body, for providers whose body shape is known."""
+        return None
 
     def format_url(
         self,
@@ -179,8 +189,8 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: dict | None,
-        litellm_params: dict,
+        request_query_params: dict[str, object] | None,
+        litellm_params: dict[str, object],
     ) -> tuple[URL, str]:
         """
         Get the complete url for the request
@@ -191,12 +201,12 @@ class BasePassthroughConfig(BaseLLMModelInfo):
 
     def sign_request(
         self,
-        headers: dict,
-        litellm_params: dict,
-        request_data: dict | None,
+        headers: dict[str, str],
+        litellm_params: dict[str, object],
+        request_data: dict[str, object] | None,
         api_base: str,
         model: str | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, str], bytes | None]:
         """
         Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
         Args:
@@ -221,7 +231,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         model: str,
         custom_llm_provider: str,
         httpx_response: Response,
-        request_data: dict,
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         endpoint: str,
     ) -> LoggedRelayResponse | OCRResponse | StandardPassThroughResponseObject | None:

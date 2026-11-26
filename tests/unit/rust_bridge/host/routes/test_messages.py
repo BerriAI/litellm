@@ -5,27 +5,38 @@ import functools
 import json
 import logging
 import os
+import queue
 import socket
 import ssl
 import struct
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import httpx
 import pytest
+from google.auth import exceptions as google_auth
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import (
+    ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
+    ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.anthropic.messages.native import interceptors, mcp_handler
 from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
+from litellm.llms.anthropic.messages.native.utils import anthropic_messages_optional_param_keys
 from litellm.llms.azure.common_utils import AzureOpenAIError, EntraRejectionError
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -33,6 +44,7 @@ from litellm.llms.custom_httpx.http_handler import (
     exclude_rsa_key_exchange_and_chacha20,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
 )
+from litellm.rust_bridge import _native
 from litellm.rust_bridge.host import callbacks_legacy_python
 from litellm.rust_bridge.host.routes import messages as messages_host
 from litellm.rust_bridge.host.routes.messages import response
@@ -72,6 +84,22 @@ def test_settings_join_buffered_stream_reads_only_on_the_aiohttp_transport(
     assert messages_host.settings({})["joined_reads"] is joined
 
 
+@pytest.mark.parametrize(("asynchronous", "drains"), [(True, True), (False, False)])
+def test_settings_drain_a_detached_stream_only_on_an_async_call(asynchronous: bool, drains: bool) -> None:
+    projected: Final = messages_host.settings({}, asynchronous=asynchronous)
+
+    assert (projected["detached_drain_timeout"], projected["detached_drain_limit"]) == (
+        (ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS, ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS)
+        if drains
+        else (None, None)
+    )
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_settings_retry_a_failed_connect_only_on_an_async_call(asynchronous: bool) -> None:
+    assert messages_host.settings({}, asynchronous=asynchronous)["connect_retry"] is asynchronous
+
+
 def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
@@ -96,6 +124,10 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "ascii_response_headers": True,
         "joined_reads": True,
         "ascii_request_headers": True,
+        "detached_drain_timeout": None,
+        "detached_drain_limit": None,
+        "connect_retry": False,
+        "pricing": None,
     }
 
 
@@ -207,6 +239,26 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     )
 
 
+@pytest.mark.parametrize("custom_llm_provider", (None, "anthropic"), ids=("provider-in-the-model", "provider-passed"))
+def test_a_rejection_before_the_send_names_the_resolved_provider_and_is_raised_as_python_raises_it(
+    custom_llm_provider: str | None,
+) -> None:
+    rejected: Final = ValueError("messages: no message has content left after dropping empty or non-string text blocks")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_unresolved_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": "anthropic/claude-sonnet-5", "custom_llm_provider": custom_llm_provider, "messages": []},
+        "anthropic",
+    )
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert mapped.status_code == 400
+    assert (mapped.model, mapped.llm_provider) == ("anthropic/claude-sonnet-5", "anthropic")
+    assert mapped.__traceback__ is not None
+
+
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
     hidden: Final = messages_host.stream_hidden_params(
         (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41"))
@@ -219,7 +271,22 @@ def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handl
     assert additional["request-id"] == additional["llm_provider-request-id"]
 
 
+@pytest.mark.parametrize("relayed", [False, True])
+def test_stream_hidden_params_carry_whether_the_native_relay_serves_the_stream(relayed: bool) -> None:
+    from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
+
+    head: Final = messages_host.stream_hidden_params((), relayed)
+
+    assert isinstance(head, MessagesStreamHead)
+    assert head.relayed is relayed
+    assert "relayed" not in head
+
+
 _ADAPTIVE_OPUS: Final = "anthropic/claude-opus-4-7"
+_BEDROCK_INVOKE: Final = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+_AWS: Final = MappingProxyType(
+    {"aws_access_key_id": "test-access-key", "aws_secret_access_key": "test-secret-key", "aws_region_name": "us-east-1"}
+)
 
 
 @pytest.mark.parametrize(
@@ -249,12 +316,86 @@ def test_azure_ad_token_is_the_one_python_mints(
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "expected"),
+    [
+        pytest.param("anthropic/claude-sonnet-4-5", "anthropic", False, id="anthropic"),
+        pytest.param("azure_ai/claude-sonnet-4-5", "azure_ai", True, id="azure_ai"),
+        pytest.param(_BEDROCK_INVOKE, "bedrock", True, id="bedrock_invoke"),
+    ],
+)
+def test_filters_beta_headers_is_what_the_provider_config_says(model: str, provider: str, expected: bool) -> None:
+    assert messages_host.filters_beta_headers(model, provider, None) is expected
+
+
+def test_the_beta_map_stays_unloaded_until_a_filter_asks_and_then_loads_off_the_calling_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remote: Final[dict[str, object]] = {"provider_aliases": {}, "azure_ai": {"advisor-tool-2026-03-01": None}}
+    fetched_on: Final = queue.SimpleQueue[str]()
+    release: Final = threading.Event()
+
+    def fetch(url: str) -> dict[str, object]:
+        fetched_on.put(threading.current_thread().name)
+        assert release.wait(timeout=10)
+        return remote
+
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "get_beta_headers_config", fetch)
+
+    assert messages_host.loaded_beta_headers_config() is None
+    assert fetched_on.empty()
+
+    messages_host.load_beta_headers_config_in_background()
+
+    assert fetched_on.get(timeout=10) != threading.current_thread().name
+    assert messages_host.loaded_beta_headers_config() is None
+    release.set()
+    assert anthropic_beta_headers_manager.get_provider_name("azure_ai") == "azure_ai"
+    assert messages_host.loaded_beta_headers_config() is remote
+    assert fetched_on.empty()
+
+
+def test_repeated_load_requests_during_a_slow_download_queue_a_single_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    release: Final = threading.Event()
+    submitted: Final = queue.SimpleQueue[str]()
+    loader: Final = ThreadPoolExecutor(max_workers=1)
+
+    class RecordingLoader:
+        def submit(self, load: Callable[[], None]) -> Future[None]:
+            submitted.put(load.__name__)
+            return loader.submit(load)
+
+    def fetch(url: str) -> dict[str, object]:
+        assert release.wait(timeout=10)
+        return {"provider_aliases": {}}
+
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "get_beta_headers_config", fetch)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG_LOADER", RecordingLoader())
+
+    for _ in range(20):
+        messages_host.load_beta_headers_config_in_background()
+    release.set()
+    loader.shutdown(wait=True)
+
+    assert submitted.qsize() == 1
+    assert messages_host.loaded_beta_headers_config() is not None
+
+
+@pytest.mark.parametrize(
     ("call", "expected"),
     [
         pytest.param({"model": "azure_ai/claude-sonnet-4-5"}, "azure_ai", id="model_prefix"),
         pytest.param(
             {"model": "claude-sonnet-4-5", "custom_llm_provider": "azure_ai"}, "azure_ai", id="explicit_provider"
         ),
+        pytest.param({"model": _BEDROCK_INVOKE}, "bedrock", id="bedrock_prefix"),
+        pytest.param(
+            {"model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "custom_llm_provider": "bedrock"},
+            "bedrock",
+            id="bedrock_explicit_provider",
+        ),
+        pytest.param({"model": "claude-sonnet-4-5"}, "anthropic", id="anthropic_model"),
         pytest.param({"model": "not-a-known-model"}, "anthropic", id="unresolved"),
     ],
 )
@@ -364,6 +505,28 @@ def test_body_params_forward_only_the_metadata_anthropic_accepts(metadata: objec
     }
 
     assert messages_host.body_params(request, asynchronous=True)["metadata"] == expected
+
+
+def test_body_params_keep_a_call_param_and_an_unknown_key_out_of_the_body() -> None:
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": [],
+        "max_tokens": 8,
+        "cache_control": {"type": "ephemeral"},
+        "user": "end-user-1",
+        "tags": ["a"],
+        "num_retries": 2,
+        "not_a_param": 1,
+    }
+
+    assert messages_host.body_params(request, asynchronous=True) == {
+        "max_tokens": 8,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_the_rust_route_reads_the_params_the_python_handler_keeps() -> None:
+    assert frozenset(_native.messages_optional_params()) == anthropic_messages_optional_param_keys()
 
 
 def _marked(phase: str | None = None, *args: object) -> ValueError:
@@ -1312,14 +1475,61 @@ def test_azure_ai_reads_azure_api_base_once_and_hands_it_to_the_native_route(
 
 @pytest.mark.usefixtures("no_tls_settings")
 @pytest.mark.parametrize(
+    ("environment", "hosted", "read"),
+    (
+        (
+            {"ANTHROPIC_API_BASE": "http:///d/anthropic", "ANTHROPIC_BASE_URL": "https://b.example"},
+            True,
+            [("ANTHROPIC_API_BASE", "http:///d/anthropic")],
+        ),
+        (
+            {"ANTHROPIC_BASE_URL": "http://user:pass@h.example/anthropic"},
+            True,
+            [("ANTHROPIC_API_BASE", None), ("ANTHROPIC_BASE_URL", "http://user:pass@h.example/anthropic")],
+        ),
+        (
+            {"ANTHROPIC_API_BASE": "   ", "ANTHROPIC_BASE_URL": "https://b.example"},
+            True,
+            [("ANTHROPIC_API_BASE", "   ")],
+        ),
+        (
+            {"ANTHROPIC_API_BASE": "", "ANTHROPIC_BASE_URL": "https://b.example"},
+            False,
+            [("ANTHROPIC_API_BASE", ""), ("ANTHROPIC_BASE_URL", "https://b.example")],
+        ),
+        ({}, False, [("ANTHROPIC_API_BASE", None), ("ANTHROPIC_BASE_URL", None)]),
+    ),
+    ids=("no-host-api-base", "credentials-base-url", "whitespace-api-base", "empty-api-base", "unset"),
+)
+@pytest.mark.parametrize("api_base", (None, ""), ids=("absent", "empty"))
+def test_anthropic_env_base_is_guarded_like_a_caller_base_and_handed_to_the_native_route(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: Mapping[str, str],
+    hosted: bool,
+    read: list[tuple[str, str | None]],
+    api_base: str | None,
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(messages_host, "get_secret_str", environment.get)
+
+    handler, sent_read = messages_host.transport_handler(
+        {"client": None, "model": "anthropic/claude-x", "api_base": api_base}
+    )
+
+    assert (handler is not None) is hosted
+    assert sent_read == read
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
     "request_",
     (
-        {"client": None, "model": "anthropic/claude-x"},
+        {"client": None, "model": "anthropic/claude-x", "api_base": "https://call.example/d"},
         {"client": None, "model": "azure_ai/claude-x", "api_base": "https://call.example/d"},
         {"client": AsyncHTTPHandler(), "model": "azure_ai/claude-x"},
         {"client": None, "model": "azure_ai/claude-x", "timeout": 0},
     ),
-    ids=("anthropic", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
+    ids=("anthropic-call-base", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
 )
 def test_azure_api_base_is_left_to_the_native_route_when_the_choice_does_not_need_it(
     monkeypatch: pytest.MonkeyPatch, request_: Mapping[str, object]
@@ -1696,10 +1906,32 @@ def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.
     call: Final = bound["call"]
     assert isinstance(call, messages_host._AgenticCall)  # pyright: ignore[reportPrivateUsage]  # the partial binds the handler call
     assert call.messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-    assert call.params == {"stream": True, "tools": request["tools"]}
+    assert call.params == {"max_tokens": 16, "stream": True, "tools": request["tools"]}
     assert call.params["tools"] is request["tools"]
     assert call.kwargs["api_key"] == "sk-test"
     assert "tools" not in call.kwargs
+
+
+_HOISTED: Final = [{"type": "text", "text": "S"}, {"type": "text", "text": "R"}]
+
+
+@pytest.mark.parametrize(
+    ("sent_system", "requested_system", "expected"),
+    [
+        pytest.param({"system": _HOISTED}, {"system": "S"}, {"system": "S"}, id="caller-system-and-hoisted-turn"),
+        pytest.param({"system": _HOISTED[1:]}, {}, {}, id="hoisted-turn-only"),
+        pytest.param({}, {"system": "S"}, {}, id="system-not-sent"),
+    ],
+)
+def test_agentic_params_take_the_callers_system_not_the_hoisted_wire_system(
+    sent_system: Mapping[str, object], requested_system: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    sent: Final = {"model": "claude-sonnet-4-5", "messages": [], "max_tokens": 16, "stream": False, **sent_system}
+    requested: Final = {"max_tokens": 16, "stream": False, **requested_system}
+
+    params: Final = messages_host._agentic_params(sent, requested, {"model": "azure_ai/claude-sonnet-4-5"})  # pyright: ignore[reportPrivateUsage]  # the follow-up params the handler's hooks read
+
+    assert params == {"stream": False, "max_tokens": 16, **expected}
 
 
 _DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]
@@ -2118,6 +2350,21 @@ def test_a_provider_config_rejection_maps_as_the_python_http_handler_maps_it() -
     assert logger.model_call_details["custom_llm_provider"] == "anthropic"
 
 
+def test_a_bad_request_another_config_raises_maps_by_its_text_as_the_python_http_handler_maps_it() -> None:
+    text: Final = "Unmapped reasoning effort: 'ultra'. Must be one of: 'low', 'none'."
+    rejected: Final = ValueError(text)
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected, {"model": "anthropic/claude-sonnet-4-5", "messages": []}, "anthropic"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert str(mapped) == f"litellm.BadRequestError: AnthropicException - litellm.BadRequestError: {text}"
+
+
 def test_short_circuits_needs_a_replaced_web_search_short_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 
@@ -2300,11 +2547,13 @@ _PARAMS: Final = TypeAdapter(dict[str, object])
     [
         pytest.param("azure_ai", True, True, id="azure_ai_async"),
         pytest.param("azure_ai", False, False, id="azure_ai_sync"),
-        pytest.param("anthropic", True, None, id="anthropic_keeps_main"),
+        pytest.param("anthropic", True, True, id="anthropic_async"),
+        pytest.param("anthropic", False, False, id="anthropic_sync"),
+        pytest.param("bedrock", True, True, id="bedrock_async"),
     ],
 )
 def test_a_token_failure_logs_the_call_flag_python_s_handler_set_first(
-    provider: str, asynchronous: bool, flagged: bool | None
+    provider: str, asynchronous: bool, flagged: bool
 ) -> None:
     logger: Final = Logging(
         model=f"{provider}/claude-sonnet-4-5",
@@ -2333,11 +2582,13 @@ def test_a_token_failure_logs_the_call_flag_python_s_handler_set_first(
     [
         pytest.param("azure_ai", True, True, id="azure_ai_async"),
         pytest.param("azure_ai", False, False, id="azure_ai_sync"),
-        pytest.param("anthropic", True, None, id="anthropic_keeps_main"),
+        pytest.param("anthropic", True, True, id="anthropic_async"),
+        pytest.param("anthropic", False, False, id="anthropic_sync"),
+        pytest.param("bedrock", True, True, id="bedrock_async"),
     ],
 )
 def test_an_unsupported_param_logs_the_call_flag_python_s_handler_set_first(
-    provider: str, asynchronous: bool, flagged: bool | None
+    provider: str, asynchronous: bool, flagged: bool
 ) -> None:
     logger: Final = Logging(
         model=f"{provider}/claude-sonnet-4-5",
@@ -2363,6 +2614,41 @@ def test_an_unsupported_param_logs_the_call_flag_python_s_handler_set_first(
     details: Final[Mapping[str, object]] = logger.model_call_details
     params: Final = _PARAMS.validate_python(details.get("litellm_params", {}))
     assert params.get("aanthropic_messages") is flagged
+
+
+@pytest.mark.parametrize(
+    ("attributed_model", "llm_provider", "model"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", "claude-sonnet-4-5", id="vertex_version_names_provider_and_model"
+        ),
+        pytest.param(None, None, None, id="unattributed_names_neither"),
+    ],
+)
+def test_an_attributed_unsupported_param_names_the_provider_and_model(
+    attributed_model: str | None, llm_provider: str | None, model: str | None
+) -> None:
+    text: Final = (
+        "claude-sonnet-4-5 does not support anthropic-version=latest. "
+        "To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )
+    rejected: Final = ValueError(text)
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+    rejected.messages_unsupported_param = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+    if attributed_model is not None:
+        rejected.messages_unsupported_param_model = attributed_model  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected, {"model": "vertex_ai/claude-sonnet-4-5", "messages": []}, "vertex_ai", True
+    )
+
+    assert isinstance(mapped, litellm.UnsupportedParamsError)
+    assert (mapped.llm_provider, mapped.model, mapped.status_code, str(mapped)) == (
+        llm_provider,
+        model,
+        400,
+        f"litellm.UnsupportedParamsError: {text}",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2682,3 +2968,1231 @@ def test_a_base_python_cannot_split_keeps_the_native_client(model: str) -> None:
         None,
         [],
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "error_class", "text"),
+    [
+        (
+            429,
+            '{"message": "Too many requests"}',
+            litellm.RateLimitError,
+            'litellm.RateLimitError: BedrockException - {"message": "Too many requests"}',
+        ),
+        (
+            400,
+            '{"message": "prompt is too long: 300000 tokens > 200000 maximum"}',
+            litellm.ContextWindowExceededError,
+            "litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - "
+            '{"message": "prompt is too long: 300000 tokens > 200000 maximum"}',
+        ),
+        (
+            404,
+            '{"message": "model not found"}',
+            litellm.NotFoundError,
+            'litellm.NotFoundError: BedrockException - {"message": "model not found"}',
+        ),
+    ],
+    ids=("throttled", "context-window", "not-found"),
+)
+def test_a_bedrock_upstream_status_maps_to_the_bedrock_exception_python_raises(
+    status: int, body: str, error_class: type[Exception], text: str
+) -> None:
+    request: Final[dict[str, object]] = {"model": _BEDROCK_INVOKE, "messages": [], **_AWS}
+    upstream: Final = ValueError(status, body)
+    upstream.headers = [("content-type", "application/json"), ("x-amzn-requestid", "req-1")]  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+
+    mapped: Final = messages_host.map_failure(upstream, request, messages_host.failure_provider(request))
+
+    assert type(mapped) is error_class
+    assert str(mapped) == text
+    assert mapped.status_code == status  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's status
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's provider
+    assert mapped.model == _BEDROCK_INVOKE  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's model
+
+
+def _ssl_configuration(_ssl_verify: object) -> str:
+    return "<ssl>"
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "provider", "origin", "rust_error", "text"),
+    [
+        (
+            True,
+            "bedrock",
+            "http://127.0.0.1:9",
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Connect call failed ('127.0.0.1', 9)]",
+        ),
+        (
+            True,
+            "bedrock_mantle",
+            "https://bedrock-mantle.us-east-1.api.aws:443",
+            f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+            "failed to lookup address information: Name or service not known",
+            "Cannot connect to host bedrock-mantle.us-east-1.api.aws:443 ssl:<ssl> [Name or service not known]",
+        ),
+        (
+            False,
+            "bedrock",
+            "http://127.0.0.1:9",
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "All connection attempts failed",
+        ),
+    ],
+    ids=("aiohttp-refused", "aiohttp-mantle-dns", "httpx"),
+)
+def test_a_bedrock_connect_failure_names_the_origin_rust_could_not_reach(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, origin: str, rust_error: str, text: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+    unreachable: Final = RuntimeError(rust_error)
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
+
+    mapped: Final = messages_host.map_failure(unreachable, {"model": model, "messages": [], **_AWS}, provider)
+
+    assert type(mapped) is litellm.ServiceUnavailableError
+    assert mapped.status_code == 503
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert text in str(mapped)
+
+
+@pytest.mark.parametrize("aiohttp", (True, False), ids=("aiohttp", "httpx"))
+def test_a_connect_failure_with_no_known_base_keeps_rust_s_text(monkeypatch: pytest.MonkeyPatch, aiohttp: bool) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    rust_error: Final = (
+        f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
+    )
+
+    mapped: Final = messages_host.map_failure(RuntimeError(rust_error), {"model": "claude-sonnet-4-5"}, "vertex_ai")
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.status_code == 500
+    assert mapped.llm_provider == "vertex_ai"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.message.endswith(f"Vertex_aiException InternalServerError - {rust_error}")
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_base", "origin"),
+    [
+        (
+            "bedrock_mantle",
+            "http://bedrock-mantle.us-west-2.api.aws/v1",
+            "https://bedrock-mantle.us-east-1.api.aws:443",
+        ),
+        ("bedrock_mantle", "", "https://bedrock-mantle.us-east-1.api.aws:443"),
+        ("bedrock", "", "https://bedrock-runtime.us-east-1.amazonaws.com:443"),
+    ],
+    ids=("mantle-host-rebuilt-in-region", "mantle-blank-base", "invoke-blank-base"),
+)
+def test_a_bedrock_connect_failure_names_rusts_origin_over_the_callers_base(
+    monkeypatch: pytest.MonkeyPatch, provider: str, api_base: str, origin: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+    unreachable: Final = RuntimeError(
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+        "failed to lookup address information: Name or service not known"
+    )
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
+
+    mapped: Final = messages_host.map_failure(
+        unreachable, {"model": model, "messages": [], "api_base": api_base, **_AWS}, provider
+    )
+
+    host: Final = origin.removeprefix("https://")
+    assert type(mapped) is litellm.ServiceUnavailableError
+    assert f"Cannot connect to host {host} ssl:<ssl> [Name or service not known]" in str(mapped)
+
+
+@pytest.fixture
+def no_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_ROLE_NAME",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", "/nonexistent")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+def _credential_failure(kind: str) -> RuntimeError:
+    native: Final = RuntimeError("provider authentication failed: could not load AWS default chain credentials")
+    native.messages_credential_failure = kind  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    return native
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize("kind", ("no_credentials", "replay"))
+def test_a_bedrock_credential_failure_answers_401_with_what_python_signing_raises(kind: str) -> None:
+    from botocore.exceptions import NoCredentialsError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure(kind), {"model": _BEDROCK_INVOKE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert mapped.status_code == 401
+    assert type(mapped.__context__) is NoCredentialsError
+    assert mapped.__traceback__ is not None
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config: Final = tmp_path / "config"
+    config.write_text(
+        "[profile logged-out-sso]\n"
+        "sso_session = litellm-unit-test-session-never-logged-in\n"
+        "sso_account_id = 111111111111\n"
+        "sso_role_name = Dev\n"
+        "[sso-session litellm-unit-test-session-never-logged-in]\n"
+        "sso_start_url = https://example.awsapps.com/start\n"
+        "sso_region = us-west-2\n"
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("replay"),
+        {
+            "model": _BEDROCK_INVOKE,
+            "messages": [],
+            "aws_region_name": "us-east-1",
+            "aws_profile_name": "logged-out-sso",
+        },
+        "bedrock",
+    )
+
+    from botocore.exceptions import SSOTokenLoadError
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert mapped.status_code == 401
+    assert type(mapped.__context__) is SSOTokenLoadError
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("sts_failure", "raised", "status"),
+    (
+        pytest.param(
+            ("rejected", "AssumeRole", "AccessDenied", "denied"), "ClientError", None, id="assume-role-denied"
+        ),
+        pytest.param(
+            ("rejected", "AssumeRoleWithWebIdentity", "ExpiredTokenException", "expired"),
+            "ClientError",
+            None,
+            id="expired-token",
+        ),
+        pytest.param(("invalid_web_identity_token", "", "", "bad"), "AwsAuthError", 401, id="invalid-web-identity"),
+        pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", None, id="sts-unreachable"),
+        pytest.param(None, "AuthenticationError", 401, id="no-sts-call"),
+    ),
+)
+def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_through(
+    sts_failure: tuple[str, str, str, str] | None, raised: str, status: int | None
+) -> None:
+    from botocore.exceptions import ClientError
+
+    rust_error: Final = _credential_failure("replay")
+    rust_error.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(
+        rust_error, {"model": _BEDROCK_MANTLE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock_mantle"
+    )
+
+    assert type(mapped).__name__ == raised
+    assert getattr(mapped, "status_code", None) == status
+    assert mapped.__traceback__ is not None
+    if isinstance(mapped, ClientError):
+        assert sts_failure is not None
+        assert mapped.response.get("Error", {}).get("Code") == sts_failure[2]
+        assert mapped.operation_name == sts_failure[1]
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_an_access_key_without_its_secret_answers_401_with_the_partial_credentials_error_python_signing_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.exceptions import PartialCredentialsError
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("no_credentials"),
+        {"model": _BEDROCK_INVOKE, "messages": [], "aws_region_name": "us-east-1"},
+        "bedrock",
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__) is PartialCredentialsError
+    assert getattr(mapped.__context__, "kwargs", None) == {"provider": "env", "cred_var": "AWS_SECRET_ACCESS_KEY"}
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("token", "kind", "status", "text"),
+    [
+        (
+            "os.environ/AWS_WEB_IDENTITY_TOKEN_REFERENCE",
+            "web_identity_reference",
+            400,
+            "Invalid web identity token reference.",
+        ),
+        (
+            "oidc-secret-that-is-not-set",
+            "missing_web_identity_token",
+            401,
+            "OIDC token could not be retrieved from secret manager.",
+        ),
+    ],
+    ids=("environment-reference", "unresolved-token"),
+)
+@pytest.mark.parametrize("replayed", (False, True), ids=("typed", "replayed"))
+def test_a_bedrock_web_identity_failure_raises_the_aws_auth_error_python_raises(
+    token: str, kind: str, status: int, text: str, replayed: bool
+) -> None:
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+
+    request: Final[dict[str, object]] = {
+        "model": _BEDROCK_INVOKE,
+        "messages": [],
+        "aws_region_name": "us-east-1",
+        "aws_web_identity_token": token,
+        "aws_role_name": "arn:aws:iam::123456789012:role/bedrock",
+        "aws_session_name": "litellm-session",
+    }
+
+    mapped: Final = messages_host.map_failure(_credential_failure("replay" if replayed else kind), request, "bedrock")
+
+    assert type(mapped) is AwsAuthError
+    assert mapped.status_code == status
+    assert str(mapped) == text
+
+
+def test_a_bedrock_credential_failure_python_would_sign_through_keeps_the_native_mapping() -> None:
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("replay"), {"model": _BEDROCK_INVOKE, "messages": [], **_AWS}, "bedrock"
+    )
+
+    assert isinstance(mapped, litellm.APIConnectionError | litellm.InternalServerError)
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_credential_failure_text_without_the_marker_keeps_the_native_mapping() -> None:
+    native: Final = RuntimeError("credential acquisition failed: no credentials in the default chain")
+
+    mapped: Final = messages_host.map_failure(
+        native, {"model": _BEDROCK_INVOKE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
+    )
+
+    assert isinstance(mapped, litellm.APIConnectionError | litellm.InternalServerError)
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+_VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+
+
+def test_a_vertex_connect_failure_without_an_api_base_keeps_rust_s_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
+    native: Final = (
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: "
+        "error resolving DNS: failed to lookup address information: Name or service not known"
+    )
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(native),
+        {"model": _VERTEX_CLAUDE, "messages": [], "custom_llm_provider": "vertex_ai", "vertex_location": "elsewhere"},
+        "vertex_ai",
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.llm_provider == "vertex_ai"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert str(mapped).endswith(native)
+
+
+_TLS_CLOSED: Final = (
+    f"upstream network error: {_TRANSPORT} (SendRequest): connection error: peer closed connection without "
+    "sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+)
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "provider", "model", "text"),
+    [
+        (True, "vertex_ai", _VERTEX_CLAUDE, "Server disconnected"),
+        (False, "vertex_ai", _VERTEX_CLAUDE, "Server disconnected without sending a response."),
+        (True, "anthropic", _ADAPTIVE_OPUS, "peer closed connection without sending TLS close_notify"),
+    ],
+    ids=("vertex_aiohttp", "vertex_httpx", "anthropic_keeps_main_s_text"),
+)
+def test_a_tls_close_before_headers_reads_as_a_disconnect_on_vertex_ai_only(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, model: str, text: str
+) -> None:
+    from litellm.litellm_core_utils.error_normalization import normalize_error
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(_TLS_CLOSED),
+        {"model": model, "messages": [], "custom_llm_provider": provider, "vertex_project": "p"},
+        provider,
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert text in str(mapped)
+    expected: Final = "500_PROVIDER_CONNECTION_ERROR" if provider == "anthropic" else "500_PROVIDER_INTERNAL_ERROR"
+    assert normalize_error(mapped, "500", str(mapped)) == expected
+
+
+def _google_login_failure(name: str, message: str) -> RuntimeError:
+    raised: Final = RuntimeError("provider authentication failed: " + message)
+    raised.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    return raised
+
+
+def _vertex_logger() -> Logging:
+    return Logging(
+        model=_VERTEX_CLAUDE,
+        messages=[],
+        stream=False,
+        call_type="aanthropic_messages",
+        start_time=None,
+        litellm_call_id="call-1",
+        function_id="fn",
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "error_class"),
+    [
+        ("ValueError", ValueError),
+        ("OSError", OSError),
+        ("google.auth.exceptions.DefaultCredentialsError", google_auth.DefaultCredentialsError),
+        ("google.auth.exceptions.InvalidResource", google_auth.InvalidResource),
+        ("google.auth.exceptions.MalformedError", google_auth.MalformedError),
+        ("google.auth.exceptions.InvalidValue", google_auth.InvalidValue),
+        ("google.auth.exceptions.RefreshError", google_auth.RefreshError),
+        ("google.auth.exceptions.TransportError", google_auth.TransportError),
+        ("google.auth.exceptions.OAuthError", google_auth.OAuthError),
+    ],
+)
+def test_a_vertex_login_failure_raises_the_exception_python_s_load_auth_raises(
+    name: str, error_class: type[Exception]
+) -> None:
+    logger: Final = _vertex_logger()
+
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure(name, "Could not resolve project_id"),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": logger},
+        "vertex_ai",
+        True,
+    )
+
+    assert type(mapped) is error_class
+    assert str(mapped) == "Could not resolve project_id"
+    assert mapped.__traceback__ is not None
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
+
+
+def test_a_vertex_credentials_file_failure_is_raised_as_the_file_failure_rust_names() -> None:
+    message: Final = "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
+
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure("ValueError", message),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
+        "vertex_ai",
+    )
+
+    assert type(mapped) is ValueError
+    assert str(mapped) == message
+
+
+def test_a_google_login_failure_outside_vertex_ai_keeps_the_rust_mapping() -> None:
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure("ValueError", "Could not resolve project_id"),
+        {"model": _BEDROCK_INVOKE, "messages": [], **_AWS},
+        "bedrock",
+    )
+
+    assert not isinstance(mapped, ValueError)
+
+
+@pytest.mark.parametrize(
+    "name", ["TypeError", "google.auth.exceptions.GoogleAuthError", "google.auth.exceptions.__class__", "SystemExit"]
+)
+def test_a_vertex_login_failure_class_outside_the_allowlist_keeps_the_rust_mapping(name: str) -> None:
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure(name, "Could not resolve project_id"),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
+        "vertex_ai",
+    )
+
+    assert not isinstance(mapped, TypeError | google_auth.GoogleAuthError | SystemExit)
+    assert str(mapped) != "Could not resolve project_id"
+
+
+@pytest.mark.parametrize(
+    ("thread", "error_class", "status", "text"),
+    [
+        (
+            {"type": "create"},
+            litellm.BadRequestError,
+            400,
+            'litellm.BadRequestError: BedrockException - {"type": "error", "error": {"type": "invalid_request_error", '
+            '"message": "message threads are not supported for provider bedrock. Send the request without thread, '
+            'or set drop_params to serve it without a server-side thread", '
+            '"details": {"error_code": "thread_unsupported_request"}}}',
+        ),
+        (
+            {"type": "continue", "previous_message_id": "msg_1"},
+            litellm.NotFoundError,
+            404,
+            'litellm.NotFoundError: BedrockException - {"type": "error", "error": {"type": "not_found_error", '
+            '"message": "message threads are not supported for provider bedrock, so this thread cannot be continued. '
+            'Send the full conversation to start over", "details": {"error_code": "thread_not_found"}}}',
+        ),
+    ],
+    ids=("create", "continue"),
+)
+def test_settings_refuse_a_thread_bedrock_cannot_serve_as_the_python_handler_does(
+    monkeypatch: pytest.MonkeyPatch,
+    thread: Mapping[str, str],
+    error_class: type[Exception],
+    status: int,
+    text: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = {**_CALL, "model": _BEDROCK_INVOKE, "thread": dict(thread), **_AWS}
+
+    with pytest.raises(error_class) as raised:
+        messages_host.settings({}, request, asynchronous=True)
+
+    assert str(raised.value) == text
+    assert raised.value.status_code == status  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's status
+    assert raised.value.llm_provider == "bedrock"  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's provider
+
+
+def test_a_thread_bedrock_cannot_serve_is_dropped_under_drop_params() -> None:
+    request: Final = {**_CALL, "model": _BEDROCK_INVOKE, "thread": {"type": "create"}, "drop_params": True, **_AWS}
+
+    messages_host.settings({}, request, asynchronous=True)
+
+    assert "thread" not in messages_host.body_params(request, asynchronous=True)
+
+
+def test_a_bedrock_thread_continue_is_not_found_even_under_drop_params() -> None:
+    request: Final = {
+        **_CALL,
+        "model": _BEDROCK_INVOKE,
+        "thread": {"type": "continue", "previous_message_id": "msg_1"},
+        "drop_params": True,
+        **_AWS,
+    }
+
+    with pytest.raises(litellm.NotFoundError):
+        messages_host.settings({}, request, asynchronous=True)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "native", "sent"),
+    [
+        (
+            " https://bedrock.example ",
+            "https://bedrock.example/model/m/invoke",
+            " https://bedrock.example /model/m/invoke",
+        ),
+        ("https://bedrock.example", "https://bedrock.example/model/m/invoke", "https://bedrock.example/model/m/invoke"),
+    ],
+    ids=("untrimmed", "clean"),
+)
+def test_a_bedrock_call_sends_the_url_python_joins_onto_the_callers_api_base(
+    api_base: str, native: str, sent: str
+) -> None:
+    assert messages_host._sent_url({"model": _BEDROCK_INVOKE, "api_base": api_base}, native) == sent  # pyright: ignore[reportPrivateUsage]  # the route's own URL fix-up
+
+
+def test_record_guardrail_bills_the_bedrock_trace_on_the_calls_logger() -> None:
+    logger: Final = Logging(
+        model=_BEDROCK_INVOKE,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="guardrail",
+        function_id="guardrail",
+    )
+    logger.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # the logger's untyped dict params
+        kwargs={},
+        model=_BEDROCK_INVOKE,
+        optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}},
+        litellm_params={"aws_region_name": "us-east-1"},
+        custom_llm_provider="bedrock",
+    )
+    trace: Final[dict[str, object]] = {
+        "guardrail": {
+            "input": {"gr-1": {"invocationMetrics": {"usage": {"contentPolicyUnits": 1}}}},
+            "outputs": [],
+        }
+    }
+
+    messages_host.record_guardrail(
+        {"id": "msg_1", "type": "message", "content": [], "amazon-bedrock-trace": trace},
+        {"model": _BEDROCK_INVOKE, "litellm_logging_obj": logger},
+    )
+
+    metadata: Final = logger.model_call_details["litellm_params"]["metadata"]  # pyright: ignore[reportAny]  # the logger's untyped details
+    assert metadata["standard_logging_guardrail_information"]
+
+
+def test_a_bedrock_web_search_rejection_raises_the_bad_request_the_invoke_config_raises() -> None:
+    text: Final = "Bedrock does not support Anthropic's server-side web search tool"
+    native: Final = ValueError(text)
+    native.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    native.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    native.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+
+    mapped: Final = messages_host.map_failure(native, {"model": _BEDROCK_INVOKE, "messages": [], **_AWS}, "bedrock")
+
+    assert type(mapped) is litellm.BadRequestError
+    assert str(mapped) == f"litellm.BadRequestError: {text}"
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+
+
+_BEDROCK_MANTLE: Final = "bedrock_mantle/anthropic.claude-sonnet-5-5"
+_MANTLE_ROUTE: Final = "bedrock/mantle/anthropic.claude-sonnet-5-5"
+
+
+_WEB_SEARCH_REFUSAL: Final = "Bedrock does not support Anthropic's server-side web search tool"
+
+
+@pytest.mark.parametrize(
+    ("named_provider", "text"),
+    (
+        ("bedrock", f"litellm.BadRequestError: {_WEB_SEARCH_REFUSAL}"),
+        # Unnamed, the host maps it as any config's HTTP handler maps the transform's error.
+        (None, f"litellm.BadRequestError: BedrockException - litellm.BadRequestError: {_WEB_SEARCH_REFUSAL}"),
+    ),
+    ids=("rust-names-bedrock", "rust-names-none"),
+)
+def test_a_mantle_bad_request_rejection_raises_as_the_provider_rust_names(
+    named_provider: str | None, text: str
+) -> None:
+    native: Final = ValueError(_WEB_SEARCH_REFUSAL)
+    native.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    native.messages_provider_rejection = _WEB_SEARCH_REFUSAL  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    native.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    native.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    if named_provider is not None:
+        native.messages_provider = named_provider  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(native, {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle")
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert str(mapped) == text
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "named_model", "raised_model"),
+    (
+        (_BEDROCK_MANTLE, "bedrock_mantle", "anthropic.claude-sonnet-5-5", "anthropic.claude-sonnet-5-5"),
+        (_MANTLE_ROUTE, "bedrock", "anthropic.claude-sonnet-5-5", "anthropic.claude-sonnet-5-5"),
+        (_BEDROCK_MANTLE, "bedrock_mantle", None, "anthropic.claude-sonnet-5-5"),
+    ),
+    ids=("bedrock-mantle", "mantle-route", "no-named-model"),
+)
+def test_a_refused_reply_raises_an_api_error_500(
+    model: str, provider: str, named_model: str | None, raised_model: str
+) -> None:
+    text: Final = "invalid response: Bedrock Mantle returned a `usage` litellm cannot bill: got an array"
+    refused: Final = RuntimeError(text)
+    refused.messages_refused_reply = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    if named_model is not None:
+        refused.messages_provider_model = named_model  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(refused, {"model": model, "messages": []}, provider)
+
+    assert type(mapped) is litellm.APIError
+    assert mapped.status_code == 500
+    assert mapped.llm_provider == provider  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == raised_model  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert text in str(mapped)
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_bedrock_mantle_credential_failure_answers_401_with_the_mantle_auth_error() -> None:
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("no_credentials"),
+        {"model": _BEDROCK_MANTLE, "messages": [], "api_base": "https://mantle.test"},
+        "bedrock_mantle",
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert mapped.status_code == 401
+    assert type(mapped.__context__) is BedrockMantleAuthError
+    assert mapped.__traceback__ is not None
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(("kind", "status"), (("web_identity_reference", 400), ("missing_web_identity_token", 401)))
+def test_a_bedrock_mantle_web_identity_failure_keeps_the_aws_auth_error(kind: str, status: int) -> None:
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure(kind), {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle"
+    )
+
+    assert type(mapped) is AwsAuthError
+    assert mapped.status_code == status
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_bedrock_mantle_route_credential_failure_answers_401() -> None:
+    from botocore.exceptions import NoCredentialsError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("no_credentials"),
+        {"model": _MANTLE_ROUTE, "messages": [], "api_base": "https://mantle.test"},
+        "bedrock",
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__) is NoCredentialsError
+
+
+@pytest.mark.parametrize(
+    ("model", "request_provider", "raised_by_signing"),
+    (
+        pytest.param(_MANTLE_ROUTE, "bedrock", "ProfileNotFound", id="mantle-route"),
+        pytest.param(_BEDROCK_MANTLE, "bedrock_mantle", "BedrockMantleAuthError", id="bedrock-mantle"),
+    ),
+)
+def test_a_mantle_missing_profile_answers_401_with_what_python_signing_raises(
+    model: str, request_provider: str, raised_by_signing: str
+) -> None:
+    rust_error: Final = _credential_failure("profile_not_found")
+    rust_error.messages_missing_profile = "absent-profile"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(
+        rust_error, {"model": model, "messages": [], "aws_region_name": "us-east-1"}, request_provider
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__).__name__ == raised_by_signing
+
+
+def _refused(text: str, **markers: object) -> ValueError:
+    rust_error: Final = ValueError(text)
+    rust_error.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    for name, value in markers.items():
+        setattr(rust_error, name, value)
+    return rust_error
+
+
+def test_a_region_refused_while_resolving_bedrock_mantle_raises_a_bad_request() -> None:
+    mapped: Final = messages_host.map_failure(
+        _refused("bad region"), {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+
+
+def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_request() -> None:
+    text: Final = "Bedrock does not support Anthropic's server-side web search tool"
+    rust_error: Final = _refused(text)
+    rust_error.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    rust_error.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    rust_error.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    rust_error.messages_provider = "bedrock"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(
+        rust_error, {"model": "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5", "messages": []}, "bedrock_mantle"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert str(mapped) == f"litellm.BadRequestError: {text}"
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+
+
+@pytest.mark.parametrize(
+    ("model", "shapes_invoke_tools", "shaped"),
+    (
+        pytest.param(_BEDROCK_MANTLE, False, False, id="bedrock-mantle"),
+        pytest.param(_MANTLE_ROUTE, False, False, id="mantle-route"),
+        pytest.param(_BEDROCK_INVOKE, True, True, id="bedrock-invoke"),
+    ),
+)
+def test_body_params_shape_caller_tools_only_when_rust_asks_and_drop_a_body_anthropic_beta(
+    model: str, shapes_invoke_tools: bool, shaped: bool
+) -> None:
+    tools: Final = [{"type": "custom", "name": "", "description": "d", "input_schema": {"type": "custom"}}]
+    request: Final[Mapping[str, object]] = {
+        "model": model,
+        "messages": [],
+        "max_tokens": 16,
+        "tools": tools,
+        "anthropic_beta": ["context-management-2025-06-27"],
+    }
+
+    params: Final = messages_host.body_params(request, asynchronous=True, shapes_invoke_tools=shapes_invoke_tools)
+
+    assert "anthropic_beta" not in params
+    assert (
+        tools
+        == [
+            {"type": "custom", "name": "litellm_unnamed_tool_0", "description": "d", "input_schema": {"type": "object"}}
+        ]
+    ) is shaped
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    (
+        pytest.param(
+            {"model": _BEDROCK_MANTLE, "api_key": "bearer-key", "aws_region_name": "us-west-2"},
+            id="python-builds-and-signs-it",
+        ),
+        pytest.param({"model": _BEDROCK_MANTLE, "aws_region_name": "US_WEST_2"}, id="no-credentials-bad-region"),
+    ),
+)
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_mantle_refusal_python_would_send_keeps_the_native_bad_request(
+    request_fields: Mapping[str, object],
+) -> None:
+    mapped: Final = messages_host.map_failure(
+        _refused("rust refusal"), {**request_fields, "messages": []}, "bedrock_mantle"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert mapped.llm_provider == "bedrock_mantle"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+def _mantle_logger() -> Logging:
+    return Logging(
+        model=_MANTLE_ROUTE,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="mantle-failure",
+        function_id="mantle-failure",
+    )
+
+
+def test_a_bedrock_mantle_region_refused_resolving_the_provider_names_no_provider() -> None:
+    rust_error: Final = _refused(
+        "Invalid AWS region format: 'US-EAST-1'.", messages_provider="", messages_provider_model=_BEDROCK_MANTLE
+    )
+
+    mapped: Final = messages_host.map_failure(rust_error, {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle")
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert mapped.llm_provider == ""  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == _BEDROCK_MANTLE  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+
+
+def test_a_mantle_route_refusal_logs_the_route_model_and_raises_the_model_id_rust_names() -> None:
+    """Python's handler logs the route model before the Mantle config's transform refuses the call
+    with the model id it hands the Bedrock invoke transform."""
+    text: Final = "Bedrock does not support Anthropic's server-side web search tool"
+    rust_error: Final = _refused(
+        text,
+        messages_provider_rejection=text,
+        messages_provider_bad_request=True,
+        messages_provider_model="anthropic.claude-sonnet-5-5",
+    )
+    logger: Final = _mantle_logger()
+
+    mapped: Final = messages_host.map_failure(
+        rust_error, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.model == "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert logger.model == "mantle/anthropic.claude-sonnet-5-5"
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_mantle_route_credential_failure_logs_the_model_id_rust_names() -> None:
+    rust_error: Final = _credential_failure("no_credentials")
+    rust_error.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    logger: Final = _mantle_logger()
+
+    messages_host.map_failure(
+        rust_error, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
+    )
+
+    assert logger.model == "anthropic.claude-sonnet-5-5"
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("sts_failure", "raised"),
+    (
+        pytest.param(None, "AuthenticationError", id="no-credentials"),
+        pytest.param(("rejected", "AssumeRole", "AccessDenied", "denied"), "ClientError", id="assume-role-denied"),
+        pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", id="sts-unreachable"),
+    ),
+)
+def test_a_mantle_route_credential_failure_maps_the_kind_rust_names(
+    sts_failure: tuple[str, str, str, str] | None, raised: str
+) -> None:
+    rust_error: Final = _credential_failure("unavailable")
+    rust_error.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(
+        rust_error, {"model": _MANTLE_ROUTE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
+    )
+
+    assert type(mapped).__name__ == raised
+    assert mapped.__traceback__ is not None
+
+
+_DIAGNOSTICS: Final = {"previous_message_id": "msg_01previous"}
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_AWS_TEST_CREDENTIALS: Final = {
+    "aws_access_key_id": "test-access-key",
+    "aws_secret_access_key": "test-secret-key",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.fixture
+def recording_upstream() -> Iterator[tuple[str, list[dict[str, object]]]]:
+    bodies: Final[list[dict[str, object]]] = []
+    answer: Final = json.dumps(
+        {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    ).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            bodies.append(_JSON_OBJECT.validate_json(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", bodies
+    server.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", (False, True), ids=("default", "drop_params"))
+async def test_anthropic_messages_forwards_diagnostics_to_anthropic(
+    recording_upstream: tuple[str, list[dict[str, object]]], drop_params: bool
+) -> None:
+    api_base, bodies = recording_upstream
+
+    await litellm.anthropic_messages(
+        model="anthropic/claude-opus-5-5",
+        api_base=api_base,
+        api_key="sk-ant-test",
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        diagnostics=_DIAGNOSTICS,
+        drop_params=drop_params,
+    )
+
+    assert bodies[0]["diagnostics"] == _DIAGNOSTICS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"model": "bedrock/invoke/us.anthropic.claude-opus-4-8", **_AWS_TEST_CREDENTIALS},
+        {"model": "bedrock/mantle/anthropic.claude-mythos-preview", **_AWS_TEST_CREDENTIALS},
+    ),
+    ids=("bedrock_invoke", "bedrock_mantle"),
+)
+async def test_anthropic_messages_refuses_diagnostics_a_provider_rejects_without_drop_params(
+    recording_upstream: tuple[str, list[dict[str, object]]],
+    deployment: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    api_base, bodies = recording_upstream
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params") as refused:
+        await litellm.anthropic_messages(
+            api_base=api_base,
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            diagnostics=_DIAGNOSTICS,
+            **deployment,
+        )
+
+    assert refused.value.status_code == 400
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop",
+    ({"drop_params": True}, {"additional_drop_params": ["diagnostics"]}),
+    ids=("drop_params", "additional_drop_params"),
+)
+async def test_anthropic_messages_drops_diagnostics_a_provider_rejects_when_asked(
+    recording_upstream: tuple[str, list[dict[str, object]]],
+    drop: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    api_base, bodies = recording_upstream
+
+    response: Final = await litellm.anthropic_messages(
+        model="bedrock/invoke/us.anthropic.claude-opus-4-8",
+        api_base=api_base,
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        diagnostics=_DIAGNOSTICS,
+        **_AWS_TEST_CREDENTIALS,
+        **drop,
+    )
+
+    assert _JSON_OBJECT.validate_python(response)["id"] == "msg_test"
+    assert "diagnostics" not in bodies[0]
+
+
+@pytest.fixture
+def unavailable_container_credentials(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", f"http://127.0.0.1:{server.server_port}/credentials")
+    yield
+    server.shutdown()
+
+
+@pytest.mark.usefixtures("no_aws_credentials", "unavailable_container_credentials")
+@pytest.mark.parametrize("kind", ("unavailable", "replay"))
+def test_a_bedrock_mantle_credential_source_outage_stays_the_retryable_mantle_value_error(kind: str) -> None:
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure(kind),
+        {"model": _BEDROCK_MANTLE, "messages": [], "aws_region_name": "us-east-1"},
+        "bedrock_mantle",
+    )
+
+    assert type(mapped) is ValueError
+    assert str(mapped) == MANTLE_AUTH_FAILED
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_bedrock_mantle_sso_profile_without_a_usable_token_answers_401(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from botocore.exceptions import SSOTokenLoadError
+
+    config: Final = tmp_path / "config"
+    config.write_text(
+        "[profile logged-out-sso]\n"
+        "sso_session = litellm-unit-test-session-never-logged-in\n"
+        "sso_account_id = 111111111111\n"
+        "sso_role_name = Dev\n"
+        "[sso-session litellm-unit-test-session-never-logged-in]\n"
+        "sso_start_url = https://example.awsapps.com/start\n"
+        "sso_region = us-west-2\n"
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("unavailable"),
+        {
+            "model": _BEDROCK_MANTLE,
+            "messages": [],
+            "aws_region_name": "us-east-1",
+            "aws_profile_name": "logged-out-sso",
+        },
+        "bedrock_mantle",
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__) is SSOTokenLoadError
+
+
+@pytest.mark.usefixtures("no_aws_credentials", "unavailable_container_credentials")
+def test_a_mantle_route_credential_source_outage_stays_the_retryable_credential_error() -> None:
+    from botocore.exceptions import CredentialRetrievalError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("unavailable"),
+        {"model": _MANTLE_ROUTE, "messages": [], "aws_region_name": "us-east-1"},
+        "bedrock",
+    )
+
+    assert type(mapped) is CredentialRetrievalError
+
+
+def _priced_logger(litellm_params: Mapping[str, object]) -> Logging:
+    logger: Final = Logging(
+        model="claude-opus-5-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="priced",
+        function_id="priced",
+    )
+    logger.litellm_params = dict(litellm_params)
+    logger.model_call_details["litellm_params"] = logger.litellm_params
+    return logger
+
+
+_ROUTED: Final = MappingProxyType({"metadata": {"model_info": {"id": "deployment-1", "base_model": "claude-opus-5-5"}}})
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "expected"),
+    [
+        (
+            "anthropic/claude-opus-5-5",
+            _ROUTED,
+            {
+                "deployment_id": "deployment-1",
+                "base_model": "claude-opus-5-5",
+                "region": None,
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        (
+            "vertex_ai/claude-opus-5-5",
+            {"vertex_location": "us-east5", "data_residency": "EU"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": None,
+                "vertex_location": "us-east5",
+                "data_residency": "EU",
+            },
+        ),
+        (
+            _MANTLE_ROUTE,
+            {"aws_region_name": "us-gov-west-1"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": "us-gov-west-1",
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        ("anthropic/claude-opus-5-5", {**_ROUTED, "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, None),
+        (
+            "anthropic/claude-opus-5-5",
+            {"metadata": {"model_info": {"id": "deployment-1", "pricing_provider": "bedrock"}}},
+            None,
+        ),
+    ],
+)
+def test_settings_hand_the_route_the_deployment_facts_its_logging_would_price_with(
+    model: str, litellm_params: Mapping[str, object], expected: Mapping[str, object] | None
+) -> None:
+    logger: Final = _priced_logger(litellm_params)
+
+    settings: Final = messages_host.settings({"litellm_logging_obj": logger}, {**_CALL, "model": model})
+
+    assert settings["pricing"] == expected
+
+
+def test_the_route_prices_at_the_routed_deployments_vertex_location_before_the_logger_holds_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_location", "global")
+    logger: Final = _priced_logger({})
+    request: Final = {**_CALL, "vertex_location": "us-east5", "model": "vertex_ai/claude-opus-5-5"}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == "us-east5"
+
+
+@pytest.mark.parametrize("deployment_location", ["us-east5", None])
+def test_the_route_prices_at_the_vertex_location_its_logging_would_price_at(
+    monkeypatch: pytest.MonkeyPatch, deployment_location: str | None
+) -> None:
+    """The route resolves the location without the call's optional params, which Logging reads, so the two must
+    agree once the resolved call is logged: the optional params Logging then holds are the Messages body fields."""
+    from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
+
+    monkeypatch.setattr(litellm, "vertex_location", "europe-west4")
+    deployment: Final = {} if deployment_location is None else {"vertex_location": deployment_location}
+    logger: Final = _priced_logger(deployment)
+    request: Final = {**_CALL, **deployment, "model": "vertex_ai/claude-opus-5-5", "litellm_logging_obj": logger}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+    messages_host.log_resolved_call(request, "vertex_ai")
+    logged_at: Final = resolve_vertex_location_for_cost(
+        custom_llm_provider="vertex_ai",
+        litellm_params=logger.litellm_params,
+        optional_params=logger.optional_params,
+        model=logger.model,
+    )
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == logged_at == (deployment_location or "europe-west4")
+
+
+def test_settings_leave_pricing_to_python_for_an_invoked_bedrock_model_id() -> None:
+    logger: Final = _priced_logger(_ROUTED)
+
+    settings: Final = messages_host.settings(
+        {"litellm_logging_obj": logger}, {**_CALL, "model": "anthropic/claude-opus-5-5", "model_id": "arn:profile"}
+    )
+
+    assert settings["pricing"] is None

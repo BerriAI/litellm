@@ -1019,7 +1019,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Resolve or dismiss matching open alerts
+         * @description Update all matching open saved alerts, including unloaded pages. Only gateway admins can write.
+         */
+        patch: operations["update_open_alerts_alerts_patch"];
         trace?: never;
     };
     "/alerts/monitoring": {
@@ -1572,6 +1576,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval/rubric/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval Rubric
+         * @description Start a shadow eval whose judge, besides picking the better response, grades each
+         *     response from 1 (fails the rubric's criteria) to 5 (fully meets them). Everything
+         *     else matches /auto_router/shadow_eval/start, and the job's preference results stay
+         *     on the regular job endpoints. Read grades from
+         *     /auto_router/shadow_eval/{job_id}/rubric_results.
+         *
+         *     Disabled unless LITELLM_SHADOW_EVAL_RUBRIC_ENABLED=true. Each worker process reads
+         *     its own environment, so a change applies only once every worker is redeployed or
+         *     restarted with it. A worker without rubric support ignores the setting and samples a
+         *     rubric job as a preference-only job, so enable it only after every API and sampling
+         *     worker sharing the database runs a version with this route. Workers with the setting
+         *     off neither start nor sample rubric jobs.
+         *
+         *     Rolling back to a version without rubric support is not zero-downtime for rubric
+         *     jobs. Before any older worker starts: apply the setting off to every upgraded worker,
+         *     stop every running rubric job with /auto_router/shadow_eval/{job_id}/stop, and wait
+         *     until every upgraded worker's in-flight evaluations have finished, for example by
+         *     draining or stopping those workers. The roughly 10 second job cache expiry alone does
+         *     not guarantee that drain.
+         */
+        post: operations["start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval/start": {
         parameters: {
             query?: never;
@@ -1629,6 +1671,28 @@ export interface paths {
          * @description One job with derived counts, judge spend, latest error, and stratified results.
          */
         get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/rubric_results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Rubric Results
+         * @description A rubric job's grades: graded and ungraded turn counts and the joint distribution
+         *     of (real_grade, shadow_grade), overall and per router arm. A job started without a
+         *     rubric is a 404 here.
+         */
+        get: operations["get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2205,7 +2269,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
-        post: operations["new_budget_endpoint_budget_new_post"];
+        post: operations["new_budget_budget_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2265,7 +2329,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
-        post: operations["update_budget_endpoint_budget_update_post"];
+        post: operations["update_budget_budget_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4024,6 +4088,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/nvidia_nim/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Nim Models
+         * @description List upstream NIM models using a saved credential or submitted connection settings.
+         *
+         *     Requires a proxy administrator. Returns model IDs only, without asserting inference access,
+         *     pricing or capabilities. Upstream failures return unavailable so the UI can use its catalog.
+         */
+        post: operations["discover_nim_models_credentials_nvidia_nim_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/user_connections": {
         parameters: {
             query?: never;
@@ -4144,6 +4231,26 @@ export interface paths {
          * @description Begin a GitHub device flow for the calling user's connection to a per-user credential.
          */
         post: operations["start_user_connection_credentials__credential_name__user_connection_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor-cli/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cursor Cli Passthrough
+         * @description Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header "x-litellm-api-key: Bearer YOUR_KEY"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Keys bound to LiteLLM agents are unsupported. Model restrictions, token limits, spend budgets and content guardrails are unsupported. Configured moderation, content guardrails or policy-engine rules disable this relay, even when not selected by this request. Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.
+         */
+        post: operations["cursor_cli_passthrough_cursor_cli__endpoint__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4553,7 +4660,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -5232,7 +5339,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -6205,6 +6312,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/reference_exchange_rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Exchange Rates
+         * @description ECB euro foreign exchange reference rates as USD per unit of each currency, with USD at 1. They estimate a USD
+         *     total in another currency for display and are not settlement quotes. Refreshes from the ECB feed when due.
+         */
+        get: operations["reference_exchange_rates_get_reference_exchange_rates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -6236,7 +6364,6 @@ export interface paths {
         /**
          * Get Ui Settings
          * @description Get UI-specific configuration flags.
-         *     All authenticated users can fetch these settings for client-side behavior.
          */
         get: operations["get_ui_settings_get_ui_settings_get"];
         put?: never;
@@ -8620,6 +8747,8 @@ export interface paths {
          *         - key: str - The key identifier (token) to update
          *         - budget_id: Optional[str] - Budget ID associated with the key
          *         - max_budget: Optional[float] - Max budget for key
+         *         - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+         *         - user_id: Optional[str] - Owner user ID, or null to remove the owner
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -9235,6 +9364,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
          *
          *     Example:
          *     ```bash
@@ -9438,6 +9568,62 @@ export interface paths {
         patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
+    "/lens/admin/gateway/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect Model Gateway
+         * @description Connect this gateway's models to Lens using a dedicated virtual key.
+         *
+         *     Requires a proxy administrator. Existing Lens model settings are preserved.
+         */
+        post: operations["connect_model_gateway_lens_admin_gateway_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Login */
+        get: operations["lens_login_lens_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/login/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Login */
+        get: operations["lens_login_lens_login__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/service": {
         parameters: {
             query?: never;
@@ -9445,8 +9631,42 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Service Connection */
-        get: operations["service_connection_lens_service_get"];
+        /** Lens Service */
+        get: operations["lens_service_lens_service_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui Entry */
+        get: operations["lens_ui_entry_lens_ui_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui */
+        get: operations["lens_ui_lens_ui__path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9542,6 +9762,328 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Resume
+         * @description Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in
+         */
+        get: operations["login_resume_login_resume_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Budget Groups
+         * @description List reusable overall app budget groups, their new-app default and revision, independently of app × customer organization groups. Proxy admins only.
+         */
+        get: operations["get_app_budget_groups_management_v1_app_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Budget Groups
+         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template names the group assigned to new apps that omit budget and budget_id, or null for no default. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_budget_groups_management_v1_app_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_customer_member_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Customer Member Budget Groups
+         * @description List reusable app × customer member budget groups and their revision. Independent of overall app, organization, and app × organization groups. Proxy admins only.
+         */
+        get: operations["get_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Customer Member Budget Groups
+         * @description Save the complete app × customer member budget group list with its expected_revision. default_budget_template must be null. Assign per-app defaults through default_customer_member_budget_id. Existing groups retain omitted settings and reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Customer Organization Budget Groups
+         * @description List reusable app × customer organization budget groups, independently of organization groups. Proxy admins only.
+         */
+        get: operations["get_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Customer Organization Budget Groups
+         * @description Save the complete app × customer organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_group_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Group Budget Groups
+         * @description List reusable app group budget groups, their new-group default and revision, independently of app × customer organization groups. Proxy admins only.
+         */
+        get: operations["get_app_group_budget_groups_management_v1_app_group_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Group Budget Groups
+         * @description Save the complete app group budget group list with its expected_revision. default_budget_template names the group assigned to new app groups that omit budget and budget_id, or null for no default. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Groups */
+        get: operations["list_app_groups_management_v1_app_groups_get"];
+        put?: never;
+        /**
+         * Create App Group
+         * @description Create an app group from selected apps and an optional custom budget or app group budget preset.
+         *
+         *     Omit budget and budget_id to use the app group catalog default. Explicit null disables the shared cap.
+         *     Proxy admins only.
+         */
+        post: operations["create_app_group_management_v1_app_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Group */
+        get: operations["get_app_group_management_v1_app_groups__app_group_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch App Group */
+        patch: operations["patch_app_group_management_v1_app_groups__app_group_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}/customer_organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Group Organizations */
+        get: operations["list_app_group_organizations_management_v1_app_groups__app_group_id__customer_organizations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put App Group Organization */
+        put: operations["put_app_group_organization_management_v1_app_groups__app_group_id__customer_organizations__customer_org_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Apps */
+        get: operations["list_apps_management_v1_apps_get"];
+        put?: never;
+        /**
+         * Create App
+         * @description Configure budget policy for an existing resource of the gateway app type. Newly configured apps inherit the overall app catalog default when budget and budget_id are omitted. Explicit null disables the cap. Existing app bindings keep their settings. Proxy admins only.
+         */
+        post: operations["create_app_management_v1_apps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/definition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Definition */
+        get: operations["get_app_definition_management_v1_apps_definition_get"];
+        /** Put App Definition */
+        put: operations["put_app_definition_management_v1_apps_definition_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Resources */
+        get: operations["list_app_resources_management_v1_apps_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/resources/{resource_type}/{resource_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List App Resource Models
+         * @description List models accessible to an app's underlying team, project, or virtual key. Proxy admins only.
+         */
+        get: operations["list_app_resource_models_management_v1_apps_resources__resource_type___resource_id__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App */
+        get: operations["get_app_management_v1_apps__app_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch App */
+        patch: operations["patch_app_management_v1_apps__app_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}/customer_members/{customer_member_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Member */
+        get: operations["get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get"];
+        /** Put App Member */
+        put: operations["put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Organization */
+        get: operations["get_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__get"];
+        /** Put App Organization */
+        put: operations["put_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9707,7 +10249,7 @@ export interface paths {
         };
         /**
          * Customer Member Daily Activity
-         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
         put?: never;
@@ -9729,7 +10271,7 @@ export interface paths {
         put?: never;
         /**
          * Upsert Customer Member
-         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
+         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget, budget_override and budget_override_expires_at follow the customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
          */
         post: operations["upsert_customer_member_management_v1_customer_members_upsert_post"];
         delete?: never;
@@ -9766,6 +10308,30 @@ export interface paths {
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
     };
+    "/management/v1/customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organization Budget Groups
+         * @description List reusable organization budget groups and their revision. Proxy admins only.
+         */
+        get: operations["get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure Customer Organization Budget Groups
+         * @description Save the complete organization budget group list with its expected_revision. default_budget_template names the group assigned to new organizations that omit budget and budget_id, or null for no organization-level limit. Existing organizations are unchanged by default selection. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch"];
+        trace?: never;
+    };
     "/management/v1/customer_organizations": {
         parameters: {
             query?: never;
@@ -9781,7 +10347,7 @@ export interface paths {
         put?: never;
         /**
          * Create Customer Organization
-         * @description Create a customer organization with resolved budgets. Proxy admins only.
+         * @description Create a customer organization with resolved budgets. Omit budget and budget_id to use the configured organization budget group default. Explicit null opts out of the default. Proxy admins only.
          */
         post: operations["create_customer_organization_management_v1_customer_organizations_post"];
         delete?: never;
@@ -9799,7 +10365,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity
-         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
         put?: never;
@@ -9819,7 +10385,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key/app filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
@@ -9979,7 +10545,7 @@ export interface paths {
         };
         /**
          * Customer Team Daily Activity
-         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
         put?: never;
@@ -10064,6 +10630,46 @@ export interface paths {
          * @description The distinct internal users appearing in spend logs the caller can read.
          */
         get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/teams/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Team Members
+         * @description One team's members, paged, sortable and filterable. Readable by whoever can read the team
+         *     through `/team/info`: proxy admins and admin viewers, a key of the team, its members, and
+         *     admins of its organization. An unknown team is a 404.
+         *
+         *     Each row is a roster entry (`user_id`, `user_email`, `user_alias`, `role`) with the fields
+         *     `/team/info` reports for that member in `team_memberships` (`spend`, `total_spend`,
+         *     `budget_id`, `litellm_budget_table`, `budget_source`). `/team/info` returns the whole roster
+         *     on every call; this route reads one page of it.
+         *
+         *     `sort` takes a comma-separated list of `user_id`, `user_email`, `user_alias`, `role`, `spend`,
+         *     `total_spend`, `max_budget` (the member's own limit, else the team default), `budget_reset_at`
+         *     or `position` (roster order, the default and the tiebreaker), each optionally prefixed with `-`
+         *     for descending. `q` is a case-insensitive substring match on `user_id`, `user_email` and
+         *     `user_alias`. `page_size` defaults to 50 and is capped at 100. Filters are
+         *     `filter[role][eq|in]` and `filter[user_id][eq|in]`. `in` splits its value on commas, so name a `user_id`
+         *     that contains a comma with `eq`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=jane&sort=-spend&filter[role][eq]=user'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     ```
+         */
+        get: operations["list_team_members_management_v1_teams__team_id__members_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12592,6 +13198,7 @@ export interface paths {
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
+         *     - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
          *     - tpm_limit: *Optional[int]* - Max tpm limit for org
          *     - rpm_limit: *Optional[int]* - Max rpm limit for org
          *     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -16297,7 +16904,7 @@ export interface paths {
         put?: never;
         /**
          * Import Skill
-         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         * @description Register a source reference, or import a public skills.sh/GitHub URL as a portable snapshot.
          */
         post: operations["import_skill_skill_hub_skills_import_post"];
         delete?: never;
@@ -16340,7 +16947,7 @@ export interface paths {
         get: operations["get_skill_skill_hub_skills__name__get"];
         /**
          * Replace Skill Metadata
-         * @description Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.
+         * @description Update supplied registry fields. Omitted metadata is retained, null clears it, and version defaults to a bump.
          */
         put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
         post?: never;
@@ -16386,6 +16993,26 @@ export interface paths {
          * @description Read the original SKILL.md without downloading supporting files.
          */
         get: operations["skill_content_skill_hub_skills__name__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/downloads/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Skill Downloads
+         * @description Export all recorded authenticated downloads. Anonymous downloads remain totals-only.
+         */
+        get: operations["export_skill_downloads_skill_hub_skills__name__downloads_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16444,7 +17071,7 @@ export interface paths {
         get?: never;
         /**
          * Replace Skill Archive
-         * @description Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.
+         * @description Replace files and refresh their inherited description, retaining registry overrides and other metadata.
          */
         put: operations["replace_skill_archive_skill_hub_skills__name__upload_put"];
         post?: never;
@@ -16503,7 +17130,7 @@ export interface paths {
         };
         /**
          * Download Skill Version
-         * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
+         * @description Download a retained skill ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
         put?: never;
@@ -16591,7 +17218,7 @@ export interface paths {
         get: operations["get_submission_skill_hub_submissions__submission_id__get"];
         /**
          * Edit Submission
-         * @description Replace a pending proposal's metadata, preserving files. Only its original submitting user may edit.
+         * @description Update supplied proposal metadata. Omit/null version uses automatic versioning on approval.
          */
         put: operations["edit_submission_skill_hub_submissions__submission_id__put"];
         post?: never;
@@ -16630,7 +17257,7 @@ export interface paths {
         };
         /**
          * Download Submission
-         * @description Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.
+         * @description Download an owned proposal as a private ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_submission_skill_hub_submissions__submission_id__archive_get"];
         put?: never;
@@ -18192,6 +18819,7 @@ export interface paths {
          *
          *     Parameters:
          *     - team_id: str - Required. The unique identifier of the team to get info on.
+         *     - include_members: bool - Optional, default true. Pass false to get the team's settings without its roster.
          *
          *     ```
          *     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here'     --header 'Authorization: Bearer your_api_key_here'
@@ -18455,6 +19083,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+         *     - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -18481,6 +19110,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Cap in USD for each member's base budget plus carried allowance. Requires a member reset period and must exceed the base member budget.
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -18711,6 +19341,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Cap in USD for each member's base budget plus carried allowance. Requires a member reset period and must exceed the base member budget. Set to null to disable rollover on the team default.
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -18719,6 +19350,7 @@ export interface paths {
          *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -19459,42 +20091,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/typesafe/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
-        trace?: never;
-    };
     "/update/background_chat_settings": {
         parameters: {
             query?: never;
@@ -20043,6 +20639,7 @@ export interface paths {
         /**
          * Ui View Users
          * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
+         *     Proxy admins and admin viewers can also search by alias and receive the alias in results.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -20163,6 +20760,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *     - max_budget: Optional[float] - Specify max budget for a given user.
+         *     - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus unused allowance carried forward. Requires a reset period and must exceed the base budget.
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -20302,6 +20900,7 @@ export interface paths {
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
+         *         - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus carried allowance. Requires a reset period and must exceed the base budget. Set to null to disable rollover.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -22018,8 +22617,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_logs_post"];
+        /**
+         * Forward Otlp Logs
+         * @description The agent's log events carry what its spans leave out, such as each reply; they go to Lens the same way.
+         */
+        post: operations["forward_otlp_logs_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24153,8 +24755,11 @@ export interface paths {
         /** List Agent Traces */
         get: operations["list_agent_traces_v1_traces_get"];
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_traces_post"];
+        /**
+         * Forward Otlp Traces
+         * @description An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner.
+         */
+        post: operations["forward_otlp_traces_v1_traces_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24221,6 +24826,23 @@ export interface paths {
         };
         /** Get Agent Trace */
         get: operations["get_agent_trace_v1_traces__trace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{trace_id}/conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Conversation */
+        get: operations["get_agent_trace_conversation_v1_traces__trace_id__conversation_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -27698,7 +28320,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * Id
              * @description Opaque alert ID, also used as a pagination cursor.
@@ -27714,7 +28336,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27724,9 +28346,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27750,6 +28371,28 @@ export interface components {
              * @description Inclusive start of the observed window, normalized to UTC milliseconds.
              */
             window_start: string;
+        };
+        /** AlertBulkResult */
+        AlertBulkResult: {
+            /**
+             * Updated
+             * @description Number of open saved alerts changed.
+             */
+            updated: number;
+        };
+        /** AlertBulkUpdate */
+        AlertBulkUpdate: {
+            /**
+             * Status
+             * @description Status to apply to every matching open saved alert.
+             * @enum {string}
+             */
+            status: "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Only update this category, or all saved alerts if omitted.
+             */
+            type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
         };
         /** AlertHistoryPoint */
         AlertHistoryPoint: {
@@ -27793,6 +28436,28 @@ export interface components {
              * @default true
              */
             model_deprecations_enabled: boolean;
+            /**
+             * @description Effective built-in thresholds. Only Enterprise admins can edit them.
+             * @default {
+             *       "latency": {
+             *         "minimum_increase": 500,
+             *         "multiplier": 3
+             *       },
+             *       "reliability": {
+             *         "minimum_increase": 0.02,
+             *         "multiplier": 3
+             *       },
+             *       "spend": {
+             *         "minimum_increase": 50,
+             *         "multiplier": 3
+             *       },
+             *       "traffic": {
+             *         "minimum_increase": 1000,
+             *         "multiplier": 10
+             *       }
+             *     }
+             */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /** AlertMonitoringUpdate */
         AlertMonitoringUpdate: {
@@ -27801,6 +28466,24 @@ export interface components {
              * @description Enable or disable performance monitoring for this gateway.
              */
             enabled: boolean;
+        };
+        /** AlertThreshold */
+        AlertThreshold: {
+            /**
+             * Minimum Increase
+             * @description Minimum absolute increase above the baseline, in the metric's unit.
+             */
+            minimum_increase: number;
+            /**
+             * Multiplier
+             * @description Minimum multiple of the baseline.
+             */
+            multiplier: number;
+        };
+        /** AlertThresholdsUpdate */
+        AlertThresholdsUpdate: {
+            /** @description Replace the built-in performance thresholds. Enterprise only. */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /**
          * AlertType
@@ -27829,7 +28512,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * History
              * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
@@ -27855,7 +28538,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27865,9 +28548,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27992,12 +28674,390 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** App */
+        App: {
+            /** Alias */
+            alias: string;
+            /** App Group Id */
+            app_group_id?: string | null;
+            /** App Id */
+            app_id: string;
+            /**
+             * Auto Create Customers
+             * @default true
+             */
+            auto_create_customers: boolean;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Margin */
+            customer_margin?: number | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Customer Member Budget Id */
+            default_customer_member_budget_id?: string | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** AppCreate */
+        AppCreate: {
+            /**
+             * App Group Id
+             * @description Parent app group. Omit to preserve membership, or send null to ungroup the app.
+             */
+            app_group_id?: string | null;
+            /**
+             * Auto Create Customers
+             * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
+             */
+            auto_create_customers?: boolean | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /**
+             * Customer Margin
+             * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
+             */
+            customer_margin?: number | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Default Customer Member Budget Id
+             * @description Linked app × customer member budget group used as this app's per-member default. Omit to preserve it, or send null to remove it. Send default_customer_member_budget instead for custom limits.
+             */
+            default_customer_member_budget_id?: string | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type?: components["schemas"]["AppResourceType"] | null;
+        };
+        /** AppDefinition */
+        AppDefinition: {
+            /**
+             * Auto Create Customers Without App
+             * @description Whether a request that belongs to no app may register a customer organization or member the proxy has never seen. When false, such a request is refused with 403.
+             * @default true
+             */
+            auto_create_customers_without_app: boolean;
+            resource_type?: components["schemas"]["AppResourceType"] | null;
+        };
+        /** AppDurationLimit */
+        AppDurationLimit: {
+            /** Budget Duration */
+            budget_duration: string;
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+        };
+        /** AppGroup */
+        AppGroup: {
+            /** App Group Id */
+            app_group_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @default []
+             */
+            budget_usage: components["schemas"]["CustomerBudgetUsage"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** AppGroupApp */
+        AppGroupApp: {
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+        };
+        /** AppGroupBudgetPut */
+        AppGroupBudgetPut: {
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+        };
+        /** AppGroupCreate */
+        AppGroupCreate: {
+            /**
+             * Apps
+             * @description Apps selected by their gateway resource type and ID. When supplied, replaces membership. Omit to keep membership unchanged. An empty list removes all apps. Existing app budgets are preserved.
+             * @default []
+             */
+            apps: components["schemas"]["AppGroupApp"][];
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name: string;
+        };
+        /** AppGroupOrganization */
+        AppGroupOrganization: {
+            /** App Group Id */
+            app_group_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @default []
+             */
+            budget_usage: components["schemas"]["CustomerBudgetUsage"][];
+            /** Customer Org Id */
+            customer_org_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /** AppGroupPatch */
+        AppGroupPatch: {
+            /**
+             * Apps
+             * @description Apps selected by their gateway resource type and ID. When supplied, replaces membership. Omit to keep membership unchanged. An empty list removes all apps. Existing app budgets are preserved.
+             * @default []
+             */
+            apps: components["schemas"]["AppGroupApp"][];
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name?: string | null;
+        };
+        /** AppMember */
+        AppMember: {
+            /** App Id */
+            app_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /** @default none */
+            budget_source: components["schemas"]["AppMemberBudgetSource"];
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Customer Member Id */
+            customer_member_id: string;
+            effective_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+        };
+        /**
+         * AppMemberBudgetSource
+         * @enum {string}
+         */
+        AppMemberBudgetSource: "member_budget" | "member_override" | "customer_default" | "app_default" | "none";
+        /** AppMemberPut */
+        AppMemberPut: {
+            /** @description Permanent budget for this app and customer member. Copies inherited policy on first edit. Explicit null fields clear limits. Null budget returns to inheritance. Independent of temporary increases. */
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked app × customer member budget group. Omit to preserve it, or send null to inherit defaults. Send budget instead to fork the preset into private custom limits. Temporary increases remain independent.
+             */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+        };
+        /** AppOrganization */
+        AppOrganization: {
+            /** App Id */
+            app_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Customer Member Budget Id */
+            customer_member_budget_id?: string | null;
+            /** Customer Org Id */
+            customer_org_id: string;
+            effective_budget?: components["schemas"]["Budget"] | null;
+            effective_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+            /** Tier Budget Id */
+            tier_budget_id?: string | null;
+        };
+        /** AppOrganizationPut */
+        AppOrganizationPut: {
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Customer Member Budget Id
+             * @description Linked app × customer member budget group for members of this customer in this app. Omit to preserve it, or send null to inherit the app default. Send customer_member_budget for custom limits.
+             */
+            customer_member_budget_id?: string | null;
+            /** Tier Budget Id */
+            tier_budget_id?: string | null;
+        };
+        /** AppPatch */
+        AppPatch: {
+            /**
+             * App Group Id
+             * @description Parent app group. Omit to preserve membership, or send null to ungroup the app.
+             */
+            app_group_id?: string | null;
+            /**
+             * Auto Create Customers
+             * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
+             */
+            auto_create_customers?: boolean | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /**
+             * Customer Margin
+             * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
+             */
+            customer_margin?: number | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Default Customer Member Budget Id
+             * @description Linked app × customer member budget group used as this app's per-member default. Omit to preserve it, or send null to remove it. Send default_customer_member_budget instead for custom limits.
+             */
+            default_customer_member_budget_id?: string | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+        };
+        /** AppResource */
+        AppResource: {
+            /** Alias */
+            alias: string;
+            /** App Id */
+            app_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+        };
+        /**
+         * AppResourceType
+         * @enum {string}
+         */
+        AppResourceType: "team" | "project" | "virtual_key";
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
             entities?: components["schemas"]["PiiEntityType"][] | null;
             /** Guardrail Name */
             guardrail_name: string;
+            /**
+             * Images
+             * @description One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.
+             */
+            images?: string[] | null;
             /**
              * Input Type
              * @default request
@@ -28015,7 +29075,10 @@ export interface components {
             } | null;
             /** @default standard */
             response_format: components["schemas"]["GuardrailResponseFormat"];
-            /** Text */
+            /**
+             * Text
+             * @default
+             */
             text: string;
         };
         /** ApplyGuardrailResponse */
@@ -29006,7 +30069,7 @@ export interface components {
             sanitize_error_detail: boolean | null;
             /**
              * Scan Only Tool Results
-             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
+             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant message text. It limits message text only, so tool calls and tool descriptions are still scanned when scan_tool_calls_as_text or scan_tool_descriptions_as_text is also set. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
             /**
@@ -29014,6 +30077,16 @@ export interface components {
              * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
              */
             scan_raw_request?: boolean | null;
+            /**
+             * Scan Tool Calls As Text
+             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, every tool call is also scanned as text, its name and each argument key and value as a separate block. Tool calls in the request history, including Gemini functionCall parts, are scanned as input, and a masked argument value is written back into the request in the shape the caller sent. Tool calls generated by the model are scanned as output, and a mask there blocks the response. A blocked tool call blocks the request or response, and so does a mask that touches a tool name or argument key.
+             */
+            scan_tool_calls_as_text?: boolean | null;
+            /**
+             * Scan Tool Descriptions As Text
+             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, the guardrail also scans every description string in tools[] (tool and parameter descriptions) as text. A pre_call guardrail blocks or masks them like message text, and a logging_only guardrail whose logging_only_scope covers the request records its verdict on a copy. Mode must include pre_call, or logging_only on a guardrail that supports logging_only_scope, otherwise the guardrail is rejected on create or update and the setting is ignored at config load. Costs one extra guardrail call per tool that has a description.
+             */
+            scan_tool_descriptions_as_text?: boolean | null;
             /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
@@ -29346,10 +30419,13 @@ export interface components {
             expected_revision: number;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
-            /** Version */
+            /**
+             * Version
+             * @description Explicit SemVer, or omit/send empty for automatic versioning on approval
+             */
             version?: string | null;
         };
         /** Body_image_edit_api_images_edits_post */
@@ -29358,6 +30434,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -29369,6 +30449,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -29380,6 +30464,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -29396,7 +30484,7 @@ export interface components {
             expected_updated_at?: string | null;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
             /** Version */
@@ -29514,6 +30602,11 @@ export interface components {
              * @description Agent Skills ZIP with SKILL.md and optional supporting files
              */
             file: string;
+            /**
+             * Metadata
+             * @description Optional JSON registry metadata
+             */
+            metadata?: string | null;
             /** Version */
             version?: string | null;
         };
@@ -29685,6 +30778,18 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** BudgetGroups */
+        BudgetGroups: {
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+        };
         /** BudgetGroupsUpdate */
         BudgetGroupsUpdate: {
             /**
@@ -29755,25 +30860,18 @@ export interface components {
         BudgetLimit: {
             /**
              * Budget Duration
-             * @enum {string}
+             * @description Positive duration such as '1h', '7d', '1mo' or '12mo'.
              */
-            budget_duration: "1mo" | "12mo";
-            /** Max Budget */
-            max_budget: number;
-            /** Reset At */
-            reset_at?: string | null;
-        };
-        /**
-         * BudgetLimitEntry
-         * @description A single budget window with its own limit and independent reset schedule.
-         */
-        BudgetLimitEntry: {
-            /** Budget Duration */
             budget_duration: string;
             /** Max Budget */
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
+            /**
+             * Window Start
+             * @description Server-managed start of the current spend window.
+             */
+            window_start?: string | null;
         };
         /**
          * BudgetListItem
@@ -29974,7 +31072,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -30039,6 +31137,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -30174,6 +31274,8 @@ export interface components {
          * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Key */
@@ -30185,6 +31287,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * BulkUpdateKeyResponse
@@ -31338,6 +32442,11 @@ export interface components {
             /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
+             * Max Output Tokens
+             * @description Optional output token limit for LLM classifier calls. Leave unset to keep the classifier deployment or provider default. When set, overrides the deployment limit. Leave room for reasoning tokens when reasoning_effort is set.
+             */
+            max_output_tokens?: number | null;
+            /**
              * Model
              * @description Model name (from the router's model_list) to call for classification
              */
@@ -31979,6 +33088,21 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
+             * Customer Budget Response Headers
+             * @description If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.
+             */
+            customer_budget_response_headers?: boolean | null;
+            /**
+             * Customer Member Id Header
+             * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_member_id_header?: string | null;
+            /**
+             * Customer Org Alias Header
+             * @description Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_org_alias_header?: string | null;
+            /**
              * Dangerously Permit Weak Or Unset Master Key
              * @description local development only: start even when master_key is unset, empty, or a publicly known default
              */
@@ -32128,6 +33252,12 @@ export interface components {
              */
             health_check_interval: number;
             /**
+             * Health Check Skip Blocked Background Models
+             * @description When true, deployments with model_info.blocked set to true are skipped by background health checks. With background checks enabled, GET /health reads cached results and can return 503 for a skipped deployment because there is no healthy result. On-demand checks and Test Connection are unaffected.
+             * @default false
+             */
+            health_check_skip_blocked_background_models: boolean;
+            /**
              * Health Check Skip Disabled Background Models
              * @description When true, deployments with model_info.disable_background_health_check are skipped for on-demand GET /health as well as the background health loop.
              * @default false
@@ -32150,6 +33280,8 @@ export interface components {
             key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
+            /** @description Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis. */
+            ldap_sync?: components["schemas"]["LDAPSyncSettings"] | null;
             /**
              * Master Key
              * @description require a key for all calls to proxy
@@ -32293,6 +33425,37 @@ export interface components {
              */
             mcp_disabled_capabilities?: ("prompts" | "resources")[] | null;
             /**
+             * Mcp Event Max Events Per Minute
+             * @description Events delivered to one caller per minute before events are dropped. Defaults to 600.
+             */
+            mcp_event_max_events_per_minute?: number | null;
+            /**
+             * Mcp Event Max Streams
+             * @description Concurrent events/stream requests one replica serves. Defaults to 512.
+             */
+            mcp_event_max_streams?: number | null;
+            /**
+             * Mcp Event Max Streams Per Caller
+             * @description Concurrent events/stream requests one caller may hold on a replica. Defaults to 50.
+             */
+            mcp_event_max_streams_per_caller?: number | null;
+            /**
+             * Mcp Event Max Subscriptions Per Key
+             * @description Webhook event subscriptions one caller may hold. Defaults to 50.
+             */
+            mcp_event_max_subscriptions_per_key?: number | null;
+            /**
+             * Mcp Events Enabled
+             * @description Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. Each upstream server also needs events.enabled. Off by default.
+             * @default false
+             */
+            mcp_events_enabled: boolean;
+            /**
+             * Mcp Events Public Base Url
+             * @description Public https base URL of this proxy that upstream MCP servers can reach, used to build the callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.
+             */
+            mcp_events_public_base_url?: string | null;
+            /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
@@ -32323,6 +33486,12 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Meter Webrtc Calls
+             * @description Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.
+             * @default true
+             */
+            meter_webrtc_calls: boolean;
             /**
              * Missing Session Id
              * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
@@ -32407,10 +33576,21 @@ export interface components {
              */
             reject_clientside_metadata_tags?: boolean | null;
             /**
+             * Reject Unregistered Guardrails
+             * @description Return 400 for a request whose merged guardrails (request, key, team, project, policy and model level) name a guardrail that is not registered on the proxy, instead of serving it without that guardrail.
+             * @default false
+             */
+            reject_unregistered_guardrails: boolean;
+            /**
              * Request Tag Mappings
              * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
              */
             request_tag_mappings?: components["schemas"]["RequestTagMapping"][] | null;
+            /**
+             * Require Key Mcp Access Defined
+             * @description When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.
+             */
+            require_key_mcp_access_defined?: boolean | null;
             /**
              * Responses Websocket Session Limit Seconds
              * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
@@ -33343,6 +34523,8 @@ export interface components {
         };
         /** CurrentUserResponse */
         CurrentUserResponse: {
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email: string | null;
             /** User Id */
@@ -33462,36 +34644,14 @@ export interface components {
             /** Window Start */
             window_start?: string | null;
         };
-        /**
-         * CustomerHierarchyAuth
-         * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
-         */
         CustomerHierarchyAuth: {
-            /** Customer Member Alias */
-            customer_member_alias?: string | null;
-            /** Customer Member Id */
-            customer_member_id?: string | null;
-            /** Customer Org Alias */
-            customer_org_alias?: string | null;
-            /** Customer Org Id */
-            customer_org_id: string;
-            /** Customer Team Alias */
-            customer_team_alias?: string | null;
-            /** Customer Team Id */
-            customer_team_id?: string | null;
-            /** Scopes */
-            scopes: components["schemas"]["CustomerScopeAuth"][];
-            /**
-             * Team Scopes
-             * @description Every team the member belongs to, in parent_team_ids order; scopes holds the selected one
-             * @default []
-             */
-            team_scopes: components["schemas"]["CustomerScopeAuth"][];
+            [key: string]: unknown;
         };
         /** CustomerMember */
         CustomerMember: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -33603,7 +34763,7 @@ export interface components {
              * Budget Limits
              * @default []
              */
-            budget_limits: components["schemas"]["BudgetLimit"][];
+            budget_limits: (components["schemas"]["BudgetLimit"] | components["schemas"]["AppDurationLimit"])[];
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Cap Policy */
@@ -33614,7 +34774,7 @@ export interface components {
              * Key
              * @enum {string}
              */
-            key: "customer_org" | "customer_team" | "customer_member";
+            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member" | "app_group" | "app_group_customer_org";
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -33627,6 +34787,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Soft Budget Duration */
+            soft_budget_duration?: string | null;
             /**
              * Spend
              * @default 0
@@ -33758,6 +34920,11 @@ export interface components {
              */
             total_autorouter_savings_spend: number;
             /**
+             * Total Cache Cost
+             * @default 0
+             */
+            total_cache_cost: number;
+            /**
              * Total Cache Creation Input Tokens
              * @default 0
              */
@@ -33783,6 +34950,12 @@ export interface components {
              */
             total_compression_savings_spend: number;
             /**
+             * Total Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in total_spend
+             * @default 0
+             */
+            total_customer_margin_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -33802,6 +34975,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Priced Cache Tokens
+             * @default 0
+             */
+            total_priced_cache_tokens: number;
             /**
              * Total Prompt Caching Savings Spend
              * @default 0
@@ -35168,6 +36346,41 @@ export interface components {
             /** Status Code */
             status_code: number;
         };
+        /** GatewaySetupRequest */
+        GatewaySetupRequest: Record<string, never>;
+        /** GatewayStatus */
+        GatewayStatus: {
+            /**
+             * Analysis Models
+             * @default 0
+             */
+            analysis_models: number;
+            /** Api Base */
+            api_base?: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Error */
+            error?: string | null;
+            /**
+             * Evaluation Models
+             * @default 0
+             */
+            evaluation_models: number;
+            /** Last Refreshed */
+            last_refreshed?: string | null;
+            /**
+             * Login Connected
+             * @default false
+             */
+            login_connected: boolean;
+            /**
+             * Supports Gateway Connect
+             * @default false
+             */
+            supports_gateway_connect: boolean;
+        };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
             /** Access Group Ids */
@@ -35212,7 +36425,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -35376,7 +36589,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -35977,6 +37190,8 @@ export interface components {
         };
         /** ImportSkillRequest */
         ImportSkillRequest: {
+            /** @description Optional registry name and metadata overrides */
+            metadata?: components["schemas"]["SkillHubUpload"] | null;
             /**
              * Path
              * @description Repository-relative skill directory
@@ -36458,6 +37673,96 @@ export interface components {
             /** Service Host */
             service_host: string;
         };
+        /** LDAPSyncSettings */
+        LDAPSyncSettings: {
+            /**
+             * Allow Empty Groups
+             * @default false
+             */
+            allow_empty_groups: boolean;
+            /** Bind Dn */
+            bind_dn?: string | null;
+            /** Bind Password */
+            bind_password?: string | null;
+            /** Ca Cert Path */
+            ca_cert_path?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Group Filter
+             * @default
+             */
+            group_filter: string;
+            /**
+             * Group Id Attribute
+             * @default cn
+             */
+            group_id_attribute: string;
+            /**
+             * Group Name Attribute
+             * @default cn
+             */
+            group_name_attribute: string;
+            /**
+             * Group Search Base
+             * @default
+             */
+            group_search_base: string;
+            /**
+             * Interval Minutes
+             * @default 30
+             */
+            interval_minutes: number;
+            /**
+             * Litellm Match Field
+             * @default user_email
+             * @enum {string}
+             */
+            litellm_match_field: "user_email" | "user_id" | "sso_user_id";
+            /**
+             * Member Attribute
+             * @default member
+             */
+            member_attribute: string;
+            /**
+             * Member Lookup Attribute
+             * @default uid
+             */
+            member_lookup_attribute: string;
+            /**
+             * Server Url
+             * @default
+             */
+            server_url: string;
+            /**
+             * Start Tls
+             * @default false
+             */
+            start_tls: boolean;
+            /**
+             * Timeout Seconds
+             * @default 30
+             */
+            timeout_seconds: number;
+            /**
+             * User Match Attribute
+             * @default mail
+             */
+            user_match_attribute: string;
+            /**
+             * User Search Base
+             * @default
+             */
+            user_search_base: string;
+        };
         /** LLMV2Calibration */
         LLMV2Calibration: {
             capable: components["schemas"]["LLMV2ProbabilityCalibration"];
@@ -36659,6 +37964,13 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[TeamMemberListItem] */
+        ListResponse_TeamMemberListItem_: {
+            /** Data */
+            data: components["schemas"]["TeamMemberListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /** ListResponse[Team] */
         ListResponse_Team_: {
             /** Data */
@@ -36768,6 +38080,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -36815,6 +38129,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -36853,7 +38169,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -37013,6 +38329,8 @@ export interface components {
             id?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -37207,6 +38525,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -37471,6 +38790,8 @@ export interface components {
             agent_access_groups?: string[] | null;
             /** Agents */
             agents?: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /** Blocked Tools */
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
@@ -37509,6 +38830,8 @@ export interface components {
              * @default []
              */
             agents: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /**
              * Blocked Tools
              * @default []
@@ -37837,6 +39160,8 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Image Token Cost Batches */
             cache_read_input_image_token_cost_batches?: number | null;
+            /** Cache Read Input Image Token Cost Priority */
+            cache_read_input_image_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -37955,6 +39280,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Image Token Priority */
+            input_cost_per_image_token_priority?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -38048,6 +39375,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -38090,6 +39427,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -38495,6 +39834,8 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -38532,7 +39873,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38668,7 +40009,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38716,6 +40057,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -38747,6 +40092,8 @@ export interface components {
         };
         /** LiteLLM_UserTableFiltered */
         LiteLLM_UserTableFiltered: {
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */
@@ -38762,7 +40109,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38815,6 +40162,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -38906,6 +40257,8 @@ export interface components {
             expires?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -39770,7 +41123,7 @@ export interface components {
             sanitize_error_detail: boolean | null;
             /**
              * Scan Only Tool Results
-             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
+             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant message text. It limits message text only, so tool calls and tool descriptions are still scanned when scan_tool_calls_as_text or scan_tool_descriptions_as_text is also set. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
             /**
@@ -39778,6 +41131,16 @@ export interface components {
              * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
              */
             scan_raw_request?: boolean | null;
+            /**
+             * Scan Tool Calls As Text
+             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, every tool call is also scanned as text, its name and each argument key and value as a separate block. Tool calls in the request history, including Gemini functionCall parts, are scanned as input, and a masked argument value is written back into the request in the shape the caller sent. Tool calls generated by the model are scanned as output, and a mask there blocks the response. A blocked tool call blocks the request or response, and so does a mask that touches a tool name or argument key.
+             */
+            scan_tool_calls_as_text?: boolean | null;
+            /**
+             * Scan Tool Descriptions As Text
+             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, the guardrail also scans every description string in tools[] (tool and parameter descriptions) as text. A pre_call guardrail blocks or masks them like message text, and a logging_only guardrail whose logging_only_scope covers the request records its verdict on a copy. Mode must include pre_call, or logging_only on a guardrail that supports logging_only_scope, otherwise the guardrail is rejected on create or update and the setting is ignored at config load. Costs one extra guardrail call per tool that has a description.
+             */
+            scan_tool_descriptions_as_text?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers
@@ -40451,6 +41814,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MCPServerEventsConfig */
+        MCPServerEventsConfig: {
+            /**
+             * Allowed Events
+             * @description Event names or globs this server may publish. Omit for every event; set enabled false for none.
+             */
+            allowed_events?: string[] | null;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Legacy Webhook Id Equals Event Id
+             * @default false
+             */
+            legacy_webhook_id_equals_event_id: boolean;
+            /**
+             * Min Poll Interval Ms
+             * @default 1000
+             */
+            min_poll_interval_ms: number;
+        };
         /**
          * MCPServerUserCredentialListItem
          * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
@@ -40866,6 +42252,8 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -40888,6 +42276,8 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -40903,6 +42293,8 @@ export interface components {
         MemberUpsert: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -40921,6 +42313,7 @@ export interface components {
         MemberUpsertResponse: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41692,6 +43085,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -41846,6 +43240,8 @@ export interface components {
             organization_alias: string;
             /** Organization Id */
             organization_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -41969,6 +43365,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -42072,7 +43470,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -42134,6 +43532,10 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
+            } | null;
             /**
              * Models
              * @default []
@@ -42178,6 +43580,8 @@ export interface components {
             } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -42219,7 +43623,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -42284,6 +43688,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -42365,7 +43771,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -42457,6 +43863,8 @@ export interface components {
             project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -42501,6 +43909,32 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** NimModelDiscoveryConnection */
+        NimModelDiscoveryConnection: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** NimModelDiscoveryRequest */
+        NimModelDiscoveryRequest: {
+            /** Credential Name */
+            credential_name?: string | null;
+            credential_values?: components["schemas"]["NimModelDiscoveryConnection"] | null;
+        };
+        /** NimModelDiscoveryResponse */
+        NimModelDiscoveryResponse: {
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "unavailable";
         };
         /** NoulAnswer */
         NoulAnswer: {
@@ -42588,6 +44022,21 @@ export interface components {
             /** Value */
             value: string | boolean;
         };
+        /** OpenAIDecisionCacheWriteTokensDetails */
+        OpenAIDecisionCacheWriteTokensDetails: {
+            /**
+             * Ttl 12H Tokens
+             * @default 0
+             */
+            ttl_12h_tokens: number;
+            /**
+             * Ttl 30M Tokens
+             * @default 0
+             */
+            ttl_30m_tokens: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** OpenAIDecisionInputTokensDetails */
         OpenAIDecisionInputTokensDetails: {
             /**
@@ -42595,6 +44044,7 @@ export interface components {
              * @default 0
              */
             cache_write_tokens: number;
+            cache_write_tokens_details?: components["schemas"]["OpenAIDecisionCacheWriteTokensDetails"] | null;
             /**
              * Cached Tokens
              * @default 0
@@ -42835,6 +44285,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -42925,6 +44380,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -42970,6 +44430,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Default Budget Template Id */
             default_budget_template_id?: string | null;
         };
@@ -43018,6 +44483,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43037,6 +44507,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -43595,7 +45070,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -43647,6 +45122,10 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
+            } | null;
             /** Models */
             models?: unknown[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
@@ -43684,6 +45163,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -43770,6 +45251,41 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /** PerformanceAlertThresholds */
+        PerformanceAlertThresholds: {
+            /**
+             * @description Average response-time increase in milliseconds over the previous seven-day weighted average.
+             * @default {
+             *       "minimum_increase": 500,
+             *       "multiplier": 3
+             *     }
+             */
+            latency: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Error-rate increase as a fraction, e.g. 0.02 is two percentage points.
+             * @default {
+             *       "minimum_increase": 0.02,
+             *       "multiplier": 3
+             *     }
+             */
+            reliability: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Spend increase in USD over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 50,
+             *       "multiplier": 3
+             *     }
+             */
+            spend: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Request increase over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 1000,
+             *       "multiplier": 10
+             *     }
+             */
+            traffic: components["schemas"]["AlertThreshold"];
         };
         /**
          * PiiAction
@@ -44680,6 +46196,46 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCacheEvidence */
+        PromptCacheEvidence: {
+            /**
+             * Config Fingerprint
+             * @description Cache-relevant deployment settings.
+             */
+            config_fingerprint: string;
+            /**
+             * Consecutive Misses
+             * @description Observed requests that reported no cache read or write, not necessarily consecutive.
+             */
+            consecutive_misses: number;
+            /**
+             * Prefix Fingerprint
+             * @description Keyed hash of the cached prefix.
+             */
+            prefix_fingerprint: string;
+            /**
+             * Proven Write Tokens
+             * @description Tokens the proving cache write stored.
+             */
+            proven_write_tokens: number;
+            /**
+             * Provider
+             * @description Provider that served the requests.
+             * @constant
+             */
+            provider: "anthropic";
+            /**
+             * Provider Model
+             * @description Model the provider served.
+             */
+            provider_model: string;
+            /**
+             * Ttl Seconds
+             * @description Cache lifetime of the prefix's breakpoint.
+             * @constant
+             */
+            ttl_seconds: 300;
+        };
         /** PromptCacheOptions */
         PromptCacheOptions: {
             /** Comparison Response Id */
@@ -45177,6 +46733,23 @@ export interface components {
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
         };
+        /** ReferenceExchangeRates */
+        ReferenceExchangeRates: {
+            /**
+             * Rate Date
+             * Format: date
+             */
+            rate_date: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ecb";
+            /** Usd Per Unit */
+            usd_per_unit: {
+                [key: string]: number;
+            };
+        };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
             /** Access Group Ids */
@@ -45221,7 +46794,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -45614,6 +47187,11 @@ export interface components {
              */
             context_window_escalation_buffer: number;
             /**
+             * Conversation Header
+             * @description Request header whose value names the application conversation for session_affinity, deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. A request without a usable value (header missing, empty, or a redacted credential header, and any SDK call without proxy request headers) gets no conversation-based reuse from this router and never falls back to its session_id. A separately enabled Router-level session_affinity pre-call check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. Unset keeps the session_id behavior
+             */
+            conversation_header?: string | null;
+            /**
              * Custom Dimensions
              * @description Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
              * @default []
@@ -45669,6 +47247,11 @@ export interface components {
              * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
              */
             fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Context Tokens
+             * @description Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. Unset preserves the local shortcut. Existing session and user-turn pins still take precedence.
+             */
+            heuristic_first_max_context_tokens?: number | null;
             /**
              * Heuristic First Max Tier
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
@@ -47256,6 +48839,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /** ResponsesAPIModeration */
         ResponsesAPIModeration: {
             /** Model */
@@ -47268,6 +48861,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -48330,6 +49924,11 @@ export interface components {
         /** ServiceConnection */
         ServiceConnection: {
             /**
+             * Browser Url
+             * @default
+             */
+            browser_url: string;
+            /**
              * Configured
              * @default false
              */
@@ -48377,6 +49976,24 @@ export interface components {
         SessionLogoutResponse: {
             /** Message */
             message: string;
+        };
+        /**
+         * ShadowEvalGradePair
+         * @description How many judged turns gave the real and shadow responses this pair of grades.
+         */
+        ShadowEvalGradePair: {
+            /**
+             * Real Grade
+             * @description Grade of the response the caller actually received, 1 to 5
+             */
+            real_grade: number;
+            /**
+             * Shadow Grade
+             * @description Grade of the duplicated response nobody was served, 1 to 5
+             */
+            shadow_grade: number;
+            /** Turn Count */
+            turn_count: number;
         };
         /**
          * ShadowEvalJobResponse
@@ -48447,8 +50064,19 @@ export interface components {
              * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
              */
             router_names: string[];
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
             /** Shadow Percentage */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Status
              * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
@@ -48578,6 +50206,158 @@ export interface components {
              * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
              */
             withheld_count?: number | null;
+        };
+        /**
+         * ShadowEvalRubricJobResponse
+         * @description A rubric shadow eval job: the regular job view plus the rubric it grades against.
+         */
+        ShadowEvalRubricJobResponse: {
+            /** Baseline Model */
+            baseline_model?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Error Count
+             * @description Sampled attempts that errored; detail endpoint only
+             */
+            error_count?: number | null;
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Judge Spend
+             * @description Judge cost so far; detail endpoint only
+             */
+            judge_spend?: number | null;
+            /**
+             * Judged Count
+             * @description Verdicts recorded; detail endpoint only
+             */
+            judged_count?: number | null;
+            /**
+             * Last Error
+             * @description Most recent attempt error; detail endpoint only
+             */
+            last_error?: string | null;
+            /**
+             * Models
+             * @description Model groups the sampled traffic is narrowed to; empty means every model the targets use
+             * @default []
+             */
+            models: string[];
+            /** @description Stratified verdicts; detail endpoint only */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /**
+             * Router Name
+             * @description The first router, kept for callers that predate router_names; derived so the
+             *     two fields can never disagree.
+             */
+            readonly router_name: string;
+            /**
+             * Router Names
+             * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria both responses are graded against, as stored at start
+             */
+            rubric: string;
+            /**
+             * Rubric Version
+             * @description The grading contract (prompt, anchors, 1-5 scale) the job runs under
+             */
+            rubric_version: number;
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Status
+             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+             *     backfills it for every job that displayed stopped when the column arrived, so the
+             *     pre-column population is closed), completion is the window passing or every target
+             *     spending its budget, and anything else is running. The all-targets-stamped fallback
+             *     covers only stops written by pre-column pods during a rolling deploy.
+             * @enum {string}
+             */
+            readonly status: "running" | "completed" | "stopped";
+            /**
+             * Stopped By
+             * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             */
+            stopped_by?: string | null;
+            /**
+             * Targets
+             * @description The targets whose traffic this job evaluates, and only theirs, each with its own budget
+             */
+            targets: components["schemas"]["ShadowEvalJobTargetResponse"][];
+        };
+        /**
+         * ShadowEvalRubricResultResponse
+         * @description A rubric job's grades so far. Error attempts are excluded, like the job's preference results.
+         */
+        ShadowEvalRubricResultResponse: {
+            /**
+             * By Router
+             * @description One slice per router arm, ordered by router name, each graded against the same real responses
+             */
+            by_router: components["schemas"]["ShadowEvalRubricSlice"][];
+            /** Job Id */
+            job_id: string;
+            /** @description Every arm together. A judged turn is one (request, router arm) pair, so a multi-router job counts each real response once per arm; compare routers with by_router */
+            overall: components["schemas"]["ShadowEvalRubricSlice"];
+            /** Rubric */
+            rubric: string;
+            /** Rubric Version */
+            rubric_version: number;
+        };
+        /**
+         * ShadowEvalRubricSlice
+         * @description Rubric grades for one router arm, or for every arm together.
+         */
+        ShadowEvalRubricSlice: {
+            /**
+             * Grade Distribution
+             * @description Joint counts of (real_grade, shadow_grade) over graded turns, ordered by real then shadow grade, so turns where both responses were good or both were bad stay distinguishable
+             */
+            grade_distribution: components["schemas"]["ShadowEvalGradePair"][];
+            /**
+             * Graded Count
+             * @description Judged turns that carry both grades
+             */
+            graded_count: number;
+            /** Group */
+            group: string;
+            /**
+             * Ungraded Count
+             * @description Judged turns with a preference but no grades, such as turns a worker without rubric support judged. They are excluded from grade_distribution, never counted as low grades
+             */
+            ungraded_count: number;
         };
         /**
          * ShadowEvalSlice
@@ -48741,27 +50521,6 @@ export interface components {
              */
             tags: string[];
         };
-        /** SkillHubMetadata */
-        SkillHubMetadata: {
-            /** Description */
-            description?: string | null;
-            /** Domain */
-            domain?: string | null;
-            /**
-             * Expected Updated At
-             * @description Published updated_at read by the editor. A stale value returns 409
-             */
-            expected_updated_at?: string | null;
-            /** Keywords */
-            keywords?: string[] | null;
-            /** Namespace */
-            namespace?: string | null;
-            /**
-             * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
-             */
-            version?: string | null;
-        };
         /** SkillHubPendingSkill */
         SkillHubPendingSkill: {
             /**
@@ -48783,10 +50542,15 @@ export interface components {
         /** SkillHubProposal */
         SkillHubProposal: {
             agent_skill?: components["schemas"]["SkillHubAgentSkill"] | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -48802,6 +50566,40 @@ export interface components {
         };
         /** SkillHubPublication */
         SkillHubPublication: Record<string, never>;
+        /** SkillHubRegistration */
+        SkillHubRegistration: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Repository or HTTPS archive source reference
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
+        };
         /** SkillHubRejection */
         SkillHubRejection: {
             /** Expected Revision */
@@ -48847,6 +50645,9 @@ export interface components {
         SkillHubSkill: {
             /** Approved By */
             approved_by?: string | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Content Url */
             content_url?: string | null;
             /** Created At */
@@ -48864,6 +50665,8 @@ export interface components {
             download_count?: number | null;
             /** Download Url */
             download_url?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Id */
             id: string;
             /** Keywords */
@@ -48949,9 +50752,22 @@ export interface components {
         };
         /** SkillHubSubmissionEdit */
         SkillHubSubmissionEdit: {
-            /** Description */
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
             description?: string | null;
-            /** Domain */
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
             domain?: string | null;
             /**
              * Expected Revision
@@ -48963,13 +50779,24 @@ export interface components {
              * @description Published updated_at read by the editor. A stale value returns 409
              */
             expected_updated_at?: string | null;
-            /** Keywords */
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
             keywords?: string[] | null;
-            /** Namespace */
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
             namespace?: string | null;
             /**
              * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             * @description Explicit SemVer, or omit/null for automatic versioning on approval
              */
             version?: string | null;
         };
@@ -48989,6 +50816,85 @@ export interface components {
              * @description Revision read from the submission detail
              */
             expected_revision: number;
+        };
+        /** SkillHubUpdate */
+        SkillHubUpdate: {
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
+            domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Explicit replacement source reference. Omit/null to preserve the stored source and archive
+             */
+            source?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
+        /** SkillHubUpload */
+        SkillHubUpload: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** SkillHubVersion */
         SkillHubVersion: {
@@ -49289,6 +51195,12 @@ export interface components {
              */
             autorouter_savings_spend: number;
             /**
+             * Cache Cost
+             * @description Recorded cache read and write cost in USD for customer usage
+             * @default 0
+             */
+            cache_cost: number;
+            /**
              * Cache Creation Input Tokens
              * @default 0
              */
@@ -49314,6 +51226,12 @@ export interface components {
              */
             compression_savings_spend: number;
             /**
+             * Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend
+             * @default 0
+             */
+            customer_margin_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
@@ -49334,6 +51252,12 @@ export interface components {
              * @default 0
              */
             guardrail_spend: number;
+            /**
+             * Priced Cache Tokens
+             * @description Cache tokens with a recorded cost for customer usage
+             * @default 0
+             */
+            priced_cache_tokens: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0
@@ -49588,6 +51512,99 @@ export interface components {
              * @description Percentage of each target's requests to duplicate through the router
              */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Team Ids
+             * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
+             * @default []
+             */
+            team_ids: string[];
+            /**
+             * User Ids
+             * @description Users whose traffic will be shadowed, matched on the user every authenticated request resolves to across all their teams: JWT requests carrying their subject claim and virtual keys they own
+             * @default []
+             */
+            user_ids: string[];
+        };
+        /**
+         * StartShadowEvalRubricRequest
+         * @description A shadow eval whose judge also grades each response from 1 to 5 against an operator rubric.
+         */
+        StartShadowEvalRubricRequest: {
+            /**
+             * Api Key Ids
+             * @description Hashed virtual keys whose traffic will be shadowed. Combined with team_ids and user_ids the job needs at least one target and at most 100, which also bounds every read the job's endpoints make. Each target carries its own max_budget spend budget, so one exhausting its budget leaves the others sampling.
+             * @default []
+             */
+            api_key_ids: string[];
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Duration Days
+             * @description How many days the job samples traffic before completing on its own
+             * @default 7
+             */
+            duration_days: number;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Max Budget
+             * @description Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window. Every router arm draws from the same per-target budget, so a multi-router job reaches it proportionally sooner
+             * @default 10
+             */
+            max_budget: number;
+            /**
+             * Models
+             * @description Model groups to narrow the sampled traffic to, matched on the group the caller requested and resolved through model_group_alias, so an alias and its target are one name. Empty samples every model the targets use. This ANDs with the targets: a job over a user and one model samples that user's requests on that model across every key they own, and none of their other traffic. Forward jobs only: a reverse job samples exactly the traffic its own router served, which no other model group can name
+             * @default []
+             */
+            models: string[];
+            /**
+             * Router Name
+             * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
+             */
+            router_name?: string | null;
+            /**
+             * Router Names
+             * @description The auto-routers under evaluation, at most 4. Every sampled request runs through every router listed and each arm is judged independently against the same real response, so routers compare head-to-head on identical traffic. More than one router requires direction 'forward'. After validation this field always carries the full deduplicated set, whichever spelling the caller used
+             * @default []
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria the judge grades both responses against, in plain language, at most 4000 characters. Each response gets an integer grade on a fixed scale where 1 fails the criteria and 5 fully meets them. Stored unchanged with the job and never edited
+             */
+            rubric: string;
+            /**
+             * Shadow Percentage
+             * @description Percentage of each target's requests to duplicate through the router
+             */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Team Ids
              * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
@@ -49911,7 +51928,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -50073,7 +52090,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
@@ -50337,10 +52354,14 @@ export interface components {
         TeamMemberInfoResponse: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role?: string | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -50359,6 +52380,42 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /** TeamMemberListItem */
+        TeamMemberListItem: {
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
+            /** Litellm Budget Table */
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Role */
+            role: string;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * TeamMemberRef
@@ -50903,6 +52960,8 @@ export interface components {
             response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            /** @description Google systemInstruction, counted with contents */
+            systemInstruction?: components["schemas"]["JsonValue"];
             thinking?: components["schemas"]["JsonValue"];
             tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
@@ -51383,6 +53442,32 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
         };
+        /** TraceConversationPage */
+        TraceConversationPage: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Turns */
+            turns: components["schemas"]["TraceConversationTurn"][];
+        };
+        /** TraceConversationTurn */
+        TraceConversationTurn: {
+            /** Input */
+            input: string;
+            /** Input Ui */
+            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Output */
+            output: string;
+            /** Output Ui */
+            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Span Id */
+            span_id: string;
+            /** Start Time */
+            start_time: string;
+            /** Trace Id */
+            trace_id: string;
+            /** Trace Ref */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -51418,7 +53503,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -51482,7 +53567,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -51507,7 +53592,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Type */
             type: string;
         };
@@ -51535,7 +53620,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            name: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
@@ -51798,6 +53883,12 @@ export interface components {
             source: {
                 [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
+            /**
+             * Supports Similarity Threshold
+             * @description Whether the active response cache supports similarity thresholds
+             * @default false
+             */
+            supports_similarity_threshold: boolean;
             /** Values */
             values: {
                 [key: string]: unknown;
@@ -52022,7 +54113,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -52054,6 +54145,11 @@ export interface components {
             key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /**
+             * Lens Enabled
+             * @description Enable or disable Lens tracing for this key. Omit to retain its policy or send null to inherit the team policy. This updates only metadata.lens_enabled and preserves other stored metadata. When metadata is also supplied, this field takes precedence over metadata.lens_enabled.
+             */
+            lens_enabled?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -52185,6 +54281,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -52216,6 +54313,12 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /**
+             * Preserve Explicit Oauth Settings
+             * @description Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.
+             * @default false
+             */
+            preserve_explicit_oauth_settings: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Rpm */
@@ -52400,6 +54503,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id: string;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -52558,7 +54663,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -52610,6 +54715,10 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
+            } | null;
             /** Models */
             models?: unknown[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
@@ -52647,6 +54756,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -52696,7 +54807,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -52756,6 +54867,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -52802,7 +54915,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -52862,6 +54975,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -53227,6 +55342,8 @@ export interface components {
             } | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -53632,11 +55749,19 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /** Budget Limits Usage */
+            budget_limits_usage?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            } | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Metadata */
@@ -53659,6 +55784,10 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -54555,6 +56684,8 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Image Token Cost Batches */
             cache_read_input_image_token_cost_batches?: number | null;
+            /** Cache Read Input Image Token Cost Priority */
+            cache_read_input_image_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -54673,6 +56804,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Image Token Priority */
+            input_cost_per_image_token_priority?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -54766,6 +56899,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -54808,6 +56951,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -56126,6 +58271,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 agent_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -56290,7 +58437,7 @@ export interface operations {
                 /** @description next_cursor from the preceding page. */
                 cursor?: string | null;
                 /** @description Alert category, or all performance alerts. */
-                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
+                type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
             };
             header?: never;
             path?: never;
@@ -56305,6 +58452,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertViewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_open_alerts_alerts_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertBulkUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertBulkResult"];
                 };
             };
             /** @description Validation Error */
@@ -56347,7 +58527,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"];
+                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"] | components["schemas"]["AlertThresholdsUpdate"];
             };
         };
         responses: {
@@ -56971,6 +59151,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -57431,6 +59612,39 @@ export interface operations {
             };
         };
     };
+    start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRubricRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_shadow_eval_auto_router_shadow_eval_start_post: {
         parameters: {
             query?: never;
@@ -57482,6 +59696,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricResultResponse"];
                 };
             };
             /** @description Validation Error */
@@ -58521,7 +60766,7 @@ export interface operations {
             };
         };
     };
-    new_budget_endpoint_budget_new_post: {
+    new_budget_budget_new_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -58585,7 +60830,7 @@ export interface operations {
             };
         };
     };
-    update_budget_endpoint_budget_update_post: {
+    update_budget_budget_update_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -61305,6 +63550,39 @@ export interface operations {
             };
         };
     };
+    discover_nim_models_credentials_nvidia_nim_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NimModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NimModelDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_user_connections_credentials_user_connections_get: {
         parameters: {
             query?: never;
@@ -61512,6 +63790,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cursor_cli_passthrough_cursor_cli__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "agent.v1.AgentService/RunSSE" | "aiserver.v1.BidiService/BidiAppend";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/connect+proto": string;
+                "application/proto": string;
+            };
+        };
+        responses: {
+            /** @description Unchanged native Cursor response bytes, including streamed agent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/proto": string;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -61979,6 +64295,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -62424,11 +64742,22 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -62441,18 +64770,41 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -62465,6 +64817,19 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: ({
+                        /** Mode */
+                        mode?: string | null;
+                        /** Ttl */
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
@@ -63038,6 +65403,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -65046,6 +67413,33 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
                 };
+            };
+        };
+    };
+    reference_exchange_rates_get_reference_exchange_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceExchangeRates"];
+                };
+            };
+            /** @description No ECB reference rate published in the last 7 days is available */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -68458,7 +70852,80 @@ export interface operations {
             };
         };
     };
-    service_connection_lens_service_get: {
+    connect_model_gateway_lens_admin_gateway_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewaySetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lens_login_lens_login_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_login_lens_login__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_service_lens_service_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -68474,6 +70941,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceConnection"];
+                };
+            };
+        };
+    };
+    lens_ui_entry_lens_ui_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_ui_lens_ui__path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -68753,6 +71271,824 @@ export interface operations {
             };
         };
     };
+    login_resume_login_resume_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_app_budget_groups_management_v1_app_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_budget_groups_management_v1_app_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_customer_member_budget_groups_management_v1_app_customer_member_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_group_budget_groups_management_v1_app_group_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_groups_management_v1_app_groups_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_app_group_management_v1_app_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_group_management_v1_app_groups__app_group_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_app_group_management_v1_app_groups__app_group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_group_organizations_management_v1_app_groups__app_group_id__customer_organizations_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroupOrganization"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_group_organization_management_v1_app_groups__app_group_id__customer_organizations__customer_org_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupBudgetPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroupOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_apps_management_v1_apps_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_app_management_v1_apps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_definition_management_v1_apps_definition_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDefinition"];
+                };
+            };
+        };
+    };
+    put_app_definition_management_v1_apps_definition_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_resources_management_v1_apps_resources_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                resource_type?: components["schemas"]["AppResourceType"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResource"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_resource_models_management_v1_apps_resources__resource_type___resource_id__models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resource_type: components["schemas"]["AppResourceType"];
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_management_v1_apps__app_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_app_management_v1_apps__app_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppMemberPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppOrganizationPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_budgets_management_v1_budgets_get: {
         parameters: {
             query?: never;
@@ -68946,6 +72282,8 @@ export interface operations {
                 parent_org_id?: string | null;
                 /** @description Case-insensitive substring of the customer member ID or alias */
                 search?: string;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -69017,6 +72355,10 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_member_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69172,6 +72514,59 @@ export interface operations {
             };
         };
     };
+    get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_customer_organizations_management_v1_customer_organizations_get: {
         parameters: {
             query?: {
@@ -69250,6 +72645,10 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_org_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69290,6 +72689,10 @@ export interface operations {
                 customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69610,6 +73013,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 parent_org_id?: string | null;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -69681,6 +73086,10 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_team_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69873,6 +73282,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_team_members_management_v1_teams__team_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_TeamMemberListItem_"];
                 };
             };
             /** @description Validation Error */
@@ -72536,6 +75976,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -72753,7 +76194,18 @@ export interface operations {
     };
     get_response_input_items_openai_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -73688,6 +77140,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 organization_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -76420,6 +79874,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -76637,7 +80092,18 @@ export interface operations {
     };
     get_response_input_items_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -77924,6 +81390,7 @@ export interface operations {
                 security_scan_passed?: boolean | null;
                 sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
                 sort_order?: "asc" | "desc";
+                enabled_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -77960,7 +81427,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ImportSkillRequest"];
+                "application/json": components["schemas"]["SkillHubRegistration"] | components["schemas"]["ImportSkillRequest"];
             };
         };
         responses: {
@@ -78059,7 +81526,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SkillHubMetadata"];
+                "application/json": components["schemas"]["SkillHubUpdate"];
             };
         };
         responses: {
@@ -78163,6 +81630,37 @@ export interface operations {
                 };
                 content: {
                     "text/markdown": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_skill_downloads_skill_hub_skills__name__downloads_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated download history as CSV */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -79003,7 +82501,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -79125,7 +82623,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -80103,6 +83601,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 start_date?: string | null;
                 end_date?: string | null;
                 model?: string | null;
@@ -80799,6 +84299,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -80915,6 +84417,8 @@ export interface operations {
                 team_id?: string;
                 /** @description Limit the number of keys returned */
                 key_limit?: number | null;
+                /** @description Set to false to skip loading the roster: `team_info.members_with_roles` and `team_memberships` come back empty. Page through members with `GET /management/v1/teams/{team_id}/members` */
+                include_members?: boolean;
             };
             header?: never;
             path?: never;
@@ -82415,161 +85919,6 @@ export interface operations {
             };
         };
     };
-    typesafe_proxy_route_typesafe__endpoint__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     update_background_chat_settings_update_background_chat_settings_patch: {
         parameters: {
             query?: never;
@@ -83343,6 +86692,8 @@ export interface operations {
             query?: {
                 export_type?: components["schemas"]["ExportType"];
                 format?: "csv" | "json";
+                /** @description Add key_metadata and user_metadata for admin callers. Ignored for everyone else. */
+                include_metadata?: boolean;
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
                 /** @description End date in YYYY-MM-DD format */
@@ -83428,7 +86779,7 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
-                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                /** @description Case-insensitive search by ID or email, or by alias for proxy admins and admin viewers. */
                 search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
@@ -83468,7 +86819,7 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
-                /** @description Include the caller's current admin MCP route permissions */
+                /** @description Include the caller's current admin MCP route permissions. An admin caller with no user_id gets empty keys and teams */
                 admin_mcp?: boolean;
                 /** @description Admin MCP tool to authorize for this caller */
                 mcp_tool?: string | null;
@@ -84633,6 +87984,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -85354,11 +88706,22 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -85371,18 +88734,41 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -85395,6 +88781,19 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: ({
+                        /** Mode */
+                        mode?: string | null;
+                        /** Ttl */
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
@@ -86608,7 +90007,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_logs_post: {
+    forward_otlp_logs_v1_logs_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -88523,6 +91922,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -88740,7 +92140,18 @@ export interface operations {
     };
     get_response_input_items_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -89682,11 +93093,14 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
-                /** @description Window end, unix ms. Default: now */
-                end_ms?: number | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+                agent?: string | null;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -89714,7 +93128,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_traces_post: {
+    forward_otlp_traces_v1_traces_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -89737,6 +93151,8 @@ export interface operations {
     list_trace_agents_v1_traces_agents_get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 start_ms?: number | null;
                 end_ms?: number | null;
             };
@@ -89822,9 +93238,11 @@ export interface operations {
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
                 cursor?: string | null;
                 page_size?: number | null;
-                trace_ref?: string;
             };
             header?: never;
             path: {
@@ -89854,9 +93272,48 @@ export interface operations {
             };
         };
     };
+    get_agent_trace_conversation_v1_traces__trace_id__conversation_get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceConversationPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
             };
             header?: never;
@@ -89891,8 +93348,10 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
+                cursor?: string | null;
             };
             header?: never;
             path: {

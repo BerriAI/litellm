@@ -1,4 +1,3 @@
-import json
 from abc import abstractmethod
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, cast
@@ -7,6 +6,9 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.litellm_core_utils.core_helpers import loads_json_object
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
 if TYPE_CHECKING:
     import httpx
@@ -76,6 +78,7 @@ def convert_model_response_to_streaming(
                     index=choice.index,
                     delta=_streaming_delta(cast(Choices, choice).message),
                     finish_reason=choice.finish_reason,
+                    logprobs=stored_attribute(choice, "logprobs"),
                 )
             )
         processed_chunk: Final = ModelResponseStream(
@@ -83,8 +86,12 @@ def convert_model_response_to_streaming(
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
         )
+        service_tier: Final = stored_attribute(model_response, "service_tier")
+        if service_tier is not None:
+            set_extra_attribute(processed_chunk, "service_tier", service_tier)
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
         usage: Final = getattr(model_response, "usage", None)
@@ -117,7 +124,7 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             self.http_response.close()
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -132,17 +139,10 @@ class BaseModelResponseIterator:
         return self
 
     @staticmethod
-    def _string_to_dict_parser(str_line: str) -> dict | None:
-        stripped_json_chunk: dict | None = None
+    def _string_to_dict_parser(str_line: str) -> dict[str, object] | None:
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
-        return stripped_json_chunk
+        decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
+        return decoded if isinstance(decoded, dict) else None
 
     @classmethod
     def string_to_dict_parser(
@@ -193,10 +193,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -229,10 +228,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -286,7 +284,7 @@ class FakeStreamResponseIterator:
         return self
 
     @abstractmethod
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk:
         pass
 
     def __next__(self):

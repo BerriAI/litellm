@@ -34,6 +34,13 @@ pub fn to_str(value: &Value) -> String {
     }
 }
 
+/// `repr(text)` for a `str`, without building a [`Value`].
+pub fn str_repr(text: &str) -> String {
+    let mut out = String::new();
+    write_str(&mut out, text);
+    out
+}
+
 /// `repr(float)`, the shortest round-trip form with CPython's exponent thresholds.
 pub fn float_repr(value: f64) -> String {
     format_float(value, true)

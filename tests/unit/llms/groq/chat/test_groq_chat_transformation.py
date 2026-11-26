@@ -209,6 +209,13 @@ class TestGroqWebSearchUsageSignal:
         assert getattr(model_response, "usage", None) is None
 
 
+def test_reply_without_service_tier_is_reported_as_auto():
+    reply_without_tier: Final = {k: v for k, v in _searched_groq_response(None).items() if k != "service_tier"}
+    response: Final = _groq_completion_with_mocked_response(reply_without_tier)
+    assert response.service_tier == "auto"
+    assert response.choices[0].message.content == "Top headline: example"
+
+
 @pytest.mark.parametrize(
     "model",
     ["groq/qwen/qwen3.8-27b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"],

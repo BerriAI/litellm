@@ -65,13 +65,22 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 }
 
 #[rstest]
-#[case(json!({"pages": [true]}), Error::Pages(PagesFault::Mixed))]
-#[case(json!({"pages": [1, "2"]}), Error::Pages(PagesFault::Mixed))]
-#[case(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
-#[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
-#[case(json!({"features": "languages&pages=1"}), Error::Features)]
-#[case(json!({"req_format": "azure"}), Error::RequestFormat)]
-#[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
+#[case::boolean_page(json!({"pages": [true]}), Error::Pages(PagesFault::Mixed))]
+#[case::mixed_pages(json!({"pages": [1, "2"]}), Error::Pages(PagesFault::Mixed))]
+#[case::negative_page(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
+#[case::injected_pages(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
+#[case::injected_features(json!({"features": "languages&pages=1"}), Error::Features)]
+#[case::bad_req_format(json!({"req_format": "azure"}), Error::RequestFormat)]
+#[case::bad_format(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
+#[case::extra_body_bad_format(json!({"extra_body": {"outputContentFormat": "html"}}), Error::OutputContentFormat)]
+#[case::extra_body_negative_page(json!({"extra_body": {"pages": [-1]}}), Error::Pages(PagesFault::Negative))]
+#[case::extra_body_zero_page(json!({"extra_body": {"pages": [0]}}), Error::Pages(PagesFault::BelowFirstPage))]
+#[case::extra_body_bad_features(json!({"extra_body": {"features": 5}}), Error::Features)]
+#[case::bad_top_level_pages_under_extra_body_pages(json!({"pages": "abc", "extra_body": {"pages": "2"}}), Error::Pages(PagesFault::Range))]
+#[case::extra_body_bad_query_fields(
+    json!({"extra_body": {"queryFields": 5}}),
+    Error::RequestField { path: "extra_body.queryFields".into(), cause: None }
+)]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -193,6 +202,57 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
 }
 
 #[rstest]
+#[case::spans_cover_the_content_once(vec![vec![(0, 256)], vec![(256, 256)]], &["a".repeat(256), "a".repeat(256)])]
+#[case::spans_pass_the_content_by_one_character(vec![vec![(0, 257)], vec![(256, 256)]], &["A".to_owned(), "B".to_owned()])]
+#[case::page_repeats_one_span(vec![vec![(0, 512), (0, 512)]], &["A".to_owned()])]
+#[tokio::test]
+async fn markdown_pages_whose_span_text_passes_the_content_fall_back_to_their_lines(
+    #[case] spans_per_page: Vec<Vec<(usize, usize)>>,
+    #[case] expected: &[String],
+) {
+    let pages = spans_per_page
+        .iter()
+        .zip(["A", "B"])
+        .enumerate()
+        .map(|(index, (spans, line))| {
+            json!({
+                "pageNumber": index + 1,
+                "spans": spans
+                    .iter()
+                    .map(|&(offset, length)| json!({"offset": offset, "length": length}))
+                    .collect::<Vec<_>>(),
+                "lines": [{"content": line}]
+            })
+        })
+        .collect::<Vec<_>>();
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "content": "a".repeat(512),
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": pages
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(
+        LAYOUT_MODEL,
+        &upstream.uri(),
+        json!({"outputContentFormat": "markdown"}),
+    ))
+    .await
+    .unwrap();
+
+    let markdown = response
+        .pages
+        .iter()
+        .map(|page| page.markdown.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(markdown, expected);
+}
+
+#[rstest]
 #[case::native_markdown(LAYOUT_MODEL, json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
 #[case::markdown_on_read(MODEL, json!({"outputContentFormat": "markdown"}), Some("markdown"))]
 #[case::text(LAYOUT_MODEL, json!({"outputContentFormat": "text"}), Some("text"))]
@@ -261,6 +321,123 @@ async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling
     assert_eq!(sent.query("drop_params"), None);
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
     assert_eq!(response.pages[0].markdown, "hello");
+}
+
+#[rstest]
+#[case::output_content_format(
+    json!({"extra_body": {"outputContentFormat": "markdown"}}),
+    [None, None, Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[case::pages_and_features(
+    json!({"extra_body": {"pages": "2", "features": ["languages"]}}),
+    [Some("2"), Some("languages"), None, None]
+)]
+#[case::over_the_top_level(
+    json!({"pages": [0], "outputContentFormat": "text", "extra_body": {"pages": "2-3", "outputContentFormat": "markdown"}}),
+    [Some("2-3"), None, Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[case::dropped(
+    json!({"extra_body": {"outputContentFormat": "html"}, "drop_params": true}),
+    [None, None, None, None]
+)]
+#[case::azure_page_numbers(
+    json!({"extra_body": {"pages": [1, 2]}}),
+    [Some("1,2"), None, None, None]
+)]
+#[case::dropped_falls_back_to_the_top_level(
+    json!({
+        "drop_params": true,
+        "pages": [0],
+        "features": "languages",
+        "outputContentFormat": "markdown",
+        "extra_body": {"pages": "abc", "features": 5, "outputContentFormat": "html"}
+    }),
+    [Some("1"), Some("languages"), Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[case::null_falls_back_to_the_top_level(
+    json!({"output_content_format": "markdown", "extra_body": {"outputContentFormat": null}}),
+    [None, None, Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[tokio::test]
+async fn azure_query_params_in_extra_body_reach_the_analyze_query(
+    #[case] options: Value,
+    #[case] expected: [Option<&str>; 4],
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    perform(ocr_request(LAYOUT_MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        [
+            "pages",
+            "features",
+            "outputContentFormat",
+            "stringIndexType"
+        ]
+        .map(|name| sent.query(name)),
+        expected.map(|value| value.map(String::from))
+    );
+}
+
+#[rstest]
+#[case::extra_body(json!({"extra_body": {
+    "features": ["queryFields"],
+    "queryFields": ["Total", "Vendor"],
+    "locale": "en-US",
+    "stringIndexType": "utf16CodeUnit"
+}}))]
+#[case::top_level(json!({
+    "features": ["queryFields"],
+    "queryFields": "Total,Vendor",
+    "locale": "en-US",
+    "stringIndexType": "UTF16CODEUNIT"
+}))]
+#[tokio::test]
+async fn other_azure_query_options_reach_the_analyze_query(#[case] options: Value) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    perform(ocr_request(LAYOUT_MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        ["features", "queryFields", "locale", "stringIndexType"].map(|name| sent.query(name)),
+        [
+            Some("queryFields"),
+            Some("Total,Vendor"),
+            Some("en-US"),
+            Some("utf16CodeUnit")
+        ]
+        .map(|value| value.map(String::from))
+    );
+}
+
+#[rstest]
+#[case::top_level(json!({"output": "figures"}), "output")]
+#[case::extra_body(json!({"extra_body": {"output": "pdf"}}), "extra_body.output")]
+#[tokio::test]
+async fn output_is_rejected_before_sending(#[case] options: Value, #[case] param: &str) {
+    let upstream = upstream([json_response(json!({}))]).await;
+
+    let error = perform(ocr_request(LAYOUT_MODEL, &upstream.uri(), options))
+        .await
+        .unwrap_err();
+
+    assert!(received(&upstream).await.is_empty());
+    assert!(matches!(&error, Error::UnsupportedParam { param: rejected, .. } if rejected == param));
+    assert_eq!(error.http_status_code(), Some(400));
 }
 
 #[tokio::test]
