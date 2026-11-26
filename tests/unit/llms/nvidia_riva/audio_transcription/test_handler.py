@@ -337,7 +337,14 @@ def test_default_mode_streams_and_never_calls_recognize() -> None:
 
 
 @pytest.mark.parametrize(
-    ("riva_offline", "rpc"), [("false", "StreamingRecognize"), ("False", "StreamingRecognize"), ("true", "Recognize")]
+    ("riva_offline", "rpc"),
+    [
+        ("false", "StreamingRecognize"),
+        ("False", "StreamingRecognize"),
+        ("0", "StreamingRecognize"),
+        ("true", "Recognize"),
+        ("yes", "Recognize"),
+    ],
 )
 def test_riva_offline_string_from_multipart_form_is_parsed(riva_offline: str, rpc: str) -> None:
     with _riva_server(_Script(streaming=(_streamed("streamed"),), offline=_offline("offline"))) as riva:
@@ -348,7 +355,7 @@ def test_riva_offline_string_from_multipart_form_is_parsed(riva_offline: str, rp
     assert response.text == ("offline" if rpc == "Recognize" else "streamed")
 
 
-@pytest.mark.parametrize("riva_offline", ["yes", "", 1])
+@pytest.mark.parametrize("riva_offline", ["maybe", "", 1])
 def test_riva_offline_malformed_value_is_rejected_before_any_rpc(riva_offline: object) -> None:
     with _riva_server(_answers("ok")) as riva:
         with pytest.raises(NvidiaRivaException) as excinfo:
@@ -362,7 +369,7 @@ def test_riva_offline_malformed_value_is_rejected_before_any_rpc(riva_offline: o
 
 def test_riva_offline_malformed_value_is_dropped_under_drop_params() -> None:
     with _riva_server(_Script(streaming=(_streamed("streamed"),), offline=_offline("offline"))) as riva:
-        response: Final = _transcribe(riva, {"riva_offline": "yes"}, litellm_params={"drop_params": True})
+        response: Final = _transcribe(riva, {"riva_offline": "maybe"}, litellm_params={"drop_params": True})
         call: Final = riva.only_call()
 
     assert response.text == "streamed"
