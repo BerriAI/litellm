@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.azure_ai.common_utils import is_azure_openai_v1_host
+from litellm.llms.azure_ai.common_utils import is_azure_openai_host
 from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import (
@@ -1028,9 +1028,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         served_from: Final = (
             self.get_complete_url(api_base, {}) if self.custom_llm_provider is LlmProviders.OPENAI else api_base
         )
-        return served_from is not None and (
-            is_openai_backed_api_base(served_from) or is_azure_openai_v1_host(served_from)
-        )
+        return served_from is not None and (is_openai_backed_api_base(served_from) or is_azure_openai_host(served_from))
 
     def supports_native_websocket(self) -> bool:
         """OpenAI supports native WebSocket for Responses API"""

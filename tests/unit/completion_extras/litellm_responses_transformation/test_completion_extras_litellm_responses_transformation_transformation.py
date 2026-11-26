@@ -7664,7 +7664,12 @@ def test_bridged_chat_rejects_background_on_a_model_the_provider_cannot_stream_l
 
 @pytest.mark.parametrize(
     "api_base",
-    ["https://api.openai.com/v1", "https://eu.api.openai.com/v1", "https://my-resource.openai.azure.com/openai/v1"],
+    [
+        "https://api.openai.com/v1",
+        "https://eu.api.openai.com/v1",
+        "https://my-resource.openai.azure.com/openai/v1",
+        "https://my-resource.cognitiveservices.azure.com/openai/v1",
+    ],
 )
 @pytest.mark.parametrize("stream", [False, True], ids=["not-streamed", "stream-the-model-cannot-serve-live"])
 def test_bridged_chat_rejects_background_on_a_pass_through_deployment_openai_serves(
@@ -7866,6 +7871,7 @@ async def test_bridged_chat_answers_400_after_one_run_when_an_unknown_server_sta
         ("azure_ai/any-model", "https://my-resource.services.ai.azure.com"),
         ("openai/any-model", "https://my-resource.openai.azure.com/openai/v1"),
         ("openai/any-model", "https://my-resource.services.ai.azure.com/openai/v1"),
+        ("openai/any-model", "https://my-resource.cognitiveservices.azure.com/openai/v1"),
         ("openai/responses/any-model", "https://api.openai.com/v1"),
     ],
 )

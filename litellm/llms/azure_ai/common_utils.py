@@ -62,6 +62,11 @@ FOUNDRY_PROJECT_NEXT_SEGMENTS: Final = ((), ("openai",), ("models",), ("v1",))
 FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 
 
+def is_azure_openai_host(api_base: str) -> bool:
+    host: Final = urlparse(api_base).hostname
+    return host is not None and host.endswith((*AZURE_OPENAI_V1_HOST_SUFFIXES, *AZURE_OPENAI_RESOURCE_HOST_SUFFIXES))
+
+
 def is_openai_v1_resource_base(base_url: httpx.URL) -> bool:
     path: Final = base_url.path.rstrip("/")
     if path == "/openai":
