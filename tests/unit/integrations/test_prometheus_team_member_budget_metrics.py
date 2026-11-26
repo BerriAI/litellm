@@ -1,7 +1,7 @@
 """Team member budget gauges: one series per (team, member) with an effective budget."""
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
@@ -498,3 +498,25 @@ async def test_real_sweep_io_uses_stored_spend_when_the_counter_read_fails(
     await logger._sweep_team_member_budget_metrics(logger._team_member_sweep_io(real_sweep_db), now=NOW)
 
     assert _sample(REMAINING_METRIC, _labels("alice", "t-search", "search")) == 18.0
+
+
+@pytest.mark.asyncio
+async def test_sweep_page_without_budgeted_members_reads_no_emails_or_counters(db_connected: None) -> None:
+    directory: Final = _Directory(memberships=(_member("carol", "t-ads"), _member("dave", "t-ads")))
+    real_io: Final = directory.sweep_io()
+    reads: Final[list[str]] = []
+
+    async def fetch_emails(user_ids: Sequence[str]) -> Mapping[str, str | None]:
+        reads.append("emails")
+        return await real_io.fetch_emails(user_ids)
+
+    async def read_counters(counter_keys: Sequence[str]) -> Mapping[str, float | None] | None:
+        reads.append("counters")
+        return await real_io.read_counters(counter_keys)
+
+    io: Final = replace(real_io, fetch_emails=fetch_emails, read_counters=read_counters)
+
+    await PrometheusLogger()._sweep_team_member_budget_metrics(io, now=NOW)
+
+    assert reads == []
+    assert _series(MAX_METRIC) == {}
