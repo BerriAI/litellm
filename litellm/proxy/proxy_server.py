@@ -15,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -38,6 +39,7 @@ from collections.abc import (
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
+from pathlib import Path as FsPath
 from types import MappingProxyType, TracebackType, UnionType
 from typing import (
     TYPE_CHECKING,
@@ -181,6 +183,13 @@ from litellm.proxy._types import (
     TokenCountRequest,
     TransformRequestBody,
     UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.admin_ui_root_path import (
+    LITELLM_ASSET_PREFIX,
+    RenderedUI,
+    RenderUnavailable,
+    render_ui_for_root_path,
+    restructure_ui_html_files,
 )
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
@@ -2895,7 +2904,6 @@ try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     packaged_ui_path: Final = os.path.join(current_dir, "_experimental", "out")
     ui_path = packaged_ui_path
-    litellm_asset_prefix: Final = "/litellm-asset-prefix"
 
     def _dir_has_content(path: str) -> bool:
         try:
@@ -3068,57 +3076,18 @@ try:
     if not _validate_ui_directory(ui_path):
         verbose_proxy_logger.error("Selected UI path %s is invalid or incomplete. UI may not work correctly.", ui_path)
 
-    # Only modify files if a custom server root path is set AND filesystem is writable
-    if server_root_path and server_root_path != "/":
-        # Check if UI path is writable
-        is_writable = os.access(ui_path, os.W_OK)
-
-        if not is_writable:
+    match render_ui_for_root_path(
+        FsPath(ui_path), server_root_path, (FsPath(ui_path).parent, FsPath(tempfile.gettempdir()))
+    ):
+        case RenderedUI(directory=directory):
+            ui_path = str(directory)  # rebind-ok: module-level UI directory selection predates Final bindings
+        case RenderUnavailable(errors=render_errors):
             verbose_proxy_logger.warning(
-                "Cannot apply server_root_path replacements to UI at %s: path is not writable. Ensure server_root_path is '/' or pre-process UI files in Dockerfile with custom server_root_path.",
+                "Could not render the UI at %s for server_root_path %s: %s. Serving the UI unmodified. For read-only deployments, pre-process the UI in the Dockerfile or provide a writable directory.",
                 ui_path,
+                server_root_path,
+                "; ".join(render_errors),
             )
-        else:
-            # Iterate through files in the UI directory
-            for root, dirs, files in os.walk(ui_path):
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    # Skip binary files and files that don't need path replacement
-                    if filename.endswith(
-                        (
-                            ".png",
-                            ".jpg",
-                            ".jpeg",
-                            ".gif",
-                            ".ico",
-                            ".woff",
-                            ".woff2",
-                            ".ttf",
-                            ".eot",
-                        )
-                    ):
-                        continue
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            content = f.read()
-
-                        # Replace the asset prefix with the server root path
-                        modified_content = content.replace(
-                            f"{litellm_asset_prefix}",
-                            f"{server_root_path}",
-                        )
-
-                        # Replace the /.well-known/litellm-ui-config with the server root path
-                        modified_content = modified_content.replace(
-                            "/litellm/.well-known/litellm-ui-config",
-                            f"{server_root_path}/.well-known/litellm-ui-config",
-                        )
-
-                        with open(file_path, "w", encoding="utf-8") as f:
-                            f.write(modified_content)
-                    except (UnicodeDecodeError, PermissionError, OSError):
-                        # Skip binary files or files we can't write to
-                        continue
 
     # # Mount the _next directory at the root level
     app.mount(
@@ -3127,39 +3096,12 @@ try:
         name="next_static",
     )
     app.mount(
-        f"{litellm_asset_prefix}/_next",
+        f"{LITELLM_ASSET_PREFIX}/_next",
         StaticFiles(directory=os.path.join(ui_path, "_next")),
         name="next_static",
     )
-    # print(f"mounted _next at {server_root_path}/ui/_next")
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
-    def _restructure_ui_html_files(ui_root: str) -> None:
-        """Ensure each exported HTML route is available as <route>/index.html."""
-
-        for current_root, _, files in os.walk(ui_root):
-            rel_root = os.path.relpath(current_root, ui_root)
-            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
-
-            # Ignore Next.js asset directories
-            if first_segment in {"_next", "litellm-asset-prefix"}:
-                continue
-
-            for filename in files:
-                if not filename.endswith(".html") or filename == "index.html":
-                    continue
-
-                file_path = os.path.join(current_root, filename)
-                target_dir = os.path.splitext(file_path)[0]
-                target_path = os.path.join(target_dir, "index.html")
-
-                os.makedirs(target_dir, exist_ok=True)
-                try:
-                    os.replace(file_path, target_path)
-                except FileNotFoundError:
-                    # Another process may have already moved this file.
-                    continue
 
     # Handle HTML file restructuring
     # Only restructure if:
@@ -3177,7 +3119,7 @@ try:
                 ui_path,
             )
         else:
-            _restructure_ui_html_files(ui_path)
+            restructure_ui_html_files(FsPath(ui_path))
             verbose_proxy_logger.info("Restructured UI directory: %s", ui_path)
     except PermissionError as e:
         verbose_proxy_logger.exception("Permission error while restructuring UI directory %s: %s", ui_path, e)
@@ -3187,9 +3129,6 @@ try:
 except Exception:
     pass
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# ui_path = os.path.join(current_dir, "_experimental", "out")
-# # Mount this test directory instead
-# app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
 def configured_max_request_size_mb() -> int | float | None:

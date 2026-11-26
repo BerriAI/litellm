@@ -146,6 +146,7 @@ crash.*.log
 .coverage
 
 litellm/ui/litellm-dashboard/out/
+litellm/proxy/_experimental/.litellm-ui-rendered/
 litellm.log
 
 .coverage-rust
