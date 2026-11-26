@@ -77,7 +77,12 @@ class _UserEnvVarsTransactionClient(Protocol):
     @property
     def litellm_mcpservertable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPServerTable]": ...
 
+    @property
+    def litellm_mcpusercredentials(self) -> "TableActions[prisma_db_models.LiteLLM_MCPUserCredentials]": ...
+
     async def execute_raw(self, query: str, *args: object) -> int: ...
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _UserEnvVarsTransaction(Protocol):
@@ -2046,27 +2051,26 @@ async def delete_user_oauth_credential_if_grant_matches(
     server_id: str,
     grant_generation: str | None,
 ) -> Literal["deleted", "missing", "changed"]:
-    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
-    current: prisma_db_models.LiteLLM_MCPUserCredentials | None = row
-    for _ in range(3):
-        grant = None if current is None else decode_oauth_payload(current.credential_b64)
-        if current is None or grant is None:
+    async with _db_transaction_manager(prisma_client) as tx:
+        rows: Final = await tx.query_raw(
+            'SELECT user_id, server_id, credential_b64 FROM "LiteLLM_MCPUserCredentials" '
+            "WHERE user_id=$1 AND server_id=$2 FOR UPDATE",
+            user_id,
+            server_id,
+        )
+        row: Final = rows[0] if rows else None
+        credential_b64: Final = None if row is None else row.get("credential_b64")
+        if row is None or not isinstance(credential_b64, str):
+            return "missing"
+        grant: Final = decode_oauth_payload(credential_b64)
+        if grant is None:
             return "missing"
         if _oauth_grant_generation(grant) != grant_generation:
             return "changed"
-        deleted = await _user_credential_actions(prisma_client, use_writer=True).delete_many(
-            where={"user_id": current.user_id, "server_id": current.server_id, "credential_b64": current.credential_b64}
+        deleted: Final = await tx.litellm_mcpusercredentials.delete_many(
+            where={"user_id": user_id, "server_id": server_id, "credential_b64": credential_b64}
         )
-        if deleted > 0:
-            return "deleted"
-        latest = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
-        latest_grant = None if latest is None else decode_oauth_payload(latest.credential_b64)
-        if latest is None:
-            return "missing"
-        if latest_grant is None or _oauth_grant_generation(latest_grant) != grant_generation:
-            return "changed"
-        current = latest
-    return "changed"
+        return "deleted" if deleted > 0 else "missing"
 
 
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:

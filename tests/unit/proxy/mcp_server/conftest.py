@@ -58,9 +58,7 @@ async def drain_logging_worker():
 
 def pytest_collection_modifyitems(config, items):
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     # Sort tests based on their names
@@ -187,13 +185,36 @@ class _UserCredentialsTable:
         return 1
 
 
+class _UserCredentialsTransaction:
+    def __init__(self, table: _UserCredentialsTable) -> None:
+        self.litellm_mcpusercredentials = table
+
+    async def __aenter__(self) -> "_UserCredentialsTransaction":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        row: Final = self.litellm_mcpusercredentials.rows.get((str(args[0]), str(args[1])))
+        return [] if row is None else [dict(vars(row))]
+
+
+class _UserCredentialsDatabase:
+    def __init__(self) -> None:
+        self.litellm_mcpusercredentials = _UserCredentialsTable()
+
+    def tx(self) -> _UserCredentialsTransaction:
+        return _UserCredentialsTransaction(self.litellm_mcpusercredentials)
+
+
 @pytest.fixture
 def credentials_prisma(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """The proxy's prisma client, with the per-user credentials table kept in memory."""
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "per-user-credential-test-salt")
-    database: Final = SimpleNamespace(litellm_mcpusercredentials=_UserCredentialsTable())
+    database: Final = _UserCredentialsDatabase()
     prisma: Final = SimpleNamespace(db=database, writer_db=database)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return prisma
