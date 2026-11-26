@@ -112,7 +112,7 @@ def test_image_edit_posts_multipart_to_vllm_omni():
     assert b'name="seed"\r\n\r\n42' in request.content
 
 
-@pytest.mark.parametrize("param", ["mask", "quality", "input_fidelity"])
+@pytest.mark.parametrize("param", ["mask", "markup", "quality", "input_fidelity"])
 def test_params_vllm_omni_ignores_are_not_advertised(param: str):
     supported = HostedVLLMImageEditConfig().get_supported_openai_params(MODEL)
 
@@ -153,3 +153,35 @@ def test_image_edit_rejects_quality_unless_dropped():
     assert len(captured) == 1
     assert b'name="quality"' not in captured[0].content
     assert b'name="prompt"\r\n\r\nadd a hat' in captured[0].content
+
+
+def test_image_edit_drops_markup_without_an_error():
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    litellm.image_edit(
+        model=f"hosted_vllm/{MODEL}",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_base="http://localhost:8091",
+        client=client,
+        markup=PNG_BYTES,
+    )
+    litellm.image_edit(
+        model=f"hosted_vllm/{MODEL}",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_base="http://localhost:8091",
+        client=client,
+        markup=PNG_BYTES,
+        drop_params=True,
+    )
+
+    assert len(captured) == 2
+    assert all(b'name="markup"' not in sent.content for sent in captured)
+    assert all(PNG_BYTES in sent.content for sent in captured)

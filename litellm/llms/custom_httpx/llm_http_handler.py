@@ -25,6 +25,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+import openai
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
@@ -38,7 +39,9 @@ import litellm.types.utils
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.retries import async_retried, retried
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
@@ -2056,7 +2059,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2160,7 +2163,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2909,12 +2912,15 @@ class BaseLLMHTTPHandler:
             )
             result: Final = final_response if final_response is not None else initial_response
             if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-                return self._wrap_responses_response_as_fake_stream(
-                    result=result,
+                return MockResponsesAPIStreamingIterator(
+                    response=self._completed_result_as_raw_response(result),
                     model=model,
-                    responses_api_provider_config=responses_api_provider_config,
                     logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             return result
 
@@ -3106,12 +3112,15 @@ class BaseLLMHTTPHandler:
 
         result: Final = final_response if final_response is not None else initial_response
         if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-            return self._wrap_responses_response_as_fake_stream(
-                result=result,
+            return MockResponsesAPIStreamingIterator(
+                response=self._completed_result_as_raw_response(result),
                 model=model,
-                responses_api_provider_config=responses_api_provider_config,
                 logging_obj=logging_obj,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_metadata=litellm_metadata,
                 custom_llm_provider=custom_llm_provider,
+                request_data=request_context,
+                call_type=CallTypes.responses.value,
             )
         return result
 
@@ -5364,12 +5373,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5410,12 +5414,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5462,14 +5461,10 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
 
         anchor_handler_to(response, async_httpx_client)
-        if response.status_code >= 400:
-            error_body: Final = await response.aread()
+        if httpx.codes.is_error(response.status_code):
+            await response.aread()
             await response.aclose()
-            raise provider_config.get_error_class(
-                error_message=error_body.decode("utf-8", errors="replace"),
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+            self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return await provider_config.transform_file_content_stream(
             stream_iterator=aiter_bytes_then_close(response, chunk_size=chunk_size),
@@ -5913,35 +5908,10 @@ class BaseLLMHTTPHandler:
                 str(e),
             )
 
-    def _wrap_responses_response_as_fake_stream(
-        self,
-        result: ResponsesAPIResponse,
-        model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: "LiteLLMLoggingObj",
-        custom_llm_provider: str,
-    ) -> MockResponsesAPIStreamingIterator:
-        """
-        Wrap a completed responses result as a synthetic stream.
-
-        Used when an interceptor forced stream=False to run the agentic loop on
-        the non-streaming path, but the caller originally asked for streaming.
-        """
-        import httpx
-
-        from litellm.responses.streaming_iterator import (
-            MockResponsesAPIStreamingIterator,
-        )
-
+    @staticmethod
+    def _completed_result_as_raw_response(result: ResponsesAPIResponse) -> httpx.Response:
         payload: Final = result.model_dump() if hasattr(result, "model_dump") else result
-        raw_response: Final = httpx.Response(status_code=200, json=payload)
-        return MockResponsesAPIStreamingIterator(
-            response=raw_response,
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        return httpx.Response(status_code=200, json=payload)
 
     async def _execute_chat_completion_agentic_plan(
         self,
@@ -6422,11 +6392,15 @@ class BaseLLMHTTPHandler:
     ) -> None:
         if not httpx.codes.is_error(response.status_code):
             return
-        raise provider_config.get_error_class(
-            error_message=response.text,
-            status_code=response.status_code,
-            headers=response.headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, response)
+        raise with_provider_reply(provider_error, response)
 
     def _handle_error(
         self,
@@ -6476,21 +6450,27 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            raise BaseLLMException(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                status_code_is_synthesized=not isinstance(received_status_code, int),
+            raise with_provider_reply(
+                BaseLLMException(
+                    status_code=status_code,
+                    message=error_text,
+                    headers=error_headers,
+                    status_code_is_synthesized=not isinstance(received_status_code, int),
+                ),
+                error_response,
             )
 
-        provider_error: Final = provider_config.get_error_class(
-            error_message=error_text,
-            status_code=status_code,
-            headers=error_headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise provider_error
+        raise with_provider_reply(provider_error, error_response)
 
     def handle_error(
         self,
@@ -7340,6 +7320,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Handles image generation requests.
@@ -7362,6 +7343,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
                 api_key=api_key,
+                max_retries=max_retries,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -7408,26 +7390,24 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
+        try:
+            response: Final = retried(send, max_retries)()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -7464,6 +7444,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -7516,26 +7497,24 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        async def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
+        try:
+            response: Final = await async_retried(send, max_retries)()
         except Exception as e:
             raise self._handle_error(
                 e=e,

@@ -633,6 +633,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -640,12 +641,17 @@ class AsyncHTTPHandler:
         self.shared_session = shared_session
         self.transport = transport
         self.follow_redirects = follow_redirects
-        self._owns_client = True
-        self._client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        self._owns_client = client is None
+        self._keeps_callers_client = client is not None
+        self._client = (
+            self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
+            if client is None
+            else client
         )
         self.client_alias = client_alias
 
@@ -853,6 +859,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
+            if self._keeps_callers_client:
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1856,3 +1864,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
 
 
 _get_httpx_client = get_httpx_client
+
+
+def handler_for_httpx_client(client: httpx.Client | httpx.AsyncClient) -> HTTPHandler | AsyncHTTPHandler:
+    return AsyncHTTPHandler(client=client) if isinstance(client, httpx.AsyncClient) else HTTPHandler(client=client)

@@ -98,6 +98,8 @@ fn prepare_provider_request(
                 .base_model
                 .as_deref()
                 .is_some_and(is_claude_model),
+            keeps_unsigned_thinking: !config
+                .checks_claude_signatures(api_base.as_deref(), &env_lookup),
             ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
         },
     )?;
@@ -107,10 +109,8 @@ fn prepare_provider_request(
     let forwarded = string_headers(Some(
         extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let forwarded = config.request_headers(
-        with_default_headers(forwarded, config.default_headers()),
-        &transformed,
-    );
+    let requested = with_default_headers(forwarded, config.default_headers());
+    let forwarded = config.request_headers(requested.clone(), &transformed);
     let environment = config.validate_environment(
         forwarded,
         api_key.as_deref(),
@@ -127,12 +127,7 @@ fn prepare_provider_request(
         &env_lookup,
     )?;
 
-    let body = config.request_body(
-        transformed,
-        &url,
-        &environment.headers,
-        shaping.settings.drop_params,
-    )?;
+    let body = config.request_body(transformed, &url, &requested, shaping.settings.drop_params)?;
 
     Ok(ProviderMessagesRequest {
         provider,
@@ -742,6 +737,192 @@ mod tests {
         assert_eq!(
             detail.to_string(),
             "claude-test does not support temperature=0.2. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        );
+    }
+
+    fn vertex_call_requesting(
+        shaping: MessagesShaping,
+        requested: &str,
+        drop_params: bool,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: None,
+            api_base: Some("https://vertex.test".into()),
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([
+                ("authorization".to_string(), json!("Bearer vertex-token")),
+                ("anthropic-version".to_string(), json!(requested)),
+            ])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params,
+                    ..shaping.settings
+                },
+                ..shaping
+            },
+        }
+    }
+
+    fn vertex_project(name: &str) -> Option<String> {
+        (name == "VERTEXAI_PROJECT").then(|| "version-project".to_string())
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", false, "2026-10-21")]
+    #[case::sdk_1("2023-06-01", false, "vertex-2023-10-16")]
+    #[case::unknown_under_drop_params("latest", true, "vertex-2023-10-16")]
+    fn vertex_gets_the_requested_version_in_the_body_alone(
+        shaping: MessagesShaping,
+        #[case] requested: &str,
+        #[case] drop_params: bool,
+        #[case] body_version: &str,
+    ) {
+        let prepared = prepare_with_secrets(
+            vertex_call_requesting(shaping, requested, drop_params),
+            &vertex_project,
+        )
+        .unwrap();
+        let version_headers: Vec<String> = wire_headers(&prepared)
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-version"))
+            .map(|(_, value)| value)
+            .collect();
+        let body = serde_json::to_value(prepared.body).unwrap();
+        assert_eq!(
+            (version_headers, &body["anthropic_version"]),
+            (Vec::<String>::new(), &json!(body_version))
+        );
+    }
+
+    #[rstest]
+    fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
+        assert!(matches!(
+            prepare_with_secrets(
+                vertex_call_requesting(shaping, "latest", false),
+                &vertex_project
+            ),
+            Err(Error::InvalidRequest(
+                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+            ))
+        ));
+    }
+
+    const KIMI_ON_ANTHROPIC: (&str, Option<&str>) =
+        ("moonshotai/kimi-k2.7-code", Some("anthropic"));
+    const KIMI_HOST: Upstream<'static> = (Some("https://kimi.example.com/anthropic"), &[]);
+    const KIMI_API_BASE_ENV: Upstream<'static> = (
+        None,
+        &[("ANTHROPIC_API_BASE", "https://kimi.example.com/anthropic")],
+    );
+    const KIMI_BASE_URL_ENV: Upstream<'static> = (
+        None,
+        &[("ANTHROPIC_BASE_URL", "https://kimi.example.com/anthropic")],
+    );
+    const FOUNDRY_HOST: Upstream<'static> =
+        (Some("https://example.services.ai.azure.com/anthropic"), &[]);
+    const KEPT: &str = "functions.Bash:0";
+    const REWRITTEN: &str = "functions_Bash_0";
+
+    fn forwarded_tool_use_ids(
+        (model, custom_llm_provider): (&str, Option<&str>),
+        (api_base, env): Upstream<'_>,
+        shaping: MessagesShaping,
+        sent: &str,
+    ) -> (Value, Value) {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let prepared = prepare_with_secrets(
+            MessagesCall {
+                body: body(json!({
+                    "model": model,
+                    "max_tokens": 16,
+                    "messages": [
+                        {"role": "user", "content": "run ls"},
+                        {"role": "assistant", "content": [
+                            {"type": "tool_use", "id": sent, "name": "Bash", "input": {"command": "ls"}}
+                        ]},
+                        {"role": "user", "content": [
+                            {"type": "tool_result", "tool_use_id": sent, "content": "README.md"}
+                        ]}
+                    ]
+                })),
+                api_key: Some("sk-test".into()),
+                api_base: api_base.map(Into::into),
+                custom_llm_provider: custom_llm_provider.map(Into::into),
+                litellm_params: Default::default(),
+                extra_headers: None,
+                provider_specific_header: None,
+                timeout: None,
+                shaping,
+            },
+            &lookup,
+        )
+        .unwrap();
+        let body = serde_json::to_value(prepared.body).unwrap();
+        (
+            body["messages"][1]["content"][0]["id"].clone(),
+            body["messages"][2]["content"][0]["tool_use_id"].clone(),
+        )
+    }
+
+    #[rstest]
+    #[case::non_claude_model_on_a_custom_host(KIMI_ON_ANTHROPIC, KIMI_HOST, KEPT)]
+    #[case::non_claude_model_under_api_base_env(KIMI_ON_ANTHROPIC, KIMI_API_BASE_ENV, KEPT)]
+    #[case::non_claude_model_under_sdk_base_url_env(KIMI_ON_ANTHROPIC, KIMI_BASE_URL_ENV, KEPT)]
+    #[case::provider_prefixed_non_claude_model(
+        ("anthropic/moonshotai/kimi-k2.7-code", None),
+        KIMI_HOST,
+        KEPT
+    )]
+    #[case::claude_named_model_on_a_custom_host(("claude-sonnet-5-5", Some("anthropic")), KIMI_HOST, KEPT)]
+    #[case::non_claude_model_on_the_default_host(
+        KIMI_ON_ANTHROPIC,
+        ANTHROPIC_BY_DEFAULT,
+        REWRITTEN
+    )]
+    #[case::non_claude_model_under_an_anthropic_base_url_env(
+        KIMI_ON_ANTHROPIC,
+        ANTHROPIC_BASE_URL_ENV,
+        REWRITTEN
+    )]
+    #[case::non_claude_deployment_on_a_foundry_host(
+        ("my-deployment", Some("anthropic")),
+        FOUNDRY_HOST,
+        REWRITTEN
+    )]
+    #[case::deepseek(("deepseek-chat", Some("deepseek")), KIMI_HOST, REWRITTEN)]
+    #[case::azure_ai(("my-deployment", Some("azure_ai")), KIMI_HOST, REWRITTEN)]
+    fn tool_use_ids_are_rewritten_only_for_an_upstream_that_enforces_anthropics_id_pattern(
+        shaping: MessagesShaping,
+        #[case] route: (&str, Option<&str>),
+        #[case] upstream: Upstream<'_>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            forwarded_tool_use_ids(route, upstream, shaping, KEPT),
+            (json!(expected), json!(expected))
+        );
+    }
+
+    #[rstest]
+    #[case::kept_by_a_custom_host(KIMI_HOST)]
+    #[case::renamed_for_the_default_host(ANTHROPIC_BY_DEFAULT)]
+    fn an_empty_tool_use_id_is_sent_as_the_fallback_id(
+        shaping: MessagesShaping,
+        #[case] upstream: Upstream<'_>,
+    ) {
+        assert_eq!(
+            forwarded_tool_use_ids(KIMI_ON_ANTHROPIC, upstream, shaping, ""),
+            (json!("tool_use_id"), json!("tool_use_id"))
         );
     }
 }

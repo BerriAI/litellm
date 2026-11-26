@@ -20,8 +20,10 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics, SlackAlerting
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.router import Router
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.integrations.slack_alerting import AlertQueueItem, AlertType, SlackAlertingCacheKeys
 from litellm.utils import get_api_base
 from datetime import timedelta
@@ -800,6 +802,54 @@ async def test_daily_reports_unit_test(slack_alerting):
 
         mock_send_alert.assert_awaited_once()
 
+_GEMINI_ANSWER: Final = httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "failed_requests"),
+    [
+        pytest.param(
+            ImageRefusalError(
+                message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_GEMINI_ANSWER,
+                provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+            ),
+            None,
+            id="refusal",
+        ),
+        pytest.param(
+            UnservedImageError(
+                message="Gemini returned no image, finishReason=STOP",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_GEMINI_ANSWER,
+            ),
+            None,
+            id="answer-without-an-image",
+        ),
+        pytest.param(
+            litellm.InternalServerError(message="boom", llm_provider="gemini", model="gemini-3.1-flash-image"),
+            1,
+            id="server-error",
+        ),
+    ],
+)
+async def test_daily_reports_count_no_failed_request_for_an_image_answer_without_an_image(
+    exception: Exception, failed_requests: int | None
+):
+    cache: Final = DualCache()
+    slack_alerting: Final = SlackAlerting(alert_types=["daily_reports"], internal_usage_cache=cache, alerting=["slack"])
+
+    await slack_alerting.async_log_failure_event(
+        {"litellm_params": {"model_info": {"id": "dep-1"}}, "exception": exception}, None, None, None
+    )
+
+    assert await cache.async_get_cache(f"dep-1:{SlackAlertingCacheKeys.failed_requests_key.value}") == failed_requests
+
+
 @pytest.mark.asyncio
 async def test_send_daily_reports_ignores_zero_values():
     router = MagicMock()
@@ -1265,3 +1315,27 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_row", ({"litellm_provider": "bedrock"}, None), ids=("unpriced_row", "no_row"))
+async def test_model_added_alert_shows_served_prices_for_an_unpriced_bedrock_arn_base_model(
+    monkeypatch: pytest.MonkeyPatch, profile_row: dict[str, str] | None
+) -> None:
+    served: Final = "bedrock/anthropic.slack-alert-served-test"
+    profile: Final = "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/slack-alert-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            served: {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 0.03},
+            **({profile: profile_row} if profile_row is not None else {}),
+        },
+    )
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    await slack_alerting.model_added_alert("by-model-id", served, RouterModelInfo(base_model=profile))
+    message: Final = slack_alerting.log_queue[0]["payload"]["text"]
+    assert f"Base Model: `{profile}`" in message
+    assert "input_cost_per_token: 0.03000000" in message

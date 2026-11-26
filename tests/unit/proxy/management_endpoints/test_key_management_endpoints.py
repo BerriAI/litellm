@@ -11940,7 +11940,8 @@ async def test_update_key_team_member_with_permission_can_update_non_budget(
 
 
 @pytest.mark.asyncio
-async def test_update_key_team_member_cannot_change_budget(monkeypatch):
+@pytest.mark.parametrize("requested_max_budget", [500.0, None])
+async def test_update_key_team_member_cannot_change_budget(monkeypatch, requested_max_budget):
     """A team member with /key/update in member_permissions still cannot
     change max_budget — budget/spend changes require team/org admin. The
     member_permissions bypass only applies to non-budget fields."""
@@ -12021,11 +12022,11 @@ async def test_update_key_team_member_cannot_change_budget(monkeypatch):
     with pytest.raises(ProxyException) as exc:
         await update_key_fn(
             request=mock_request,
-            data=UpdateKeyRequest(key=test_hashed_token, max_budget=500.0),
+            data=UpdateKeyRequest(key=test_hashed_token, max_budget=requested_max_budget),
             user_api_key_dict=team_member,
             litellm_changed_by=None,
         )
-    assert str(exc.value.code) == "403"
+    assert str(exc.value.code) == "403", exc.value.message
 
 
 # ============================================================================
@@ -12621,6 +12622,40 @@ class TestKeyOwnerPrivilegeEscalation:
                     user_api_key_cache=MagicMock(),
                 )
         mock_check.assert_called_once()
+
+    async def _validate_as_creator(self, data, existing):
+        prisma_client = AsyncMock()
+        prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+        return await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=self._make_auth(user_id="creator-123"),
+            llm_router=None,
+            premium_user=False,
+            prisma_client=prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_creator_cannot_clear_own_max_budget_with_null(self):
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = 10.0
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._validate_as_creator(UpdateKeyRequest(key="sk-test", max_budget=None), existing)
+
+        assert exc_info.value.status_code == 403, exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_creator_sending_null_max_budget_on_uncapped_key_needs_no_admin(self):
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = None
+
+        result = await self._validate_as_creator(
+            UpdateKeyRequest(key="sk-test", key_alias="renamed", max_budget=None), existing
+        )
+
+        assert result is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cleared_value", [[], None])

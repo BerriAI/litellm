@@ -12,14 +12,18 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
+use super::{
+    handler::{shape_anthropic_messages_request_keeping_tool_use_ids, with_sanitized_tool_use_ids},
+    thinking::translate_thinking,
+};
 use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
+        has_advisor_tool, has_anthropic_credential, is_anthropic_tool_use_id_pattern_error,
+        is_tool_search_used, merge_beta_headers, messages_with_renamed_tool_use_ids,
         optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks, strip_unsigned_thinking_blocks,
     },
@@ -31,6 +35,14 @@ use crate::{
 
 const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "services.ai.azure.com",
     "openai.azure.com",
@@ -47,7 +59,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         request: MessagesRequest,
         reasoning_auto_summary: bool,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request_keeping_tool_use_ids(request, reasoning_auto_summary)
     }
 
     fn get_complete_url(
@@ -59,6 +71,15 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn checks_claude_signatures(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url::Url::parse(&complete_anthropic_url(api_base, env_lookup))
+            .is_ok_and(|url| url.host_str().is_some_and(replays_unsigned_thinking))
     }
 
     fn transform_anthropic_messages_request(
@@ -133,10 +154,29 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
-        if !serves_anthropic_api_versions(url) {
-            return Ok(request);
+        if serves_anthropic_api_versions(url) {
+            return drop_sampling_params_removed_by_requested_version(
+                with_sanitized_tool_use_ids(request),
+                headers,
+                drop_params,
+            );
         }
-        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+        Ok(request)
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+    ) -> Option<Value> {
+        if status != 400 || !is_anthropic_tool_use_id_pattern_error(error_text) {
+            return None;
+        }
+        let messages = messages_with_renamed_tool_use_ids(request_body)?;
+        let mut fields = request_body.as_object()?.clone();
+        fields.insert("messages".to_owned(), Value::Array(messages));
+        Some(Value::Object(fields))
     }
 }
 
@@ -160,7 +200,9 @@ pub(crate) fn transform_messages_request(
         strip_advisor_blocks(request.messages)
     };
     let messages = strip_encrypted_reasoning_blocks(messages);
-    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
         strip_unsigned_thinking_blocks(messages)
     } else {
         messages
@@ -356,6 +398,12 @@ fn is_foundry_host(host: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
 fn serves_anthropic_api_versions(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| {
         url.host_str()
@@ -375,7 +423,7 @@ pub(crate) fn drop_sampling_params_removed_by_requested_version(
     drop_sampling_params_removed_by_version(request, requested_api_version(headers), drop_params)
 }
 
-fn drop_sampling_params_removed_by_version(
+pub(crate) fn drop_sampling_params_removed_by_version(
     request: MessagesRequest,
     api_version: &str,
     drop_params: bool,
@@ -756,6 +804,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
         let messages = tool_turn(Some(
             json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
@@ -1113,6 +1177,7 @@ mod tests {
                     },
                     drop_params: true,
                     claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;
@@ -1536,5 +1601,40 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    #[rstest]
+    #[case::rejected_id(
+        400,
+        "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        Some("functions_Bash_0")
+    )]
+    #[case::server_error(
+        500,
+        "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        None
+    )]
+    #[case::other_rejection(400, "messages.0.content: Field required", None)]
+    fn a_rejected_tool_use_id_is_retried_with_renamed_ids(
+        #[case] status: u16,
+        #[case] error_text: &str,
+        #[case] retried_id: Option<&str>,
+    ) {
+        let request_body = body(json!({"stream": true, "messages": [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]}
+        ]}));
+
+        let retried =
+            ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, &request_body);
+
+        assert_eq!(
+            retried,
+            retried_id.map(|id| merged(
+                request_body.clone(),
+                json!({"messages": [
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]}
+                ]})
+            ))
+        );
     }
 }

@@ -103,7 +103,7 @@ pub(super) async fn execute(
                     body: truncate_error_body(&text),
                 }));
             }
-            let raw = RawResponse { body: text.clone() };
+            let raw = RawResponse::new(text.clone());
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },

@@ -12,11 +12,11 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -42,8 +42,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.anthropic.pass_through.stream_assembly import has_unreadable_json_event
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.proxy.common_utils.sse_keepalive import last_sse_frame_end
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
@@ -146,38 +147,62 @@ def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[
     yield from all_chunks
 
 
-async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+def _holds_json_object_frame(frames: bytes) -> bool:
+    return any(
+        line.startswith(b"data:") and line[len(b"data:") :].lstrip().startswith(b"{") for line in frames.splitlines()
+    )
+
+
+def _classify_completed_frames(pending: bytearray, classified: int, appended: int) -> tuple[bytes, bytes, int]:
+    """
+    Split the frames a read of ``appended`` bytes completed into ``(preface, classifiable, next classified offset)``.
+    Only a buffer with no data-bearing frame yet (``classified == 0``) has a preface, which the caller relays and
+    removes from its buffer.
+    """
+    frames_end: Final = last_sse_frame_end(pending, classified, appended)
+    new_frames: Final = bytes(pending[classified:frames_end])
+    preface, classifiable = _split_sse_preface(new_frames) if classified == 0 else (b"", new_frames)
+    return preface, classifiable, frames_end - len(preface)
+
+
+_FrameClassifier: TypeAlias = Callable[[bytearray, int, int], tuple[bytes, bytes, int]]
+
+
+async def _coalesce_first_sse_frame(
+    stream: AsyncIterator[object], classify: _FrameClassifier = _classify_completed_frames
+) -> AsyncGenerator[object, None]:
     """
     Relay leading data-less SSE frames (comment keepalives, events without a
     ``data:`` line) as they complete, and join raw ``bytes`` chunks until they
-    hold one complete SSE event with a data line, so the stream shape is
-    decided on a whole frame rather than a transport fragment. Everything
-    after that first frame is forwarded untouched. The byte cap can only be
-    reached by a single unterminated frame.
+    hold one complete SSE event with a JSON object on its data line, so the
+    stream shape is decided on a whole frame rather than a transport fragment
+    or a line that says nothing about the shape. Everything after that frame
+    is forwarded untouched. The byte cap bounds a single unterminated frame
+    and a run of frames with no JSON object.
     """
-    pending = b""
+    pending: Final = bytearray()
+    classified = 0  # rebind-ok: offset of the first byte no read has classified yet, advanced on every read
     try:
         async for chunk in stream:
             if not isinstance(chunk, bytes):
                 yield chunk
                 continue
-            pending += chunk
-            complete_frames, tail = split_complete_sse_frames(pending)
-            preface, classifiable = _split_sse_preface(complete_frames)
+            pending.extend(chunk)
+            preface, classifiable, classified = classify(pending, classified, len(chunk))
             if preface:
                 yield _SsePreface(preface)
-            pending = classifiable + tail
-            if classifiable or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
+                del pending[: len(preface)]
+            if _holds_json_object_frame(classifiable) or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
                 break
         else:
             if pending:
-                yield pending
+                yield bytes(pending)
             return
     except Exception:
         if pending:
-            yield pending
+            yield bytes(pending)
         raise
-    yield pending
+    yield bytes(pending)
     async for chunk in stream:
         yield chunk
 
@@ -1474,7 +1499,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     first_frame_is_anthropic = (
                         not passthrough_due_to_unknown_stream_shape
                         and not all_chunks
-                        and is_anthropic_sse_stream((chunk,))
+                        and self._is_anthropic_first_frame(chunk)
                     )
                     if not first_frame_is_anthropic:
                         passthrough_due_to_unknown_stream_shape = (
@@ -1516,6 +1541,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
+    def _is_anthropic_first_frame(self, chunk: bytes) -> bool:
+        if is_anthropic_sse_stream((chunk,)):
+            return True
+        if has_unreadable_json_event((chunk,)):
+            raise self._unreadable_stream_refusal()
+        return False
+
+    def _unreadable_stream_refusal(self) -> GuardrailRaisedException:
+        return GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message="Presidio could not read the upstream stream; cannot verify PII when PII protection is configured",
+            should_wrap_with_default_message=False,
+        )
+
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
@@ -1523,6 +1562,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:
+            if has_unreadable_json_event(chunks):
+                raise self._unreadable_stream_refusal()
             verbose_proxy_logger.warning(
                 "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
                 "Output PII masking was skipped for this response."
@@ -1559,7 +1600,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         if unmasked != delta["text"]:
                             event["delta"]["text"] = unmasked
                             line = "data: " + json.dumps(event, ensure_ascii=False)
-                except (json.JSONDecodeError, KeyError, TypeError):
+                except (ValueError, RecursionError, KeyError, TypeError):
                     pass
             result_lines.append(line)
 

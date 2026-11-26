@@ -1068,6 +1068,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "decisions",
                         "image_edit",
                         "embedding",
                         "evaluation",
@@ -1139,7 +1140,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
                 "supports_parallel_tool_use_config": {"type": "boolean"},
+                "supports_tool_schema_defs": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
+                "supports_part_media_resolution": {"type": "boolean"},
+                "supports_media_in_tool_response": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_thinking_cache_preservation": {"type": "boolean"},
@@ -1167,6 +1171,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
+                "supports_logprobs": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
                 "supports_low_reasoning_effort": {"type": "boolean"},
@@ -1187,6 +1192,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
+                "supports_search_tools_with_functions": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
                 "supports_fast_mode": {"type": "boolean"},
@@ -1207,6 +1213,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "supports_regex_lookaround": {"type": "boolean"},
+                "supports_all_json_schema_keywords": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",
@@ -2513,6 +2520,29 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     assert choice["reasoning_content"] == "Here's my chain of thought..."
 
 
+def test_text_completion_stream_carries_a_reasoning_details_piece_on_its_frame() -> None:
+    signature_piece: Final = {"type": "reasoning.text", "signature": "sig", "index": 0}
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id="chatcmpl-1",
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=delta)],
+        )
+        for delta in (Delta(content="391"), Delta(reasoning_details=[signature_piece]))
+    )
+
+    frames: Final = tuple(
+        TextCompletionStreamWrapper(completion_stream=iter(chunks), model="test-model", stream_options=None)
+    )
+
+    assert [(frame.choices[0].text, "reasoning_details" in frame.choices[0]) for frame in frames] == [
+        ("391", False),
+        (None, True),
+    ]
+    assert frames[1].choices[0]["reasoning_details"] == [signature_piece]
+
+
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
@@ -3523,6 +3553,106 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         # All params should be present when additional_drop_params is empty
         assert result.get("prompt_cache_key") == "test_key"
         assert result.get("custom_param") == "value"
+
+
+@pytest.mark.parametrize("provider", ("anthropic", "openai", "azure", "azure_ai", "hosted_vllm", "litellm_proxy"))
+def test_provider_specific_params_withhold_vector_store_routing_keys(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first", "vs-second"]}
+    provider_params: Final = {"provider_option": True, "tools": [{"type": "file_search", "vector_store_ids": ["vs"]}]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={**routing_params, **provider_params},
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    forwarded: Final = {**routing_params, **provider_params} if provider == "litellm_proxy" else provider_params
+    assert result == (forwarded if provider == "anthropic" else {"extra_body": forwarded})
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+def test_explicit_extra_body_vector_store_keys_reach_the_provider_as_sent(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    extra_body: Final = {"vector_store_ids": ["vs-first"], "provider_option": True}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={"extra_body": extra_body},
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    assert result == {"extra_body": extra_body}
+
+
+def test_custom_handler_still_receives_vector_store_routing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "my-rag-llm", "custom_handler": litellm.CustomLLM()}]
+    )
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first"]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params=dict(routing_params),
+        custom_llm_provider="my-rag-llm",
+        openai_params=[],
+    )
+
+    assert result == routing_params
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "url"),
+    (
+        ("anthropic", "claude-sonnet-5-5", "https://api.anthropic.com/v1/messages"),
+        ("openai", "gpt-6.1-sol", "https://api.openai.com/v1/chat/completions"),
+    ),
+)
+def test_completion_keeps_vector_store_routing_keys_out_of_provider_requests(
+    provider: str, model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    reply: Final = (
+        {
+            "id": "msg-vector-routing",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        if provider == "anthropic"
+        else {
+            "id": "chatcmpl-vector-routing",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    upstream: Final = respx_mock.post(url).respond(200, json=reply)
+    response: Final = litellm.completion(
+        model=f"{provider}/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        api_key="test-key",
+        vector_store_id="vs-single",
+        vector_store_ids=["vs-first", "vs-second"],
+    )
+    request_body: Final[Mapping[str, object]] = json.loads(upstream.calls.last.request.content)
+
+    assert response.choices[0].message.content == "ok"
+    assert request_body["model"] == model
+    assert "vector_store_id" not in request_body
+    assert "vector_store_ids" not in request_body
 
 
 class TestExtraBodyCannotOverrideModel:
@@ -9441,6 +9571,19 @@ def test_get_valid_models_from_provider():
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
     assert "gpt-5-mini" in valid_models
+
+
+def test_get_valid_models_lists_a_json_provider_set_up_through_its_declared_key_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
+
+    monkeypatch.delenv("PERPLEXITYORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_ORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test-key")
+
+    assert "perplexity_orchestrator/anthropic/claude-haiku-5-5" in get_valid_models()
 
 
 @pytest.mark.parametrize(

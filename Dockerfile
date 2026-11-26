@@ -14,6 +14,13 @@ ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf2
 
 FROM $UV_IMAGE AS uvbin
 
+FROM $LITELLM_BUILD_IMAGE AS prisma-openssl-builder
+USER root
+RUN apk add --no-cache build-base perl curl
+WORKDIR /build
+COPY docker/build_prisma_openssl.sh /build_prisma_openssl.sh
+RUN sh /build_prisma_openssl.sh
+
 FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
 ARG PGBOUNCER_VERSION
 ARG PGBOUNCER_SHA256
@@ -142,7 +149,9 @@ USER root
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libevent
+RUN apk add --no-cache bash openssl-4.0 '!libssl3' '!libcrypto3' tzdata nodejs python-3.13 libsndfile libevent
+COPY --from=prisma-openssl-builder /runtime/ /
+RUN ldconfig
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app

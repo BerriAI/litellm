@@ -11,14 +11,20 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import (
+    get_recorded_rate_limit_headers,
+    loads_json_object,
+    set_provider_response_headers_in_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
-from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
+from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception, process_anthropic_headers
 from litellm.llms.anthropic.pass_through.stream_assembly import (
+    anthropic_sse_events_before_upstream_error,
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
@@ -77,6 +83,13 @@ def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, ob
     return next(
         (payload for payload in payloads if payload is not None and BEDROCK_INVOKE_TRACE_FIELD in payload), None
     )
+
+
+def _stamp_provider_response_headers(response: ModelResponse, logging_obj: LiteLLMLoggingObj) -> None:
+    headers: Final = get_recorded_rate_limit_headers(logging_obj.model_call_details)
+    if headers is None:
+        return
+    set_provider_response_headers_in_hidden_params(response, headers, process_headers=process_anthropic_headers)
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -217,7 +230,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
             assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
-                all_chunks=all_chunks,
+                all_chunks=anthropic_sse_events_before_upstream_error(all_chunks),
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
                 speed=speed,
@@ -249,6 +262,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_provider_response_headers(response, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
         )
@@ -353,9 +367,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in text.splitlines():
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 if not isinstance(data, dict):
                     continue
@@ -393,9 +406,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in reversed(text.splitlines()):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":

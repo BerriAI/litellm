@@ -9,6 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
+import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
@@ -113,6 +114,85 @@ def validate_rate_limit_type(value: object) -> str | None:
     if isinstance(value, str) and value in _RATE_LIMIT_TYPE_VALUES:
         return value
     return None
+
+
+def _upstream_body(response: object) -> bytes:
+    if not isinstance(response, httpx.Response):
+        return b""
+    try:
+        body: Final[object] = getattr(response, "content", b"")
+    except httpx.ResponseNotRead:
+        return b""
+    return body if isinstance(body, bytes) else b""
+
+
+def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.Request:
+    if not isinstance(upstream, httpx.Response):
+        return httpx.Request(method="POST", url=fallback_url)
+    try:
+        upstream_request: Final = upstream.request
+    except RuntimeError:
+        return httpx.Request(method="POST", url=fallback_url)
+    return httpx.Request(
+        method=upstream_request.method,
+        url=upstream_request.url.copy_with(userinfo=b"", query=None, fragment=None),
+    )
+
+
+def _upstream_elapsed(upstream: object) -> datetime.timedelta | None:
+    if not isinstance(upstream, httpx.Response):
+        return None
+    try:
+        return upstream.elapsed
+    except RuntimeError:
+        return None
+
+
+def error_response_without_credentials(status_code: int, upstream: object, fallback_url: str) -> httpx.Response:
+    response: Final = httpx.Response(
+        status_code=status_code,
+        stream=httpx.ByteStream(_upstream_body(upstream)),
+        request=_request_without_credentials(upstream, fallback_url),
+    )
+    _ = response.read()
+    if isinstance(upstream, httpx.Response):
+        response.headers = httpx.Headers(upstream.headers)
+        response.encoding = upstream.encoding or "utf-8"
+    elapsed: Final = _upstream_elapsed(upstream)
+    if elapsed is not None:
+        response.elapsed = elapsed
+    return response
+
+
+_PROVIDER_REPLY_FALLBACK_URL: Final = "https://docs.litellm.ai/docs"
+_RESPONSE_ATTRIBUTE: Final = "response"
+_HTTP_ERROR_STATUSES: Final = frozenset(range(400, 600))
+
+
+def _reported_status(failure: BaseException, current: object, provider_reply: httpx.Response) -> int:
+    if isinstance(current, httpx.Response):
+        return current.status_code
+    reported: Final[object] = getattr(failure, "status_code", None)
+    return reported if isinstance(reported, int) else provider_reply.status_code
+
+
+def with_provider_reply(failure: BaseException, provider_reply: object) -> BaseException:
+    current: Final[object] = getattr(failure, _RESPONSE_ATTRIBUTE, None)
+    if current is not None and (not isinstance(current, httpx.Response) or _upstream_body(current)):
+        return failure
+    if not isinstance(provider_reply, httpx.Response) or provider_reply.status_code not in _HTTP_ERROR_STATUSES:
+        return failure
+    if not _upstream_body(provider_reply):
+        return failure
+    status_code: Final = _reported_status(failure, current, provider_reply)
+    reply: Final = error_response_without_credentials(status_code, provider_reply, _PROVIDER_REPLY_FALLBACK_URL)
+    reply.headers = httpx.Headers(current.headers if isinstance(current, httpx.Response) else None)
+    reply.request = _request_without_credentials(current, _PROVIDER_REPLY_FALLBACK_URL)
+    setattr(failure, _RESPONSE_ATTRIBUTE, reply)
+    return failure
+
+
+_NO_UPSTREAM_REQUEST_URL: Final = "https://cloud.google.com/vertex-ai/"
 
 
 _MINIMAL_ERROR_RESPONSE: httpx.Response | None = None
@@ -232,7 +312,7 @@ class BadRequestError(openai.BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -276,7 +356,7 @@ class ImageFetchError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -317,12 +397,20 @@ class MalformedRequestFieldError(BadRequestError):
     pass
 
 
+class UnresolvablePreviousResponseError(MalformedRequestFieldError):
+    pass
+
+
+class UnknownPreviousResponseError(UnresolvablePreviousResponseError):
+    pass
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -502,20 +590,11 @@ class RateLimitError(openai.RateLimitError):
         # headers stay reachable on `e.response.headers` for callers that
         # explicitly want them; only the proxy-supplied `headers=` kwarg
         # makes it onto `self.headers`.
-        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
         # Mirrors FastAPI HTTPException.detail so the same instance can be
         # serialized through both the ProxyException and HTTPException paths.
         self.detail = detail if detail is not None else self.message
-        self.response = httpx.Response(
-            status_code=429,
-            headers=_response_headers,
-            content=response.content if response is not None else None,
-            request=httpx.Request(
-                method="POST",
-                url=" https://cloud.google.com/vertex-ai/",
-            ),
-        )
+        self.response = error_response_without_credentials(429, response, _NO_UPSTREAM_REQUEST_URL)
         super().__init__(
             self.message,
             response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
@@ -685,7 +764,7 @@ class ContentPolicyViolationError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -1034,6 +1113,7 @@ class UnsupportedParamsError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -1043,6 +1123,7 @@ class UnsupportedParamsError(BadRequestError):
             litellm_debug_info=litellm_debug_info,
             max_retries=max_retries,
             num_retries=num_retries,
+            body=body,
         )
         self.message = f"litellm.UnsupportedParamsError: {message}"
         self.args = (self.message,)

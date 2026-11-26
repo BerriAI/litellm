@@ -489,7 +489,7 @@ impl LegacyLogging {
             .map(|api_key| api_key.expose());
         self.logger()?.post_call(
             py,
-            &raw.body,
+            raw,
             api_key,
             self.request.as_ref().map(|request| &request.body),
             self.request.as_ref().map(|request| &request.headers),
@@ -953,9 +953,10 @@ class PayloadLogger(StubLogger):
         self.pre_api_key = api_key
         on_pre_call(additional_args)
 
-    def post_call(self, original_response, api_key, additional_args):
+    def post_call(self, original_response, api_key, additional_args, response_headers):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
+        self.response_headers = response_headers
 
 bound = {}
 kwargs = {}
@@ -1116,21 +1117,20 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
         let step = logging
             .before_provider_request(py, Box::new(wire), context)
             .unwrap();
-        let raw = RawResponse {
-            body: "raw response".into(),
-        };
+        receive(py, logging, &RawResponse::new("raw response"));
+        (logging, step)
+    }
+
+    fn receive(py: Python<'_>, logging: &mut LegacyLogging, raw: &RawResponse) {
         assert!(matches!(
             logging
                 .on_event(
                     py,
-                    PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
-                        raw: &raw
-                    })
+                    PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw })
                 )
                 .unwrap(),
             HookStep::Ready(())
         ));
-        (logging, step)
     }
 
     fn route_context() -> RequestContext {
@@ -1527,6 +1527,36 @@ def check():
 ",
             json!({"document": document(DOCUMENT)}),
         );
+    }
+
+    #[rstest]
+    #[case::forwarded(vec![("request-id".to_string(), "req_1".to_string())])]
+    #[case::not_forwarded(vec![])]
+    fn post_call_receives_the_provider_headers_the_route_forwards(
+        #[case] headers: Vec<(String, String)>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            receive(
+                py,
+                &mut logging,
+                &RawResponse {
+                    body: "raw response".into(),
+                    headers: headers.clone(),
+                },
+            );
+            let received = local(&locals, "logger")
+                .getattr("response_headers")
+                .unwrap()
+                .extract::<Vec<(String, String)>>()
+                .unwrap();
+            assert_eq!(received, headers);
+        });
     }
 
     #[rstest::rstest]
