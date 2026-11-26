@@ -38,8 +38,10 @@ from litellm.llms.anthropic.messages.native.mcp_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.proxy._types import SpendLogsPayload
 from litellm.types.utils import StandardLoggingPayload
 
 MCP_REFERENCE = {
@@ -554,12 +556,14 @@ class _RoundRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.logged: tuple[StandardLoggingPayload, ...] = ()
+        self.spend_rows: tuple[SpendLogsPayload, ...] = ()
         self.failed: tuple[StandardLoggingPayload, ...] = ()
         self._recorded: Final = asyncio.Condition()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        self.spend_rows = (*self.spend_rows, get_logging_payload(dict(kwargs), response_obj, start_time, end_time))
         self.logged = (*self.logged, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
         await self._announce()
 
@@ -761,6 +765,10 @@ async def test_auto_execute_bills_every_round_on_one_row_logged_after_the_last_r
     assert recorder.failed == ()
     assert len(recorder.logged) == 1
     _assert_bills(recorder.logged[0], plain_rows)
+    assert (recorder.spend_rows[0]["prompt_tokens"], recorder.spend_rows[0]["completion_tokens"]) == (
+        recorder.logged[0]["prompt_tokens"],
+        recorder.logged[0]["completion_tokens"],
+    )
     summed: Final = (
         sum(cast(Mapping[str, int], body["usage"])["input_tokens"] for body in rounds),
         sum(cast(Mapping[str, int], body["usage"])["output_tokens"] for body in rounds),

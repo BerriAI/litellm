@@ -1081,6 +1081,7 @@ class Logging(LiteLLMLoggingBaseClass):
     streamed_anthropic_message_id: str | None = None
     served_agentic_follow_up: bool = False
     bridged_model_response: ModelResponse | None = None
+    every_round_usage: Usage | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
@@ -3345,6 +3346,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["cache_hit"] = served_from_cache
         if usage is not None:
             self.model_call_details["combined_usage_object"] = usage
+            self.every_round_usage = usage
 
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
@@ -6564,7 +6566,10 @@ class Logging(LiteLLMLoggingBaseClass):
         caller was served is minted locally rather than issued upstream, so it is absent from the
         response the row would otherwise be keyed on and has to be carried over here.
         """
-        logged: Final = self._handle_anthropic_messages_response_logging(result=result)
+        parsed: Final = self._handle_anthropic_messages_response_logging(result=result)
+        logged: Final = (
+            parsed if self.every_round_usage is None else parsed.model_copy(update={"usage": self.every_round_usage})
+        )
         streamed_message_id: Final = self.streamed_anthropic_message_id
         if streamed_message_id is None:
             return logged
