@@ -445,6 +445,9 @@ async def test_transient_and_client_refresh_failures_never_revoke_the_grant():
 
     for status, body, expected in (
         (500, {"error": "temporarily_unavailable"}, "upstream_unavailable"),
+        (500, {"error": "invalid_grant"}, "upstream_unavailable"),
+        (500, {"error": {}}, "upstream_unavailable"),
+        (400, {"error": []}, "misconfigured"),
         (401, {"error": "invalid_client"}, "misconfigured"),
     ):
         async def endpoint(url, form, headers, status=status, body=body):

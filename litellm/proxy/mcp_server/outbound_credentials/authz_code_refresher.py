@@ -232,12 +232,12 @@ class AuthorizationCodeRefresher:
 
     def _classified_denial(self, outcome: AuthorizationCodeTokenDenied) -> CredError:
         error: Final = outcome.body.get("error")
-        if error in {"invalid_grant", "invalid_token"}:
-            return CredError.of_unauthorized("The upstream OAuth grant is no longer valid; sign in again.")
         if outcome.status_code >= 500 or error == "temporarily_unavailable":
             return CredError.of_upstream_unavailable(
                 "OAuth token endpoint is temporarily unavailable; retry the request."
             )
+        if isinstance(error, str) and error in {"invalid_grant", "invalid_token"}:
+            return CredError.of_unauthorized("The upstream OAuth grant is no longer valid; sign in again.")
         return CredError.of_misconfigured(f"OAuth token endpoint rejected the refresh grant: {outcome.detail}")
 
     async def _revoke_dead_grant(self, user_id: str, server_id: str, token: OAuthToken) -> None:
