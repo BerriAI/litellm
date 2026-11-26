@@ -62870,6 +62870,130 @@
             "comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 23 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s at 480p or 720p. Only text and image inputs are declared; the mini tier's reference video and audio caps were not verified. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."
         }
     },
+    "volcengine/doubao-seedream-4-0-260415": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.028571429,
+        "metadata": {"comment": "List 0.20 CNY per output image with input images free, converted at 7.0 CNY/USD like the other volcengine entries (price page fetched 2026-11-24)."}
+    },
+    "volcengine/doubao-seedream-4-0-20260415": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.028571429,
+        "metadata": {"comment": "Alias of volcengine/doubao-seedream-4-0-260415. List 0.20 CNY per output image with input images free, converted at 7.0 CNY/USD like the other volcengine entries (price page fetched 2026-11-24)."}
+    },
+    "volcengine/doubao-seedream-5-0-flash-260915": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.017142857,
+        "metadata": {"comment": "List 0.12 CNY per output image with input images free, converted at 7.0 CNY/USD like the other volcengine entries (price page fetched 2026-11-24)."}
+    },
+    "volcengine/doubao-seedream-5-0-pro-260628": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.085714286,
+        "output_cost_per_image_1K": 0.042857143,
+        "output_cost_per_image_2K": 0.085714286,
+        "input_cost_per_image": 0.002857143,
+        "provider_specific_entry": {"volcengine_image": {"layer_output_cost_per_image_1K": 0.021428571, "layer_output_cost_per_image_2K": 0.042857143, "free_input_images": 1}},
+        "metadata": {"comment": "List 0.30 CNY per single-image output at P <= 2.61M pixels and 0.60 above, 0.15 and 0.30 for layer decomposition outputs, first input image free and 0.02 CNY per additional input image, converted at 7.0 CNY/USD (price page fetched 2026-11-24). Base field is the 2K single-image tier; provider_specific_entry.volcengine_image carries the layer rates and the free first input image."}
+    },
+    "volcengine/dola-seedream-5-5-261028": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.035,
+        "output_cost_per_image_1K": 0.02,
+        "output_cost_per_image_2K": 0.035,
+        "input_cost_per_image": 0.008,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.008 per input image and $0.020 per output image at P <= 1536^2 x 1.05^2 (2,601,123.84) pixels, $0.035 above. Base field is the 2K tier. Layer decomposition outputs bill at the same per-image rate."}
+    },
+    "volcengine/dola-seedream-5-0-pro-260628": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.09,
+        "output_cost_per_image_1K": 0.045,
+        "output_cost_per_image_2K": 0.09,
+        "input_cost_per_image": 0.003,
+        "provider_specific_entry": {"volcengine_image": {"layer_output_cost_per_image_1K": 0.0225, "layer_output_cost_per_image_2K": 0.045, "free_input_images": 1}},
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.045 per single-image output at P <= 2.61M pixels and $0.09 above, $0.0225 and $0.045 for layer decomposition outputs, first input image free and $0.003 per additional input image. Base field is the 2K single-image tier; provider_specific_entry.volcengine_image carries the layer rates and the free first input image."}
+    },
+    "volcengine/dola-seedream-5-0-flash-260915": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.018,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.018 per output image with input images free."}
+    },
+    "volcengine/seedream-5-0-lite-260128": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.035,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.035 per output image with input images free."}
+    },
+    "volcengine/seedream-4-5-251128": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.04,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.04 per output image with input images free."}
+    },
+    "volcengine/seedream-4-0-250828": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.03,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.03 per output image with input images free."}
+    },
+    "volcengine/doubao-seedream-5-5-261028": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.032857143,
+        "output_cost_per_image_1K": 0.018571429,
+        "output_cost_per_image_2K": 0.032857143,
+        "input_cost_per_image": 0.007142857,
+        "metadata": {"comment": "List 0.05 CNY per input image and 0.13 CNY per output image at P <= 2.61M pixels, 0.23 CNY above, converted at 7.0 CNY/USD (price page fetched 2026-11-24). Base field is the 2K tier; 1K and 1.5K use the 1K tier. Layer decomposition outputs bill at the same per-image rate."}
+    },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
