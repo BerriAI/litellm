@@ -85,6 +85,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.anthropic.cost_calculation import (
     get_anthropic_web_search_requests_from_response,
 )
+from litellm.llms.anthropic.cost_calculation import (
+    is_unbilled_refusal as is_unbilled_anthropic_refusal,
+)
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
@@ -183,6 +186,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     CallTypes,
+    Choices,
     CostPerToken,
     EmbeddingResponse,
     ImageResponse,
@@ -2003,6 +2007,26 @@ def _image_response_cost(
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+def _stop_fields_of(completion_response: object) -> Mapping[str, object]:
+    """The Anthropic ``stop_reason`` and ``stop_details`` of a response: a Messages body carries them itself, a chat
+    completion on its first choice's ``provider_specific_fields``."""
+    if isinstance(completion_response, ModelResponse):
+        message: Final = next(
+            (choice.message for choice in completion_response.choices if isinstance(choice, Choices)), None
+        )
+        return as_str_mapping(attribute_or_none(message, "provider_specific_fields")) or _NO_HIDDEN_PARAMS
+    return as_str_mapping(completion_response) or _NO_HIDDEN_PARAMS
+
+
+def _is_unbilled_anthropic_refusal(
+    completion_response: object, custom_llm_provider: object, usage: Usage | None
+) -> bool:
+    provider: Final = custom_llm_provider or _hidden_params_of(completion_response).get("custom_llm_provider")
+    if provider != "anthropic" or usage is None:
+        return False
+    return is_unbilled_anthropic_refusal(_stop_fields_of(completion_response), usage.completion_tokens or 0)
+
+
 def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
     return as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or _NO_HIDDEN_PARAMS
 
@@ -2251,6 +2275,8 @@ def completion_cost(
             _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
+        if _is_unbilled_anthropic_refusal(completion_response, custom_llm_provider, provider_usage_object):
+            return 0.0
 
         explicit_tier: Final = _normalize_service_tier(service_tier)
         if explicit_tier is not None:

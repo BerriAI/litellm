@@ -13690,3 +13690,96 @@ def test_completion_cost_leaves_to_python_a_claude_call_main_prices_another_way(
     reported_cost_applies: bool,
 ) -> None:
     assert _rust_priced(response, tools_params, reported_cost_applies) is None
+
+
+def _anthropic_refusal_usage(output_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=6192,
+        completion_tokens=output_tokens,
+        total_tokens=6192 + output_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=6179,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=6179
+            ),
+        ),
+    )
+
+
+def _refusal_stop_fields(category: str | None) -> dict[str, object]:
+    return {"stop_reason": "refusal", "stop_details": {"type": "refusal", "category": category, "explanation": None}}
+
+
+def _refused_chat_completion(stop_fields: Mapping[str, object], output_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        model="claude-fable-5-1",
+        choices=[
+            Choices(
+                finish_reason="content_filter",
+                message=Message(role="assistant", content=None, provider_specific_fields=dict(stop_fields)),
+            )
+        ],
+        usage=_anthropic_refusal_usage(output_tokens),
+    )
+
+
+def _refused_messages_body(stop_fields: Mapping[str, object], output_tokens: int) -> dict[str, object]:
+    return {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fable-5-1",
+        "content": [],
+        **stop_fields,
+        "usage": {
+            "input_tokens": 13,
+            "cache_creation_input_tokens": 6179,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6179},
+            "output_tokens": output_tokens,
+        },
+    }
+
+
+# Billed categories per https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed
+# as read on 2026-11-26: a refusal before any output is billed only for bio, frontier_llm and reasoning_extraction.
+@pytest.mark.parametrize(
+    ("stop_fields", "output_tokens", "provider", "billed"),
+    [
+        pytest.param(_refusal_stop_fields("cyber"), 0, "anthropic", False, id="cyber"),
+        pytest.param(_refusal_stop_fields("general_harms"), 0, "anthropic", False, id="general-harms"),
+        pytest.param(_refusal_stop_fields(None), 0, "anthropic", False, id="no-named-category"),
+        pytest.param({"stop_reason": "refusal"}, 0, "anthropic", False, id="no-stop-details"),
+        pytest.param(_refusal_stop_fields("bio"), 0, "anthropic", True, id="bio"),
+        pytest.param(_refusal_stop_fields("frontier_llm"), 0, "anthropic", True, id="frontier-llm"),
+        pytest.param(_refusal_stop_fields("reasoning_extraction"), 0, "anthropic", True, id="reasoning-extraction"),
+        pytest.param(_refusal_stop_fields("cyber"), 7, "anthropic", True, id="after-partial-output"),
+        pytest.param({}, 0, "anthropic", True, id="not-a-refusal"),
+        pytest.param(_refusal_stop_fields("cyber"), 0, "bedrock", True, id="another-platform"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("build_response", "call_type"),
+    [
+        pytest.param(_refused_chat_completion, "acompletion", id="chat-completion"),
+        pytest.param(_refused_messages_body, "anthropic_messages", id="messages-body"),
+    ],
+)
+def test_completion_cost_charges_an_anthropic_refusal_only_where_anthropic_bills_it(
+    local_model_cost_map: None,
+    build_response: Callable[[Mapping[str, object], int], object],
+    call_type: Literal["acompletion", "anthropic_messages"],
+    stop_fields: Mapping[str, object],
+    output_tokens: int,
+    provider: str,
+    billed: bool,
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=build_response(stop_fields, output_tokens),
+        model="anthropic.claude-fable-5-1" if provider == "bedrock" else "claude-fable-5-1",
+        custom_llm_provider=provider,
+        call_type=call_type,
+    )
+
+    assert (cost > 0) == billed

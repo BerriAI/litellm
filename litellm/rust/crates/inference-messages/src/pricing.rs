@@ -100,6 +100,34 @@ pub fn price_call<T: PricingTable + ?Sized>(
     priced(table, call.token_call(at), None::<fn(&str) -> T::Row>)
 }
 
+/// The refusal categories Anthropic bills before any output
+/// (<https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed>)
+const REFUSALS_BILLED_BEFORE_OUTPUT: [&str; 3] = ["bio", "frontier_llm", "reasoning_extraction"];
+
+/// How an answer stopped, as Anthropic's refusal billing reads it
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+struct Stop {
+    #[serde(default)]
+    stop_reason: Option<String>,
+    #[serde(default)]
+    stop_details: Option<Value>,
+}
+
+impl Stop {
+    /// Anthropic bills nothing for a refusal before any output outside the categories it names, whatever tokens the
+    /// usage counts. A refusal after partial output is billed, so any output token keeps the charge
+    fn is_unbilled_refusal(&self, usage: &MessagesUsage) -> bool {
+        let category = self
+            .stop_details
+            .as_ref()
+            .and_then(|details| details.get("category"))
+            .and_then(Value::as_str);
+        self.stop_reason.as_deref() == Some("refusal")
+            && usage.output_tokens.unwrap_or(0) == 0
+            && !category.is_some_and(|category| REFUSALS_BILLED_BEFORE_OUTPUT.contains(&category))
+    }
+}
+
 /// The facts one call's price reads beside its usage
 pub(crate) struct CallPricing {
     pricing: Arc<dyn Pricing>,
@@ -150,14 +178,30 @@ impl CallPricing {
         })
     }
 
+    /// The billed quantities of `usage` on an answer that stopped as `stop` says
+    fn billed(&self, usage: &MessagesUsage, stop: &Stop, context: UsageContext) -> Option<Metered> {
+        let metered = metered(usage, context)?;
+        if self.provider == "anthropic" && stop.is_unbilled_refusal(usage) {
+            return Some(Metered {
+                usage: TokenUsage::default(),
+                ..metered
+            });
+        }
+        Some(metered)
+    }
+
     /// The cost of a message body
     pub(crate) fn message(&self, message: &MessagesResponse) -> Cost {
         let thinking = message.content.iter().any(is_thinking_block);
+        let stop = Stop {
+            stop_reason: message.stop_reason.clone(),
+            stop_details: message.extra.get("stop_details").cloned(),
+        };
         message
             .usage
             .clone()
             .and_then(|usage| serde_json::from_value::<MessagesUsage>(usage).ok())
-            .and_then(|usage| metered(&usage, self.context(thinking)))
+            .and_then(|usage| self.billed(&usage, &stop, self.context(thinking)))
             .and_then(|metered| self.priced(metered, Some(message.model.clone())))
             .map_or(Cost::Deferred, |priced| Cost::Priced(Box::new(priced)))
     }
@@ -184,6 +228,7 @@ impl CallPricing {
             usage: Map::new(),
             response_model: None,
             thinking: false,
+            stop: Stop::default(),
             delta_last: false,
         };
         futures_util::stream::unfold((chunks, Some(watch)), |(mut chunks, watch)| async move {
@@ -250,6 +295,8 @@ enum StreamEvent {
     #[serde(rename = "message_delta")]
     MessageDelta {
         #[serde(default)]
+        delta: Stop,
+        #[serde(default)]
         usage: Option<Map<String, Value>>,
     },
     #[serde(rename = "message_stop")]
@@ -276,6 +323,7 @@ struct StreamWatch {
     usage: Map<String, Value>,
     response_model: Option<String>,
     thinking: bool,
+    stop: Stop,
     /// The last event of the stream's terminal region was a `message_delta`. Main re-tokenizes a stream that ended
     /// anywhere else (`_stream_was_interrupted`), so only such a stream is priced here
     delta_last: bool,
@@ -322,7 +370,8 @@ impl StreamWatch {
             StreamEvent::ContentBlockDelta {} | StreamEvent::ContentBlockStop {} => {
                 self.delta_last = false;
             }
-            StreamEvent::MessageDelta { usage } => {
+            StreamEvent::MessageDelta { delta, usage } => {
+                self.stop = delta;
                 self.merge(usage);
                 self.delta_last = true;
             }
@@ -344,7 +393,10 @@ impl StreamWatch {
         }
         let priced = serde_json::from_value::<MessagesUsage>(Value::Object(self.usage.clone()))
             .ok()
-            .and_then(|usage| metered(&usage, self.pricing.context(self.thinking)))
+            .and_then(|usage| {
+                self.pricing
+                    .billed(&usage, &self.stop, self.pricing.context(self.thinking))
+            })
             .and_then(|metered| {
                 self.pricing.priced(
                     Metered {
@@ -405,10 +457,17 @@ impl StreamWatch {
             return None;
         };
         let read = MessagesUsage::deserialize(usage_value).ok()?;
-        let priced = metered(&read, UsageContext::default()).and_then(|metered| {
-            self.pricing
-                .priced(metered, Some(self.pricing.request_model.clone()))
-        })?;
+        let stop = fields
+            .get("delta")
+            .and_then(|delta| Stop::deserialize(delta).ok())
+            .unwrap_or_default();
+        let priced = self
+            .pricing
+            .billed(&read, &stop, UsageContext::default())
+            .and_then(|metered| {
+                self.pricing
+                    .priced(metered, Some(self.pricing.request_model.clone()))
+            })?;
         let cost = serde_json::Number::from_f64(priced.receipt.total)?;
         let usage: Map<String, Value> = usage
             .iter()
@@ -630,6 +689,120 @@ mod tests {
             meter.settled().unwrap().receipt.total,
             total(&expected.usage)
         );
+    }
+
+    fn refusal_case(provider: &str) -> Case {
+        Case {
+            name: "refusal".into(),
+            provider: provider.into(),
+            requested_speed: None,
+            body: None,
+            sse: None,
+            expected: None,
+        }
+    }
+
+    fn refusal_body(stop_details: &Value, output_tokens: u64) -> MessagesResponse {
+        serde_json::from_value(serde_json::json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-1",
+            "content": [],
+            "stop_reason": "refusal",
+            "stop_sequence": null,
+            "stop_details": stop_details,
+            "usage": {
+                "input_tokens": 13,
+                "cache_creation_input_tokens": 6179,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6179},
+                "output_tokens": output_tokens,
+            },
+        }))
+        .unwrap()
+    }
+
+    fn refusal_details(category: Option<&str>) -> Value {
+        serde_json::json!({"type": "refusal", "category": category, "explanation": null})
+    }
+
+    #[rstest]
+    #[case::cyber("anthropic", refusal_details(Some("cyber")), 0, false)]
+    #[case::general_harms("anthropic", refusal_details(Some("general_harms")), 0, false)]
+    #[case::no_named_category("anthropic", refusal_details(None), 0, false)]
+    #[case::no_stop_details("anthropic", Value::Null, 0, false)]
+    #[case::bio("anthropic", refusal_details(Some("bio")), 0, true)]
+    #[case::frontier_llm("anthropic", refusal_details(Some("frontier_llm")), 0, true)]
+    #[case::reasoning_extraction("anthropic", refusal_details(Some("reasoning_extraction")), 0, true)]
+    #[case::after_partial_output("anthropic", refusal_details(Some("cyber")), 7, true)]
+    #[case::another_platform("bedrock", refusal_details(Some("cyber")), 0, true)]
+    fn a_refusal_is_charged_only_where_anthropic_bills_it(
+        recording: Arc<Recording>,
+        #[case] provider: &str,
+        #[case] stop_details: Value,
+        #[case] output_tokens: u64,
+        #[case] billed: bool,
+    ) {
+        let pricing = call_pricing(&recording, &refusal_case(provider), RequestedPricing::default());
+
+        let cost = pricing.message(&refusal_body(&stop_details, output_tokens));
+
+        let Cost::Priced(priced) = cost else {
+            panic!("a refusal with usage is priced, got {cost:?}");
+        };
+        assert_eq!(priced.receipt.total > 0.0, billed);
+    }
+
+    fn refusal_stream(category: &str) -> String {
+        format!(
+            "event: message_start\ndata: {{\"type\": \"message_start\", \"message\": {{\"model\": \
+             \"claude-fable-5-1\", \"usage\": {{\"input_tokens\": 13, \"cache_creation_input_tokens\": 6179, \
+             \"output_tokens\": 0}}}}}}\n\nevent: message_delta\ndata: {{\"type\": \"message_delta\", \"delta\": \
+             {{\"stop_reason\": \"refusal\", \"stop_sequence\": null, \"stop_details\": {{\"type\": \"refusal\", \
+             \"category\": \"{category}\", \"explanation\": null}}}}, \"usage\": {{\"input_tokens\": 13, \
+             \"cache_creation_input_tokens\": 6179, \"output_tokens\": 0}}}}\n\nevent: message_stop\ndata: \
+             {{\"type\": \"message_stop\"}}\n\n"
+        )
+    }
+
+    #[rstest]
+    #[case::cyber("cyber", false)]
+    #[case::bio("bio", true)]
+    #[tokio::test]
+    async fn a_refused_stream_is_charged_only_where_anthropic_bills_it(
+        recording: Arc<Recording>,
+        #[case] category: &str,
+        #[case] billed: bool,
+    ) {
+        let pricing = call_pricing(
+            &recording,
+            &refusal_case("anthropic"),
+            RequestedPricing {
+                inject_stream_cost: true,
+                ..RequestedPricing::default()
+            },
+        );
+        let meter = StreamMeter::default();
+        let frames: Vec<Result<Bytes, Error>> = refusal_stream(category)
+            .split_inclusive("\n\n")
+            .map(|frame| Ok(Bytes::from(frame.to_owned())))
+            .collect();
+
+        let delivered: Vec<Bytes> = pricing
+            .metered_stream(meter.clone(), futures_util::stream::iter(frames).boxed())
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(meter.settled().unwrap().receipt.total > 0.0, billed);
+        let injected: Value = delivered
+            .iter()
+            .map(|frame| std::str::from_utf8(frame).unwrap())
+            .find(|frame| frame.contains("\"cost\""))
+            .and_then(|frame| frame.lines().find_map(|line| line.strip_prefix("data: ")))
+            .map(|data| serde_json::from_str(data).unwrap())
+            .unwrap();
+        assert_eq!(injected["usage"]["cost"].as_f64().unwrap() > 0.0, billed);
     }
 
     #[rstest]

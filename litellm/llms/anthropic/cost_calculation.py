@@ -3,6 +3,7 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import ValidationError
@@ -19,6 +20,22 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
+
+
+# https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed
+_REFUSAL_CATEGORIES_BILLED_BEFORE_OUTPUT: Final = frozenset({"bio", "frontier_llm", "reasoning_extraction"})
+
+
+def is_unbilled_refusal(message: Mapping[str, object], output_tokens: int) -> bool:
+    """Whether Anthropic bills nothing for ``message``: a refusal before any output, outside the categories it bills.
+
+    ``message`` carries the Messages API ``stop_reason`` and ``stop_details``, and ``output_tokens`` is what its usage
+    reports. A refusal after partial output is billed, so any output token keeps the charge."""
+    if message.get("stop_reason") != "refusal" or output_tokens > 0:
+        return False
+    stop_details: Final = message.get("stop_details")
+    category: Final = stop_details.get("category") if isinstance(stop_details, Mapping) else None
+    return category not in _REFUSAL_CATEGORIES_BILLED_BEFORE_OUTPUT
 
 
 def cost_per_token(
