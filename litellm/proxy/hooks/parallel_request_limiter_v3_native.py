@@ -31,6 +31,7 @@ from litellm.integrations.custom_logger_v2.rust import (
 )
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.total_deadline import total_timeout_held
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
 from litellm.proxy.hooks.batch_enqueued_tokens import (
@@ -348,6 +349,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                     ctx,
                     {
                         "combined_is_usage": isinstance(data.get("combined_usage_object"), Usage),
+                        "provider_billed": is_answer_without_an_image(_member(view, Field.error.value)),
                         "token_rate_limit_type": _general_setting("token_rate_limit_type", "total"),
                     },
                 )

@@ -196,6 +196,12 @@ def _caller_frames(first: FrameType) -> Iterator[FrameType]:
         frame = frame.f_back
 
 
+def _get_caller_frame(frame: FrameType | None) -> FrameType | None:
+    if frame is None or frame.f_back is None:
+        return None
+    return frame.f_back.f_back
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names of the nearest meaningful callers of the cache method.
@@ -212,15 +218,7 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         A string with format "caller_function [<- grandparent_function]"
     """
     try:
-        current_frame: Final = inspect.currentframe()
-        if current_frame is None:
-            return "unknown"
-
-        # Skip this function and the immediate caller (which sets call_type)
-        f_back: Final = current_frame.f_back
-        if f_back is None:
-            return "unknown"
-        first: Final = f_back.f_back
+        first: Final = _get_caller_frame(inspect.currentframe())
         if first is None:
             return "unknown"
         frames: Final = _caller_frames(first)

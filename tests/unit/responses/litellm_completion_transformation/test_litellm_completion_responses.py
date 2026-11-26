@@ -7237,7 +7237,7 @@ def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is
         custom_llm_provider="bedrock",
     )
 
-    with pytest.raises(litellm.BadRequestError, match="Unable to create messages"):
+    with pytest.raises(litellm.BadRequestError, match="Previous response with id 'resp_unknown' not found"):
         asyncio.run(
             LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id="resp_unknown",
@@ -8806,6 +8806,7 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
             litellm_completion_request=chat_request,
             instructions=None,
             session_lookup=no_stored_turns,
+            input_replaces_history=True,
         )
     )
 

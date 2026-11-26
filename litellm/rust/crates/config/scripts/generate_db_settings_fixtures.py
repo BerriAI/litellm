@@ -207,7 +207,7 @@ async def layered(case):
     return {**case, "merged": merged, "shadowed": shadowed}
 
 
-async def main():
+async def main() -> None:
     fixture = {
         "tables": {
             "managed_general_settings": sorted(proxy_server._db_managed_general_settings_keys()),

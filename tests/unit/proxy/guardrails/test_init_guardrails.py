@@ -302,6 +302,167 @@ async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(
     assert (response.choices[0].message.content != llm_answer) is expect_output_scanned
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, filter_scope, expect_client_response_masked, expect_logged_request_masked",
+    [
+        ("logging_only", None, False, True),
+        (["logging_only"], None, False, True),
+        ({"tags": {"team:audit": "logging_only"}, "default": "logging_only"}, None, False, True),
+        ("logging_only", "output", False, False),
+        (["logging_only", "pre_call"], None, True, True),
+    ],
+)
+async def test_initialize_presidio_logging_only_masks_the_log_and_not_the_client_response(
+    mode: str | list[str] | dict[str, object],
+    filter_scope: Literal["input", "output", "both"] | None,
+    expect_client_response_masked: bool,
+    expect_logged_request_masked: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer: Final = "Call me at 415-555-2671"
+    masked_answer: Final = "Call me at <PHONE_NUMBER>"
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode=mode,
+            default_on=True,
+            presidio_filter_scope=filter_scope,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+
+    def _answer() -> ModelResponse:
+        return ModelResponse(
+            choices=[Choices(message=Message(role="assistant", content=llm_answer), index=0, finish_reason="stop")]
+        )
+
+    client_response: Final = _answer()
+    data: Final[dict[str, object]] = {"metadata": {}}
+    for callback in callbacks:
+        if callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call):
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), client_response
+            )
+
+    logged_request: Final[dict[str, object]] = {"messages": [{"role": "user", "content": llm_answer}], "metadata": {}}
+    logged_responses: Final = [
+        (await callback.async_logging_hook(kwargs=logged_request, result=_answer(), call_type="acompletion"))[1]
+        for callback in callbacks
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only)
+    ]
+
+    case: Final = f"mode={mode!r} filter_scope={filter_scope!r}"
+    assert client_response.choices[0].message.content == (
+        masked_answer if expect_client_response_masked else llm_answer
+    ), f"client response for {case}"
+    assert [response.choices[0].message.content for response in logged_responses] == [masked_answer], (
+        f"logged response for {case}"
+    )
+    assert logged_request["messages"] == [
+        {"role": "user", "content": masked_answer if expect_logged_request_masked else llm_answer}
+    ], f"logged request for {case}"
+
+
+@pytest.mark.asyncio
+async def test_initialize_presidio_logging_only_masks_the_logged_responses_api_answer_and_not_the_client_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer: Final = "Call me at 415-555-2671"
+    masked_answer: Final = "Call me at <PHONE_NUMBER>"
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode="logging_only",
+            default_on=True,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+    client_response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": llm_answer, "annotations": []}],
+            }
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+    logged: Final = [
+        (await callback.async_logging_hook(kwargs={"metadata": {}}, result=client_response, call_type="aresponses"))[1]
+        for callback in callbacks
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only)
+    ]
+
+    assert [response.output[0].content[0].text for response in logged] == [masked_answer]
+    assert client_response.output[0].content[0].text == llm_answer
+
+
+@pytest.mark.asyncio
+async def test_initialize_presidio_logging_only_masks_the_logged_messages_api_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer: Final = "Call me at 415-555-2671"
+    masked_answer: Final = "Call me at <PHONE_NUMBER>"
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode="logging_only",
+            default_on=True,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+    logged_answer: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content=llm_answer))])
+
+    logged: Final = [
+        (
+            await callback.async_logging_hook(
+                kwargs={"metadata": {}}, result=logged_answer, call_type="anthropic_messages"
+            )
+        )[1]
+        for callback in callbacks
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only)
+    ]
+
+    assert [response.choices[0].message.content for response in logged] == [masked_answer]
+
+
 @pytest.mark.parametrize(
     "config_value, expected",
     [(True, True), (False, False), (None, False)],

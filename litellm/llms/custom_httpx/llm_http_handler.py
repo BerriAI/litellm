@@ -59,9 +59,12 @@ from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAG
 from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
 from litellm.images.fan_out import (
-    merge_billed_image_responses,
+    billed_answers,
+    outcomes_of,
+    partition_outcomes,
     record_partial_image_spend,
     run_concurrently,
+    settle_image_answers,
     split_outcomes,
 )
 from litellm.images.streaming import (
@@ -6936,7 +6939,7 @@ class BaseLLMHTTPHandler:
             raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise with_provider_reply(provider_error, error_response)
+        raise with_provider_reply(provider_error, error_response) from error
 
     def handle_error(
         self,
@@ -7744,18 +7747,20 @@ class BaseLLMHTTPHandler:
         if isinstance(streamed, ImageStream):
             return streamed
         responses, failure = split_outcomes(run_concurrently(request_count, send) if streamed is None else (streamed,))
-        served: Final = [
-            image_edit_provider_config.transform_image_edit_response(
-                model=model,
-                raw_response=response,
-                logging_obj=logging_obj,
+        served, unserved = partition_outcomes(
+            outcomes_of(
+                lambda response: image_edit_provider_config.transform_image_edit_response(
+                    model=model,
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                ),
+                responses,
             )
-            for response in responses
-        ]
+        )
         if failure is not None:
-            record_partial_image_spend(logging_obj, served)
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
-        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        image_edit_response: Final = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
@@ -7886,18 +7891,20 @@ class BaseLLMHTTPHandler:
             if streamed is None
             else (streamed,)
         )
-        served: Final = [
-            image_edit_provider_config.transform_image_edit_response(
-                model=model,
-                raw_response=response,
-                logging_obj=logging_obj,
+        served, unserved = partition_outcomes(
+            outcomes_of(
+                lambda response: image_edit_provider_config.transform_image_edit_response(
+                    model=model,
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                ),
+                responses,
             )
-            for response in responses
-        ]
+        )
         if failure is not None:
-            record_partial_image_spend(logging_obj, served)
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
-        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        image_edit_response: Final = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
@@ -8011,23 +8018,25 @@ class BaseLLMHTTPHandler:
                 send,
             )
         )
-        served: Final = [
-            image_generation_provider_config.transform_image_generation_response(
-                model=model,
-                raw_response=response,
-                model_response=litellm.ImageResponse(),
-                logging_obj=logging_obj,
-                request_data=data,
-                optional_params=image_generation_optional_request_params,
-                litellm_params=dict(litellm_params),
-                encoding=None,
+        served, unserved = partition_outcomes(
+            outcomes_of(
+                lambda response: image_generation_provider_config.transform_image_generation_response(
+                    model=model,
+                    raw_response=response,
+                    model_response=litellm.ImageResponse(),
+                    logging_obj=logging_obj,
+                    request_data=data,
+                    optional_params=image_generation_optional_request_params,
+                    litellm_params=dict(litellm_params),
+                    encoding=None,
+                ),
+                responses,
             )
-            for response in responses
-        ]
+        )
         if failure is not None:
-            record_partial_image_spend(logging_obj, served)
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
-        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        model_response: Final[ImageResponse] = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
@@ -8123,23 +8132,28 @@ class BaseLLMHTTPHandler:
         responses, failure = split_outcomes(
             await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
         )
-        served: Final = [
-            await image_generation_provider_config.async_transform_image_generation_response(
-                model=model,
-                raw_response=response,
-                model_response=litellm.ImageResponse(),
-                logging_obj=logging_obj,
-                request_data=data,
-                optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-                litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-                encoding=None,
+        served, unserved = partition_outcomes(
+            await asyncio.gather(
+                *(
+                    image_generation_provider_config.async_transform_image_generation_response(
+                        model=model,
+                        raw_response=response,
+                        model_response=litellm.ImageResponse(),
+                        logging_obj=logging_obj,
+                        request_data=data,
+                        optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                        litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                        encoding=None,
+                    )
+                    for response in responses
+                ),
+                return_exceptions=True,
             )
-            for response in responses
-        ]
+        )
         if failure is not None:
-            record_partial_image_spend(logging_obj, served)
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
-        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        model_response: Final[ImageResponse] = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response

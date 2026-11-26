@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    generic_cost_per_token,
     get_web_search_requests_from_usage,
 )
 from litellm.types.llms.openai import (
@@ -22,6 +23,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
+    ImageSVGUsage,
     Message,
     ModelInfo,
     ModelResponse,
@@ -286,6 +288,77 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
+    def _image_generation_svg_tool_model(response_object: ResponsesAPIResponse) -> str | None:
+        tools: Final[Sequence[object]] = cast(Sequence[object], response_object.tools or ())  # cast-ok: dict tool union
+        for tool in tools:
+            if _output_item_field(tool, "type") != "image_generation":
+                continue
+            if (svg_config := _output_item_field(tool, "svg")) is None:
+                continue
+            if isinstance(model := _output_item_field(svg_config, "model"), str) and model:
+                return model
+        return None
+
+    @staticmethod
+    def _parse_image_generation_svg_usage(
+        raw_svg_usage: object, fallback_svg_model: str | None
+    ) -> ImageSVGUsage | None:
+        if raw_svg_usage is None:
+            return None
+        if isinstance(raw_svg_usage, ImageSVGUsage):
+            return raw_svg_usage if raw_svg_usage.model else None
+        raw_payload: Final[Mapping[str, object]] = (
+            cast(Mapping[str, object], raw_svg_usage)  # cast-ok: narrowed by isinstance
+            if isinstance(raw_svg_usage, Mapping)
+            else {
+                field: value
+                for field in ("model", "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
+                if (value := getattr(raw_svg_usage, field, None)) is not None
+            }
+        )
+        model_val: Final = raw_payload.get("model")
+        payload: Final[Mapping[str, object]] = (
+            {**raw_payload, "model": fallback_svg_model}
+            if (not isinstance(model_val, str) or not model_val) and fallback_svg_model
+            else raw_payload
+        )
+        try:
+            parsed: Final = ImageSVGUsage.model_validate(payload)
+        except ValidationError:
+            verbose_logger.debug("Ignoring invalid SVG authoring usage in Responses API image_generation_call")
+            return None
+        return parsed if parsed.model else None
+
+    @staticmethod
+    def _image_generation_svg_usage_cost(
+        output_item: object,
+        fallback_svg_model: str | None,
+        custom_llm_provider: str | None,
+    ) -> float:
+        raw_svg_usage: Final = _output_item_field(output_item, "svg_usage")
+        svg_usage: Final = StandardBuiltInToolCostTracking._parse_image_generation_svg_usage(
+            raw_svg_usage, fallback_svg_model
+        )
+        if svg_usage is None:
+            return 0.0
+        try:
+            prompt_cost, completion_cost = generic_cost_per_token(
+                model=svg_usage.model,
+                usage=Usage(
+                    prompt_tokens=svg_usage.input_tokens,
+                    completion_tokens=svg_usage.output_tokens,
+                    total_tokens=svg_usage.total_tokens or (svg_usage.input_tokens + svg_usage.output_tokens),
+                ),
+                custom_llm_provider=custom_llm_provider or "openai",
+            )
+        except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
+            verbose_logger.debug(
+                "Unable to price Responses API SVG authoring usage for model=%s: %s", svg_usage.model, exc
+            )
+            return 0.0
+        return prompt_cost + completion_cost
+
+    @staticmethod
     def _image_generation_call_cost(output_item: object, tool_model: str, custom_llm_provider: str | None) -> float:
         from litellm.cost_calculator import (
             default_image_cost_calculator,  # pyright: ignore[reportUnknownVariableType]  # optional_params param is untyped
@@ -374,16 +447,23 @@ class StandardBuiltInToolCostTracking:
         )
         if not completed_items:
             return 0.0
+        svg_tool_model: Final = StandardBuiltInToolCostTracking._image_generation_svg_tool_model(response_object)
+        svg_authoring_cost: Final = sum(
+            StandardBuiltInToolCostTracking._image_generation_svg_usage_cost(
+                output_item, svg_tool_model, custom_llm_provider
+            )
+            for output_item in completed_items
+        )
         tool_model: Final = StandardBuiltInToolCostTracking._image_generation_tool_model(response_object)
         if tool_model is None:
             verbose_logger.debug("Responses API image_generation_call has no tools[].model to price, billing 0.0")
-            return 0.0
+            return svg_authoring_cost
         token_cost: Final = StandardBuiltInToolCostTracking._image_generation_token_cost(
             response_object, tool_model, custom_llm_provider
         )
         if token_cost is not None:
-            return token_cost
-        return sum(
+            return token_cost + svg_authoring_cost
+        return svg_authoring_cost + sum(
             StandardBuiltInToolCostTracking._image_generation_call_cost(output_item, tool_model, custom_llm_provider)
             for output_item in completed_items
         )

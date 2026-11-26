@@ -2747,6 +2747,7 @@ def client(original_function):
                     and not is_responses_litellm_router_call
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2873,7 +2874,15 @@ def client(original_function):
 
             # MODEL CALL
             call_kwargs: Final = (
-                {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
+                {
+                    **kwargs,
+                    "input": _caching_handler_response.embedding_uncached_input,
+                    **(
+                        {"extra_body": _caching_handler_response.embedding_uncached_extra_body}
+                        if "extra_body" in kwargs
+                        else {}
+                    ),
+                }
                 if _caching_handler_response is not None
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs
@@ -3098,6 +3107,7 @@ def client(original_function):
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -4203,6 +4213,13 @@ def deployment_declared_mid_conversation_system_support(model_info: object) -> b
             return None
 
 
+def declares_system_first(model: str, custom_llm_provider: str | None, model_info: object) -> bool:
+    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
+    if deployment_declared is not None:
+        return not deployment_declared
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system")
+
+
 def declared_mid_conversation_system_support(
     model: str, custom_llm_provider: str | None, model_info: object
 ) -> bool | None:
@@ -4210,12 +4227,11 @@ def declared_mid_conversation_system_support(
     The `supports_mid_conversation_system` the deployment's own model_info declares, else the one the
     cost map declares for the model, else None when neither sets it.
     """
-    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
-    if deployment_declared is not None:
-        return deployment_declared
-    if is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system"):
+    if declares_system_first(model, custom_llm_provider, model_info):
         return False
-    if supports_mid_conversation_system(model, custom_llm_provider):
+    if deployment_declared_mid_conversation_system_support(model_info) or supports_mid_conversation_system(
+        model, custom_llm_provider
+    ):
         return True
     return None
 
@@ -12026,6 +12042,13 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.common_utils import is_prisma_v25, supports_realtime
+            from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
+
+            if not supports_realtime(model):
+                return None
+            return GnaniRealtimeConfig(drop_params=drop_params, requires_explicit_language=is_prisma_v25(model))
         if LlmProviders.SONIOX == provider:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 

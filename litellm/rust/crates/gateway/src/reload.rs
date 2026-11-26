@@ -255,7 +255,7 @@ where
         heard: Option<BoxStream<'static, Heard>>,
     ) -> Vec<JoinHandle<()>> {
         let polls = self.clone();
-        let poll = tokio::spawn(async move {
+        let poll = litellm_call_scope::spawn_detached(async move {
             let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
             ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
@@ -264,7 +264,7 @@ where
             }
         });
         let listener = heard.map(|heard| {
-            tokio::spawn(listen(heard, Pacing::PYTHON, uniform, move || {
+            litellm_call_scope::spawn_detached(listen(heard, Pacing::PYTHON, uniform, move || {
                 let reloader = self.clone();
                 async move {
                     reloader.boxed_reload().await;

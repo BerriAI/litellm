@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
 from openai.types.completion import Completion
@@ -2380,6 +2381,34 @@ async def test_async_streaming_read_timeout_after_first_chunk_surfaces_timeout(
     assert excinfo.value.is_pre_first_chunk is False
     assert isinstance(excinfo.value.original_exception, litellm.Timeout)
     assert excinfo.value.original_exception.status_code == 408
+
+
+def _stall_before_the_answer(request: httpx.Request) -> NoReturn:
+    raise httpx.ReadTimeout("no answer in time", request=request)
+
+
+async def _read_a_gemini_stream(api_base: str) -> None:
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        api_base=api_base,
+        api_key="test-key",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+    )
+    async for _ in response:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_direct_gemini_stream_that_times_out_before_its_first_chunk_raises_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = "https://gemini-stream-open-stall.test"
+    respx_mock.post(url__startswith=api_base).mock(side_effect=_stall_before_the_answer)
+
+    with pytest.raises(litellm.Timeout):
+        await _read_a_gemini_stream(api_base)
 
 
 _AZURE_DEPLOYMENT_API_BASE: Final = "https://mid-stream-debug.openai.azure.com"
@@ -6047,6 +6076,63 @@ async def test_responses_bridged_tool_call_stream_sets_the_model_on_every_chunk(
         "tool_calls"
     ]
     assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
+
+
+_BRIDGED_REFUSAL: Final = "I can't help with that."
+_BRIDGED_REFUSAL_PART: Final = MappingProxyType({"type": "refusal", "refusal": _BRIDGED_REFUSAL})
+_BRIDGED_REFUSAL_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_MESSAGE, "status": "in_progress", "content": []},
+    },
+    *(
+        {
+            "type": "response.refusal.delta",
+            "sequence_number": 2 + position,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": delta,
+        }
+        for position, delta in enumerate(("I can't ", "help ", "with that."))
+    ),
+    {
+        "type": "response.refusal.done",
+        "sequence_number": 5,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "refusal": _BRIDGED_REFUSAL,
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 6,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [{**_BRIDGED_MESSAGE, "status": "completed", "content": [dict(_BRIDGED_REFUSAL_PART)]}],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_refusal_stream_reaches_the_client_once_as_content(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(
+        _bridged_stream(_BRIDGED_REFUSAL_EVENTS, provider, sync_mode, logging_obj), sync_mode
+    )
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == _BRIDGED_REFUSAL
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+    assert litellm.stream_chunk_builder(chunks=received).choices[0].message.content == _BRIDGED_REFUSAL
 
 
 @pytest.mark.parametrize("provider", ["azure", "azure_ai"])
