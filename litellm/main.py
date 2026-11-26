@@ -257,9 +257,11 @@ from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    joined,
     keyword_arguments,
     normalize_drop_params,
     safe_deep_copy,
+    subscript,
     without,
 )
 from .litellm_core_utils.fallback_utils import (
@@ -5501,7 +5503,7 @@ def _complete_custom(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     )
 
     """
-    prompt: Final = " ".join([message["content"] for message in messages])
+    prompt: Final = joined(" ", [subscript(message, "content") for message in messages])
     resp: Final = litellm.module_level_client.post(
         url,
         headers=headers,

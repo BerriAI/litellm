@@ -21,7 +21,7 @@ The API uses these endpoints:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -319,7 +319,7 @@ class AzureAIAgentsConfig(BaseConfig):
     @staticmethod
     def completion(
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str | None,
         model_response: ModelResponse,

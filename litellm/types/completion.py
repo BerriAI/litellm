@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm import BaseConfig
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.utils import CustomStreamWrapper, ModelResponse
 
 
@@ -215,16 +216,16 @@ class CompletionDispatchContext:
     client: Any
     custom_llm_provider: str
     custom_prompt_dict: dict
-    extra_headers: dict | None
+    extra_headers: dict[str, object] | None
     headers: dict[str, object]
     hf_model_name: str | None
     kwargs: dict
     litellm_params: dict[str, object]
-    logger_fn: Callable | None
+    logger_fn: Callable[..., object] | None
     logging: LiteLLMLoggingObj
     max_retries: int | None
     max_tokens: int | None
-    messages: list
+    messages: list[AllMessageValues]
     metadata: dict | None
     model: str
     model_response: ModelResponse
