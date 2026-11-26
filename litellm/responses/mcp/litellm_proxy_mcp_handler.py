@@ -924,6 +924,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.hooks.parallel_request_limiter_v3 import mark_parallel_slot_reused_by_tool_calls
+        from litellm.proxy.litellm_pre_call_utils import get_session_id_from_headers
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -934,6 +935,7 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_call_id: str | None = None
         rules_obj: Final = Rules()
         logging_safe_headers: Final = logging_safe_mcp_headers(raw_headers)
+        caller_session_id: Final = get_session_id_from_headers(raw_headers)
         typed_user_api_key_auth: Final[UserAPIKeyAuth | None] = user_api_key_auth
         for tool_call in tool_calls:
             logging_request_data: dict[str, object] = {}
@@ -976,6 +978,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "tool_name": sanitized_tool_name,
                     "server_name": server_name,
                     "headers": logging_safe_headers,
+                    **({"trace_id": caller_session_id, "session_id": caller_session_id} if caller_session_id else {}),
                 }
                 logging_request_data = {
                     "model": f"MCP: {tool_name}",
@@ -983,6 +986,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "input": logging_input,
                     "call_type": CallTypes.call_mcp_tool.value,
                     "litellm_call_id": tool_logging_call_id,
+                    **({"litellm_session_id": caller_session_id} if caller_session_id else {}),
                     # Add proxy_server_request with arguments for callback logging
                     "proxy_server_request": {
                         "url": "/mcp/tools/call",
@@ -994,8 +998,8 @@ class LiteLLM_Proxy_MCP_Handler:
                         },
                     },
                 }
-                if litellm_trace_id:
-                    logging_request_data["litellm_trace_id"] = litellm_trace_id
+                if litellm_trace_id or caller_session_id:
+                    logging_request_data["litellm_trace_id"] = litellm_trace_id or caller_session_id
                 if request_trace_id:
                     logging_metadata["existing_trace_id"] = request_trace_id
                 if request_tags:

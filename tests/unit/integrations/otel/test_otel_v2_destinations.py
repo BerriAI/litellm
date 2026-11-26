@@ -6009,6 +6009,39 @@ class TestCaptureMessageContent:
         assert flattened.callback_vars == {"langfuse_public_key": "pk"}
 
 
+def test_without_destination_langfuse_attributes_strips_langfuse_controls_from_mcp_spans() -> None:
+    from litellm.integrations.otel.plumbing.providers import without_destination_langfuse_attributes
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer: Final = get_tracer(provider, "litellm")
+    with tracer.start_as_current_span("tools/call echo") as span:
+        span.set_attributes(
+            {
+                "mcp.method.name": "tools/call",
+                "mcp.session.id": "proto-1",
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.conversation.id": "caller-sess-1",
+                "session.id": "caller-sess-1",
+                "langfuse.trace.name": "mcp-op",
+                "langfuse.trace.tags": ("prod",),
+            }
+        )
+
+    (recorded_span,) = exporter.get_finished_spans()
+    stripped: Final = without_destination_langfuse_attributes(recorded_span, langfuse_mapped=False)
+    stripped_attrs: Final = dict(stripped.attributes or {})
+    assert "session.id" not in stripped_attrs
+    assert "langfuse.trace.name" not in stripped_attrs
+    assert "langfuse.trace.tags" not in stripped_attrs
+    assert stripped_attrs["gen_ai.conversation.id"] == "caller-sess-1"
+    assert stripped_attrs["mcp.session.id"] == "proto-1"
+
+    kept: Final = without_destination_langfuse_attributes(recorded_span, langfuse_mapped=True)
+    assert dict(kept.attributes or {})["session.id"] == "caller-sess-1"
+
+
 class TestArizeProjectRouting:
     """Arize rejects an export that names no project (400: set x-project-name,
     arize.project.name, openinference.project.name, or model_id), so an Arize
@@ -6407,9 +6440,7 @@ class TestMixpanelGetsTheCallersId:
             return in_fresh_context(run)
 
         def seeded_from_header() -> str | None:
-            _seed_request_user_id(
-                UserAPIKeyAuth(), {}, request_with(((b"x-litellm-customer-id", b"from-header"),))
-            )
+            _seed_request_user_id(UserAPIKeyAuth(), {}, request_with(((b"x-litellm-customer-id", b"from-header"),)))
             return request_user_id()
 
         assert seeded(None, {"metadata": {"user.id": "named"}}) == "named"

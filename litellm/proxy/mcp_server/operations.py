@@ -68,7 +68,7 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
-    get_chain_id_from_headers,
+    get_session_id_from_headers,
 )
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -1365,8 +1365,8 @@ async def _get_tools_from_mcp_servers(
         # This is intentionally minimal: only async_success_handler / post_call_failure_hook
         rules_obj: Final = Rules()
         list_tools_call_id: Final = str(uuid.uuid4())
-        # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
-        effective_litellm_trace_id: Final = litellm_trace_id or get_chain_id_from_headers(raw_headers)
+        chain_id: Final = get_session_id_from_headers(raw_headers)
+        effective_litellm_trace_id: Final = litellm_trace_id or chain_id
         spend_logs_metadata: Final[dict[str, object]] = {
             "mcp_operation": "list_tools",
         }
@@ -1380,9 +1380,11 @@ async def _get_tools_from_mcp_servers(
             "call_type": CallTypes.list_mcp_tools.value,
             "litellm_call_id": list_tools_call_id,
             "litellm_trace_id": effective_litellm_trace_id,
+            **({"litellm_session_id": chain_id} if chain_id else {}),
             "metadata": {
                 "spend_logs_metadata": spend_logs_metadata,
                 "headers": logging_safe_mcp_headers(raw_headers),
+                **({"trace_id": chain_id, "session_id": chain_id} if chain_id else {}),
                 **({"tags": request_tags} if request_tags else {}),
                 **({"existing_trace_id": request_trace_id} if request_trace_id else {}),
             },
@@ -3664,10 +3666,8 @@ async def _execute_mcp_server_tool_call(
         if virtual_tool_result is not None:
             return virtual_tool_result
 
-        # Create a body date for logging
         body_data: Final = {"name": params.name, "arguments": params.arguments}
-        # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
-        chain_id: Final = get_chain_id_from_headers(raw_headers)
+        chain_id: Final = get_session_id_from_headers(raw_headers)
         if chain_id:
             body_data["litellm_trace_id"] = chain_id
             body_data["litellm_session_id"] = chain_id
@@ -3686,8 +3686,8 @@ async def _execute_mcp_server_tool_call(
             if user_api_key_auth is not None
             else None
         )
-        if guardrail_auth is not None:
-            data = await add_litellm_data_to_request(
+        data: Final = (
+            await add_litellm_data_to_request(
                 data=body_data,
                 request=request,
                 # Bill a team-derived call to the team that granted it. A keyless admitted
@@ -3701,8 +3701,15 @@ async def _execute_mcp_server_tool_call(
                 user_api_key_dict=guardrail_auth,
                 proxy_config=proxy_config,
             )
-        else:
-            data = body_data
+            if guardrail_auth is not None
+            else {
+                **body_data,
+                "metadata": {
+                    "headers": logging_safe_mcp_headers(raw_headers),
+                    **({"trace_id": chain_id, "session_id": chain_id} if chain_id else {}),
+                },
+            }
+        )
 
         response: Final = await call_mcp_tool(
             user_api_key_auth=user_api_key_auth,

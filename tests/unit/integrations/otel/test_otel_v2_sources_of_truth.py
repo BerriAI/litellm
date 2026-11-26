@@ -47,7 +47,11 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
-from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.trace_controls import (
+    TraceControls,
+    caller_trace_controls,
+    trace_controls_from_headers,
+)
 from litellm.types.responses.main import build_web_search_call
 
 
@@ -1913,3 +1917,85 @@ def test_upstream_address_port(resource, expected):
     origin yields nothing at all because the redactor rebuilds it without its brackets;
     both are why the mapper gates ``rpc.system`` on the complete pair."""
     assert _upstream_address_port(resource) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        (
+            {"metadata": {"headers": {"langfuse_session_id": "lf-1", "langfuse_trace_name": "mcp-op"}}},
+            TraceControls(name="mcp-op", session_id="lf-1"),
+        ),
+        (
+            {"metadata": {"headers": {"Langfuse_Session_Id": "lf-mixed"}, "session_id": "body-sess"}},
+            TraceControls(session_id="lf-mixed"),
+        ),
+        (
+            {
+                "proxy_server_request": {"headers": {"langfuse_session_id": "proxy-hdr"}},
+                "metadata": {"headers": {"langfuse_session_id": "meta-hdr"}, "session_id": "body-sess"},
+            },
+            TraceControls(session_id="proxy-hdr"),
+        ),
+        (
+            {"metadata": {"headers": {}, "session_id": "chain-sess"}},
+            TraceControls(session_id="chain-sess"),
+        ),
+    ],
+    ids=["metadata-headers", "case-insensitive-beats-body", "proxy-headers-beat-metadata-headers", "body-fallback"],
+)
+def test_caller_trace_controls_reads_langfuse_headers_from_metadata_headers(
+    request_data: Mapping[str, object], expected: TraceControls
+) -> None:
+    assert caller_trace_controls({"litellm_params": request_data}) == expected
+
+
+@pytest.mark.parametrize(
+    ("headers", "session_id", "expected"),
+    [
+        (
+            {"Langfuse_Session_Id": "lf-hdr", "langfuse_trace_name": "op", "langfuse_trace_user_id": "u1"},
+            "chain-1",
+            TraceControls(name="op", user_id="u1", session_id="lf-hdr"),
+        ),
+        ({"x-litellm-session-id": "chain-1"}, "chain-1", TraceControls(session_id="chain-1")),
+        ({}, None, TraceControls()),
+        (None, None, TraceControls()),
+    ],
+    ids=["langfuse-header-beats-fallback", "fallback-session", "empty-headers", "no-headers"],
+)
+def test_trace_controls_from_headers_prefers_langfuse_session_id_over_fallback(
+    headers: Mapping[str, str] | None, session_id: str | None, expected: TraceControls
+) -> None:
+    assert trace_controls_from_headers(headers, session_id=session_id) == expected
+
+
+def test_mcp_span_mappers_keep_caller_session_separate_from_mcp_protocol_session() -> None:
+    from litellm.integrations.otel import MCP
+    from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
+    from litellm.integrations.otel.model.payloads import MCPListToolsSpanData, MCPToolCallSpanData
+
+    trace: Final = TraceControls(name="agent-turn", session_id="caller-sess-1", tags=("prod",))
+    tool_data: Final = MCPToolCallSpanData.from_standard_logging_payload(
+        _mcp_payload(), trace=trace, caller_session_id="caller-sess-1"
+    )
+    list_data: Final = MCPListToolsSpanData.from_standard_logging_payload(
+        {"call_type": "list_mcp_tools", "status": "success", "litellm_call_id": "mcp_list_1", "metadata": {}},
+        trace=trace,
+    )
+
+    genai_tool_attrs: Final = GenAIMapper().map(tool_data)
+    assert genai_tool_attrs[MCP.SESSION_ID] == "sess-abc123"
+    assert genai_tool_attrs[GenAI.CONVERSATION_ID] == "caller-sess-1"
+
+    langfuse_tool_attrs: Final = LangfuseMapper().map(tool_data)
+    assert langfuse_tool_attrs == {
+        "langfuse.trace.name": "agent-turn",
+        "session.id": "caller-sess-1",
+        "langfuse.trace.tags": ("prod",),
+    }
+    assert LangfuseMapper().map(list_data) == langfuse_tool_attrs
+
+    without_caller: Final = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload())
+    assert GenAI.CONVERSATION_ID not in GenAIMapper().map(without_caller)
+    assert LangfuseMapper().map(without_caller) == {}
