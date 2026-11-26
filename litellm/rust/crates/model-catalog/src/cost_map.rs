@@ -57,7 +57,7 @@ impl Base {
 
 static BUNDLED_BASE: LazyLock<Base> = LazyLock::new(|| {
     Base::new(
-        Catalog::parse_trusted(BUNDLED_REGISTRY)
+        Catalog::bundled()
             .expect("the bundled registry parses")
             .value,
     )

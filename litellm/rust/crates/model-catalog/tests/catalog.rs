@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use litellm_model_catalog::{
-    BUNDLED_MODEL_COUNT, BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode,
+    BUNDLED_MODEL_COUNT, BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode, Model,
     Rejects, Written,
 };
 use rstest::{fixture, rstest};
@@ -60,17 +60,8 @@ fn error_text(document: Value) -> Vec<String> {
 #[case::legacy_evaluation("evaluation", Mode::Evaluation)]
 fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
     let catalog = catalog(json!({"Test": {"litellm_provider": "test", "mode": mode}}));
-    assert_eq!(
-        catalog
-            .lookup("Test")
-            .unwrap()
-            .entry
-            .model()
-            .unwrap()
-            .attributes
-            .mode,
-        Some(expected)
-    );
+    let model = Model::from_fields(catalog.lookup("Test").unwrap().entry.fields()).unwrap();
+    assert_eq!(model.attributes.mode, Some(expected));
 }
 
 #[rstest]
@@ -84,15 +75,9 @@ fn a_minimum_billed_input_token_count_is_read_and_mergeable() {
         .map(report)
         .collect();
     assert!(problems.is_empty(), "{problems:#?}");
-    let attributes = catalog(document)
-        .lookup("Test")
-        .unwrap()
-        .entry
-        .model()
-        .unwrap()
-        .attributes
-        .clone();
-    assert_eq!(attributes.min_billed_input_tokens, Some(600));
+    let catalog = catalog(document);
+    let model = Model::from_fields(catalog.lookup("Test").unwrap().entry.fields()).unwrap();
+    assert_eq!(model.attributes.min_billed_input_tokens, Some(600));
 }
 
 #[rstest]
@@ -111,12 +96,12 @@ fn unknown_keys_are_kept_raw_and_listed_as_unrecognized(fixture_catalog: Catalog
         Some(&json!({"nested":[1,{"x":true}]}))
     );
     assert_eq!(
-        fixture_catalog.unrecognized().collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            ("Alpha", "enabled"),
-            ("Alpha", "price"),
-            ("Alpha", "unknown")
-        ])
+        Model::from_fields(entry.fields())
+            .unwrap()
+            .unrecognized
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["enabled", "price", "unknown"].map(String::from))
     );
 }
 
@@ -155,8 +140,8 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
     assert!(problems[0].starts_with("Bad.mode: invalid value: unknown variant `chatt`"));
     assert!(problems[1].starts_with("Bad.input_cost_per_token: invalid value"));
     assert_eq!(problems[2], "Worse.litellm_provider: required");
-    assert!(catalog.lookup("Good").unwrap().entry.model().is_some());
-    assert!(catalog.lookup("Bad").unwrap().entry.model().is_none());
+    assert!(Model::from_fields(catalog.lookup("Good").unwrap().entry.fields()).is_ok());
+    assert!(Model::from_fields(catalog.lookup("Bad").unwrap().entry.fields()).is_err());
     assert_eq!(catalog.model_count(), 3);
     assert!(
         parsed
@@ -547,20 +532,20 @@ fn bundled_model_count_matches_the_parsed_registry() {
 }
 
 #[rstest]
-fn trusted_parse_serves_the_bundled_registry_like_a_full_parse() {
+fn the_bundled_catalog_serves_the_registry_like_a_full_parse() {
     let full = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
-    let trusted = Catalog::parse_trusted(BUNDLED_REGISTRY).unwrap().value;
+    let bundled = Catalog::bundled().unwrap().value;
 
-    assert_eq!(trusted.aliases(), full.aliases());
-    assert!(trusted.served().eq(full.served()));
+    assert_eq!(bundled.aliases(), full.aliases());
+    assert!(bundled.served().eq(full.served()));
     assert!(
-        trusted
+        bundled
             .written()
             .map(|(key, _)| key)
             .eq(full.written().map(|(key, _)| key))
     );
     assert_eq!(
-        trusted.fallback_rules().map(<[_]>::len),
+        bundled.fallback_rules().map(<[_]>::len),
         full.fallback_rules().map(<[_]>::len)
     );
 }
