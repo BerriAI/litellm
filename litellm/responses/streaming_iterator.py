@@ -2690,7 +2690,7 @@ class _ResponsesWsTurn:
 
     logging_obj: LiteLLMLoggingObj
     events: tuple[Mapping[str, object], ...] = ()
-    request_body: Mapping[str, object] = _NO_REQUEST_BODY
+    request_body: Mapping[str, object] = field(default_factory=lambda: _NO_REQUEST_BODY)
     record_failure: Callable[[Exception, Mapping[str, object]], None] | None = None
 
     def with_event(self, event: Mapping[str, object]) -> _ResponsesWsTurn:
