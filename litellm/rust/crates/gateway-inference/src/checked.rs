@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use litellm_config::GeneralSettings;
 use litellm_gateway_auth_core::{
-    Caller, StoredKey,
+    Credential, StoredKey,
     body::{
         self, Deferred, Deployment, HostTables, Names, OptIn, Params, Policy, Reachable, Surface,
     },
@@ -113,9 +113,9 @@ async fn check<H: Host>(
         deferred: Deferred::default(),
     };
     let needs = body::needs(&request, names, policy);
-    let team = match &*call.identity {
-        Caller::MasterKey => None,
-        Caller::Key(context) => context.key.record().team_id.as_deref(),
+    let team = match &call.identity.credential {
+        Credential::MasterKey => None,
+        Credential::Key { key } => key.record().team_id.as_deref(),
     };
     let reachable = Reachable {
         groups: gateway
