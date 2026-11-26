@@ -619,7 +619,7 @@ async def _forward_jsonrpc_sse(
     extra_headers: Mapping[str, str] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-    request_data: dict[str, object] | None = None,
+    request_data: dict[str, object] | None = None,  # mutable-ok: proxy hook mutates data
     served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
     event_source: Final = _a2a_sse_event_source(
@@ -950,12 +950,54 @@ def _finalize_task_jsonrpc_result(
     return normalize_jsonrpc_response(result_dict, served_version, method=method)
 
 
+def _a2a_session_principal(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    if user_api_key_dict.api_key:
+        return user_api_key_dict.api_key
+    caller: Final = user_api_key_dict.agent_caller
+    if caller is not None:
+        if caller.user_id:
+            return f"user:{caller.user_id}"
+        if caller.team_id:
+            return f"team:{caller.team_id}"
+    claims: Final = user_api_key_dict.jwt_claims
+    if isinstance(claims, Mapping):
+        sub: Final = claims.get("sub")
+        iss: Final = claims.get("iss")
+        if isinstance(sub, str | int) and str(sub):
+            return f"jwt:{iss or ''}:{sub}"
+    for prefix, candidate in (
+        ("user", user_api_key_dict.user_id),
+        ("end_user", user_api_key_dict.end_user_id),
+        ("email", user_api_key_dict.user_email),
+        ("agent", user_api_key_dict.agent_id),
+        ("team", user_api_key_dict.team_id),
+        ("org", user_api_key_dict.org_id),
+    ):
+        if candidate:
+            return f"{prefix}:{candidate}"
+    return None
+
+
+def _strip_unscoped_context_id(params: object) -> object:
+    if not is_str_keyed_dict(params):
+        return params
+    sanitized: Final[dict[str, object]] = {  # mutable-ok: shallow copy excluding unscoped contextId
+        k: v for k, v in params.items() if k != "contextId"
+    }
+    message: Final = sanitized.get("message")
+    if is_str_keyed_dict(message) and "contextId" in message:
+        sanitized["message"] = {k: v for k, v in message.items() if k != "contextId"}
+    return sanitized
+
+
 def _with_inbound_runtime_session_id(
     litellm_params: Mapping[str, object],
     custom_llm_provider: object,
     inbound_runtime_session_id: str | None,
+    *,
+    has_principal: bool,
 ) -> Mapping[str, object]:
-    if not custom_llm_provider or not inbound_runtime_session_id:
+    if not custom_llm_provider or not inbound_runtime_session_id or not has_principal:
         return litellm_params
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2A_RUNTIME_SESSION_ID_PARAM,
@@ -1254,17 +1296,18 @@ async def invoke_agent_a2a(
         litellm_params: dict[str, object] = agent.litellm_params or {}
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
 
-        # Hand the authenticated key hash to the completion bridge so provider
-        # configs can scope provider-side session state per key (e.g. LangFlow
-        # session memory) instead of trusting the client-supplied A2A contextId.
-        if custom_llm_provider and user_api_key_dict.api_key:
+        # Hand the authenticated principal identifier to the completion bridge so
+        # provider configs can scope provider-side session state per principal
+        # (e.g. LangFlow or AgentCore) instead of trusting raw client session IDs.
+        session_principal: Final = _a2a_session_principal(user_api_key_dict)
+        if custom_llm_provider and session_principal:
             from litellm.a2a_protocol.litellm_completion_bridge.handler import (
                 A2A_USER_API_KEY_HASH_PARAM,
             )
 
             litellm_params = {
                 **litellm_params,
-                A2A_USER_API_KEY_HASH_PARAM: user_api_key_dict.api_key,
+                A2A_USER_API_KEY_HASH_PARAM: session_principal,
             }
 
         # URL is required unless using completion bridge with a provider that derives endpoint from model
@@ -1362,6 +1405,10 @@ async def invoke_agent_a2a(
             forwarded_litellm_params,
             custom_llm_provider,
             normalized.get("x-amzn-bedrock-agentcore-runtime-session-id"),
+            has_principal=bool(session_principal),
+        )
+        effective_params: Final = (
+            _strip_unscoped_context_id(params) if custom_llm_provider and not session_principal else params
         )
 
         native_jsonrpc_provider: Final = _resolve_native_jsonrpc_provider(
@@ -1396,7 +1443,7 @@ async def invoke_agent_a2a(
             from a2a.compat.v0_3.types import SendMessageRequest
 
             try:
-                message_send_params: Final = _build_message_send_params(_DECODED_JSON.validate_python(params))
+                message_send_params: Final = _build_message_send_params(_DECODED_JSON.validate_python(effective_params))
             except (ValidationError, ValueError) as e:
                 return _jsonrpc_error(request_id, -32602, f"Invalid params: {e}")
 
@@ -1450,7 +1497,7 @@ async def invoke_agent_a2a(
             return await _handle_stream_message(
                 api_base=agent_url,
                 request_id=request_id if request_id is not None else "",
-                params=params,
+                params=effective_params,
                 litellm_params=dict(provider_litellm_params),
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
@@ -1466,7 +1513,7 @@ async def invoke_agent_a2a(
             return await _handle_task_jsonrpc_method(
                 method=method,
                 request_id=request_id,
-                params=params,
+                params=effective_params,
                 agent_id=agent_id,
                 agent_url=agent_url,
                 request=request,
@@ -1482,7 +1529,7 @@ async def invoke_agent_a2a(
         elif method == "tasks/resubscribe":
             return await _handle_resubscribe_method(
                 request_id=request_id,
-                params=params,
+                params=effective_params,
                 agent_id=agent_id,
                 agent_url=agent_url,
                 served_version=served_version,

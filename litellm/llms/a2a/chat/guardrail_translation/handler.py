@@ -48,10 +48,25 @@ class _SupportsSetItem(Protocol):
     def __setitem__(self, key: str, value: object, /) -> None: ...
 
 
+@runtime_checkable
+class _SupportsResultAssign(Protocol):
+    result: object
+
+
 def _item_assignment_target(value: object) -> _SupportsSetItem:
     if isinstance(value, _SupportsSetItem):
         return value
     raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _write_back_result(
+    response: object,
+    response_dict: _ResultLookup,
+    result: dict[str, Any],  # mutable-ok: stores mutated guardrail result payload in place
+) -> None:
+    _item_assignment_target(response_dict)["result"] = result
+    if not isinstance(response, dict) and isinstance(response, _SupportsResultAssign):
+        response.result = result  # rebind-ok: mutates response.result for callers ignoring return value
 
 
 def _response_payload(response: object) -> object:
@@ -247,7 +262,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
         verbose_proxy_logger.debug("A2A: Processed output response")
 
-        _item_assignment_target(response_dict)["result"] = result
+        _write_back_result(response, response_dict, result)
         return response
 
     async def process_output_streaming_response(
@@ -384,11 +399,70 @@ class A2AGuardrailHandler(BaseTranslation):
                 chunk_indices_with_text.append(orig_i)
         return "".join(text_parts), chunk_indices_with_text
 
+    def _extract_container_parts(
+        self,
+        container: object,
+        path: tuple[str, ...],
+        texts_to_check: list[str],  # mutable-ok: accumulates extracted text fragments in place
+        task_mappings: list[tuple[tuple[str, ...], int]],  # mutable-ok: accumulates JSON paths in place
+    ) -> None:
+        if isinstance(container, dict) and "parts" in container:
+            self._extract_texts_from_parts(
+                parts=container["parts"],
+                path=path,
+                texts_to_check=texts_to_check,
+                task_mappings=task_mappings,
+            )
+
+    def _extract_sequence_parts(
+        self,
+        items: object,
+        base_path: tuple[str, ...],
+        texts_to_check: list[str],  # mutable-ok: accumulates extracted text fragments in place
+        task_mappings: list[tuple[tuple[str, ...], int]],  # mutable-ok: accumulates JSON paths in place
+    ) -> None:
+        if not isinstance(items, list):
+            return
+        for idx, item in enumerate(items):
+            self._extract_container_parts(
+                item,
+                (*base_path, str(idx), "parts"),
+                texts_to_check,
+                task_mappings,
+            )
+
+    def _extract_nested_tasks(
+        self,
+        result: Mapping[str, Any],
+        texts_to_check: list[str],  # mutable-ok: accumulates extracted text fragments in place
+        task_mappings: list[tuple[tuple[str, ...], int]],  # mutable-ok: accumulates JSON paths in place
+    ) -> None:
+        result_fields: Final = require_get(result)
+        nested_task: Final = result_fields.get("task")
+        if isinstance(nested_task, dict):
+            self._extract_texts_from_result(
+                result=nested_task,
+                texts_to_check=texts_to_check,
+                task_mappings=task_mappings,
+                path_prefix=("task",),
+            )
+        tasks: Final = result_fields.get("tasks")
+        if isinstance(tasks, list):
+            for task_idx, task in enumerate(tasks):
+                if isinstance(task, dict):
+                    self._extract_texts_from_result(
+                        result=task,
+                        texts_to_check=texts_to_check,
+                        task_mappings=task_mappings,
+                        path_prefix=("tasks", str(task_idx)),
+                    )
+
     def _extract_texts_from_result(
         self,
         result: dict[str, Any],
         texts_to_check: list[str],
         task_mappings: list[tuple[tuple[str, ...], int]],
+        path_prefix: tuple[str, ...] = (),
     ) -> None:
         """
         Extract text from all possible locations in an A2A result.
@@ -398,61 +472,35 @@ class A2AGuardrailHandler(BaseTranslation):
         2. Nested message: {"message": {"parts": [...]}}
         3. Task with artifacts: {"artifacts": [{"parts": [...]}]}
         4. Task with status message: {"status": {"message": {"parts": [...]}}}
-        5. Streaming artifact-update: {"artifact": {"parts": [...]}}
+        5. Task history messages: {"history": [{"parts": [...]}]}
+        6. Streaming artifact-update: {"artifact": {"parts": [...]}}
+        7. Task list or 1.0 task envelope: {"tasks": [...]} or {"task": {...}}
         """
-        # Case 1: Direct parts in result (direct message)
-        if "parts" in result:
-            self._extract_texts_from_parts(
-                parts=result["parts"],
-                path=("parts",),
-                texts_to_check=texts_to_check,
-                task_mappings=task_mappings,
-            )
-
         result_fields: Final = require_get(result)
-        # Case 2: Nested message
-        message: Final = result_fields.get("message")
-        if message and isinstance(message, dict) and "parts" in message:
-            self._extract_texts_from_parts(
-                parts=message["parts"],
-                path=("message", "parts"),
-                texts_to_check=texts_to_check,
-                task_mappings=task_mappings,
+        status: Final = result_fields.get("status")
+        for sub_path, container in (
+            (("parts",), result),
+            (("message", "parts"), result_fields.get("message")),
+            (("artifact", "parts"), result_fields.get("artifact")),
+            (("status", "message", "parts"), status.get("message") if isinstance(status, dict) else None),
+        ):
+            self._extract_container_parts(
+                container,
+                (*path_prefix, *sub_path),
+                texts_to_check,
+                task_mappings,
             )
 
-        # Case 3: Streaming artifact-update (singular artifact)
-        artifact: Final = result_fields.get("artifact")
-        if artifact and isinstance(artifact, dict) and "parts" in artifact:
-            self._extract_texts_from_parts(
-                parts=artifact["parts"],
-                path=("artifact", "parts"),
-                texts_to_check=texts_to_check,
-                task_mappings=task_mappings,
+        for list_key in ("artifacts", "history"):
+            self._extract_sequence_parts(
+                result_fields.get(list_key),
+                (*path_prefix, list_key),
+                texts_to_check,
+                task_mappings,
             )
 
-        # Case 4: Task with status message
-        status: Final = result_fields.get("status", {})
-        if isinstance(status, dict):
-            status_message: Final = status.get("message")
-            if status_message and isinstance(status_message, dict) and "parts" in status_message:
-                self._extract_texts_from_parts(
-                    parts=status_message["parts"],
-                    path=("status", "message", "parts"),
-                    texts_to_check=texts_to_check,
-                    task_mappings=task_mappings,
-                )
-
-        # Case 5: Task with artifacts (plural, array)
-        artifacts: Final = result_fields.get("artifacts", [])
-        if artifacts and isinstance(artifacts, list):
-            for artifact_idx, art in enumerate(artifacts):
-                if isinstance(art, dict) and "parts" in art:
-                    self._extract_texts_from_parts(
-                        parts=art["parts"],
-                        path=("artifacts", str(artifact_idx), "parts"),
-                        texts_to_check=texts_to_check,
-                        task_mappings=task_mappings,
-                    )
+        if not path_prefix:
+            self._extract_nested_tasks(result, texts_to_check, task_mappings)
 
     def _extract_texts_from_parts(
         self,
@@ -463,9 +511,14 @@ class A2AGuardrailHandler(BaseTranslation):
     ) -> None:
         """Extract text from message parts."""
         for part_idx, part in enumerate(parts):
-            if part.get("kind") == "text":
+            if not isinstance(part, Mapping):
+                continue
+            is_text_part: Final = part.get("kind") == "text" or (
+                "kind" not in part and isinstance(part.get("text"), str)
+            )
+            if is_text_part:
                 text = part.get("text", "")
-                if text:
+                if isinstance(text, str) and text:
                     texts_to_check.append(text)
                     task_mappings.append((path, part_idx))
 

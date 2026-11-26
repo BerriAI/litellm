@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -3692,3 +3692,202 @@ async def test_agentcore_invalid_inbound_runtime_session_header_returns_400() ->
     body = json.loads(response.body.decode())
     assert body["error"]["code"] == -32602
     assert "Invalid AgentCore runtime session id" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_agentcore_tasks_list_applies_unified_output_guardrail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    class _MaskingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj=None,
+        ) -> GenericGuardrailAPIInputs:
+            return {"texts": [text.replace("123-45-6789", "[SSN]") for text in inputs.get("texts", [])]}
+
+    guardrail: Final = _MaskingGuardrail(
+        guardrail_name="mask-a2a-tasks-list",
+        default_on=True,
+        event_hook="post_call",
+    )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=MagicMock())
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    agent: Final = _make_agentcore_agent(card_url=None)
+    mock_request: Final = _make_request_mock("tasks/list", {"contextId": "ctx-list-00000000000000000000001"})
+
+    with ExitStack() as stack:
+        for base_patch in _base_patches(agent):
+            stack.enter_context(base_patch)
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging))
+        router = stack.enter_context(respx.mock(assert_all_called=True))
+        router.post(url__regex=r"https://bedrock-agentcore\.us-west-2\.amazonaws\.com/.*/invocations").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req-1",
+                    "result": {
+                        "tasks": [
+                            {
+                                "kind": "task",
+                                "id": "task-1",
+                                "status": {"state": "completed"},
+                                "artifacts": [
+                                    {"artifactId": "art-1", "parts": [{"kind": "text", "text": "leak SSN 123-45-6789"}]}
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+        )
+
+        response: Final = await invoke_agent_a2a(
+            agent_id="agentcore-demo",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-agentcore-1", user_id="u1", team_id="t1"),
+        )
+
+    assert response.status_code == 200
+    body: Final = json.loads(response.body.decode())
+    assert body["result"]["tasks"][0]["artifacts"][0]["parts"][0]["text"] == "leak SSN [SSN]"
+
+
+@pytest.mark.asyncio
+async def test_agentcore_jwt_callers_scope_session_ids_distinctly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    agent: Final = _make_agentcore_agent(card_url=None)
+    session_id: Final = "jwt-shared-session-0000000000000000001"
+    req_alice_get: Final = _make_request_mock("tasks/get", {"id": "task-1"})
+    req_alice_get.headers = {"X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id}
+    req_alice_send: Final = _make_request_mock(
+        "message/send",
+        {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "m-1",
+                "contextId": session_id,
+            }
+        },
+    )
+    req_bob_get: Final = _make_request_mock("tasks/get", {"id": "task-1"})
+    req_bob_get.headers = {"X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id}
+    req_user_fallback: Final = _make_request_mock("tasks/list", {"contextId": session_id})
+
+    jwt_alice: Final = UserAPIKeyAuth(api_key=None, jwt_claims={"sub": "alice", "iss": "https://idp.example"})
+    jwt_bob: Final = UserAPIKeyAuth(api_key=None, jwt_claims={"sub": "bob", "iss": "https://idp.example"})
+    user_only: Final = UserAPIKeyAuth(api_key=None, user_id="alice")
+
+    with ExitStack() as stack:
+        for base_patch in _base_patches(agent):
+            stack.enter_context(base_patch)
+        router = stack.enter_context(respx.mock(assert_all_called=True))
+        route = router.post(url__regex=r"https://bedrock-agentcore\.us-west-2\.amazonaws\.com/.*/invocations").mock(
+            return_value=httpx.Response(
+                200,
+                json={"jsonrpc": "2.0", "id": "req-1", "result": {"id": "task-1", "status": {"state": "completed"}}},
+            )
+        )
+
+        for req, auth in (
+            (req_alice_get, jwt_alice),
+            (req_alice_send, jwt_alice),
+            (req_bob_get, jwt_bob),
+            (req_user_fallback, user_only),
+        ):
+            resp = await invoke_agent_a2a(
+                agent_id="agentcore-demo",
+                request=req,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=auth,
+            )
+            assert resp.status_code == 200
+
+    alice_get_session: Final = route.calls[0].request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+    alice_send_session: Final = route.calls[1].request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+    bob_get_session: Final = route.calls[2].request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+    user_only_session: Final = route.calls[3].request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+
+    assert alice_get_session == alice_send_session
+    assert alice_get_session != session_id
+    assert alice_get_session.endswith(f"-{session_id}")
+    assert bob_get_session != alice_get_session
+    assert bob_get_session.endswith(f"-{session_id}")
+    assert user_only_session not in (session_id, alice_get_session, bob_get_session)
+    assert user_only_session.endswith(f"-{session_id}")
+
+
+@pytest.mark.asyncio
+async def test_agentcore_caller_without_principal_cannot_forward_client_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    configured_session: Final = "configured-agentcore-session-00000000000001"
+    agent: Final = _make_agentcore_agent(card_url=None)
+    agent.litellm_params["runtimeSessionId"] = configured_session
+    attacker_session: Final = "victim-raw-session-00000000000000000000001"
+
+    req_header: Final = _make_request_mock("tasks/get", {"id": "task-1"})
+    req_header.headers = {"X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": attacker_session}
+    req_context: Final = _make_request_mock("tasks/list", {"contextId": attacker_session})
+    req_send: Final = _make_request_mock(
+        "message/send",
+        {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "m-1",
+                "contextId": attacker_session,
+            }
+        },
+    )
+
+    principal_less: Final = UserAPIKeyAuth(api_key=None)
+
+    with ExitStack() as stack:
+        for base_patch in _base_patches(agent):
+            stack.enter_context(base_patch)
+        router = stack.enter_context(respx.mock(assert_all_called=True))
+        route = router.post(url__regex=r"https://bedrock-agentcore\.us-west-2\.amazonaws\.com/.*/invocations").mock(
+            return_value=httpx.Response(
+                200,
+                json={"jsonrpc": "2.0", "id": "req-1", "result": {"id": "task-1", "status": {"state": "completed"}}},
+            )
+        )
+
+        for req in (req_header, req_context, req_send):
+            resp = await invoke_agent_a2a(
+                agent_id="agentcore-demo",
+                request=req,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=principal_less,
+            )
+            assert resp.status_code == 200
+
+    for call in route.calls:
+        assert call.request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == configured_session
+        assert attacker_session not in call.request.content.decode()

@@ -94,3 +94,60 @@ class TestA2AGuardrailHandlerOutputResponse:
         )
 
         assert processed == "SSN 123-45-6789"
+
+    async def test_tasks_list_03_and_10_dict_and_pydantic_responses_rewrite_all_task_text_in_place(self):
+        v03_tasks_list: Final = {
+            "tasks": [
+                {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {
+                        "state": "completed",
+                        "message": {"kind": "message", "parts": [{"kind": "text", "text": "status 123-45-6789"}]},
+                    },
+                    "artifacts": [{"artifactId": "a1", "parts": [{"kind": "text", "text": "artifact 123-45-6789"}]}],
+                    "history": [{"kind": "message", "parts": [{"kind": "text", "text": "history 123-45-6789"}]}],
+                },
+                {
+                    "id": "task-2",
+                    "status": {
+                        "state": "TASK_STATE_COMPLETED",
+                        "message": {"parts": [{"text": "v1 status 123-45-6789"}]},
+                    },
+                    "artifacts": [{"artifactId": "a2", "parts": [{"text": "v1 artifact 123-45-6789"}]}],
+                    "history": [{"parts": [{"text": "v1 history 123-45-6789"}]}],
+                },
+            ]
+        }
+        pydantic_response: Final = LiteLLMSendMessageResponse(id="req-1", result=json.loads(json.dumps(v03_tasks_list)))
+
+        processed: Final = await A2AGuardrailHandler().process_output_response(
+            pydantic_response, _MaskingGuardrail(guardrail_name="mask-ssn")
+        )
+
+        assert processed is pydantic_response
+        dumped: Final = pydantic_response.model_dump()
+        task1: Final = dumped["result"]["tasks"][0]
+        task2: Final = dumped["result"]["tasks"][1]
+        assert task1["status"]["message"]["parts"][0]["text"] == "status [SSN]"
+        assert task1["artifacts"][0]["parts"][0]["text"] == "artifact [SSN]"
+        assert task1["history"][0]["parts"][0]["text"] == "history [SSN]"
+        assert task2["status"]["message"]["parts"][0]["text"] == "v1 status [SSN]"
+        assert task2["artifacts"][0]["parts"][0]["text"] == "v1 artifact [SSN]"
+        assert task2["history"][0]["parts"][0]["text"] == "v1 history [SSN]"
+
+    async def test_tasks_list_blocking_guardrail_rejects_task_artifacts(self):
+        response: Final = LiteLLMSendMessageResponse(
+            id="req-2",
+            result={
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "artifacts": [{"parts": [{"kind": "text", "text": "secret 123-45-6789"}]}],
+                    }
+                ]
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"blocked \['secret 123-45-6789'\]"):
+            await A2AGuardrailHandler().process_output_response(response, _BlockingGuardrail(guardrail_name="block"))
