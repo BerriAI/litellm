@@ -630,6 +630,56 @@ async def test_a_tool_calls_spend_logging_leaves_the_requests_budget_reservation
 
 
 @pytest.mark.asyncio
+async def test_the_mcp_tool_listings_spend_logging_leaves_the_requests_budget_reservation_to_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import mcp_server_manager, operations
+
+    manager: Final = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+    )
+    logger: Final = MagicMock(model_call_details={})
+    logger.async_success_handler = AsyncMock()
+    setup: Final = MagicMock(return_value=(logger, None))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr(operations, "function_setup", setup)
+    response: Final = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567891,
+        model="test-model",
+        object="response",
+        status="completed",
+        output=[],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    monkeypatch.setattr(responses_main, "aresponses", AsyncMock(return_value=response))
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-listing-budget-hold"),
+        user_id="u",
+        budget_reservation={"reserved_cost": 0.5, "finalized": False},
+    )
+
+    await responses_main.aresponses_api_with_mcp(
+        input="hi",
+        model="test-model",
+        tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+        user_api_key_auth=caller,
+    )
+
+    logger.async_success_handler.assert_awaited_once()
+    listing_metadata: Final = setup.call_args.kwargs["metadata"]
+    assert listing_metadata["user_api_key_user_id"] == "u"
+    assert budget_reservation_from_metadata(listing_metadata) is None
+    assert caller.budget_reservation == {"reserved_cost": 0.5, "finalized": False}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("behavior", [None, "tool_result", "raise"])
 @pytest.mark.parametrize("error_kind", ["pii", "guardrail", "http", "string_http", "unattributed_http"])
 @pytest.mark.parametrize("mode", ["pre_mcp_call", "during_mcp_call"])
@@ -1019,7 +1069,6 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
         mock_get_tools,
     )
 
-    # Patch manager methods used by _get_mcp_tools_from_manager to avoid needing full UserAPIKeyAuth fields.
     fake_manager = types.SimpleNamespace(
         catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
@@ -1032,7 +1081,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
         fake_manager,
     )
 
-    user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
+    user_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
     tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=user_auth,
         mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
@@ -1091,7 +1140,7 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
     )
 
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
-        user_api_key_auth=types.SimpleNamespace(api_key="k", user_id="u"),
+        user_api_key_auth=UserAPIKeyAuth(api_key="k", user_id="u"),
         mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
         request_tags=["team-a"],
     )

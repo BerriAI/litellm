@@ -435,7 +435,9 @@ class LiteLLM_Proxy_MCP_Handler:
         effective_server_filter: Final = None if resolved_toolset_ids else (list(resolved_mcp_servers) or None)
 
         listing: Final = await _get_tools_from_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
+            user_api_key_auth=(
+                None if user_api_key_auth is None else user_api_key_auth.model_copy(update={"budget_reservation": None})
+            ),
             mcp_auth_header=mcp_auth_header,
             mcp_servers=effective_server_filter,
             mcp_server_auth_headers=mcp_server_auth_headers,
