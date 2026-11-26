@@ -799,6 +799,26 @@ async def test_a_consumer_cancelled_just_as_the_terminal_event_arrives_still_bil
     ) == (1200, 900, 2100), "an event the provider already sent must not be dropped by the cancel"
 
 
+@pytest.mark.asyncio
+async def test_a_stream_cut_after_its_terminal_event_was_logged_reports_that_the_success_event_owns_the_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+    upstream.released.set()
+    assert [(await iterator.__anext__()).type for _ in range(2)] == ["response.created", "response.completed"]
+
+    billed_by_the_success_event: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert billed_by_the_success_event is True, "False has the proxy release the parallel-request slot a second time"
+    assert len(recorder.success_payloads) == 1
+    assert upstream.closed is True
+
+
 @pytest.mark.parametrize("outlives_its_consumer", [True, False], ids=["told_to_close", "never_kept_open"])
 @pytest.mark.asyncio
 async def test_a_cut_stream_that_is_not_drained_closes_the_provider_connection_and_bills_no_success(
