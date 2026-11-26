@@ -6,7 +6,7 @@ use super::{
 record! {
     /// `LiteLLM_ObjectPermissionTable.model_dump(mode="json")`, the value under
     /// [`AuthObject::ObjectPermission`](crate::auth_cache::AuthObject::ObjectPermission) and
-    /// nested in a key's, a team's, a project's, an end user's or an organization's entry.
+    /// nested in a key's, a team's, a project's, an end user's, an organization's or a user's entry.
     pub struct ObjectPermissionEntry {
         object_permission_id: String = required!("object_permission_id"),
         mcp_servers: Option<Vec<String>> = Some(Vec::new()),
