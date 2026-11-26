@@ -6,15 +6,16 @@ from itertools import chain, pairwise
 from typing import Final, Literal, TypeAlias
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import ConfigDict, TypeAdapter, field_serializer, field_validator
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import ConfigDict, field_serializer, field_validator
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 Weekday: TypeAlias = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 WEEKDAYS: Final[tuple[Weekday, ...]] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 SCHEDULE_PREFIX: Final = "sched:"
+SCHEDULE_PERIOD_RETENTION: Final = timedelta(days=8)
 _DAY_MINUTES: Final = 24 * 60
 _WEEK_MINUTES: Final = 7 * _DAY_MINUTES
 
@@ -31,27 +32,14 @@ def resolve_schedules_at(at: datetime | None) -> Generator[None]:
         _schedule_time.reset(token)
 
 
-class _ReceiveStamp(TypedDict, total=False):
-    litellm_received_at: ReadOnly[datetime | None]
-
-
-class _StampedParams(TypedDict, total=False):
-    litellm_metadata: ReadOnly[_ReceiveStamp | None]
-    metadata: ReadOnly[_ReceiveStamp | None]
-
-
-class _StampedKwargs(TypedDict, total=False):
-    litellm_params: ReadOnly[_StampedParams | None]
-
-
-_STAMPED_KWARGS: Final = TypeAdapter(_StampedKwargs)
-
-
 def request_admitted_at(kwargs: Mapping[str, object]) -> datetime | None:
     """The instant auth admitted the request, which charging must resolve schedules at instead of the model call start."""
-    params: Final = _STAMPED_KWARGS.validate_python(kwargs).get("litellm_params") or {}
-    buckets: Final = (params.get("litellm_metadata") or {}, params.get("metadata") or {})
-    return next((stamp for bucket in buckets if (stamp := bucket.get("litellm_received_at")) is not None), None)
+    params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    stamps: Final = (
+        (as_str_mapping(params.get(bucket)) or {}).get("litellm_received_at")
+        for bucket in ("litellm_metadata", "metadata")
+    )
+    return next((stamp for stamp in stamps if isinstance(stamp, datetime)), None)
 
 
 def schedule_clock() -> datetime:

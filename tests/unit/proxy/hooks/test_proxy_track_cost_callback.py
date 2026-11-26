@@ -1292,13 +1292,32 @@ async def test_charge_moves_only_the_committed_counters_auth_named_as_budgeted(m
     assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == expected_scope
 
 
+_ADMITTED: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
-async def test_charge_resolves_schedules_at_the_instant_auth_admitted_the_request(bucket: str) -> None:
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"metadata": {"litellm_received_at": _ADMITTED}},
+        {"litellm_metadata": {"litellm_received_at": _ADMITTED}},
+        {
+            "litellm_metadata": {"litellm_received_at": _ADMITTED},
+            "metadata": {"litellm_received_at": "not-a-date"},
+        },
+        {
+            "litellm_metadata": {"litellm_received_at": "2026-11-25T08:00:00Z"},
+            "metadata": {"litellm_received_at": _ADMITTED},
+        },
+    ],
+    ids=["chat_metadata", "responses_metadata", "malformed_client_stamp", "client_iso_stamp"],
+)
+async def test_charge_resolves_schedules_at_the_instant_auth_admitted_the_request(
+    litellm_params: dict[str, object],
+) -> None:
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
     increment_spend_counters = AsyncMock()
-    admitted = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
 
     await _update_database_and_spend_counters(
         proxy_logging_obj=proxy_logging_obj,
@@ -1308,7 +1327,7 @@ async def test_charge_resolves_schedules_at_the_instant_auth_admitted_the_reques
         end_user_id=None,
         team_id="test_team_id",
         org_id="test_org_id",
-        kwargs={"litellm_params": {bucket: {"litellm_received_at": admitted}}},
+        kwargs={"litellm_params": litellm_params},
         completion_response=None,
         start_time=datetime(2026, 11, 25, 12, 1, tzinfo=timezone.utc),
         end_time=datetime(2026, 11, 25, 12, 2, tzinfo=timezone.utc),
@@ -1316,7 +1335,32 @@ async def test_charge_resolves_schedules_at_the_instant_auth_admitted_the_reques
         budget_reservation=None,
     )
 
-    assert increment_spend_counters.await_args.kwargs["admitted_at"] == admitted
+    assert increment_spend_counters.await_args.kwargs["admitted_at"] == _ADMITTED
+
+
+@pytest.mark.asyncio
+async def test_charge_with_only_a_client_supplied_stamp_falls_back_to_the_call_start() -> None:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={"litellm_params": {"metadata": {"litellm_received_at": "2026-11-25T08:00:00Z"}}},
+        completion_response=None,
+        start_time=datetime(2026, 11, 25, 12, 1, tzinfo=timezone.utc),
+        end_time=datetime(2026, 11, 25, 12, 2, tzinfo=timezone.utc),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["admitted_at"] is None
 
 
 @pytest.mark.asyncio
