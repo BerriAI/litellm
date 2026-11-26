@@ -163,6 +163,35 @@ describe("UsefulLinksManagement", () => {
     expect(mockedNotifications.success).toHaveBeenCalledWith("Link updated successfully");
   });
 
+  it.each([
+    { url: null, valid: false },
+    { url: ["https://test.example.com"], valid: true },
+  ])("edits stored URLs with browser URL validation (valid: $valid)", async ({ url, valid }) => {
+    const user = userEvent.setup();
+    const hubInfo = {
+      docs_title: "Docs",
+      custom_docs_description: null,
+      litellm_version: "1.0.0",
+      useful_links: { "Test Link": { url: url as unknown as string, index: 0 } },
+    };
+    mockedGetPublicModelHubInfo.mockResolvedValue(hubInfo);
+
+    render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
+    await user.click(await screen.findByTestId("edit-link-0-Test Link"));
+    await user.click(screen.getByRole("button", { name: "Save", exact: true }));
+
+    if (valid) {
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledExactlyOnceWith("token", {
+        "Test Link": { url, index: 0 },
+      });
+      expect(mockedNotifications.success).toHaveBeenCalledWith("Link updated successfully");
+    } else {
+      expect(mockedUpdateUsefulLinksCall).not.toHaveBeenCalled();
+      expect(mockedNotifications.fromError).toHaveBeenCalledWith("Please enter a valid URL");
+      expect(screen.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+    }
+  });
+
   it("should cancel editing when cancel button is clicked", async () => {
     const user = userEvent.setup();
     mockedGetPublicModelHubInfo.mockResolvedValue({
