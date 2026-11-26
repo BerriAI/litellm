@@ -6,7 +6,7 @@ import copy
 import io
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Union, cast
 
@@ -80,6 +80,8 @@ from litellm.types.utils import (
 from ...base import BaseLLM
 from ..common_utils import (
     AnthropicError,
+    is_anthropic_tool_use_id_pattern_error,
+    messages_with_renamed_tool_use_ids,
     process_anthropic_headers,
     refusal_params,
     stop_reason_provider_specific_fields,
@@ -99,7 +101,7 @@ if TYPE_CHECKING:
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 _DECODED_JSON: Final = TypeAdapter(object)
-_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def _loads_stream_chunk(payload: str) -> dict[str, object] | None:
@@ -370,6 +372,42 @@ def make_sync_call(
     return completion_stream, response.headers
 
 
+def _request_with_renamed_tool_use_ids(
+    request: Mapping[str, object], error: AnthropicError
+) -> Mapping[str, object] | None:
+    renamed: Final = (
+        messages_with_renamed_tool_use_ids(request.get("messages"))
+        if error.status_code == 400 and is_anthropic_tool_use_id_pattern_error(str(error))
+        else None
+    )
+    return None if renamed is None else {**request, "messages": list(renamed)}
+
+
+def _send_renaming_rejected_tool_use_ids(
+    send: Callable[[Mapping[str, object]], "ModelResponse | CustomStreamWrapper"], request: Mapping[str, object]
+) -> "ModelResponse | CustomStreamWrapper":
+    try:
+        return send(request)
+    except AnthropicError as error:
+        renamed_request: Final = _request_with_renamed_tool_use_ids(request, error)
+        if renamed_request is None:
+            raise
+        return send(renamed_request)
+
+
+async def _asend_renaming_rejected_tool_use_ids(
+    send: Callable[[Mapping[str, object]], Awaitable["ModelResponse | CustomStreamWrapper"]],
+    request: Mapping[str, object],
+) -> "ModelResponse | CustomStreamWrapper":
+    try:
+        return await send(request)
+    except AnthropicError as error:
+        renamed_request: Final = _request_with_renamed_tool_use_ids(request, error)
+        if renamed_request is None:
+            raise
+        return await send(renamed_request)
+
+
 class AnthropicChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -524,7 +562,7 @@ class AnthropicChatCompletion(BaseLLM):
 
         optional_params = copy.deepcopy(optional_params)
         stream: Final = optional_params.pop("stream", None)
-        json_mode: Final[bool] = optional_params.pop("json_mode", False)
+        json_mode: Final = bool(optional_params.pop("json_mode", False))
         is_vertex_request: Final[bool] = optional_params.pop("is_vertex_request", False)
         optional_params.pop("vertex_count_tokens_location", None)
         _is_function_call: Final = False
@@ -535,7 +573,7 @@ class AnthropicChatCompletion(BaseLLM):
             model=model,
             messages=messages,
             optional_params={
-                **with_extra_body_fields(_OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)),
+                **with_extra_body_fields(_STR_KEYED_MAPPING.validate_python(optional_params)),
                 "is_vertex_request": is_vertex_request,
             },
             litellm_params=litellm_params,
@@ -586,15 +624,21 @@ class AnthropicChatCompletion(BaseLLM):
 
         async def acompletion_dispatch() -> "ModelResponse | CustomStreamWrapper":
             """Translate then send, so the provider config can inline remote media off the event loop."""
-            request_headers, data = finish_request(
-                await config.async_transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=transform_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
+            return await _asend_renaming_rejected_tool_use_ids(
+                asend,
+                _STR_KEYED_MAPPING.validate_python(
+                    await config.async_transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=transform_params,
+                        litellm_params=litellm_params,
+                        headers=headers,
+                    )
+                ),
             )
+
+        async def asend(request: Mapping[str, object]) -> "ModelResponse | CustomStreamWrapper":
+            request_headers, data = finish_request(dict(request))
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
@@ -644,27 +688,16 @@ class AnthropicChatCompletion(BaseLLM):
                 timeout=timeout,
             )
 
-        if acompletion is True:
-            return acompletion_dispatch()
-        else:
-            headers, data = finish_request(
-                config.transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=transform_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
-            )
-            ## COMPLETION CALL
+        def send(request: Mapping[str, object]) -> "ModelResponse | CustomStreamWrapper":
+            request_headers, data = finish_request(dict(request))
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 data["stream"] = stream
-                completion_stream, headers = make_sync_call(
+                completion_stream, response_headers = make_sync_call(
                     client=client,
                     api_base=api_base,
-                    headers=headers,
+                    headers=request_headers,
                     data=json.dumps(data),
                     model=model,
                     messages=messages,
@@ -686,53 +719,64 @@ class AnthropicChatCompletion(BaseLLM):
                     model=model,
                     custom_llm_provider="anthropic",
                     logging_obj=logging_obj,
-                    _response_headers=process_anthropic_headers(headers),
+                    _response_headers=process_anthropic_headers(response_headers),
                 )
 
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    client = get_httpx_client(params={"timeout": timeout})
-                else:
-                    client = client
+            sync_client: Final = (
+                client if isinstance(client, HTTPHandler) else get_httpx_client(params={"timeout": timeout})
+            )
+            try:
+                response: Final = sync_client.post(
+                    api_base,
+                    headers=request_headers,
+                    data=json.dumps(data),
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                )
+            except Exception as e:
+                status_code: Final = getattr(e, "status_code", 500)
+                error_headers = getattr(e, "headers", None)
+                error_text = getattr(e, "text", str(e))
+                error_response: Final[object] = getattr(e, "response", None)
+                if error_headers is None and error_response:
+                    error_headers = getattr(error_response, "headers", None)
+                if error_response and hasattr(error_response, "text"):
+                    error_text = getattr(error_response, "text", error_text)
+                raise with_provider_reply(
+                    AnthropicError(
+                        message=error_text,
+                        status_code=status_code,
+                        headers=error_headers,
+                    ),
+                    error_response,
+                )
+            return config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
+            )
 
-                try:
-                    response: Final = client.post(
-                        api_base,
-                        headers=headers,
-                        data=json.dumps(data),
-                        timeout=timeout,
-                        logging_obj=logging_obj,
-                    )
-                except Exception as e:
-                    status_code: Final = getattr(e, "status_code", 500)
-                    error_headers = getattr(e, "headers", None)
-                    error_text = getattr(e, "text", str(e))
-                    error_response: Final[object] = getattr(e, "response", None)
-                    if error_headers is None and error_response:
-                        error_headers = getattr(error_response, "headers", None)
-                    if error_response and hasattr(error_response, "text"):
-                        error_text = getattr(error_response, "text", error_text)
-                    raise with_provider_reply(
-                        AnthropicError(
-                            message=error_text,
-                            status_code=status_code,
-                            headers=error_headers,
-                        ),
-                        error_response,
-                    )
-
-        return config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-            json_mode=json_mode,
+        if acompletion is True:
+            return acompletion_dispatch()
+        return _send_renaming_rejected_tool_use_ids(
+            send,
+            _STR_KEYED_MAPPING.validate_python(
+                config.transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=transform_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            ),
         )
 
     def embedding(self):

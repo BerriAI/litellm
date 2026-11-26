@@ -220,15 +220,20 @@ async def _stream_then_end_of_stream_chunk(
 ) -> AsyncGenerator[tuple[_StreamItemT, bool], None]:
     last_item: _StreamItemT | None = None  # rebind-ok: the end-of-stream chunk copies the last chunk's id and model
     held_items: tuple[_StreamItemT, ...] = ()  # rebind-ok: the usage chunk must stay after the end-of-stream chunk
-    async for item in response:
-        last_item = item
-        if _is_choiceless_chunk(item):
-            held_items = (*held_items, item)
-            continue
-        for held_item in held_items:
-            yield held_item, False
-        held_items = ()
-        yield item, False
+    try:
+        async for item in response:
+            last_item = item
+            if _is_choiceless_chunk(item):
+                held_items = (*held_items, item)
+                continue
+            for held_item in held_items:
+                yield held_item, False
+            held_items = ()
+            yield item, False
+    except Exception:
+        if last_item is not None and (closing_on_error := end_of_stream_chunk(last_item)) is not None:
+            yield closing_on_error, True
+        raise
     closing_item: Final = None if last_item is None else end_of_stream_chunk(last_item)
     if closing_item is not None:
         yield closing_item, True

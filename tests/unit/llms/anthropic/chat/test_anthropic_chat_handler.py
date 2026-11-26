@@ -4980,3 +4980,173 @@ def test_make_sync_call_exposes_a_rejection_the_client_returned_without_raising(
         )
 
     assert caught.value.response.json() == json.loads(_ANTHROPIC_WIRE_REJECTION)
+
+
+_TOOL_USE_ID_REJECTION: Final = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
+_BASH_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "Bash", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}},
+}
+_KIMI_TOOL_ROUND: Final = [
+    {"role": "user", "content": "run ls"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "functions.Bash:0", "type": "function", "function": {"name": "Bash", "arguments": '{"command": "ls"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "README.md"},
+]
+_DONE_MESSAGE: Final = {
+    "id": "msg_done",
+    "type": "message",
+    "role": "assistant",
+    "model": "kimi-k2",
+    "content": [{"type": "text", "text": "done"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+def _done_stream() -> bytes:
+    events: Final = (
+        ("message_start", {"type": "message_start", "message": {**_DONE_MESSAGE, "content": []}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "done"}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    return "".join(f"event: {name}\ndata: {json.dumps(payload)}\n\n" for name, payload in events).encode()
+
+
+def _sent_tool_use_ids(request: httpx.Request) -> tuple[str, str]:
+    assistant, results = json.loads(request.content)["messages"][1:3]
+    return (
+        next(block["id"] for block in assistant["content"] if block["type"] == "tool_use"),
+        next(block["tool_use_id"] for block in results["content"] if block["type"] == "tool_result"),
+    )
+
+
+_KIMI_FUNCTION_RESULT_ROUND: Final = [
+    *_KIMI_TOOL_ROUND[:2],
+    {"role": "function", "name": "Bash", "tool_call_id": "functions.Bash:0", "content": "README.md"},
+]
+
+
+@pytest.mark.parametrize(
+    "messages", [_KIMI_TOOL_ROUND, _KIMI_FUNCTION_RESULT_ROUND], ids=["tool-result", "function-result"]
+)
+@pytest.mark.parametrize(
+    ("api_base", "sent_id"),
+    [
+        pytest.param("http://vllm.test", "functions.Bash:0", id="vllm-base"),
+        pytest.param(None, "functions_Bash_0", id="anthropics-own-api"),
+    ],
+)
+def test_anthropic_chat_renames_tool_call_ids_only_for_an_upstream_that_enforces_anthropics_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str | None,
+    sent_id: str,
+    messages: list[dict[str, object]],
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    route: Final = respx_mock.post(url__regex=r"/v1/messages").mock(return_value=httpx.Response(200, json=_DONE_MESSAGE))
+
+    litellm.completion(
+        model="anthropic/kimi-k2", messages=messages, tools=[_BASH_TOOL], api_base=api_base, api_key="sk-test"
+    )
+
+    assert _sent_tool_use_ids(route.calls.last.request) == (sent_id, sent_id)
+
+
+def test_anthropic_chat_sends_an_empty_tool_call_id_as_the_fallback_id_to_a_backend_that_keeps_ids(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    route: Final = respx_mock.post("http://vllm.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=_DONE_MESSAGE)
+    )
+    assistant, tool_result = _KIMI_TOOL_ROUND[1:3]
+    empty_id_round: Final = [
+        _KIMI_TOOL_ROUND[0],
+        {**assistant, "tool_calls": [{**assistant["tool_calls"][0], "id": ""}]},
+        {**tool_result, "tool_call_id": ""},
+    ]
+
+    litellm.completion(
+        model="anthropic/kimi-k2",
+        messages=empty_id_round,
+        tools=[_BASH_TOOL],
+        api_base="http://vllm.test",
+        api_key="sk-test",
+    )
+
+    assert _sent_tool_use_ids(route.calls.last.request) == ("tool_use_id", "tool_use_id")
+
+
+def test_anthropic_chat_keeps_tool_call_ids_when_the_global_api_base_points_at_another_backend(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setattr(litellm, "api_base", "http://vllm.test")
+    route: Final = respx_mock.post("http://vllm.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=_DONE_MESSAGE)
+    )
+
+    litellm.completion(model="anthropic/kimi-k2", messages=_KIMI_TOOL_ROUND, tools=[_BASH_TOOL], api_key="sk-test")
+
+    assert _sent_tool_use_ids(route.calls.last.request) == ("functions.Bash:0", "functions.Bash:0")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
+@pytest.mark.parametrize(
+    ("rejection", "sent_ids"),
+    [
+        pytest.param(_TOOL_USE_ID_REJECTION, ["functions.Bash:0", "functions_Bash_0"], id="tool-use-id-pattern"),
+        pytest.param("messages: text content blocks must be non-empty", ["functions.Bash:0"], id="other-400"),
+    ],
+)
+async def test_anthropic_chat_retries_once_with_renamed_tool_call_ids_when_the_upstream_rejects_them(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, stream: bool, rejection: str, sent_ids: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    success: Final = (
+        httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_done_stream())
+        if stream
+        else httpx.Response(200, json=_DONE_MESSAGE)
+    )
+    with respx.mock as upstream:
+        route: Final = upstream.post("http://gateway.test/v1/messages").mock(
+            side_effect=[
+                httpx.Response(
+                    400, json={"type": "error", "error": {"type": "invalid_request_error", "message": rejection}}
+                ),
+                success,
+            ]
+        )
+        request: Final = {
+            "model": "anthropic/sonnet-prod",
+            "messages": _KIMI_TOOL_ROUND,
+            "tools": [_BASH_TOOL],
+            "api_base": "http://gateway.test",
+            "api_key": "sk-test",
+            "stream": stream,
+        }
+        try:
+            response: Final = await litellm.acompletion(**request) if is_async else litellm.completion(**request)
+            if stream:
+                _ = [chunk async for chunk in response] if is_async else list(response)
+        except litellm.BadRequestError:
+            pass
+
+    assert [_sent_tool_use_ids(call.request)[0] for call in route.calls] == sent_ids
+    assert [_sent_tool_use_ids(call.request)[1] for call in route.calls] == sent_ids

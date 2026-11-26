@@ -2777,8 +2777,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+        from litellm.llms.anthropic.messages.native.utils import renames_tool_use_ids_up_front
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        api_base: Final = litellm_params.get("api_base") or litellm.api_base
+        rewrites_tool_use_ids: Final = renames_tool_use_ids_up_front(
+            model, self._resolved_provider, api_base if isinstance(api_base, str) else None
+        )
         translated_messages: Final = (
             list(
                 AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
@@ -2895,6 +2900,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     llm_provider=self._resolved_provider,
                     drop_params=drop_params,
                     replays_mcp_calls=self.runs_hosted_mcp(),
+                    rewrites_tool_use_ids=rewrites_tool_use_ids,
                 ),
                 conversation,
                 messages,

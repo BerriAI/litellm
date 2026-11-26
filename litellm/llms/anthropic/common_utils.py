@@ -96,6 +96,7 @@ from litellm.types.responses.main import (
     with_hosted_web_tool_arguments,
 )
 from litellm.types.utils import (
+    OPENAI_RESPONSE_HEADERS,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Delta,
@@ -462,8 +463,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
 
     Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
-    the mark, skipping tool-search tools whose transform drops cache markers. A client that
-    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    the mark, skipping tool-search tools whose transform drops cache markers and deferred tools,
+    which Anthropic refuses to mark. A client that already marked a tool keeps its own breakpoint.
+    Returns ``None`` when nothing is marked.
     """
     control: Final = _tool_config_point_control(points)
     tool_list: Final = validated_object_list(tools) or ()
@@ -473,7 +475,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     cacheable: Final = tuple(
         (position, fields)
         for position, fields in enumerate(tool_fields)
-        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        if fields is not None
+        and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        and fields.get("defer_loading") is not True
     )
     if not cacheable:
         return None
@@ -2234,6 +2238,24 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
+_ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR: Final = re.compile(
+    r"(?:tool_use\.id|tool_result\.tool_use_id): String should match pattern"
+)
+
+
+def is_anthropic_tool_use_id_pattern_error(error_text: str) -> bool:
+    """messages.N.content.M.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"""
+    return _ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR.search(error_text) is not None
+
+
+def messages_with_renamed_tool_use_ids(messages: object) -> Sequence[object] | None:
+    listed: Final = as_object_list(messages)
+    if listed is None:
+        return None
+    renamed: Final = sanitize_tool_use_ids_in_anthropic_messages(listed)
+    return None if renamed == listed else renamed
+
+
 _ADAPTIVE_THINKING_KEYS: Final = (
     AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
 ) - {"budget_tokens"}
@@ -2455,6 +2477,13 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+def strips_thinking_from_anthropic_messages_request(request_body: Mapping[object, object]) -> bool:
+    messages: Final = as_object_list(request_body.get("messages"))
+    return "thinking" in request_body or (
+        messages is not None and strip_thinking_blocks_from_anthropic_messages(messages) != messages
+    )
+
+
 _DROP_ANTHROPIC_MESSAGE: Final = object()
 
 
@@ -2571,29 +2600,35 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     """
     base_id = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in raw_id else raw_id
     sanitized: Final = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
-    return sanitized or "tool_use_id"
+    return fill_empty_tool_use_id(sanitized)
 
 
-def _sanitize_tool_use_id_content_block(block: object) -> object:
+def fill_empty_tool_use_id(raw_id: str) -> str:
+    return raw_id or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: object, rename: Callable[[str], str]) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> Sequence[object]:
+def sanitize_tool_use_ids_in_anthropic_messages(
+    messages: Sequence[object], rename: Callable[[str], str] = normalize_anthropic_tool_use_id
+) -> Sequence[object]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -2604,14 +2639,14 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> S
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    return [_sanitize_tool_use_ids_in_message(message) for message in messages]
+    return [_sanitize_tool_use_ids_in_message(message, rename) for message in messages]
 
 
-def _sanitize_tool_use_ids_in_message(message: object) -> object:
+def _sanitize_tool_use_ids_in_message(message: object, rename: Callable[[str], str]) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
     content: Final = message["content"]
-    new_content: Final = [_sanitize_tool_use_id_content_block(block) for block in content]
+    new_content: Final = [_sanitize_tool_use_id_content_block(block, rename) for block in content]
     return message if new_content == content else {**message, "content": new_content}
 
 
@@ -3223,21 +3258,25 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
+_ANTHROPIC_RATELIMIT_TO_OPENAI_HEADERS: Final = MappingProxyType(
+    {
+        "anthropic-ratelimit-requests-limit": "x-ratelimit-limit-requests",
+        "anthropic-ratelimit-requests-remaining": "x-ratelimit-remaining-requests",
+        "anthropic-ratelimit-tokens-limit": "x-ratelimit-limit-tokens",
+        "anthropic-ratelimit-tokens-remaining": "x-ratelimit-remaining-tokens",
+    }
+)
+
+
 def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
-    openai_headers: Final[dict[str, str]] = {}
-    if "anthropic-ratelimit-requests-limit" in headers:
-        openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]
-    if "anthropic-ratelimit-requests-remaining" in headers:
-        openai_headers["x-ratelimit-remaining-requests"] = headers["anthropic-ratelimit-requests-remaining"]
-    if "anthropic-ratelimit-tokens-limit" in headers:
-        openai_headers["x-ratelimit-limit-tokens"] = headers["anthropic-ratelimit-tokens-limit"]
-    if "anthropic-ratelimit-tokens-remaining" in headers:
-        openai_headers["x-ratelimit-remaining-tokens"] = headers["anthropic-ratelimit-tokens-remaining"]
-
-    llm_response_headers: Final = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
-
-    additional_headers: Final = {**llm_response_headers, **openai_headers}
-    return additional_headers
+    llm_response_headers: Final = {f"llm_provider-{name}": value for name, value in headers.items()}
+    provider_openai_headers: Final = {name: value for name, value in headers.items() if name in OPENAI_RESPONSE_HEADERS}
+    mapped_openai_headers: Final = {
+        openai_name: headers[anthropic_name]
+        for anthropic_name, openai_name in _ANTHROPIC_RATELIMIT_TO_OPENAI_HEADERS.items()
+        if anthropic_name in headers
+    }
+    return {**llm_response_headers, **provider_openai_headers, **mapped_openai_headers}
 
 
 def _anthropic_model_entry(

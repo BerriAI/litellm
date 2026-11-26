@@ -2,6 +2,7 @@
 //! the body, model in the URL, Vertex's betas and labels), sent with a Google access token to the
 //! project and region the call resolves.
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::vertex_ai::common_utils::vertex_region;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
@@ -133,7 +134,7 @@ impl MessagesDialect for VertexAiMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {

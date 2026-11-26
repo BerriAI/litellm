@@ -11,6 +11,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.caching.caching import responses_input_message_count, with_caller_message_count
 from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, drops_unsupported_params
@@ -273,6 +274,8 @@ class LiteLLMCompletionTransformationHandler:
         if _is_async:
             return self.async_response_api_handler(
                 previous_response_client_ids,
+                None,
+                responses_input_message_count(input),
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=echoed_request,
@@ -291,7 +294,14 @@ class LiteLLMCompletionTransformationHandler:
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request, bridged_input)
         with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-                **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+                **{
+                    **kwargs,
+                    **litellm_completion_request,
+                    **with_caller_message_count(
+                        _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_input_message_count(input)
+                    ),
+                    "_skip_responses_api_bridge": True,
+                },
             )
         return _bridged_reply(
             litellm_completion_response,
@@ -336,6 +346,7 @@ class LiteLLMCompletionTransformationHandler:
         return await self.async_response_api_handler(
             previous_response_client_ids,
             stored_turns,
+            responses_input_message_count(caller_input),
             litellm_completion_request={
                 **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                     model=model,
@@ -362,6 +373,7 @@ class LiteLLMCompletionTransformationHandler:
         self,
         previous_response_client_ids: tuple[str, ...] = (),
         stored_turns: StoredTurns | None = None,
+        caller_message_count: int | None = None,
         /,
         *,
         litellm_completion_request: Mapping[str, object],
@@ -393,6 +405,7 @@ class LiteLLMCompletionTransformationHandler:
         completion_kwargs: Final[Mapping[str, object]] = {
             **request_kwargs,
             **completion_request,
+            **with_caller_message_count(request_kwargs, caller_message_count),
             "_skip_responses_api_bridge": True,
         }
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request, request_input)

@@ -2021,6 +2021,10 @@ def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
 
 
+def _callers_tool_use_id(tool_use_id: str) -> str:
+    return tool_use_id or _TOOL_USE_ID_FALLBACK
+
+
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     """
     Bedrock Converse requires toolUseId to match [a-zA-Z0-9_.:-]+ and be at most 64 chars.
@@ -2051,6 +2055,7 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
 def convert_to_anthropic_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     force_base64: bool = False,
+    rename_tool_use_id: Callable[[str], str] = sanitize_anthropic_tool_use_id,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -2165,8 +2170,7 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "tool":
         tool_message: Final[ChatCompletionToolMessage] = message
         tool_call_id: str = tool_message["tool_call_id"]
-        # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = rename_tool_use_id(tool_call_id)
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
@@ -2179,8 +2183,7 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
-        # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = rename_tool_use_id(tool_call_id)
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result",
             tool_use_id=sanitized_tool_use_id,
@@ -2535,6 +2538,7 @@ def convert_to_anthropic_tool_invoke(
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
     split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
+    rename_tool_use_id: Callable[[str], str] = sanitize_anthropic_tool_use_id,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2647,7 +2651,7 @@ def convert_to_anthropic_tool_invoke(
             _tool_use_params = [
                 AnthropicMessagesToolUseParam(
                     type="tool_use",
-                    id=sanitize_anthropic_tool_use_id(tool_use_id),
+                    id=rename_tool_use_id(tool_use_id),
                     name=tool_name,
                     input=tool_input,
                 )
@@ -3556,6 +3560,7 @@ def anthropic_messages_pt(
     model: str,
     llm_provider: str,
     drop_params: bool = False,
+    rewrites_tool_use_ids: bool = True,
     *,
     replays_mcp_calls: bool = True,
 ) -> _AnthropicMessageList:
@@ -3589,8 +3594,9 @@ def anthropic_messages_pt(
         verbose_logger.warning(MCP_HISTORY_DROP_WARNING, model, llm_provider)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
+    rename_tool_use_id: Final = sanitize_anthropic_tool_use_id if rewrites_tool_use_ids else _callers_tool_use_id
     split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
-        messages, _anthropic_argument_object_count, sanitize_anthropic_tool_use_id, "__concat_"
+        messages, _anthropic_argument_object_count, rename_tool_use_id, "__concat_"
     )
 
     # add role=tool support to allow function call result/error submission
@@ -3722,7 +3728,9 @@ def anthropic_messages_pt(
                 user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
-                _tool_result = convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                _tool_result = convert_to_anthropic_tool_result(
+                    user_message_types_block, force_base64=force_base64, rename_tool_use_id=rename_tool_use_id
+                )
                 user_content.append(_tool_result)
                 user_content.extend(
                     _anthropic_tool_results_for_split_ids(
@@ -3793,6 +3801,7 @@ def anthropic_messages_pt(
                         answered_tool_ids=client_answered_tool_ids,
                         server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
                         split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
+                        rename_tool_use_id=rename_tool_use_id,
                     )
                     if assistant_tool_calls is not None
                     else ()

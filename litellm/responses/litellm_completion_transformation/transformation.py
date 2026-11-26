@@ -289,6 +289,14 @@ def _echoable_request_params(request: Mapping[str, object]) -> _EchoedResponsesR
     return _ECHOED_PARAMS_ADAPTER.validate_python(echoable)
 
 
+class _ToolCallStatusField(Protocol):
+    def get(self, key: Literal["status"], /) -> Literal["in_progress", "completed", "incomplete"] | None: ...
+
+
+def _tool_call_status(function_definition: object) -> Literal["in_progress", "completed", "incomplete"]:
+    return require_attributes(function_definition, _ToolCallStatusField, "get").get("status") or "completed"
+
+
 @dataclass(frozen=True, slots=True)
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
@@ -3726,7 +3734,7 @@ class LiteLLMCompletionResponsesConfig:
                         id=openai_shaped_tool_call_item_id("custom_tool_call", tool_id),
                         name=tool_name,
                         input=input_str,
-                        status=function_definition.get("status") or "completed",
+                        status=_tool_call_status(function_definition),
                     )
                     responses_tools.append(custom_item)
                 else:
@@ -3742,7 +3750,7 @@ class LiteLLMCompletionResponsesConfig:
                         call_id=tool_id,
                         id=openai_shaped_tool_call_item_id("function_call", tool_id),
                         type="function_call",
-                        status=function_definition.get("status") or "completed",
+                        status=_tool_call_status(function_definition),
                     )
                     if namespace:
                         output_tool_call.namespace = namespace
