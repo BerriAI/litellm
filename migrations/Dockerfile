@@ -4,6 +4,13 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2
 
 FROM $UV_IMAGE AS uvbin
 
+FROM $LITELLM_BUILD_IMAGE AS prisma-openssl-builder
+USER root
+RUN apk add --no-cache build-base perl curl
+WORKDIR /build
+COPY docker/build_prisma_openssl.sh /build_prisma_openssl.sh
+RUN sh /build_prisma_openssl.sh
+
 # ---------- Builder ----------
 #
 # Minimal install for `prisma migrate deploy`. We deliberately skip the heavy
@@ -89,14 +96,15 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl libssl3 tzdata python-3.13 nodejs libsndfile libatomic && break; \
+      apk add --no-cache bash openssl-4.0 '!libssl3' '!libcrypto3' tzdata python-3.13 nodejs libsndfile libatomic && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
 
-# wolfi-base ships an unprivileged `nonroot` account (UID/GID 65532). The
-# Prisma engine binaries are dynamically linked against libssl/libcrypto, so
-# openssl stays in the runtime layer.
+COPY --from=prisma-openssl-builder /runtime/ /
+RUN ldconfig
+
+# wolfi-base ships an unprivileged `nonroot` account (UID/GID 65532).
 WORKDIR /app
 ENV HOME=/home/nonroot \
     PATH="/app/.venv/bin:${PATH}" \
