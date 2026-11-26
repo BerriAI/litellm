@@ -19,8 +19,6 @@ use axum::http::request::Parts;
 use litellm_gateway_auth::Authenticated;
 use serde_json::{Map, Value};
 
-pub(super) use model::alias;
-
 use super::{Admit, Refused};
 use crate::host::NativeRows;
 

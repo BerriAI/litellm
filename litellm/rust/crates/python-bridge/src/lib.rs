@@ -97,9 +97,10 @@ mod _native {
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
     use crate::model_cost::{
-        NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
-        NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
-        NativeRejected, NativeTableSwapped,
+        CostMapKept, CostMapRefreshStop, CostMapRefreshed, NativeCostMapSource, NativeFetchFailed,
+        NativeFetchPolicy, NativeFetched, NativeInstalled, NativeModelCostMap,
+        NativeModelCostMapState, NativeProvenance, NativeRegistered, NativeRejected,
+        NativeTableSwapped,
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
@@ -318,6 +319,9 @@ mod tests {
                 "NativeFetchPolicy",
                 "NativeFetched",
                 "NativeFetchFailed",
+                "CostMapRefreshed",
+                "CostMapRefreshStop",
+                "CostMapKept",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",
