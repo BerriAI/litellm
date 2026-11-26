@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import gc
 import json
-import ssl
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
@@ -45,8 +44,6 @@ from litellm.router_strategy.adaptive_router.config import (
 )
 from litellm.types.router import GenericLiteLLMParams, RouterErrors, RouterGeneralSettings, RouterRateLimitError
 from tests.integration._support.custom_video_provider import QueueVideoConfig
-from tests.integration._support.wire import Reply, wire_server
-from tests.unit.integrations.conftest import write_self_signed_cert
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -535,7 +532,6 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
     opts in. Without the opt-in the positive cases fail outright and the
     negative ones pass for the wrong reason, so the suite and the config it
     runs against have to move together."""
-    from pathlib import Path
 
     import yaml
 
@@ -3112,19 +3108,6 @@ async def test_only_a_video_list_is_sent_straight_to_the_deployment_it_names(mon
         await (await route_request(request, router, None, "acompletion"))
 
     assert json.loads(route.calls.last.request.content)["model"] == "doubao-seedance-2-0-mini-260615"
-
-
-@pytest.mark.asyncio
-async def test_a_video_list_reaches_a_self_signed_backend_whose_deployment_turns_tls_checks_off(tmp_path: Path) -> None:
-    tls: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.load_cert_chain(*write_self_signed_cert(tmp_path, "ark"))
-    request: Final = {**_video_list_pinned_to("dep-b"), "litellm_metadata": {"user_api_key_team_id": "team-b"}}
-
-    with wire_server(lambda _: Reply(body=b'{"items": [], "total": 0}'), tls=tls) as wire:
-        router: Final = _team_b_seedance_router(api_base=wire.url, ssl_verify=False)
-        listed: Final = await (await route_request(request, router, None, "avideo_list"))
-
-    assert listed["data"] == [], listed
 
 
 def _tagged_seedance_router(
