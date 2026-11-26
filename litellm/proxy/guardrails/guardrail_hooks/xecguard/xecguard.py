@@ -77,6 +77,7 @@ _DEFAULT_MODEL: Final = "xecguard_v2"
 _DEFAULT_GROUNDING_STRICTNESS: Final = "BALANCED"
 _METADATA_GROUNDING_KEY: Final = "xecguard_grounding_documents"
 _RATIONALE_TRUNCATE_CHARS: Final = 200
+_TEXT_PART_TYPES: Final = frozenset(("text", "input_text", "output_text"))
 _DEFAULT_POLICIES: Final = [
     "Default_Policy_SystemPromptEnforcement",
     "Default_Policy_HarmfulContentProtection",
@@ -443,7 +444,7 @@ class XecGuardGuardrail(CustomGuardrail):
         if isinstance(content, list):
             parts: Final[list[str]] = []
             for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
+                if isinstance(item, dict) and item.get("type") in _TEXT_PART_TYPES:
                     text = item.get("text")
                     if isinstance(text, str):
                         parts.append(text)

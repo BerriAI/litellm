@@ -6047,6 +6047,46 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert reservations[first_turn] == (reservation, reservation)
         assert reservations[second_turn] == (None, None)
 
+    @pytest.mark.parametrize("nested", [False, True], ids=["flat-frame", "nested-frame"])
+    def test_each_turn_logs_every_input_item_of_its_frame(self, nested: bool) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.types.utils import CallTypes
+
+        class PreCallRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.logged_messages: tuple[tuple[object, object], ...] = ()
+
+            def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+                self.logged_messages = (*self.logged_messages, (messages, kwargs["messages"]))
+
+        turn_input: Final = [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Weather in Bogota?"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
+            {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
+        ]
+        recorder: Final = PreCallRecorder()
+        connection_logging: Final = Logging(
+            model="gpt-5.4",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aresponses_websocket.value,
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="connection-call",
+            function_id="connection-call",
+            dynamic_input_callbacks=[recorder],
+        )
+        connection_logging.litellm_params = {"metadata": {}}
+        handler: Final = _make_streaming(logging_obj=connection_logging, request_data={})
+
+        params: Final = {"input": turn_input}
+        frame: Final = {"type": "response.create", "response": params} if nested else {"type": "response.create", **params}
+
+        handler._record_client_frame(json.dumps(frame))
+
+        assert recorder.logged_messages == ((turn_input, turn_input),)
+
     @pytest.mark.asyncio
     async def test_bidirectional_forward_returns_the_provider_failure(self):
         import asyncio

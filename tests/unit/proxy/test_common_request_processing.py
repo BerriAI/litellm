@@ -37,7 +37,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
 from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -17408,3 +17408,108 @@ def test_get_custom_headers_leave_a_plain_request_without_a_fallback_reason() ->
 
     assert headers["x-litellm-attempted-fallbacks"] == "0"
     assert "x-litellm-fallback-reason" not in headers
+
+
+_RESPONSES_TOOL_TURN_INPUT: Final = (
+    {"role": "user", "content": "What is the weather in Bogota?"},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
+    {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
+)
+_STRAY_MESSAGES: Final = ({"role": "user", "content": "stray messages field"},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_type", "path", "body", "logged"),
+    [
+        pytest.param(
+            "aresponses",
+            "/v1/responses",
+            {"model": "gpt-4o", "input": list(_RESPONSES_TOOL_TURN_INPUT), "messages": list(_STRAY_MESSAGES)},
+            list(_RESPONSES_TOOL_TURN_INPUT),
+            id="responses-input-wins-over-a-messages-field",
+        ),
+        pytest.param(
+            "aresponses",
+            "/v1/responses",
+            {"model": "gpt-4o", "messages": list(_STRAY_MESSAGES)},
+            list(_STRAY_MESSAGES),
+            id="responses-messages-only-body-still-logs-messages",
+        ),
+        pytest.param(
+            "aresponses",
+            "/v1/responses",
+            {"model": "gpt-4o", "input": "hello there"},
+            [{"role": "user", "content": "hello there"}],
+            id="responses-string-input-logs-a-user-message",
+        ),
+        pytest.param(
+            "acompletion",
+            "/v1/chat/completions",
+            {"model": "gpt-4o", "messages": list(_STRAY_MESSAGES)},
+            list(_STRAY_MESSAGES),
+            id="chat-completions-logs-messages",
+        ),
+    ],
+)
+async def test_pre_call_logged_input_keeps_every_responses_input_item(
+    route_type: Literal["aresponses", "acompletion"], path: str, body: dict[str, object], logged: list[dict[str, str]]
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    _, logging_obj = await ProxyBaseLLMRequestProcessing(data=copy.deepcopy(body)).common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": path, "query_string": b"", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        proxy_config=RealProxyConfig(),
+        route_type=route_type,
+    )
+
+    assert logging_obj.model_call_details["messages"] == logged
+
+
+class _MessagesOnlyMasker(CustomGuardrail):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: object, cache: object, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        return {**data, "messages": [{"role": "user", "content": "contact <EMAIL>"}]}
+
+
+class _InputOnlyMasker(CustomGuardrail):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: object, cache: object, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        return {**data, "input": [{"role": "user", "content": "contact <EMAIL>"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "masker",
+    [
+        pytest.param(_MessagesOnlyMasker, id="guardrail-masks-messages-only"),
+        pytest.param(_InputOnlyMasker, id="guardrail-masks-input-only"),
+    ],
+)
+async def test_pre_call_logged_input_on_responses_is_the_copy_a_guardrail_masked(
+    masker: type[CustomGuardrail], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [masker(guardrail_name="mask", event_hook="pre_call", default_on=True)])
+    raw: Final = [{"role": "user", "content": "contact jane.doe@example.com"}]
+
+    _, logging_obj = await ProxyBaseLLMRequestProcessing(
+        data={"model": "gpt-4o", "input": copy.deepcopy(raw), "messages": copy.deepcopy(raw)}
+    ).common_processing_pre_call_logic(
+        request=Request(
+            {"type": "http", "method": "POST", "path": "/v1/responses", "query_string": b"", "headers": []}
+        ),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        proxy_config=RealProxyConfig(),
+        route_type="aresponses",
+    )
+
+    assert logging_obj.model_call_details["messages"] == [{"role": "user", "content": "contact <EMAIL>"}]

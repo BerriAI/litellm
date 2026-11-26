@@ -12,7 +12,6 @@ from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Itera
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
-from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -2574,22 +2573,6 @@ def _json_object_or_none(message: object) -> Mapping[str, object] | None:
     return parsed if _is_json_object(parsed) else None
 
 
-def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
-    if not _is_json_object(item) or item.get("type") != "message" or item.get("role") != "user":
-        return ()
-    content: Final = item.get("content", [])
-    if isinstance(content, str):
-        return (content,)
-    return tuple(
-        text
-        for block in _json_array_or_empty(content)
-        if _is_json_object(block)
-        and block.get("type") == "input_text"
-        and isinstance(text := block.get("text"), str)
-        and text
-    )
-
-
 def _set_turn_guardrail_information(
     turn_logging_obj: LiteLLMLoggingObj, guardrail_information: tuple[Mapping[str, object], ...]
 ) -> None:
@@ -2625,15 +2608,14 @@ def _replace_guardrail_information(bucket: object, guardrail_information: tuple[
         ]
 
 
-def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:
+def _logged_input_items(client_frame: object) -> tuple[object, ...]:
     frame: Final = _json_object_or_none(client_frame)
     if frame is None or frame.get("type") != "response.create":
         return ()
-    input_items: Final = frame.get("input", [])
+    input_items: Final = _response_create_params(frame).get("input", [])
     if isinstance(input_items, str):
         return ({"role": "user", "content": input_items},)
-    texts: Final = chain.from_iterable(_user_texts_in_input_item(item) for item in _json_array_or_empty(input_items))
-    return tuple({"role": "user", "content": text} for text in texts)
+    return tuple(_json_array_or_empty(input_items))
 
 
 def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
@@ -2775,7 +2757,7 @@ class ResponsesWebSocketStreaming:
         self._detach_budget_reservation()
         _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         _set_turn_io_token_reservation(turn_logging_obj, io_token_reservation)
-        turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
+        turn_logging_obj.update_messages(list(_logged_input_items(client_frame)))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 

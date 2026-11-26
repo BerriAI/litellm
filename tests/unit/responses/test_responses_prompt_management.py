@@ -15,10 +15,14 @@ Covers:
 
 from importlib import import_module
 import asyncio
-from typing import List, cast
+import copy
+from datetime import datetime
+from typing import Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
@@ -26,6 +30,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.llms.openai import (
     AllMessageValues,
     ResponseInputParam,
@@ -668,3 +674,137 @@ def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
         litellm.responses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
 
     assert exc_info.value is block
+
+
+_TOOL_TURN_INPUT: Final = [
+    {"role": "system", "content": "You are a weather assistant"},
+    {"role": "user", "content": "What is the weather in Bogota?"},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
+    {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
+]
+
+
+def _real_logging_obj() -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=copy.deepcopy(_TOOL_TURN_INPUT),
+        stream=False,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+
+
+_TOOL_TURN_INPUT_WITH_INJECTED_MARKER: Final = [
+    {**_TOOL_TURN_INPUT[0], "cache_control": {"type": "ephemeral"}},
+    *_TOOL_TURN_INPUT[1:],
+]
+
+
+_OPENAI_RESPONSE: Final = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1767225600,
+    "status": "completed",
+    "model": "gpt-4o",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Bogota is 14C", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
+}
+
+
+def _mock_openai_responses(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_OPENAI_RESPONSE)
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_cache_control_injection_logs_role_less_input_items(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = _mock_openai_responses(respx_mock)
+    logging_obj: Final = _real_logging_obj()
+
+    await litellm.aresponses(
+        input=copy.deepcopy(_TOOL_TURN_INPUT),
+        model="gpt-4o",
+        api_key="sk-test",
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert responses_route.call_count == 1
+    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+    assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+
+
+def test_sync_cache_control_injection_logs_role_less_input_items(respx_mock: respx.MockRouter) -> None:
+    responses_route: Final = _mock_openai_responses(respx_mock)
+    logging_obj: Final = _real_logging_obj()
+
+    litellm.responses(
+        input=copy.deepcopy(_TOOL_TURN_INPUT),
+        model="gpt-4o",
+        api_key="sk-test",
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert responses_route.call_count == 1
+    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+    assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+
+
+@pytest.mark.asyncio
+async def test_async_vector_store_context_logs_role_less_input_items(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="vs_weather", custom_llm_provider="openai")]
+        ),
+    )
+    search_route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/vs_weather/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "vector_store.search_results.page",
+                "search_query": "What is the weather in Bogota?",
+                "data": [{"file_id": "file_1", "filename": "bogota.txt", "score": 0.9, "attributes": {},
+                          "content": [{"type": "text", "text": "Bogota averages 14C"}]}],
+                "has_more": False,
+                "next_page": None,
+            },
+        )
+    )
+    responses_route: Final = _mock_openai_responses(respx_mock)
+    logging_obj: Final = _real_logging_obj()
+
+    await litellm.aresponses(
+        input=copy.deepcopy(_TOOL_TURN_INPUT),
+        model="gpt-4o",
+        api_key="sk-test",
+        vector_store_ids=["vs_weather"],
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert search_route.call_count == 1
+    assert responses_route.call_count == 1
+    assert logging_obj.model_call_details["messages"] == [
+        _TOOL_TURN_INPUT[0],
+        {"role": "user", "content": "Context:\n\nBogota averages 14C\n\n"},
+        *_TOOL_TURN_INPUT[1:],
+    ]

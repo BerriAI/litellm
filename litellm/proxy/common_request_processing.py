@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import itertools
 import json
 import logging
@@ -504,6 +505,37 @@ async def _record_streaming_client_disconnect_if_needed(
         request_data.get("litellm_call_id"),
     )
     return True
+
+
+_LOGGED_MESSAGES: Final[TypeAdapter[str | Sequence[object]]] = TypeAdapter(
+    str | Sequence[object], config=ConfigDict(strict=True)
+)
+
+
+def _is_responses_body_with_input(data: Mapping[str, object], route_type: str) -> bool:
+    return route_type == "aresponses" and bool(data.get("input"))
+
+
+def _messages_beside_responses_input(data: Mapping[str, object], route_type: str) -> object:
+    return copy.deepcopy(data.get("messages")) if _is_responses_body_with_input(data, route_type) else None
+
+
+def _logged_input_after_hooks(
+    data: Mapping[str, object], route_type: str, messages_before_hooks: object
+) -> Sequence[object] | None:
+    """What the logged input should show once the pre-call hooks have run.
+
+    The Responses API reads ``input``, so that is what gets logged, with every item and whatever a hook
+    rewrote in it. A ``messages`` field sent beside it is logged instead only when a hook rewrote it
+    (a guardrail that masks ``messages`` alone), which keeps the masked copy in the logs.
+    """
+    logs_input: Final = (
+        _is_responses_body_with_input(data, route_type) and data.get("messages") == messages_before_hooks
+    )
+    try:
+        return _LOGGED_MESSAGES.validate_python(data.get("input" if logs_input else "messages")) or None
+    except ValidationError:
+        return None
 
 
 def _deferred_stream_logging_is_armed(request_data: Mapping[str, object]) -> bool:
@@ -3480,6 +3512,10 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
+        messages_before_hooks: Final = _messages_beside_responses_input(
+            cast("Mapping[str, object]", self.data),  # cast-ok: the request body is an untyped JSON dict
+            route_type,
+        )
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -3507,8 +3543,9 @@ class ProxyBaseLLMRequestProcessing:
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
 
-        if "messages" in self.data and self.data["messages"]:
-            logging_obj.update_messages(self.data["messages"])
+        logged_input: Final = _logged_input_after_hooks(self.data, route_type, messages_before_hooks)
+        if logged_input:
+            logging_obj.update_messages(logged_input)
 
         if (
             self.served_model is not None
