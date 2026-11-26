@@ -683,22 +683,24 @@ def test_build_responses_kwargs_sends_what_the_budget_alone_sends_when_the_model
     )
 
 
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("effort", ["low", "minimal"])
 @pytest.mark.parametrize(
     "base_model_kwargs",
     [{"base_model": "azure/gpt-5.4-pro"}, {"model_info": {"base_model": "azure/gpt-5.4-pro"}}],
     ids=["litellm_params", "model_info"],
 )
 def test_build_responses_kwargs_sends_a_custom_named_deployment_the_effort_its_base_model_gets(
-    base_model_kwargs: dict[str, object],
+    base_model_kwargs: dict[str, object], effort: str, drop_params: bool
 ) -> None:
     def sent_reasoning(model: str, deployment_kwargs: Mapping[str, object]) -> object:
         return _build_responses_kwargs(
             max_tokens=8000,
             messages=MESSAGES,
             model=model,
-            output_config=cast(AnthropicOutputConfig, {"effort": "low"}),
+            output_config=cast(AnthropicOutputConfig, {"effort": effort}),
             thinking=HIGH_BUDGET_THINKING,
-            extra_kwargs={"custom_llm_provider": "azure", "drop_params": True, **deployment_kwargs},
+            extra_kwargs={"custom_llm_provider": "azure", "drop_params": drop_params, **deployment_kwargs},
         ).get("reasoning")
 
     assert sent_reasoning("azure/my-pro-deployment", base_model_kwargs) == sent_reasoning("azure/gpt-5.4-pro", {})

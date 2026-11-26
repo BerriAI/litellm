@@ -772,7 +772,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
-        deployment_model_info: Final = completion_kwargs.get("model_info")
+        deployment_model_info: Final = model_info_with_request_base_model(completion_kwargs)
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(

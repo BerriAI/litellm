@@ -657,7 +657,7 @@ def normalize_reasoning_effort_value(
     ):
         return effort
 
-    supported: Final = model_reasoning_efforts(model, custom_llm_provider)
+    supported: Final = model_reasoning_efforts(_cost_map_model(model, deployment_model_info), custom_llm_provider)
     if not supported:
         return chain[-1]
 
