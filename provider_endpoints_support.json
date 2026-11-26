@@ -5458,6 +5458,32 @@
         "generateContent": true
       }
     },
+    "lyceum": {
+      "display_name": "Lyceum (`lyceum`)",
+      "url": "https://docs.litellm.ai/docs/providers/lyceum",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": true,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "empiriolabs": {
       "display_name": "EmpirioLabs AI (`empiriolabs`)",
       "url": "https://docs.litellm.ai/docs/providers/empiriolabs",

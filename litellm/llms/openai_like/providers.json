@@ -386,6 +386,16 @@
       "supports_reasoning": true
     }
   },
+  "lyceum": {
+    "base_url": "https://api.lyceum.technology/openai/v1",
+    "api_key_env": "LYCEUM_API_KEY",
+    "api_base_env": "LYCEUM_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
+  },
   "vispark": {
     "base_url": "https://api.lab.vispark.in/v1",
     "api_key_env": "VISPARK_LAB_API_KEY",
