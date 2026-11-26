@@ -4960,7 +4960,7 @@ def test_context_window_pre_call_check_on_a_caption_next_to_an_embedding_image(b
     router: Final = _embedding_context_router(backend, window=20)
     deployments: Final = router.registry().deployments("embedder")
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
         if fits:
             kept: Final = router._pre_call_checks(
                 model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
@@ -5012,6 +5012,42 @@ async def test_a_wildcard_route_checks_the_context_window_with_the_requested_ope
     )
 
     assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == ("ok", "ok")
+
+
+_AUDIO_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What do you hear? One word."},
+            {"type": "input_audio", "input_audio": {"data": "UklGRiQAAABXQVZF", "format": "wav"}},
+        ],
+    }
+]
+
+
+async def test_a_prompt_the_pre_call_check_cannot_count_is_served_with_one_debug_line_and_no_error(caplog):
+    """The token counter does not read `input_audio` parts, so the context window check is skipped and
+    the request goes through. That skip used to log at ERROR on every such request, which a log pipeline
+    counted as a proxy error although the request succeeded."""
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "audio",
+                "litellm_params": {"model": "openai/gpt-audio-1.5", "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": 128000},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        sync_response: Final = router.completion(model="audio", messages=_AUDIO_PROMPT, mock_response="ok")
+        async_response: Final = await router.acompletion(model="audio", messages=_AUDIO_PROMPT, mock_response="ok")
+
+    assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == ("ok", "ok")
+    count_failures: Final = [record for record in caplog.records if "failed to count tokens" in record.getMessage()]
+    assert [record.levelno for record in count_failures] == [logging.DEBUG, logging.DEBUG]
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 _OVERSIZED_TOOL_DESCRIPTION = "look up the answer in the knowledge base. " * 40
@@ -5168,7 +5204,7 @@ def _embedding_router(max_input_tokens: int) -> litellm.Router:
 async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input, caplog):
     router: Final = _embedding_router(max_input_tokens=10)
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
         response: Final = await router.aembedding(model="embed", input=embedding_input)
 
     assert response.data

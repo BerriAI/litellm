@@ -1,9 +1,12 @@
 import asyncio
 import base64
 import importlib
+import logging
 import os
 import shutil
+import sys
 import tempfile
+import threading
 from collections.abc import AsyncIterator, Callable, Container, Coroutine, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -390,6 +393,16 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
         for name in ("PROXY_BASE_URL", "SERVER_ROOT_PATH", "SERVER_ROOT_PATHS", "LITELLM_LOG"):
             environment.delenv(name, raising=False)
         environment.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
+        yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_exception_hooks() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as hooks:
+        hooks.setattr(sys, "excepthook", sys.excepthook)
+        hooks.setattr(sys, "unraisablehook", sys.unraisablehook)
+        hooks.setattr(threading, "excepthook", threading.excepthook)
+        hooks.setattr(logging, "lastResort", logging.lastResort)
         yield
 
 

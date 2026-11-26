@@ -1,14 +1,18 @@
 import ast
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import logging
 import re
 import sys
+import threading
 import time
+from collections.abc import Callable
 from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
+from types import TracebackType
 from typing import Final, List
 
 import pytest
@@ -2181,3 +2185,308 @@ def test_print_startup_message_blank_spacer_emits_no_json_record(
     print_startup_message("\n\033[0m\n")
 
     assert capfd.readouterr() == ("", "")
+
+
+class _FailsInDestructor:
+    def __del__(self) -> None:
+        raise RuntimeError("resource cleanup failed")
+
+
+class _UnprintableObject:
+    def __repr__(self) -> str:
+        raise RuntimeError("repr failed")
+
+
+def _fails_in_background() -> None:
+    raise ValueError("background job failed")
+
+
+@pytest.fixture
+def python_default_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pytest installs its own unraisable and thread hooks for the whole session, so these tests start from the
+    hooks a process has before any library touches them."""
+    monkeypatch.setattr(sys, "excepthook", sys.__excepthook__)
+    monkeypatch.setattr(sys, "unraisablehook", sys.__unraisablehook__)
+    monkeypatch.setattr(threading, "excepthook", threading.__excepthook__)
+
+
+def _stderr_records(capfd: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
+    _, err = capfd.readouterr()
+    return [json.loads(raw) for raw in err.splitlines() if raw.strip()]
+
+
+def _unraisable_args(err_msg: str | None, obj: object, keep_exception: bool) -> "sys.UnraisableHookArgs":
+    captured: Final[list["sys.UnraisableHookArgs"]] = []
+    with pytest.MonkeyPatch.context() as hooks:
+        hooks.setattr(sys, "unraisablehook", captured.append)
+        _FailsInDestructor()
+    raised: Final = captured[0]
+    exception: Final = (raised.exc_value, raised.exc_traceback) if keep_exception else (None, None)
+    return type(raised)((raised.exc_type, *exception, err_msg, obj))
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_report_an_exception_raised_in_a_destructor_as_one_error_record(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """Python reports an exception raised in `__del__` through sys.unraisablehook, whose default prints a
+    multi-line traceback to stderr that a log shipper splits into one entry per line. With JSON logs on it
+    is one ERROR record that names the destructor and carries the traceback."""
+    turn_on_json()
+
+    _FailsInDestructor()
+
+    records: Final = _stderr_records(capfd)
+    assert len(records) == 1, records
+    assert records[0]["level"] == "ERROR"
+    assert str(records[0]["message"]).startswith("Exception ignored")
+    assert "_FailsInDestructor.__del__" in str(records[0]["message"])
+    assert str(records[0]["stacktrace"]).endswith("RuntimeError: resource cleanup failed")
+
+
+@pytest.mark.parametrize(
+    ("err_msg", "obj", "keep_exception", "message"),
+    [
+        pytest.param(None, _fails_in_background, True, f"Exception ignored in: {_fails_in_background!r}", id="object"),
+        pytest.param("Exception ignored in a callback", None, True, "Exception ignored in a callback", id="err-msg"),
+        pytest.param(None, _UnprintableObject(), True, "Exception ignored in: <object repr() failed>", id="bad-repr"),
+        pytest.param("Exception ignored in a callback", None, False, "Exception ignored in a callback", id="no-value"),
+    ],
+)
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_word_an_unraisable_exception_like_python_does(
+    capfd: pytest.CaptureFixture[str], err_msg: str | None, obj: object, keep_exception: bool, message: str
+) -> None:
+    """CPython passes the hook an error message, the object the exception came from, or both, depending on
+    where it was raised and on the Python version, and the exception value may be missing. The record reads
+    like the line Python's own hook prints and carries a traceback only when there is an exception."""
+    turn_on_json()
+
+    sys.unraisablehook(_unraisable_args(err_msg, obj, keep_exception))
+
+    records: Final = _stderr_records(capfd)
+    assert len(records) == 1, records
+    assert records[0]["message"] == message
+    assert records[0]["level"] == "ERROR"
+    assert ("stacktrace" in records[0]) is keep_exception
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_report_an_exception_raised_in_a_thread_as_one_error_record(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """An exception that ends a thread goes to threading.excepthook, whose default prints a multi-line
+    traceback to stderr. With JSON logs on it is one ERROR record that names the thread."""
+    turn_on_json()
+
+    worker: Final = threading.Thread(target=_fails_in_background, name="background-job")
+    worker.start()
+    worker.join()
+
+    records: Final = _stderr_records(capfd)
+    assert len(records) == 1, records
+    assert records[0]["message"] == "Exception in thread background-job"
+    assert records[0]["level"] == "ERROR"
+    assert str(records[0]["stacktrace"]).endswith("ValueError: background job failed")
+    assert records[0]["logger"] == f"{Path(__file__).name}:{_fails_in_background.__code__.co_firstlineno + 1}"
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_write_tracebacks_and_unhandled_warnings_to_the_current_stderr() -> None:
+    """Python's default hooks and lastResort write to whatever sys.stderr is when the record arrives, so a
+    caller that redirects stderr after litellm turned JSON logs on still captures them, now as JSON records."""
+    turn_on_json()
+    redirected: Final = StringIO()
+
+    with contextlib.redirect_stderr(redirected):
+        logging.Logger("unconfigured_library").warning("Unclosed client session")
+        worker: Final = threading.Thread(target=_fails_in_background, name="background-job")
+        worker.start()
+        worker.join()
+
+    records: Final = [json.loads(line) for line in redirected.getvalue().splitlines()]
+    assert [(record["message"], record["level"]) for record in records] == [
+        ("Unclosed client session", "WARNING"),
+        ("Exception in thread background-job", "ERROR"),
+    ]
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_name_a_thread_python_no_longer_tracks_by_its_id(capfd: pytest.CaptureFixture[str]) -> None:
+    turn_on_json()
+
+    threading.excepthook(threading.ExceptHookArgs((ValueError, ValueError("gone"), None, None)))
+
+    records: Final = _stderr_records(capfd)
+    assert [record["message"] for record in records] == [f"Exception in thread {threading.get_ident()}"]
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_stay_silent_when_a_thread_ends_with_system_exit(capfd: pytest.CaptureFixture[str]) -> None:
+    """Python's own thread hook ignores SystemExit, so a thread that calls sys.exit logs nothing."""
+    turn_on_json()
+
+    worker: Final = threading.Thread(target=sys.exit, args=(3,))
+    worker.start()
+    worker.join()
+
+    assert capfd.readouterr().err == ""
+
+
+def _fails_in_a_loop_callback() -> None:
+    raise ValueError("loop callback failed")
+
+
+async def test_json_logs_report_an_exception_raised_in_an_event_loop_callback_as_one_error_record(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """asyncio hands an exception raised in a loop callback to the loop's exception handler, whose default
+    logs a multi-line traceback. With JSON logs on it is one ERROR record carrying that traceback."""
+    loop: Final = asyncio.get_running_loop()
+    previous_handler: Final = loop.get_exception_handler()
+    turn_on_json()
+    try:
+        callbacks_ran: Final = loop.create_future()
+        loop.call_soon(_fails_in_a_loop_callback)
+        loop.call_soon(callbacks_ran.set_result, None)
+        await callbacks_ran
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    records: Final = _stderr_records(capfd)
+    assert [(record["message"], record["level"]) for record in records] == [("loop callback failed", "ERROR")]
+    assert str(records[0]["stacktrace"]).endswith("ValueError: loop callback failed")
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_report_an_uncaught_exception_as_one_error_record(capfd: pytest.CaptureFixture[str]) -> None:
+    """Python passes an exception nothing caught to sys.excepthook, whose default prints a multi-line
+    traceback. With JSON logs on it is one ERROR record carrying that traceback."""
+    turn_on_json()
+    try:
+        raise LookupError("startup step failed")
+    except LookupError as uncaught:
+        sys.excepthook(type(uncaught), uncaught, uncaught.__traceback__)
+
+    records: Final = _stderr_records(capfd)
+    assert [(record["message"], record["level"]) for record in records] == [("startup step failed", "ERROR")]
+    assert str(records[0]["stacktrace"]).endswith("LookupError: startup step failed")
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_report_a_record_no_handler_takes_as_one_error_record(capfd: pytest.CaptureFixture[str]) -> None:
+    """A library logger with no handler anywhere above it falls back to logging.lastResort, which prints the
+    message and traceback as plain lines. asyncio reports an unretrieved task exception and an unclosed aiohttp
+    session this way when the operator configured no root handler. With JSON logs on it is one ERROR record,
+    and records below WARNING stay dropped as they are without JSON logs."""
+    turn_on_json()
+    unconfigured_library: Final = logging.Logger("unconfigured_library")
+    try:
+        raise ConnectionError("fire-and-forget task failed")
+    except ConnectionError:
+        unconfigured_library.exception("Task exception was never retrieved")
+    unconfigured_library.info("routine progress")
+
+    records: Final = _stderr_records(capfd)
+    assert [(record["message"], record["level"]) for record in records] == [
+        ("Task exception was never retrieved", "ERROR")
+    ]
+    assert str(records[0]["stacktrace"]).endswith("ConnectionError: fire-and-forget task failed")
+
+
+class _RecordingHandler(logging.Handler):
+    def __init__(self, received: list[str]) -> None:
+        super().__init__()
+        self.received: Final = received
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.received.append(f"no handler: {record.getMessage()}")
+
+
+def test_json_logs_take_over_the_uncaught_exception_hook_and_keep_other_hooks_an_app_set_first(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """A tracer such as ddtrace-run in the proxy image sets sys.excepthook before litellm loads, and its hook
+    hands off to Python's, which prints a plain traceback. JSON logs still report an uncaught exception as one
+    JSON record, as they always did. The thread, destructor and unhandled record hooks stay the app's own."""
+    received: Final[list[str]] = []
+
+    def host_excepthook(exc_type: type[BaseException], value: BaseException, tb: TracebackType | None) -> None:
+        received.append(f"uncaught: {value}")
+        sys.__excepthook__(exc_type, value, tb)
+
+    monkeypatch.setattr(sys, "excepthook", host_excepthook)
+    monkeypatch.setattr(sys, "unraisablehook", lambda args: received.append(f"unraisable: {args.exc_value}"))
+    monkeypatch.setattr(threading, "excepthook", lambda args: received.append(f"thread: {args.exc_value}"))
+    monkeypatch.setattr(logging, "lastResort", _RecordingHandler(received))
+    turn_on_json()
+
+    sys.excepthook(LookupError, LookupError("startup step failed"), None)
+    _FailsInDestructor()
+    worker: Final = threading.Thread(target=_fails_in_background)
+    worker.start()
+    worker.join()
+    logging.Logger("unconfigured_library").warning("Unclosed client session")
+
+    assert received == [
+        "unraisable: resource cleanup failed",
+        "thread: background job failed",
+        "no handler: Unclosed client session",
+    ]
+    assert [record["message"] for record in _stderr_records(capfd)] == ["startup step failed"]
+
+
+def _fails_with_a_long_message() -> None:
+    raise ValueError(" ".join(f"step-{index}" for index in range(400)))
+
+
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_cap_a_hook_traceback_at_the_operator_limit_and_keep_its_last_line(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """MAX_STRING_LENGTH_STDOUT_LOG bounds every JSON log line, a dying thread's traceback included. The cut
+    falls in the middle, so the record still names the exception and how its message ends."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    turn_on_json()
+
+    worker: Final = threading.Thread(target=_fails_with_a_long_message, name="background-job")
+    worker.start()
+    worker.join()
+
+    stacktrace: Final = str(_stderr_records(capfd)[0]["stacktrace"])
+    assert (stacktrace.startswith("Traceback"), stacktrace.endswith("step-399"), len(stacktrace) <= 500) == (
+        True,
+        True,
+        True,
+    )
+
+
+def _drop_an_object_that_fails_in_its_destructor() -> None:
+    _FailsInDestructor()
+
+
+def _warn_from_an_unconfigured_library() -> None:
+    logging.Logger("unconfigured_library").warning("Task exception was never retrieved")
+
+
+@pytest.mark.parametrize(
+    "emit_during_another_request", [_drop_an_object_that_fails_in_its_destructor, _warn_from_an_unconfigured_library]
+)
+@pytest.mark.usefixtures("python_default_hooks")
+def test_json_logs_leave_the_active_request_trace_id_off_garbage_collection_records(
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    emit_during_another_request: Callable[[], None],
+) -> None:
+    """Garbage collection runs a destructor, or asyncio's report of a task nobody awaited, in whatever request
+    happens to be active, so the record carries no trace id rather than the id of an unrelated request."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    turn_on_json()
+    token: Final = trace_id_var.set("unrelated-request")
+    try:
+        emit_during_another_request()
+    finally:
+        trace_id_var.reset(token)
+
+    assert ["trace_id" in record for record in _stderr_records(capfd)] == [False]
+
