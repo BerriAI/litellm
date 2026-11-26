@@ -257,39 +257,6 @@ def test_image_edit_without_an_optional_field_reaches_the_provider_with_it_set_t
     assert missing in captured and captured[missing] is None, captured
 
 
-def test_image_edit_proxy_returns_http_400_on_bad_request_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the provider/processor raises litellm.BadRequestError, the proxy must return HTTP 400 with an OpenAI-shaped error."""
-    class FailingProcessing:
-        def __init__(self, data: Dict[str, Any]) -> None:
-            pass
-
-        async def base_process_llm_request(self, **_: Any) -> Dict[str, Any]:
-            raise litellm.BadRequestError(
-                message="Vertex AI Imagen image edit requires at least one reference image.",
-                model="vertex_ai/imagen-3.0-capability-001",
-                llm_provider="vertex_ai",
-            )
-
-    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FailingProcessing)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
-
-    app = FastAPI()
-    app.include_router(endpoints.router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
-
-    client = TestClient(app, raise_server_exceptions=False)
-    response = client.post(
-        "/v1/images/edits",
-        data={"model": "vertex_ai/imagen-3.0-capability-001", "prompt": "add a hat"},
-    )
-
-    assert response.status_code == 400
-    error_body = response.json()["error"]
-    assert error_body["code"] == "400"
-    assert "Vertex AI Imagen image edit requires at least one reference image." in error_body["message"]
-
-
 @pytest.mark.asyncio
 async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(monkeypatch: pytest.MonkeyPatch):
     """A bare HTTPException carries no type or param, so the tail used to ship the

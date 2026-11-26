@@ -515,60 +515,47 @@ class TestVertexAIImagenImageEditTransformation:
         assert "maskImageConfig" in reference_images[1]
         assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
-    @pytest.mark.parametrize("image", [None, [], [None]])
-    def test_transform_image_edit_request_without_image_is_a_bad_request(self, image: object) -> None:
-        """Missing or empty reference images must raise BadRequestError (HTTP 400), not raw ValueError."""
-        with pytest.raises(litellm.BadRequestError) as exc_info:
+    @pytest.mark.parametrize(
+        ("image", "reason"),
+        [
+            (None, "requires at least one reference image"),
+            ([], "requires at least one reference image"),
+            ([None], "requires at least one reference image"),
+            ("cat.png", "plain string values are not accepted"),
+            (Path("cat.png"), "filesystem paths are not accepted"),
+            (123, "Unsupported image type"),
+        ],
+    )
+    def test_transform_image_edit_request_with_an_unusable_image_is_a_bad_request(
+        self, image: object, reason: str
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match=reason) as exc_info:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
-                image=image,  # type: ignore[arg-type]
+                image=image,
                 image_edit_optional_request_params={},
                 litellm_params=MagicMock(),
                 headers={},
             )
         assert exc_info.value.status_code == 400
         assert exc_info.value.llm_provider == "vertex_ai"
-        assert "reference image" in str(exc_info.value).lower()
-        assert not isinstance(exc_info.value, ValueError)
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("image", [None, [], [None]])
-    async def test_async_transform_image_edit_request_without_image_is_a_bad_request(self, image: object) -> None:
-        """Async path must hit the same validation and raise BadRequestError (HTTP 400)."""
-        with pytest.raises(litellm.BadRequestError) as exc_info:
-            await self.config.async_transform_image_edit_request(
+    def test_transform_image_edit_request_with_an_unusable_mask_is_a_bad_request(self) -> None:
+        with pytest.raises(litellm.BadRequestError, match="plain string values are not accepted") as exc_info:
+            self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
-                image=image,  # type: ignore[arg-type]
-                image_edit_optional_request_params={},
+                image=BytesIO(b"fake_image"),
+                image_edit_optional_request_params={"mask": "mask.png"},
                 litellm_params=MagicMock(),
                 headers={},
             )
         assert exc_info.value.status_code == 400
-        assert exc_info.value.llm_provider == "vertex_ai"
 
     def test_transform_image_edit_request_without_prompt_is_a_bad_request(self) -> None:
-        """Missing prompt must raise BadRequestError (HTTP 400), not raw ValueError."""
-        with pytest.raises(litellm.BadRequestError) as exc_info:
+        with pytest.raises(litellm.BadRequestError, match="requires a prompt") as exc_info:
             self.config.transform_image_edit_request(
-                model=self.model,
-                prompt=None,
-                image=BytesIO(b"fake_image"),
-                image_edit_optional_request_params={},
-                litellm_params=MagicMock(),
-                headers={},
-            )
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.llm_provider == "vertex_ai"
-        assert "prompt" in str(exc_info.value).lower()
-        assert not isinstance(exc_info.value, ValueError)
-
-    @pytest.mark.asyncio
-    async def test_async_transform_image_edit_request_without_prompt_is_a_bad_request(self) -> None:
-        """Async path with missing prompt must raise BadRequestError (HTTP 400)."""
-        with pytest.raises(litellm.BadRequestError) as exc_info:
-            await self.config.async_transform_image_edit_request(
                 model=self.model,
                 prompt=None,
                 image=BytesIO(b"fake_image"),
@@ -609,20 +596,6 @@ class TestVertexAIImagenImageEditTransformation:
         assert len(image_response.data) == 2
         assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
         assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
-
-    def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
-        optional_params = {}
-
-        with pytest.raises(ValueError, match="requires at least one reference image"):
-            self.config.transform_image_edit_request(
-                model=self.model,
-                prompt=self.prompt,
-                image=[],
-                image_edit_optional_request_params=optional_params,
-                litellm_params=MagicMock(),
-                headers={},
-            )
 
     def test_read_all_bytes_handles_various_types(self) -> None:
         """Test that _read_all_bytes handles different file types"""

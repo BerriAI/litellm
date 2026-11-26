@@ -183,7 +183,10 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                 model=model,
                 llm_provider="vertex_ai",
             )
-        reference_images: Final = self._prepare_reference_images(image, image_edit_optional_request_params)
+        try:
+            reference_images: Final = self._prepare_reference_images(image, image_edit_optional_request_params)
+        except ValueError as exc:
+            raise litellm.BadRequestError(message=str(exc), model=model, llm_provider="vertex_ai") from exc
         if not reference_images:
             raise litellm.BadRequestError(
                 message="Vertex AI Imagen image edit requires at least one reference image.",
