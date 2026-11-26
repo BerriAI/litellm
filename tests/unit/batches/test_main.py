@@ -177,6 +177,19 @@ def test_create__vertex_ai_forwards_custom_endpoint(seams):
     assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is True
 
 
+@pytest.mark.parametrize(("sent", "forwarded"), [("yes", True), (1, True), ("", False), (0, False)])
+def test_create__vertex_ai_forwards_a_non_bool_custom_endpoint_as_its_truthiness(seams, sent, forwarded):
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai", custom_endpoint=sent)
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is forwarded
+
+
+def test_create__vertex_ai_forwards_an_absent_custom_endpoint_as_false(seams):
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai")
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is False
+
+
 def test_create__provider_config_routes_to_base_http_handler(seams):
     """model + a provider batches config (bedrock-style) routes to the generic
     base_llm_http_handler, NOT the per-provider instance."""
@@ -750,8 +763,7 @@ def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams:
 
     litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
     assert {
-        key: litellm_params[key]
-        for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
+        key: litellm_params[key] for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
     } == {
         "s3_bucket_name": "configured-bucket",
         "s3_output_bucket_name": "output-bucket",
@@ -861,9 +873,7 @@ async def test_batch_logging_azure_credentials_regression():
 
     extracted_creds = extract_file_access_credentials(azure_credentials)
     assert "api_key" in extracted_creds, "api_key should be extracted"
-    assert (
-        extracted_creds["api_key"] == "test-azure-key-regression"
-    ), "Incorrect api_key"
+    assert extracted_creds["api_key"] == "test-azure-key-regression", "Incorrect api_key"
     assert "api_base" in extracted_creds, "api_base should be extracted"
     assert "api_version" in extracted_creds, "api_version should be extracted"
     assert "timeout" in extracted_creds, "timeout should be extracted"
@@ -890,25 +900,20 @@ async def test_batch_logging_azure_credentials_regression():
         )
         return HttpxBinaryResponseContent(response=mock_response)
 
-    with patch(
-        "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-    ):
+    with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
         result = await _fetch_batch_output_file_content(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
         )
 
-        assert credentials_received[
-            "value"
-        ], "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
-        assert (
-            credentials_received["params"]["api_key"] == "test-azure-key-regression"
-        ), "REGRESSION: Incorrect api_key"
-        assert (
-            credentials_received["params"]["api_base"]
-            == "https://test-regression.openai.azure.com"
-        ), "REGRESSION: Incorrect api_base"
+        assert credentials_received["value"], (
+            "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
+        )
+        assert credentials_received["params"]["api_key"] == "test-azure-key-regression", "REGRESSION: Incorrect api_key"
+        assert credentials_received["params"]["api_base"] == "https://test-regression.openai.azure.com", (
+            "REGRESSION: Incorrect api_base"
+        )
 
         print("   ✓ Credentials passed to afile_content")
         print(f"   ✓ api_key: {credentials_received['params']['api_key']}")
@@ -919,18 +924,14 @@ async def test_batch_logging_azure_credentials_regression():
     credentials_received["value"] = False
     credentials_received["params"] = None
 
-    with patch(
-        "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-    ):
+    with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
         result = await handle_completed_batch(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
         )
 
-        assert credentials_received[
-            "value"
-        ], "REGRESSION: Credentials not passed through _handle_completed_batch"
+        assert credentials_received["value"], "REGRESSION: Credentials not passed through _handle_completed_batch"
 
         assert result.cost > 0, "Cost should be calculated"
         assert result.usage.total_tokens == 40, "Usage should be calculated correctly"
@@ -949,9 +950,7 @@ async def test_batch_logging_azure_credentials_regression():
             "`AZURE_OPENAI_AD_TOKEN` environment variables."
         )
 
-        with patch(
-            "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-        ):
+        with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
             try:
                 result = await handle_completed_batch(
                     batch=mock_batch,
@@ -975,9 +974,7 @@ async def test_batch_logging_azure_credentials_regression():
             content=batch_output,
             headers={"content-type": "application/octet-stream"},
         )
-        mock_afile_content.return_value = HttpxBinaryResponseContent(
-            response=mock_response
-        )
+        mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
 
         result = await _fetch_batch_output_file_content(
             batch=mock_batch,
@@ -1576,7 +1573,9 @@ async def _list_on_vllm_router() -> Sequence[Batch]:
 
 
 async def _list_on_vllm_router_sync() -> Sequence[Batch]:
-    return litellm.list_batches(custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE).data
+    return litellm.list_batches(
+        custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    ).data
 
 
 @pytest.mark.parametrize("list_router", (_list_on_vllm_router, _list_on_vllm_router_sync))
@@ -1655,7 +1654,10 @@ async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock:
 
     first, second = page.data
     assert first.usage is not None
-    assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (4, 2)
+    assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (
+        4,
+        2,
+    )
     assert (second.id, second.object, second.status) == ("batch_def456", "batch", "queued")
 
 

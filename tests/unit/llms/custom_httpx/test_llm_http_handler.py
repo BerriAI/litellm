@@ -2159,6 +2159,22 @@ def test_resolve_anthropic_messages_timeout(monkeypatch, litellm_params_kwargs, 
     assert resolved == expected
 
 
+@pytest.mark.parametrize("wrong", [["12"], {"read": 12}, b"12"])
+def test_resolve_anthropic_messages_timeout_reads_a_wrong_typed_model_timeout_as_unset(monkeypatch, wrong):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr("litellm.request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS), raising=False)
+    monkeypatch.setattr("litellm.request_timeout_explicitly_set", False, raising=False)
+
+    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+        litellm_params=GenericLiteLLMParams.model_construct(timeout=wrong, request_timeout=30.0),
+        stream=False,
+        custom_llm_provider="anthropic",
+    )
+
+    assert resolved == 30.0
+
+
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeypatch):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
@@ -8693,7 +8709,6 @@ def test_a_three_turn_bridged_conversation_maps_each_overlong_id_the_same_way_ev
     assert (later_call[0], later_output) == ("function_call", ("function_call_output", later_call[1])), sent
     assert isinstance(later_call[1], str) and len(later_call[1]) <= _CALL_ID_LIMIT, sent
     assert len({call_id for _, call_id in sent[2]}) == 3, sent
-
 
 
 _OVERLONG_HISTORY_IDS: Final = [_OVERLONG_FUNCTION_ID] * 2 + [_OVERLONG_CUSTOM_ID] * 2

@@ -1243,7 +1243,10 @@ def test_str_param_is_none_for_an_absent_undeclared_key_and_an_unset_field() -> 
 def test_str_param_reads_an_undeclared_extra_key() -> None:
     from litellm.types.router import GenericLiteLLMParams
 
-    assert str_param(GenericLiteLLMParams(azure_scope="scope/.default"), "azure_scope") == "scope/.default"
+    params: Final = GenericLiteLLMParams(**{"not_a_declared_field": "extra-value"})
+
+    assert "not_a_declared_field" not in GenericLiteLLMParams.model_fields
+    assert str_param(params, "not_a_declared_field") == "extra-value"
 
 
 @pytest.mark.parametrize("wrong", [123, True, b"sk-bytes", ["sk-list"], {"key": "sk"}])
