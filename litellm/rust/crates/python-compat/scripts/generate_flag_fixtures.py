@@ -38,8 +38,8 @@ def helpers(module, *names):
 
 
 _str_to_bool, _coerces_to_true = helpers("_redis.py", "_str_to_bool", "_coerces_to_true")
-_TRUE_FALSE_STRINGS, _, str_to_bool = helpers(
-    "secret_managers/main.py", "_TRUE_FALSE_STRINGS", "_BOOL_STRINGS", "str_to_bool"
+_, _, str_to_bool, true_or_false = helpers(
+    "secret_managers/main.py", "_TRUE_FALSE_STRINGS", "_BOOL_STRINGS", "str_to_bool", "true_or_false"
 )
 _, lax_bool = helpers("litellm_core_utils/core_helpers.py", "_LAX_BOOL", "lax_bool")
 
@@ -112,7 +112,7 @@ def row(value):
     return {
         "input": json.dumps(value),
         "str_to_bool": str_to_bool(value) if is_text else None,
-        "true_or_false": _TRUE_FALSE_STRINGS.get(value.strip().lower()) if is_text else None,
+        "true_or_false": true_or_false(value) if is_text else None,
         "redis_str_to_bool": _str_to_bool(value) if is_text else None,
         "lower_is_true": value.lower() == "true" if is_text else None,
         "coerces_to_true": _coerces_to_true(value),

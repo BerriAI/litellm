@@ -184,7 +184,7 @@ from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
 from litellm.rust_bridge._native import NativeDatabaseFailure
-from litellm.secret_managers.main import str_to_bool
+from litellm.secret_managers.main import str_to_bool, true_or_false
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -3092,7 +3092,7 @@ def read_email_verified(value: object) -> bool | None:
     """Some identity providers send `email_verified` as the string "true" or "false"."""
     if isinstance(value, bool):
         return value
-    return str_to_bool(value) if isinstance(value, str) else None
+    return true_or_false(value) if isinstance(value, str) else None
 
 
 def escape_ilike(value: str) -> str:

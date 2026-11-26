@@ -149,6 +149,10 @@ def str_to_bool(value: str | None) -> bool | None:
     return _BOOL_STRINGS.get(value.strip().lower())
 
 
+def true_or_false(value: str) -> bool | None:
+    return _TRUE_FALSE_STRINGS.get(value.strip().lower())
+
+
 def get_secret_str(
     secret_name: str,
     default_value: str | bool | None = None,
@@ -495,7 +499,7 @@ def get_secret(
                 return secret
         else:
             secret = os.environ.get(secret_name)
-            secret_value_as_bool = _TRUE_FALSE_STRINGS.get(secret.strip().lower()) if secret is not None else None
+            secret_value_as_bool = true_or_false(secret) if secret is not None else None
             if secret_value_as_bool is not None:
                 return secret_value_as_bool
             else:

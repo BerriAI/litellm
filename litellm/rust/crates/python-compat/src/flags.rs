@@ -15,7 +15,11 @@ use crate::{Value, pydantic, truthy::truthy, unicode::isspace};
 /// `true`, `1`, `yes` or `on` in any case once stripped, `false`, `0`, `no` or `off` likewise,
 /// otherwise `None`.
 pub fn str_to_bool(text: &str) -> Option<bool> {
-    read_words(text, &["true", "1", "yes", "on"], &["false", "0", "no", "off"])
+    read_words(
+        text,
+        &["true", "1", "yes", "on"],
+        &["false", "0", "no", "off"],
+    )
 }
 
 /// `true` or `false` in any case once stripped, otherwise `None`.

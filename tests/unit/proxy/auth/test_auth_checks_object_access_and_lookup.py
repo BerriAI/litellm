@@ -12894,6 +12894,7 @@ async def test_cached_row_is_not_filled_with_an_email_another_row_holds() -> Non
         (" False ", False),
         ("True", True),
         ("yes", None),
+        ("1", None),
         ("", None),
         (0, None),
         (1, None),

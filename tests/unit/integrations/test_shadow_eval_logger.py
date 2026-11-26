@@ -3110,7 +3110,7 @@ def test_the_rubric_response_format_demands_both_grades_on_the_fixed_scale():
     assert schema["properties"]["grade_b"]["enum"] == [1, 2, 3, 4, 5]
 
 
-@pytest.mark.parametrize(("value", "enabled"), [(None, False), ("false", False), ("yes", False), ("true", True)])
+@pytest.mark.parametrize(("value", "enabled"), [(None, False), ("false", False), ("maybe", False), ("true", True), ("yes", True)])
 def test_rubric_grading_is_off_unless_the_env_var_turns_it_on(
     value: str | None, enabled: bool, monkeypatch: pytest.MonkeyPatch
 ):
