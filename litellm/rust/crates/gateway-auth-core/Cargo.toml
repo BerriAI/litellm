@@ -13,6 +13,7 @@ jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 litellm-config.workspace = true
 litellm-fnmatch.workspace = true
 litellm-python-compat.workspace = true
+litellm-router-types.workspace = true
 litellm-secret-value.workspace = true
 litellm-starlette.workspace = true
 fancy-regex.workspace = true

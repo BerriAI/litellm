@@ -603,7 +603,7 @@ async def anthropic_messages(
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
@@ -614,7 +614,7 @@ async def anthropic_messages(
         messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
-    original_stream: Final = stream or kwargs.get("_websearch_interception_converted_stream", False)
+    original_stream: Final = stream or bool(kwargs.get("_websearch_interception_converted_stream", False))
 
     # Execute pre-request hooks to allow CustomLoggers to modify request.
     # tool_choice is forwarded explicitly (it is a named param, not in kwargs)

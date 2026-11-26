@@ -1,10 +1,14 @@
-//! Pydantic's lax `bool` and `int` validation: `TypeAdapter(bool)` and `TypeAdapter(int)`.
+//! Pydantic's lax `bool`, `int`, `float` and `datetime` validation: `TypeAdapter(bool)` and the
+//! like.
 
 use num_bigint::BigInt;
 use serde::{Deserialize, Deserializer, de::Error};
 use serde_with::DeserializeAs;
 
-use crate::Value;
+use crate::{
+    Value,
+    datetime::{IsoDateTime, fromisoformat},
+};
 
 const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
 /// pydantic refuses an integer longer than this once cleaned, a `-` included. Checking first also
@@ -45,6 +49,28 @@ pub fn lax_float(value: &Value) -> Option<f64> {
             .ok()
             .and_then(crate::number::float),
         _ => None,
+    }
+}
+
+/// pydantic reads a number above this as milliseconds since 1970-01-01, and seconds otherwise.
+const MILLISECONDS_ABOVE: f64 = 2e10;
+
+/// `TypeAdapter(datetime).validate_python(value)`, or `None` where pydantic raises
+/// `ValidationError`. A number, or text that is one, is a UTC time since 1970-01-01. Other text is
+/// read as `datetime.fromisoformat` reads it, which pydantic matches for the forms LiteLLM stores.
+pub fn lax_datetime(value: &Value) -> Option<IsoDateTime> {
+    let number = match value {
+        Value::Bool(_) => return None,
+        Value::Str(text) => match crate::number::float(text) {
+            Some(number) => number,
+            None => return fromisoformat(text),
+        },
+        value => lax_float(value)?,
+    };
+    if number.abs() > MILLISECONDS_ABOVE {
+        IsoDateTime::from_milliseconds(number)
+    } else {
+        IsoDateTime::from_timestamp(number)
     }
 }
 
