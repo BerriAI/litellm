@@ -54,6 +54,11 @@ fn unset_or<V: FromValue>(name: &'static str, value: Value) -> Result<Option<V>,
     }
 }
 
+/// A column the model requires that the table lets be NULL, or the column it refuses the row for.
+pub(crate) fn required<T>(column: &'static str, value: Option<T>) -> Result<T, Error> {
+    value.ok_or(Error::row(column))
+}
+
 /// A timestamp column as Python's driver hands it out: an aware UTC `datetime`, or the column the
 /// model refuses for a year a `datetime` cannot hold.
 pub(crate) fn instant(column: &'static str, at: NaiveDateTime) -> Result<IsoDateTime, Error> {
