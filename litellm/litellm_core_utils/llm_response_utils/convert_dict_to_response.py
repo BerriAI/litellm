@@ -801,7 +801,7 @@ def should_convert_tool_call_to_json_mode(
     """
     if convert_tool_call_to_json_mode and tool_calls is not None and len(tool_calls) == 1:
         function: Final = tool_calls[0].get("function")
-        return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
+        return function is not None and subscript(function, "name") == RESPONSE_FORMAT_TOOL_NAME
     return False
 
 

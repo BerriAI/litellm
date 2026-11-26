@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol, overload
 from urllib.parse import urlparse
 
 import httpx
@@ -44,6 +44,22 @@ _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
 _DEFAULT_TIMEOUT: Final = 30.0
 _EMPTY_MAPPING: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _MCP_MODEL_PREFIX: Final = "MCP:"
+
+
+class _ToolCallFunctionFields(Protocol):
+    @overload
+    def get(self, key: Literal["name"], /) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["arguments"], /) -> object: ...
+
+
+class _ToolCallFields(Protocol):
+    @overload
+    def get(self, key: Literal["id", "type"], /) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["function"], /) -> _ToolCallFunctionFields | None: ...
 
 
 class _MetadataContainer(Protocol):
@@ -352,15 +368,16 @@ class SingulrGuardrail(CustomGuardrail):
 
     @staticmethod
     def _build_tool_call(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> "ToolCall | None":
-        tool_call_id: Final = tool_call.get("id")
-        fun: Final = tool_call.get("function")
+        tool_call_fields: Final = require_attributes(tool_call, _ToolCallFields, "get")
+        tool_call_id: Final = tool_call_fields.get("id")
+        fun: Final = tool_call_fields.get("function")
         if not tool_call_id or not fun:
             return None
         func_name: Final = fun.get("name")
         args: Final = fun.get("arguments")
         if not func_name or args is None:
             return None
-        call_type: Final = tool_call.get("type")
+        call_type: Final = tool_call_fields.get("type")
         return ToolCall(
             id=tool_call_id,
             type=call_type if isinstance(call_type, str) and call_type else "function",
