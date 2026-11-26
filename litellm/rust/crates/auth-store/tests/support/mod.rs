@@ -61,3 +61,31 @@ pub async fn execute(pool: &PgPool, sql: &'static str) {
 pub fn dumped(value: impl IntoValue) -> String {
     litellm_python_compat::json::dumps(&value.into_value()).unwrap()
 }
+
+/// A budget with every column set under `budget`, and one stored with nothing but its id and
+/// audit columns under `bare`, for an object that nests its budget.
+pub async fn insert_budgets(pool: &PgPool) {
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_BudgetTable" (
+               budget_id, name, max_budget, rollover_max_budget, soft_budget, max_parallel_requests,
+               tpm_limit, rpm_limit, tpd_limit, model_max_budget, model_tpm_limit, model_rpm_limit,
+               budget_duration, budget_limits, cap_policy, budget_reset_at, budget_reset_count,
+               allowed_models, temp_budget_increase, temp_budget_expiry, created_at, created_by,
+               updated_at, updated_by
+           ) VALUES (
+               'budget', 'Budget', 10.5, 20.0, 8, 3,
+               1000, 10, 100000, '{"claude": {"max_budget": 1}}', '{"claude": 100.0, "gpt": "7"}', '{"claude": "5"}',
+               '30d', '[]', 'hard', '2026-12-01 00:00:00', 2,
+               ARRAY['claude'], 1.5, '2026-11-20 12:30:00.25', '2026-11-01 00:00:00', 'test',
+               '2026-11-02 00:00:00', 'test'
+           )"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_BudgetTable" (budget_id, created_at, created_by, updated_at, updated_by)
+           VALUES ('bare', '2026-11-01 00:00:00', 'test', '2026-11-01 00:00:00', 'test')"#,
+    )
+    .await;
+}

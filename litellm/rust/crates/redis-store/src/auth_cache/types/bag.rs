@@ -18,9 +18,16 @@ impl Bag {
     }
 }
 
-/// A `dict[str, list[str]]`, in the order it was written.
+/// A `dict[str, V]`, in the order it was written, each value read as a `V` field reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Lists(pub Vec<(String, Vec<String>)>);
+pub struct Dict<V>(pub Vec<(String, V)>);
+
+/// A `dict[str, list[str]]`.
+pub type Lists = Dict<Vec<String>>;
+
+/// A `dict[str, int]`, each value read as pydantic's lax `int` reads it, so `100.0` and `"7"` are
+/// `100` and `7`.
+pub type Ints = Dict<i64>;
 
 impl Field for Bag {
     fn read(value: &Value) -> Option<Self> {
@@ -35,14 +42,14 @@ impl Field for Bag {
     }
 }
 
-impl Field for Lists {
+impl<V: Field> Field for Dict<V> {
     fn read(value: &Value) -> Option<Self> {
         let Value::Dict(entries) = value else {
             return None;
         };
         entries
             .iter()
-            .map(|(name, list)| Some((String::read(name)?, Vec::read(list)?)))
+            .map(|(name, value)| Some((String::read(name)?, V::read(value)?)))
             .collect::<Option<_>>()
             .map(Self)
     }
@@ -51,7 +58,7 @@ impl Field for Lists {
         Value::Dict(
             self.0
                 .into_iter()
-                .map(|(name, list)| (Value::Str(name), list.write()))
+                .map(|(name, value)| (Value::Str(name), value.write()))
                 .collect(),
         )
     }
@@ -63,8 +70,8 @@ impl FromValue for Bag {
     }
 }
 
-impl FromValue for Lists {
+impl<V: Field> FromValue for Dict<V> {
     fn from_value(value: &Value) -> Result<Self, DecodeError> {
-        Self::read(value).ok_or(DecodeError::Shape("a dict of string lists"))
+        Self::read(value).ok_or(DecodeError::Shape("a dict"))
     }
 }

@@ -34,6 +34,13 @@ Each object has one entry here, in the same form, and a later object adds its ow
 - Nested: the roster, each entry as `Member` dumps it, the model alias table as `LiteLLM_ModelTable` dumps it, each `budget_limits` window as `BudgetLimit` dumps it, without the keys the model drops, and the object permission, as `get_team_object` nests it. The permission is read through the key's policy in `object_permission.rs`, so a row that cannot be read or that its model refuses leaves a replica read's team without it and fails a writer read
 - Not read: `last_refreshed_at`, which the host that caches the team stamps
 
+### Project
+
+- Query: `ProjectDatabase::project`, the project's row with its budget (`find_with_budget`), one query
+- Entry: `ProjectEntry` under `AuthObject::Project`, the `LiteLLM_ProjectTableCachedObj` dump
+- Nested: the budget, as `LiteLLM_BudgetTable` dumps it (`BudgetEntry`). A budget whose `budget_limits` Python finds truthy is refused, as the model's `reject_concurrent_windows` does. An object whose model nests a different budget class, such as a team membership's `LiteLLM_BudgetTableFull`, needs its own record
+- Not read: the object permission the project points at, and `last_refreshed_at`, which the host that caches the project stamps
+
 ## The cached shape
 
 - What the database gives is not what the cache holds. Python's entry is `Model(**row).model_dump(mode="json")`, so each shaper converts its row field by field into the entry, and the entry dumps to the bytes Python writes for the same row
@@ -45,5 +52,6 @@ Each object has one entry here, in the same form, and a later object adds its ow
 
 ## Other writers
 
-- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, and `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, so no host reads a team through this crate yet. Both write the bytes this crate shapes for the same row
+- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, and `get_project_object` does the same for a project, so no host reads a team or a project through this crate yet. All three write the bytes this crate shapes for the same row
 - A writer whose bytes differ from this crate's is listed here with the difference, and is left alone on purpose
+  - The auth prefetch (`auth_object_prefetch.py`) writes `project_id:{id}` from the key owners row instead, with the object permission nested, times without a `Z` and `[]` for a NULL budget `allowed_models`, so its bytes differ from this shape for the same row
