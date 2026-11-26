@@ -27,7 +27,9 @@ tests:
           value: PreSync
       - equal:
           path: metadata.annotations["argocd.argoproj.io/hook-delete-policy"]
-          value: BeforeHookCreation
+          value: BeforeHookCreation,HookSucceeded
+      - notExists:
+          path: spec.ttlSecondsAfterFinished
 
   - it: drops the Helm hook so Argo CD owns the Job
     set:
@@ -61,3 +63,23 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "-5"
+
+  - it: retains the configured cleanup TTL for Helm hooks
+    set:
+      migrationJob.ttlSecondsAfterFinished: 600
+    asserts:
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 600
+
+  - it: gives Argo CD cleanup ownership even when a Job TTL is configured
+    set:
+      migrationJob.hooks.helm.enabled: false
+      migrationJob.hooks.argocd.enabled: true
+      migrationJob.ttlSecondsAfterFinished: 1
+    asserts:
+      - notExists:
+          path: spec.ttlSecondsAfterFinished
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook-delete-policy"]
+          value: BeforeHookCreation,HookSucceeded

@@ -6,14 +6,21 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 """
 
 from datetime import datetime
+from typing import Final
 
 from pydantic import ConfigDict, Field, model_validator
 
+from litellm.models.budget import active_rollover_credit as calculate_rollover_credit
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
+
+
+def _is_none(value: object) -> bool:
+    return value is None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -29,6 +36,9 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=_is_none)
+    rollover_credit: float | None = Field(default=None, exclude_if=_is_none)
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     spend: float = 0.0
     user_email: str | None = None
     models: list = []
@@ -60,10 +70,20 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             values.update({"teams": []})
         return values
 
+    def active_rollover_credit(self) -> float | None:
+        return calculate_rollover_credit(
+            self.max_budget, self.rollover_max_budget, self.budget_duration, self.rollover_credit
+        )
+
+    def effective_max_budget(self) -> float | None:
+        credit: Final = self.active_rollover_credit()
+        return self.max_budget if credit is None or self.max_budget is None else self.max_budget + credit
+
     def is_over_budget(self) -> bool:
-        if self.max_budget is None:
+        max_budget: Final = self.effective_max_budget()
+        if max_budget is None:
             return False
-        return self.spend >= self.max_budget
+        return self.spend >= max_budget
 
     def has_model_access(self, model_name: str) -> bool:
         if not self.models:

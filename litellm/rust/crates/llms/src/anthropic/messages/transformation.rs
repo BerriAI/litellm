@@ -1,23 +1,29 @@
 use litellm_auth::CredentialPlacement;
 use litellm_host::interceptors::{RetriedRequest, RetryReason};
-use litellm_http::request::{with_header, without_headers};
+use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
-        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message, MessageContent,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
-    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::{Recognized, map_known_runs},
+    providers::anthropic::{
+        API_VERSION, AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS,
+        VERSION_HEADER,
+    },
+    recognized::{Recognized, is_one, python_str},
 };
+use litellm_python_compat::scalar::python_value;
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
     handler::shape_anthropic_messages_request,
-    scalar::{is_one, python_str, python_value},
-    thinking::translate_thinking,
+    thinking::{drop_unsupported_effort, translate_thinking},
 };
-use crate::anthropic::beta_headers::accepted_or_unlisted;
+use crate::anthropic::{
+    beta_gated_fields::strip_beta_gated_request, beta_headers::accepted_or_unlisted,
+};
 use crate::base_llm::messages::{
     context::{MessagesShapeOptions, MessagesTransformContext},
     tools::ToolCustomField,
@@ -26,36 +32,36 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        drop_advisor_blocks, drop_non_string_system_texts, drop_non_string_user_texts,
+        drop_raw_advisor_blocks, drop_raw_non_string_user_texts, existing_betas, get_api_key,
+        get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
+        is_claude_strict_tools_rejection, is_tool_search_used, map_messages,
+        map_messages_rejecting_emptied, merge_beta_headers, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
+        strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
+        strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
+        strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
+        tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
         messages::transformation::{
-            BaseMessagesConfig, FederatedEnvironment, Headers, ValidatedEnvironment,
+            FederatedEnvironment, Headers, MessagesAuth, MessagesDialect, MessagesEndpoint,
+            MessagesReply, ValidatedEnvironment,
         },
     },
 };
+
+const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
 
 pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
-impl BaseMessagesConfig for AnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
+impl MessagesEndpoint for AnthropicMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -67,20 +73,32 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
-    fn transform_anthropic_messages_request(
+    fn checks_claude_signatures(
         &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url_host(&complete_anthropic_url(api_base, env_lookup))
+            .is_some_and(|host| replays_unsigned_thinking(&host))
     }
 
-    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
-        ToolCustomField::Rewrite {
-            hoist_defer_loading: is_claude_model(model),
+    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
+        if !is_foundry_url(url) {
+            return headers;
         }
+        let betas = existing_betas(&headers);
+        if betas.is_empty() {
+            return headers;
+        }
+        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
+        if kept.is_empty() {
+            return without_headers(headers, &[BETA_HEADER]);
+        }
+        with_header(headers, BETA_HEADER, kept.to_string())
     }
+}
 
+impl MessagesAuth for AnthropicMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[
             ANTHROPIC_API_KEY_ENV,
@@ -118,6 +136,43 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     ) -> Result<FederatedEnvironment, Error> {
         Ok(anthropic_environment(headers, api_key, env_lookup))
     }
+}
+
+impl MessagesDialect for AnthropicMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
+            hoist_defer_loading: is_claude_model(model),
+        }
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        transform_messages_request(request, &context.keeping_display_updates())
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        if !serves_anthropic_api_versions(url) {
+            return Ok(request);
+        }
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+    }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
@@ -130,6 +185,25 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         )
     }
 
+    /// Python's transform strips the thinking and system fields the final header does not
+    /// unlock.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: Headers,
+        context: &MessagesTransformContext,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        let stripped = strip_beta_gated_request(
+            request,
+            &existing_betas(&headers),
+            context.drops_unsupported_params,
+            BetaProvider::Anthropic,
+        );
+        Ok((stripped, headers))
+    }
+}
+
+impl MessagesReply for AnthropicMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,
@@ -139,22 +213,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     ) -> Option<RetriedRequest> {
         retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
-
-    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
-        if !is_foundry_url(url) {
-            return headers;
-        }
-        let betas = existing_betas(&headers);
-        if betas.is_empty() {
-            return headers;
-        }
-        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
-        if kept.is_empty() {
-            return without_headers(headers, &[BETA_HEADER]);
-        }
-        with_header(headers, BETA_HEADER, kept.to_string())
-    }
 }
+
+const OUTPUT_CONFIG: &str = "output_config";
 
 const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "services.ai.azure.com",
@@ -162,7 +223,17 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "cognitiveservices.azure.com",
 ];
 
-fn is_foundry_url(url: &str) -> bool {
+const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
+
+fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
         url.to_string()
     } else {
@@ -171,14 +242,29 @@ fn is_foundry_url(url: &str) -> bool {
     url::Url::parse(&absolute)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| {
-            FOUNDRY_HOST_SUFFIXES
-                .iter()
-                .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
-        })
 }
 
-pub(crate) fn is_claude_model(model: &str) -> bool {
+fn is_foundry_host(host: &str) -> bool {
+    FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn is_foundry_url(url: &str) -> bool {
+    url_host(url).is_some_and(|host| is_foundry_host(&host))
+}
+
+fn serves_anthropic_api_versions(url: &str) -> bool {
+    url_host(url).is_some_and(|host| host == ANTHROPIC_API_HOST || is_foundry_host(&host))
+}
+
+pub fn is_claude_model(model: &str) -> bool {
     model.to_lowercase().contains("claude")
 }
 
@@ -269,6 +355,14 @@ fn anthropic_environment(
             auth: AuthScheme::Forwarded,
         });
     }
+    if let Some(token) =
+        get_api_key(api_key, env_lookup).filter(|key| OauthToken::parse(key).is_some())
+    {
+        return FederatedEnvironment::Validated(minted_oauth_environment(
+            headers,
+            SecretValue::new(token),
+        ));
+    }
     match get_auth_header(api_key, env_lookup) {
         Some(auth) => FederatedEnvironment::Validated(ValidatedEnvironment { headers, auth }),
         None => FederatedEnvironment::Unauthenticated {
@@ -297,23 +391,55 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
+    let request = if context.drops_unsupported_params {
+        MessagesRequest {
+            params: MessagesOptionalParams {
+                system: request.params.system.and_then(drop_non_string_system_texts),
+                ..request.params
+            },
+            ..request
+        }
+    } else {
+        request
+    };
+    let messages = if context.drops_unsupported_params {
+        map_messages_rejecting_emptied(
+            request.messages,
+            drop_non_string_user_texts,
+            drop_raw_non_string_user_texts,
+        )?
+    } else {
+        request.messages
+    };
     let messages = if has_advisor_tool(request.params.tools.as_deref())
         || continues_message_thread(&request.params)
     {
-        request.messages
+        messages
+    } else if context.drops_unsupported_params {
+        map_messages(messages, drop_advisor_blocks, drop_raw_advisor_blocks)
     } else {
-        map_known_runs(request.messages, strip_advisor_blocks)
+        map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks)
     };
-    let messages = if context.drops_unsupported_params {
-        drop_non_string_tool_result_texts(messages)
+    let messages = map_messages(
+        messages,
+        strip_encrypted_reasoning_blocks_restoring_redacted_data,
+        strip_raw_encrypted_reasoning_blocks,
+    );
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
+        map_messages(
+            messages,
+            strip_unsigned_thinking_blocks,
+            strip_raw_unsigned_thinking_blocks,
+        )
     } else {
         messages
     };
     Ok(MessagesRequest {
-        messages: map_known_runs(messages, strip_encrypted_reasoning_blocks),
+        messages,
         params: MessagesOptionalParams {
             context_management,
-            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
@@ -340,69 +466,6 @@ fn without_unstructured_output_format(
         },
         ..request
     }
-}
-
-fn is_python_str(value: &Value) -> bool {
-    match value {
-        Value::String(text) => {
-            litellm_host::raw_json::decode(text).is_none_or(|raw| raw.starts_with('"'))
-        }
-        _ => false,
-    }
-}
-
-fn is_non_string_text(part: &Value) -> bool {
-    part.get("type").and_then(Value::as_str) == Some("text")
-        && part.get("text").is_some_and(|text| !is_python_str(text))
-}
-
-fn without_non_string_texts(content: &mut Value) {
-    if let Value::Array(parts) = content {
-        parts.retain(|part| !is_non_string_text(part));
-    }
-}
-
-fn drop_non_string_tool_result_texts(
-    messages: Vec<Recognized<Message>>,
-) -> Vec<Recognized<Message>> {
-    messages
-        .into_iter()
-        .map(|message| match message {
-            Recognized::Known(mut message) => {
-                if message.role == "user"
-                    && let MessageContent::Blocks(blocks) = &mut message.content
-                {
-                    blocks
-                        .iter_mut()
-                        .filter(|block| block.is_type(ContentBlockType::ToolResult))
-                        .filter_map(|block| block.content.as_mut())
-                        .for_each(without_non_string_texts);
-                }
-                Recognized::Known(message)
-            }
-            Recognized::Unrecognized(mut message) => {
-                if message.get("role").and_then(Value::as_str) == Some("user")
-                    && let Some(Value::Array(blocks)) = message.get_mut("content")
-                {
-                    blocks
-                        .iter_mut()
-                        .filter(|block| {
-                            block.get("type").and_then(Value::as_str) == Some("tool_result")
-                        })
-                        .filter_map(|block| block.get_mut("content"))
-                        .for_each(without_non_string_texts);
-                }
-                Recognized::Unrecognized(message)
-            }
-        })
-        .collect()
-}
-
-fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
-    extra
-        .into_iter()
-        .filter(|(key, value)| key != "safeguards" || !value.is_null())
-        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -444,7 +507,7 @@ fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
 }
 
 fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
-    let Some(Value::Object(thread)) = params.extra.get("thread") else {
+    let Some(Value::Object(thread)) = &params.thread else {
         return false;
     };
     thread.get("type").and_then(Value::as_str) == Some("continue")
@@ -454,10 +517,7 @@ fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
 }
 
 fn is_threaded(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("thread")
-        .is_some_and(|thread| !thread.is_null())
+    params.thread.is_some()
 }
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
@@ -501,7 +561,9 @@ fn context_management_betas(
 ) -> impl Iterator<Item = AnthropicBeta> {
     let edits = context_management
         .and_then(Recognized::known)
-        .and_then(|context_management| context_management.edits.as_deref())
+        .and_then(|context_management| context_management.edits.as_ref())
+        .and_then(Recognized::known)
+        .map(Vec::as_slice)
         .unwrap_or_default();
     let compact = edits.iter().any(is_compact_edit);
     let other = edits.iter().any(|edit| !is_compact_edit(edit));
@@ -517,21 +579,26 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .output_config
             .as_ref()
             .and_then(Recognized::known)
-            .is_some_and(|config| config.format.is_some())
+            .is_some_and(|config| {
+                config
+                    .format
+                    .as_ref()
+                    .is_some_and(|format| !format.is_null())
+            })
 }
 
 fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("safeguards")
-        .is_some_and(|value| !value.is_null())
+    params.safeguards.is_some()
 }
 
+/// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,
+/// such as a system turn sent without content, counts too.
 fn messages_carry_output_config(messages: &[Recognized<Message>]) -> bool {
-    messages
-        .iter()
-        .filter_map(Recognized::known)
-        .any(|message| message.extra.contains_key("output_config"))
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => message.extra.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(Value::Object(fields)) => fields.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(_) => false,
+    })
 }
 
 fn uses_thinking_display_updates(params: &MessagesOptionalParams) -> bool {
@@ -564,7 +631,7 @@ fn uses_thinking_block_binding(params: &MessagesOptionalParams) -> bool {
 
 fn is_tool_reference_change(block: &ContentBlock) -> bool {
     matches!(
-        &block.block_type,
+        block.known_type(),
         Some(ContentBlockType::Other(block_type))
             if block_type == "tool_addition" || block_type == "tool_removal"
     ) && block
@@ -575,13 +642,34 @@ fn is_tool_reference_change(block: &ContentBlock) -> bool {
         == Some("tool_reference")
 }
 
+fn is_raw_tool_reference_change(block: &Value) -> bool {
+    block
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|block_type| block_type == "tool_addition" || block_type == "tool_removal")
+        && block
+            .get("tool")
+            .and_then(|tool| tool.get("type"))
+            .and_then(Value::as_str)
+            == Some("tool_reference")
+}
+
+/// `AnthropicModelInfo.is_mid_conversation_tool_change_used` reads any mapping, so a system
+/// message that did not parse is scanned through its raw content too.
 fn messages_carry_tool_changes(messages: &[Recognized<Message>]) -> bool {
-    messages
-        .iter()
-        .filter_map(Recognized::known)
-        .filter(|message| message.role == "system")
-        .flat_map(Message::blocks)
-        .any(is_tool_reference_change)
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => {
+            message.role == "system" && message.blocks().iter().any(is_tool_reference_change)
+        }
+        Recognized::Unrecognized(Value::Object(fields)) => {
+            fields.get("role").and_then(Value::as_str) == Some("system")
+                && matches!(
+                    fields.get("content"),
+                    Some(Value::Array(blocks)) if blocks.iter().any(is_raw_tool_reference_change)
+                )
+        }
+        Recognized::Unrecognized(_) => false,
+    })
 }
 
 fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
@@ -599,6 +687,11 @@ pub fn drop_unsupported_params(
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
     let capabilities = &context.thinking.capabilities;
+    let request = if context.drop_params {
+        drop_unsupported_effort(request, capabilities)
+    } else {
+        request
+    };
     let model = request.model.clone();
     let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
         if context.drop_params {
@@ -610,6 +703,9 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
+            tracing::warn!(
+                "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
+            );
             None
         }
         _ => params.speed.clone(),
@@ -647,6 +743,68 @@ pub fn drop_unsupported_params(
         },
         ..request
     })
+}
+
+fn requested_api_version(headers: &Headers) -> &str {
+    header_value(headers, VERSION_HEADER).map_or(API_VERSION, str::trim)
+}
+
+pub(crate) fn drop_sampling_params_removed_by_requested_version(
+    request: MessagesRequest,
+    headers: &Headers,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    drop_sampling_params_removed_by_version(request, requested_api_version(headers), drop_params)
+}
+
+pub(crate) fn drop_sampling_params_removed_by_version(
+    request: MessagesRequest,
+    api_version: &str,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    if !removes_sampling_params(api_version) {
+        return Ok(request);
+    }
+    let params = &request.params;
+    let first_sent = [
+        ("temperature", params.temperature.as_ref().map(python_str)),
+        ("top_p", params.top_p.as_ref().map(python_str)),
+        ("top_k", params.top_k.as_ref().map(python_str)),
+    ]
+    .into_iter()
+    .find_map(|(param, value)| Some((param, value?)));
+    if let (Some((param, value)), false) = (first_sent, drop_params) {
+        return Err(unsupported_param(
+            &request.model,
+            param,
+            &value,
+            &format!("anthropic-version {api_version} removed temperature, top_p and top_k. "),
+        ));
+    }
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn removes_sampling_params(api_version: &str) -> bool {
+    is_dated_version(api_version) && api_version >= FIRST_VERSION_WITHOUT_SAMPLING_PARAMS
+}
+
+fn is_dated_version(version: &str) -> bool {
+    version.len() == 10
+        && version
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                4 | 7 => byte == b'-',
+                _ => byte.is_ascii_digit(),
+            })
 }
 
 fn speed_repr(speed: &Recognized<Speed>) -> String {
@@ -695,7 +853,7 @@ pub fn map_openai_context_management_to_anthropic(
         return context_management;
     }
     Recognized::Known(ContextManagement {
-        edits: Some(edits),
+        edits: Some(Recognized::Known(edits)),
         extra: Map::new(),
     })
 }
@@ -711,6 +869,7 @@ mod tests {
 
     use super::*;
     use crate::anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX;
+    use crate::base_llm::messages::context::SupportedEffortTiers;
     use litellm_http::request::header_values;
 
     type Env = &'static [(&'static str, &'static str)];
@@ -797,6 +956,84 @@ mod tests {
         MessagesModelCapabilities::default()
     }
 
+    fn transformed_messages(
+        messages: Value,
+        drops_unsupported_params: bool,
+    ) -> Result<Value, Error> {
+        ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                request(json!({"messages": messages})),
+                &MessagesTransformContext {
+                    drops_unsupported_params,
+                    ..MessagesTransformContext::with_lookup(unmapped(), false, &no_env)
+                },
+            )
+            .map(|transformed| serde_json::to_value(transformed).unwrap()["messages"].clone())
+    }
+
+    fn user_text(text: Value) -> Value {
+        json!({"type": "text", "text": text})
+    }
+
+    #[rstest]
+    #[case::null_text(json!(null))]
+    #[case::numeric_text(json!(5))]
+    fn a_user_s_non_string_text_is_sent_as_is_without_drop_params(#[case] text: Value) {
+        let messages =
+            json!([{"role": "user", "content": [user_text(text), user_text(json!("hi"))]}]);
+        assert_eq!(
+            transformed_messages(messages.clone(), false).unwrap(),
+            messages
+        );
+    }
+
+    #[rstest]
+    #[case::null_text(
+        json!([{"role": "user", "content": [user_text(json!(null)), user_text(json!("hi"))]}]),
+        json!([{"role": "user", "content": [user_text(json!("hi"))]}])
+    )]
+    #[case::numeric_text(
+        json!([{"role": "user", "content": [user_text(json!(5)), user_text(json!("hi"))]}]),
+        json!([{"role": "user", "content": [user_text(json!("hi"))]}])
+    )]
+    #[case::tool_result_part(
+        json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            user_text(json!(null)), user_text(json!("ok"))
+        ]}]}]),
+        json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            user_text(json!("ok"))
+        ]}]}])
+    )]
+    #[case::emptied_user_message(
+        json!([
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": [user_text(json!(null)), user_text(json!(5))]}
+        ]),
+        json!([{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}])
+    )]
+    fn drop_params_drops_a_user_s_non_string_text(
+        #[case] messages: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(transformed_messages(messages, true).unwrap(), expected);
+    }
+
+    #[rstest]
+    fn drop_params_that_leaves_no_message_is_a_request_error() {
+        let dropped = transformed_messages(
+            json!([
+                {"role": "user", "content": [user_text(json!(null))]},
+                {"role": "user", "content": [user_text(json!(5))]}
+            ]),
+            true,
+        );
+        assert!(matches!(
+            dropped,
+            Err(Error::InvalidRequest(crate::ErrorDetail::EmptiedMessages))
+        ));
+    }
+
     #[fixture]
     fn sampling_removed() -> MessagesModelCapabilities {
         MessagesModelCapabilities {
@@ -809,6 +1046,30 @@ mod tests {
     fn fast_mode() -> MessagesModelCapabilities {
         MessagesModelCapabilities {
             supports_speed: true,
+            ..Default::default()
+        }
+    }
+
+    #[fixture]
+    fn adaptive_without_xhigh() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_adaptive_thinking: true,
+            supports_legacy_thinking: true,
+            supports_output_config: true,
+            effort_tiers: SupportedEffortTiers {
+                max: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[fixture]
+    fn effort_without_adaptive() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_output_config: true,
             ..Default::default()
         }
     }
@@ -846,6 +1107,16 @@ mod tests {
     )]
     #[case::speed_on_a_fast_mode_model(fast_mode(), false, json!({"speed": "fast"}))]
     #[case::speed_on_a_fast_mode_model_under_drop_params(fast_mode(), true, json!({"speed": "fast"}))]
+    #[case::effort_tier_the_model_lacks_is_left_to_the_provider(
+        adaptive_without_xhigh(),
+        false,
+        json!({"output_config": {"effort": "xhigh"}})
+    )]
+    #[case::effort_tier_the_model_has_under_drop_params(
+        adaptive_without_xhigh(),
+        true,
+        json!({"output_config": {"effort": "max"}})
+    )]
     #[case::native_context_management_edits(unmapped(), false, json!({"context_management": {"edits": [{
         "type": "clear_tool_uses_20250919",
         "trigger": {"type": "input_tokens", "value": 30000},
@@ -900,6 +1171,21 @@ mod tests {
         json!({"speed": "fast", "temperature": 1.0}),
         json!({"temperature": 1.0})
     )]
+    #[case::reasoning_effort_tier_the_adaptive_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"reasoning_effort": "xhigh"}),
+        json!({})
+    )]
+    #[case::output_config_effort_tier_the_adaptive_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"output_config": {"effort": "xhigh", "format": {"type": "json_schema"}}}),
+        json!({"output_config": {"format": {"type": "json_schema"}}})
+    )]
+    #[case::output_config_effort_tier_the_effort_model_lacks(
+        effort_without_adaptive(),
+        json!({"output_config": {"effort": "max"}}),
+        json!({})
+    )]
     fn removed_params_are_dropped_under_drop_params(
         #[case] capabilities: MessagesModelCapabilities,
         #[case] fields: Value,
@@ -909,70 +1195,89 @@ mod tests {
     }
 
     #[rstest]
+    fn drop_params_keeps_the_effort_sized_budget_on_a_model_without_adaptive_thinking(
+        effort_without_adaptive: MessagesModelCapabilities,
+    ) {
+        let adaptive = json!({"max_tokens": 64000, "thinking": {"type": "adaptive"}});
+        let with_xhigh = merged(
+            adaptive.clone(),
+            json!({"output_config": {"effort": "xhigh"}}),
+        );
+
+        let dropped = transform(with_xhigh.clone(), effort_without_adaptive, true);
+
+        assert_eq!(
+            dropped,
+            transform(with_xhigh, effort_without_adaptive, false)
+        );
+        assert_ne!(dropped, transform(adaptive, effort_without_adaptive, true));
+    }
+
+    #[rstest]
     #[case::temperature(
         sampling_removed(),
         json!({"temperature": 0.3}),
-        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::temperature_just_below_one(
         sampling_removed(),
         json!({"temperature": 0.99}),
-        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::whole_number_temperature_keeps_its_decimal(
         sampling_removed(),
         json!({"temperature": 2.0}),
-        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p(
         sampling_removed(),
         json!({"top_p": 0.9}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k(
         sampling_removed(),
         json!({"top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k_next_to_unit_temperature(
         sampling_removed(),
         json!({"temperature": 1.0, "top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::temperature_ahead_of_top_k(
         sampling_removed(),
         json!({"temperature": 0.5, "top_k": 5}),
-        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p_ahead_of_top_k(
         sampling_removed(),
         json!({"top_p": 0.9, "top_k": 5}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::speed(
         unmapped(),
         json!({"speed": "fast"}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::integer_temperature_keeps_no_decimal(
         sampling_removed(),
         json!({"temperature": 0}),
-        "claude does not support temperature=0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::integer_top_p(
         sampling_removed(),
         json!({"top_p": 1}),
-        "claude does not support top_p=1. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=1. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::non_string_speed_is_reprd(
         unmapped(),
         json!({"speed": 2}),
-        "claude does not support speed=2. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed=2. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::speed_ahead_of_sampling_params(
         sampling_removed(),
         json!({"speed": "fast", "temperature": 0.5}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     fn removed_params_are_rejected_without_drop_params(
         #[case] capabilities: MessagesModelCapabilities,
@@ -984,6 +1289,143 @@ mod tests {
             panic!("expected an invalid request");
         };
         assert_eq!(detail.to_string(), message);
+    }
+
+    const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+
+    fn versioned_body(
+        url: &str,
+        version: &[(&str, &str)],
+        fields: Value,
+        drop_params: bool,
+    ) -> Result<Value, Error> {
+        ANTHROPIC_MESSAGES_CONFIG
+            .request_body(request(fields), &headers(version), url, drop_params)
+            .map(|body| serde_json::to_value(body).unwrap())
+    }
+
+    #[rstest]
+    #[case::unit_temperature(&[("anthropic-version", "2026-10-21")], json!({"temperature": 1.0}), json!({}))]
+    #[case::any_header_case(&[("Anthropic-Version", "2026-10-21")], json!({"top_p": 0.9}), json!({}))]
+    #[case::padded_header(&[("anthropic-version", " 2026-10-21 ")], json!({"top_k": 40}), json!({}))]
+    #[case::every_sampling_param_keeping_the_rest(
+        &[("anthropic-version", "2026-10-21")],
+        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40, "stream": true}),
+        json!({"stream": true})
+    )]
+    #[case::later_dated_version(&[("anthropic-version", "2027-01-01")], json!({"top_k": 40}), json!({}))]
+    fn sampling_params_are_dropped_under_an_api_version_that_removed_them(
+        #[case] version: &[(&str, &str)],
+        #[case] fields: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            versioned_body(ANTHROPIC_URL, version, fields, true),
+            Ok(body(expected))
+        );
+    }
+
+    #[rstest]
+    #[case::sdk_1(&[("anthropic-version", "2023-06-01")])]
+    #[case::default_version(&[])]
+    #[case::day_before(&[("anthropic-version", "2026-10-20")])]
+    #[case::undated(&[("anthropic-version", "latest")])]
+    fn sampling_params_reach_an_api_version_that_has_them(
+        #[case] version: &[(&str, &str)],
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            versioned_body(ANTHROPIC_URL, version, fields.clone(), drop_params),
+            Ok(body(fields))
+        );
+    }
+
+    #[rstest]
+    #[case::unit_temperature(
+        "2026-10-21",
+        json!({"temperature": 1.0}),
+        "claude does not support temperature=1.0. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )]
+    #[case::top_k(
+        "2026-10-21",
+        json!({"top_k": 40}),
+        "claude does not support top_k=40. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )]
+    #[case::top_p_ahead_of_top_k(
+        "2026-10-21",
+        json!({"top_p": 0.9, "top_k": 40}),
+        "claude does not support top_p=0.9. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )]
+    #[case::later_dated_version(
+        "2027-01-01",
+        json!({"temperature": 0.3}),
+        "claude does not support temperature=0.3. anthropic-version 2027-01-01 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )]
+    fn sampling_params_are_rejected_under_an_api_version_that_removed_them(
+        #[case] version: &str,
+        #[case] fields: Value,
+        #[case] message: &str,
+    ) {
+        let Error::InvalidRequest(detail) = versioned_body(
+            ANTHROPIC_URL,
+            &[("anthropic-version", version)],
+            fields,
+            false,
+        )
+        .unwrap_err() else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(detail.to_string(), message);
+    }
+
+    #[rstest]
+    fn a_request_without_sampling_params_passes_an_api_version_that_removed_them() {
+        assert_eq!(
+            versioned_body(
+                ANTHROPIC_URL,
+                &[("anthropic-version", "2026-10-21")],
+                json!({}),
+                false
+            ),
+            Ok(body(json!({})))
+        );
+    }
+
+    #[rstest]
+    #[case::deepseek("https://api.deepseek.com/anthropic/v1/messages")]
+    #[case::minimax("https://api.minimax.io/anthropic/v1/messages")]
+    #[case::anthropic_lookalike("https://api.anthropic.com.example/v1/messages")]
+    fn sampling_params_reach_a_third_party_anthropic_api_under_2026_10_21(
+        #[case] url: &str,
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            versioned_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                fields.clone(),
+                drop_params
+            ),
+            Ok(body(fields))
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic(ANTHROPIC_URL)]
+    #[case::anthropic_host_in_any_case("https://API.Anthropic.com/v1/messages")]
+    #[case::foundry(FOUNDRY)]
+    fn anthropic_and_foundry_hosts_drop_sampling_params_under_2026_10_21(#[case] url: &str) {
+        assert_eq!(
+            versioned_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40}),
+                true
+            ),
+            Ok(body(json!({})))
+        );
     }
 
     #[rstest]
@@ -1114,6 +1556,66 @@ mod tests {
         );
     }
 
+    fn web_search_use() -> Value {
+        json!({"type": "server_tool_use", "id": "srvtoolu_ws", "name": "web_search", "input": {"query": "pools"}})
+    }
+
+    #[rstest]
+    #[case::list_id_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}])
+    )]
+    #[case::list_id_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    #[case::unmatched_result_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}])
+    )]
+    #[case::unmatched_result_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
+        #[case] unpaired: Value,
+        #[case] drops_unsupported_params: bool,
+        #[case] kept: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
+        };
+        let content = [
+            vec![json!({"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}})],
+            unpaired.as_array().unwrap().clone(),
+            vec![web_search_use(), json!({"type": "text", "text": "Done."})],
+        ]
+        .concat();
+        let history = json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": content}
+        ]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request(json!({"messages": history})), &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed).unwrap()["messages"][1]["content"],
+            json!(
+                [
+                    kept.as_array().unwrap().clone(),
+                    vec![web_search_use(), json!({"type": "text", "text": "Done."})]
+                ]
+                .concat()
+            )
+        );
+    }
+
     #[rstest]
     #[case::continue_turn(json!({"type": "continue", "previous_message_id": "msg_1"}), false)]
     #[case::continue_without_a_previous_message_id(json!({"type": "continue"}), false)]
@@ -1169,6 +1671,74 @@ mod tests {
         );
     }
 
+    fn tool_turn(opening: Option<Value>) -> Value {
+        let pending: Vec<Value> = opening
+            .into_iter()
+            .chain([json!({"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}})])
+            .collect();
+        json!([
+            {"role": "user", "content": "List the files."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Draft."}
+            ]},
+            {"role": "user", "content": "Now list them."},
+            {"role": "assistant", "content": pending},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]}
+        ])
+    }
+
+    #[rstest]
+    #[case::empty(json!({"type": "thinking", "thinking": "open model plan", "signature": ""}))]
+    #[case::null(json!({"type": "thinking", "thinking": "open model plan", "signature": null}))]
+    #[case::missing(json!({"type": "thinking", "thinking": "open model plan"}))]
+    fn unsigned_thinking_never_reaches_claude_even_on_the_pending_tool_turn(
+        #[case] unsigned: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform(
+                json!({"messages": tool_turn(Some(unsigned))}),
+                unmapped,
+                false
+            ),
+            Ok(body(json!({"messages": tool_turn(None)})))
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
+    fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
+        let messages = tool_turn(Some(
+            json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        ));
+        assert_eq!(
+            transform(
+                json!({"model": "deepseek-v4-pro", "messages": messages.clone()}),
+                unmapped,
+                false
+            ),
+            Ok(body(
+                json!({"model": "deepseek-v4-pro", "messages": messages})
+            ))
+        );
+    }
+
     #[test]
     fn thinking_is_translated_with_the_context_budgets() {
         let context = MessagesTransformContext::with_lookup(
@@ -1208,9 +1778,13 @@ mod tests {
                         },
                         drop_params: true,
                         keeps_display_updates: false,
+                        warns_dropped_disabled_thinking: false,
                     },
                     drop_params: true,
                     drops_unsupported_params: false,
+                    global_drop_params: false,
+                    claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;
@@ -1367,12 +1941,26 @@ mod tests {
         &[],
         Some(("Authorization", "env-token")),
     )]
-    #[case::oauth_env_key_as_a_bearer(
-        &[],
+    #[case::oauth_env_key_as_a_bearer_with_the_oauth_beta(
+        &[("anthropic-beta", "web-search-2025-03-05")],
         None,
         &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")],
-        &[],
+        &[("anthropic-beta", "oauth-2025-04-20,web-search-2025-03-05")],
         Some(("Authorization", "sk-ant-oat01-env")),
+    )]
+    #[case::padded_oauth_api_key_as_a_bearer_with_the_oauth_beta(
+        &[],
+        Some(" sk-ant-oat01-param "),
+        &[],
+        &[("anthropic-beta", OAUTH_BETA)],
+        Some(("Authorization", "sk-ant-oat01-param")),
+    )]
+    #[case::bearer_prefixed_oauth_env_key_without_the_oauth_beta(
+        &[],
+        None,
+        &[("ANTHROPIC_API_KEY", OAUTH_BEARER)],
+        &[],
+        Some(("Authorization", OAUTH_TOKEN)),
     )]
     fn validate_environment_shapes_the_headers_and_names_the_credential(
         #[case] forwarded: &[(&str, &str)],
@@ -1409,6 +1997,8 @@ mod tests {
     #[case::no_features(json!({}), &[])]
     #[case::output_format(json!({"output_format": {"type": "json_schema"}}), &["structured-outputs-2025-11-13"])]
     #[case::null_output_format(json!({"output_format": null}), &[])]
+    #[case::null_output_config_format(json!({"output_config": {"format": null}}), &[])]
+    #[case::null_context_management_edits(json!({"context_management": {"edits": null}}), &[])]
     #[case::output_config_format(
         json!({"output_config": {"format": {"type": "json_schema"}, "effort": "xhigh"}}),
         &["structured-outputs-2025-11-13"]
@@ -1472,6 +2062,43 @@ mod tests {
     #[case::per_message_null_output_config(
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
+    )]
+    #[case::contentless_system_output_config(
+        json!({"messages": [
+            {"role": "", "content": "Hello"},
+            {"role": "system", "output_config": {"effort": "high"}},
+        ]}),
+        &["per-turn-control-2026-07-01"]
+    )]
+    #[case::unparsed_message_output_config(
+        json!({"messages": [{"role": "user", "content": 5, "output_config": {"effort": "low"}}]}),
+        &["per-turn-control-2026-07-01"]
+    )]
+    #[case::unparsed_signed_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": "sig"}]},
+            {"role": "user", "content": "Continue"},
+        ]}),
+        &["compact-2026-09-04"]
+    )]
+    #[case::unparsed_unsigned_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": ""}]},
+        ]}),
+        &[]
+    )]
+    #[case::unparsed_system_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": "Use the ping tool"},
+            {"role": "system", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::unparsed_user_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &[]
     )]
     #[case::safeguards(
         json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
@@ -1563,6 +2190,35 @@ mod tests {
     )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::contentless_system_output_config(json!({"messages": [
+        {"role": "", "content": "Hello"},
+        {"role": "system", "output_config": {"effort": "high"}},
+    ]}))]
+    #[case::unparsed_message_output_config(
+        json!({"messages": [{"role": "user", "content": 5, "output_config": {"effort": "low"}}]})
+    )]
+    #[case::unparsed_signed_compaction_block_in_history(json!({"messages": [
+        {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": "sig"}]},
+        {"role": "user", "content": "Continue"},
+    ]}))]
+    #[case::unparsed_system_tool_addition(json!({"messages": [
+        {"role": "user", "content": "Use the ping tool"},
+        {"role": "system", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+    ]}))]
+    fn a_beta_trigger_in_an_unparsed_message_counts_on_every_provider(#[case] fields: Value) {
+        let request = request(fields);
+        assert_ne!(feature_betas(&request), BetaSet::default());
+        assert_eq!(
+            existing_betas(&update_headers_with_anthropic_beta(Vec::new(), &request)),
+            feature_betas(&request)
+        );
+        assert_eq!(
+            provider_feature_betas(&request, BetaProvider::Anthropic),
+            feature_betas(&request)
+        );
     }
 
     #[rstest]

@@ -1,16 +1,18 @@
 use std::{
     collections::HashSet,
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 use futures_util::future::{BoxFuture, join_all};
 use litellm_redis_client::{CallTag, Declared, RedisBatch, RedisClient, current_tag, tagged};
+use parking_lot::Mutex;
 use tokio::{runtime::Handle, sync::oneshot, task::JoinHandle};
 use tracing::{Dispatch, Instrument, instrument::WithSubscriber};
-
-use crate::memory::lock;
 
 /// One request's Redis batches: a pre-call batch for the reads it needs before answering and a
 /// post-call batch for the writes nobody waits on, one of each per Redis client. The host that owns
@@ -22,10 +24,49 @@ struct Shared {
     runtime: Handle,
     logs: Dispatch,
     post_call_deadline: Duration,
-    deadline_tag: Option<CallTag>,
+    deadline_tag: DeadlineTag,
     batches: Mutex<Vec<ClientBatches>>,
     follow_ups: Mutex<Vec<JoinHandle<()>>>,
     deadline: Mutex<Option<oneshot::Sender<()>>>,
+    flushing_post: tokio::sync::Mutex<()>,
+    drain: PostCallDrain,
+    tracked: Mutex<Vec<Arc<AtomicBool>>>,
+}
+
+/// The requests whose post-call batch holds ops not sent yet, so a shutdown sends them before Redis
+/// goes away. A request joins when a post-call declaration arms its deadline and leaves once a
+/// flush has its post-call writes back with nothing declared since.
+#[derive(Clone, Default)]
+pub struct PostCallDrain(Arc<Mutex<Vec<Weak<Shared>>>>);
+
+impl PostCallDrain {
+    pub async fn drain(&self) {
+        let open: Vec<RequestRedis> = self
+            .0
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(RequestRedis)
+            .collect();
+        join_all(open.iter().map(RequestRedis::flush_post)).await;
+    }
+
+    fn open(&self, request: &Arc<Shared>) {
+        let mut open = self.0.lock();
+        open.retain(|held| held.strong_count() != 0);
+        if !open
+            .iter()
+            .any(|held| std::ptr::eq(held.as_ptr(), Arc::as_ptr(request)))
+        {
+            open.push(Arc::downgrade(request));
+        }
+    }
+
+    fn close(&self, request: &Arc<Shared>) {
+        self.0
+            .lock()
+            .retain(|open| !std::ptr::eq(open.as_ptr(), Arc::as_ptr(request)));
+    }
 }
 
 #[derive(Clone)]
@@ -43,15 +84,15 @@ pub(crate) struct Misses(Arc<Mutex<HashSet<String>>>);
 
 impl Misses {
     pub(crate) fn contains(&self, key: &str) -> bool {
-        lock(&self.0).contains(key)
+        self.0.lock().contains(key)
     }
 
     pub(crate) fn note(&self, keys: impl IntoIterator<Item = String>) {
-        lock(&self.0).extend(keys);
+        self.0.lock().extend(keys);
     }
 
     pub(crate) fn forget(&self, key: &str) {
-        lock(&self.0).remove(key);
+        self.0.lock().remove(key);
     }
 }
 
@@ -60,15 +101,23 @@ impl RequestRedis {
     /// Python one that has no Tokio context. Work spawned for the request logs to the subscriber
     /// current here, since a declaring thread may have none.
     pub fn new(runtime: Handle, post_call_deadline: Duration) -> Self {
-        Self::with_deadline_tag(runtime, post_call_deadline, None)
+        Self::hosted(
+            runtime,
+            post_call_deadline,
+            Arc::new(|| None),
+            PostCallDrain::default(),
+        )
     }
 
-    /// As `new`, with the deadline's flush of the post-call batch run inside `tagged(deadline_tag)`,
-    /// the scope an explicit `flush_post` runs in.
-    pub fn with_deadline_tag(
+    /// As `new`, for the host that owns the request: the deadline's flush of the post-call batch
+    /// runs inside the tag `deadline_tag` gives for the declaration that armed it, as an explicit
+    /// `flush_post` runs inside its caller's, and `drain` sends the batch at shutdown if nothing
+    /// else has.
+    pub fn hosted(
         runtime: Handle,
         post_call_deadline: Duration,
-        deadline_tag: Option<CallTag>,
+        deadline_tag: DeadlineTag,
+        drain: PostCallDrain,
     ) -> Self {
         Self(Arc::new(Shared {
             runtime,
@@ -78,6 +127,9 @@ impl RequestRedis {
             batches: Mutex::new(Vec::new()),
             follow_ups: Mutex::new(Vec::new()),
             deadline: Mutex::new(None),
+            flushing_post: tokio::sync::Mutex::new(()),
+            drain,
+            tracked: Mutex::new(Vec::new()),
         }))
     }
 
@@ -100,11 +152,44 @@ impl RequestRedis {
     /// into memory, on the request's runtime, from any thread. `flush_post` waits for it, so the
     /// shutdown drain does not drop a fallback write still in flight.
     pub fn spawn(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
-        let follow_up = self
-            .0
-            .runtime
-            .spawn(self.logged(within(current_tag(), task)));
-        lock(&self.0.follow_ups).push(follow_up);
+        let follow_up = litellm_call_scope::spawn_in_call_on(
+            &self.0.runtime,
+            self.logged(within(current_tag(), task)),
+        );
+        self.0.follow_ups.lock().push(follow_up);
+    }
+
+    /// Runs `task` on the request's runtime without `flush_post` waiting for it, for work that
+    /// settles with the pre-call batch whoever awaits it.
+    pub(crate) fn detach(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
+        drop(litellm_call_scope::spawn_in_call_on(
+            &self.0.runtime,
+            self.logged(within(current_tag(), task)),
+        ));
+    }
+
+    /// `spawn` for the follow-up of post-call writes a later reader in this request waits on, such
+    /// as its own committed spend charge; see `tracked_writes_settled`.
+    pub(crate) fn spawn_tracked(
+        &self,
+        task: impl Future<Output = ()> + std::marker::Send + 'static,
+    ) {
+        let settled = Arc::new(AtomicBool::new(false));
+        self.0.tracked.lock().push(settled.clone());
+        self.spawn(async move {
+            task.await;
+            settled.store(true, Ordering::Release);
+        });
+    }
+
+    /// Whether every tracked follow-up has run to its end, whoever sent the batch; `false` while
+    /// none was tracked.
+    pub fn tracked_writes_settled(&self) -> bool {
+        let tracked = self.0.tracked.lock();
+        !tracked.is_empty()
+            && tracked
+                .iter()
+                .all(|settled| settled.load(Ordering::Acquire))
     }
 
     fn logged<F: Future>(&self, task: F) -> impl Future<Output = F::Output> + use<F> {
@@ -116,24 +201,31 @@ impl RequestRedis {
     }
 
     /// Sends every post-call op declared so far and waits for the follow-ups spawned on them; the
-    /// shutdown drain calls it too.
+    /// shutdown drain calls it too. One flush runs at a time and the request stays in the drain
+    /// until it is done, so a drain that overlaps a flush waits for its writes. An op declared
+    /// while it runs arms a new deadline and keeps the request in the drain.
     pub async fn flush_post(&self) {
-        lock(&self.0.deadline).take();
-        let follow_ups = std::mem::take(&mut *lock(&self.0.follow_ups));
+        let _flushing = self.0.flushing_post.lock().await;
+        self.0.deadline.lock().take();
+        let follow_ups = std::mem::take(&mut *self.0.follow_ups.lock());
         join_all(self.batches().iter().map(|batches| batches.post.flush())).await;
         join_all(follow_ups)
             .await
             .into_iter()
             .filter_map(Result::err)
             .for_each(|error| tracing::warn!(%error, "a post-call follow-up failed"));
+        let deadline = self.0.deadline.lock();
+        if deadline.is_none() {
+            self.0.drain.close(&self.0);
+        }
     }
 
     fn batches(&self) -> Vec<ClientBatches> {
-        lock(&self.0.batches).clone()
+        self.0.batches.lock().clone()
     }
 
     fn batches_for(&self, client: &RedisClient) -> ClientBatches {
-        let mut batches = lock(&self.0.batches);
+        let mut batches = self.0.batches.lock();
         if let Some(existing) = batches
             .iter()
             .find(|batches| batches.client.same_client(client))
@@ -151,15 +243,21 @@ impl RequestRedis {
     }
 
     fn arm_deadline(&self) {
-        let mut deadline = lock(&self.0.deadline);
+        if self.0.deadline.lock().is_some() {
+            return;
+        }
+        // Asked before taking the lock: the host may answer under its interpreter lock, which
+        // another declaring thread can hold while it waits for this one.
+        let tag = (self.0.deadline_tag)();
+        let mut deadline = self.0.deadline.lock();
         if deadline.is_some() {
             return;
         }
         let (disarm, disarmed) = oneshot::channel();
         *deadline = Some(disarm);
+        self.0.drain.open(&self.0);
         let request = self.clone();
-        let tag = self.0.deadline_tag.clone();
-        self.0.runtime.spawn(self.logged(async move {
+        litellm_call_scope::spawn_in_call_on(&self.0.runtime, self.logged(async move {
             tokio::select! {
                 () = tokio::time::sleep(request.0.post_call_deadline) => within(tag, request.flush_post()).await,
                 _ = disarmed => {}
@@ -167,6 +265,10 @@ impl RequestRedis {
         }));
     }
 }
+
+/// Names the scope a deadline flush runs in. It is asked when a post-call declaration arms the
+/// deadline, on the declaring thread, so it can describe that declaration's caller.
+pub type DeadlineTag = Arc<dyn Fn() -> Option<CallTag> + std::marker::Send + Sync>;
 
 async fn within<F: Future>(tag: Option<CallTag>, task: F) -> F::Output {
     match tag {
@@ -196,6 +298,14 @@ impl Send<'_> {
         }
     }
 
+    /// The request the op rides, `None` for one on its own.
+    pub(crate) fn request(&self) -> Option<&RequestRedis> {
+        match self {
+            Self::Now => None,
+            Self::PreCall(request) | Self::PostCall(request) => Some(request),
+        }
+    }
+
     /// The request's misses on `client`; `None` for an op outside a request.
     pub(crate) fn misses(&self, client: &RedisClient) -> Option<Misses> {
         match self {
@@ -216,4 +326,49 @@ pub(crate) fn pending<T: std::marker::Send + 'static>(declared: Declared<T>) -> 
 /// An op answered without Redis, from memory.
 pub(crate) fn ready<T: std::marker::Send + 'static>(value: T) -> Pending<T> {
     Box::pin(std::future::ready(Ok(value)))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_request_dropped_after_a_cancelled_flush_leaves_the_drain_when_the_next_one_joins() {
+        let drain = PostCallDrain::default();
+        let hosted = || {
+            RequestRedis::hosted(
+                Handle::current(),
+                Duration::from_secs(60),
+                Arc::new(|| None),
+                drain.clone(),
+            )
+        };
+        let cancelled = hosted();
+        cancelled.arm_deadline();
+        cancelled.spawn(std::future::pending());
+        let flush = tokio::spawn({
+            let request = cancelled.clone();
+            async move { request.flush_post().await }
+        });
+        tokio::task::yield_now().await;
+        flush.abort();
+        drop(flush.await);
+        let dropped = Arc::downgrade(&cancelled.0);
+        drop(cancelled);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while dropped.strong_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let next = hosted();
+        next.arm_deadline();
+
+        assert_eq!(drain.0.lock().len(), 1);
+    }
 }

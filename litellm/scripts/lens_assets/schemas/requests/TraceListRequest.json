@@ -1,33 +1,57 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceListRequest",
+  "type": "object",
   "properties": {
-    "cursor": {
-      "default": null,
-      "maxLength": 512,
+    "team_id": {
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "maxLength": 256,
+      "default": null
     },
-    "end_ms": {
-      "default": null,
-      "description": "Window end, unix ms. Default: now",
-      "format": "int64",
+    "api_key_hash": {
       "type": [
-        "integer",
+        "string",
         "null"
-      ]
+      ],
+      "maxLength": 256,
+      "default": null
     },
     "start_ms": {
-      "default": null,
       "description": "Window start, unix ms. Default: 24h ago",
-      "format": "int64",
       "type": [
         "integer",
         "null"
-      ]
+      ],
+      "format": "int64",
+      "default": null
+    },
+    "end_ms": {
+      "description": "Window end, unix ms. Default: now",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null
+    },
+    "agent": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 512,
+      "default": null
     }
-  },
-  "title": "TraceListRequest",
-  "type": "object"
+  }
 }

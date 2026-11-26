@@ -1,11 +1,24 @@
 import base64
+import copy
 import os
 import re
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Optional, TypeVar, Union, cast, get_type_hints, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    NoReturn,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -14,13 +27,16 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_object_list,
     as_str_mapping,
     attribute_or_none,
     decoded_json_object,
     iter_items,
+    json_contains,
+    require_attributes,
 )
-from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
     ANY_REASONING_FIELD_VALUES,
@@ -53,6 +69,9 @@ from litellm.types.utils import (
     text_tokens_without_nested_reasoning,
 )
 
+if TYPE_CHECKING:
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
@@ -76,9 +95,35 @@ class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
     pass
 
 
-def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
-    nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
-    return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
+class _LooksUpById(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+class _ParamItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
+def _special_params(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    return dict(require_attributes(value, _ParamItems, "items").items())
+
+
+def _names_nested_path(path: object) -> bool:
+    return json_contains(path, ".") or json_contains(path, "[")
+
+
+def _without_nested_path(params: dict[str, object], path: object) -> dict[str, object]:
+    return delete_nested_value(params, path) if isinstance(path, str) else copy.deepcopy(params)
+
+
+def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: object) -> dict[str, object]:
+    nested_paths: Final = tuple(path for path in iter_items(additional_drop_params or ()) if _names_nested_path(path))
+    return reduce(_without_nested_path, nested_paths, params)
 
 
 def _output_token_detail(details: object, field: str) -> int | None:
@@ -151,8 +196,8 @@ def _as_input_text_part(part: object) -> object:
     return part
 
 
-_RequestInputT: Final = TypeVar("_RequestInputT")
-_StreamEventT: Final = TypeVar("_StreamEventT", bound=BaseModel)
+_RequestInputT = TypeVar("_RequestInputT")
+_StreamEventT = TypeVar("_StreamEventT", bound=BaseModel)
 
 
 def _provider_mapped_params(
@@ -161,9 +206,19 @@ def _provider_mapped_params(
     model: str,
     drop_params: bool,
     declared_reasoning_efforts: Collection[str] | None,
+    allowed_openai_params: Collection[str],
 ) -> Mapping[str, object]:
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedResponsesParams
 
+    if isinstance(config, MapsAllowedResponsesParams):
+        return config.map_openai_params_for_deployment(
+            params,
+            model,
+            drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+            allowed_openai_params=allowed_openai_params,
+        )
     if (
         declared_reasoning_efforts is not None
         and isinstance(config, OpenAIResponsesAPIConfig)
@@ -289,7 +344,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _check_valid_arg(
         supported_params: list[str] | None,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         drop_params: bool | None,
         custom_llm_provider: str | None,
         model: str,
@@ -314,10 +369,10 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: list[str] | None = None,
+        allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
         declared_reasoning_efforts: Collection[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get optional parameters for the responses API.
 
@@ -340,7 +395,7 @@ class ResponsesAPIRequestUtils:
         non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
-            supported_params=supported_params + (allowed_openai_params or []),
+            supported_params=[*supported_params, *allowed_openai_param_names(allowed_openai_params)],
             non_default_params=non_default_params,
             drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
@@ -355,6 +410,7 @@ class ResponsesAPIRequestUtils:
                 model,
                 should_drop_params,
                 declared_reasoning_efforts,
+                allowed_openai_param_names(allowed_openai_params),
             ),
             strict=True,
         )
@@ -369,12 +425,12 @@ class ResponsesAPIRequestUtils:
         return apply_openai_param_overrides(
             optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
-            allowed_openai_params=allowed_openai_params or [],
+            allowed_openai_params=allowed_openai_params,
         )
 
     @staticmethod
     def get_requested_response_api_optional_param(
-        params: dict[str, Any],
+        params: dict[str, object],
     ) -> ResponsesAPIOptionalRequestParams:
         """
         Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
@@ -389,13 +445,13 @@ class ResponsesAPIRequestUtils:
 
         valid_keys: Final = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final[dict[str, object]] = params.pop("kwargs", {})
+        special_params: Final = params.pop("kwargs", {})
 
-        additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
+        additional_drop_params: Final = params.pop("additional_drop_params", None)
         non_default_params: Final = _apply_nested_drop_params(
             PreProcessNonDefaultParams.base_pre_process_non_default_params(
                 passed_params=params,
-                special_params=special_params,
+                special_params=_special_params(special_params),
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
                 default_param_values={k: None for k in valid_keys},
@@ -451,7 +507,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
-        litellm_metadata: Mapping[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
@@ -459,8 +515,8 @@ class ResponsesAPIRequestUtils:
         by some streaming providers.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
-        model_id: Final = model_info.get("id")
+        model_info: Final = litellm_metadata.get("model_info") or _NO_MODEL_INFO
+        model_id: Final = require_attributes(model_info, _LooksUpById, "get").get("id")
 
         # access the response id based on the object type
         if isinstance(responses_api_response, dict):
@@ -504,7 +560,7 @@ class ResponsesAPIRequestUtils:
     _update_responses_api_response_id_with_model_id = update_responses_api_response_id_with_model_id
 
     @staticmethod
-    def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
+    def _build_encrypted_item_id(model_id: object, item_id: str) -> str:
         """Encode model_id into an output item ID for encrypted-content items.
 
         Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
@@ -550,7 +606,7 @@ class ResponsesAPIRequestUtils:
         return model_id if isinstance(model_id, str) and model_id else None
 
     @staticmethod
-    def affinity_item_id(item_type: object, item_id: object, encrypted_content: object, model_id: str) -> str | None:
+    def affinity_item_id(item_type: object, item_id: object, encrypted_content: object, model_id: object) -> str | None:
         """The ``encitem_`` id an output item carries under encrypted-content affinity, or ``None`` to keep its id.
 
         Reasoning and compaction items qualify by type, so a stream encodes them before their
@@ -578,7 +634,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _affinity_item_updates(
-        item_type: object, item_id: object, encrypted_content: object, model_id: str
+        item_type: object, item_id: object, encrypted_content: object, model_id: object
     ) -> Mapping[str, str]:
         encoded_id: Final = ResponsesAPIRequestUtils.affinity_item_id(item_type, item_id, encrypted_content, model_id)
         wrapped: Final = (
@@ -631,7 +687,7 @@ class ResponsesAPIRequestUtils:
         return None if encoded_item_id is None else {**event, "item_id": encoded_item_id}
 
     @staticmethod
-    def wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: str) -> str:
+    def wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: object) -> str:
         """Wrap encrypted_content with model_id metadata for affinity routing.
 
         When Codex or other clients send items with encrypted_content but no ID,
@@ -683,7 +739,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _update_encrypted_content_item_ids_in_response(
         response: Union["ResponsesAPIResponse", dict[str, object]],
-        model_id: str | None,
+        model_id: object,
     ) -> Union["ResponsesAPIResponse", dict[str, object]]:
         """Rewrite item IDs for reasoning, compaction and other output items that contain ``encrypted_content``.
 
@@ -822,7 +878,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _build_responses_api_response_id(
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
         response_id: str,
     ) -> str:
         """Build the responses_api_response_id"""
@@ -932,7 +988,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def build_container_id(
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
         container_id: str,
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
@@ -1024,7 +1080,7 @@ class ResponsesAPIRequestUtils:
     def encode_container_ids_in_annotations(
         annotations: object,
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
     ) -> None:
         """Encode ``container_id`` on each annotation (e.g. ``container_file_citation``)."""
         if not annotations or not _is_object_sequence(annotations):
@@ -1042,7 +1098,7 @@ class ResponsesAPIRequestUtils:
     def _encode_container_ids_in_message_content(
         content: object,
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
     ) -> None:
         """Walk message ``content`` parts and encode citation ``container_id`` values."""
         if not content:
@@ -1066,7 +1122,7 @@ class ResponsesAPIRequestUtils:
     def encode_container_id_on_output_item(
         item: object,
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
     ) -> None:
         """Mutate one output item (dict or object): wrap raw ``container_id`` as LiteLLM-managed.
 
@@ -1231,7 +1287,7 @@ class ResponsesAPIRequestUtils:
     def _update_container_ids_in_response(
         responses_api_response: ResponsesAPIResponse | dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: Mapping[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
@@ -1239,8 +1295,8 @@ class ResponsesAPIRequestUtils:
         so that follow-up container API calls can auto-route to the correct provider.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
-        model_id: Final = model_info.get("id")
+        model_info: Final = litellm_metadata.get("model_info") or _NO_MODEL_INFO
+        model_id: Final = require_attributes(model_info, _LooksUpById, "get").get("id")
 
         # Get the output list
         output: Final = (
@@ -1296,9 +1352,21 @@ class ResponsesAPIRequestUtils:
         return text
 
     @staticmethod
+    def mcp_raw_headers(
+        secret_fields: Mapping[str, Any] | None, mcp_auth: "UserAPIKeyAuth | None"
+    ) -> dict[str, str] | None:  # mutable-ok: callers merge per-tool headers into the returned headers
+        from litellm.proxy.mcp_server.mcp_server_manager import without_admission_authorization
+
+        raw_headers: Final[Mapping[str, str] | None] = (
+            secret_fields.get("raw_headers") if secret_fields and isinstance(secret_fields, Mapping) else None
+        )
+        return dict(without_admission_authorization(raw_headers, mcp_auth)) if raw_headers else None
+
+    @staticmethod
     def extract_mcp_headers_from_request(
         secret_fields: dict[str, Any] | None,
         tools: Iterable[object] | None,
+        mcp_auth: "UserAPIKeyAuth | None" = None,
     ) -> tuple[
         str | None,
         dict[str, dict[str, str]] | None,
@@ -1316,9 +1384,9 @@ class ResponsesAPIRequestUtils:
         )
 
         # Extract headers from secret_fields which contains the original request headers
-        raw_headers_from_request: dict[str, str] | None = None
-        if secret_fields and isinstance(secret_fields, dict):
-            raw_headers_from_request = secret_fields.get("raw_headers")
+        raw_headers_from_request: dict[str, str] | None = ResponsesAPIRequestUtils.mcp_raw_headers(
+            secret_fields, mcp_auth
+        )
 
         # Extract MCP-specific headers using MCPRequestHandler methods
         mcp_auth_header: str | None = None
@@ -1370,6 +1438,33 @@ class ResponsesAPIRequestUtils:
             oauth2_headers,
             raw_headers_from_request,
         )
+
+
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
+
+
+_RESPONSES_API_ID_PREFIX: Final = "resp_"
+
+
+def held_by_a_provider(response_id: str) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    original: Final = decoded.get("response_id", response_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    return original.startswith(_RESPONSES_API_ID_PREFIX) or (
+        provider is not None
+        and not original.startswith(_CHAT_COMPLETION_ID_PREFIX)
+        and ProviderConfigManager.get_provider_responses_api_config(provider=provider) is not None
+    )
 
 
 class ResponseAPILoggingUtils:
@@ -1440,6 +1535,7 @@ class ResponseAPILoggingUtils:
             reasoning_tokens: Final = _output_token_detail(output_tokens_details, "reasoning_tokens")
             image_tokens: Final = _output_token_detail(output_tokens_details, "image_tokens")
             audio_tokens: Final = _output_token_detail(output_tokens_details, "audio_tokens")
+            video_tokens: Final = _output_token_detail(output_tokens_details, "video_tokens")
             reported_text_tokens: Final = _output_token_detail(output_tokens_details, "text_tokens")
             completion_tokens_details = CompletionTokensDetailsWrapper(
                 reasoning_tokens=reasoning_tokens,
@@ -1450,9 +1546,10 @@ class ResponseAPILoggingUtils:
                     completion_tokens=completion_tokens,
                     text_tokens=reported_text_tokens,
                     reasoning_tokens=reasoning_tokens or 0,
-                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0),
+                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0) + (video_tokens or 0),
                 ),
                 audio_tokens=audio_tokens,
+                video_tokens=video_tokens,
             )
 
         extra_usage_fields: Final = _UsageExtraFields(
@@ -1689,6 +1786,7 @@ def bridge_reasoning(
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
     additional_drop_params: object,
+    collapses_to_effort: bool = False,
 ) -> Mapping[str, object] | RefusedReasoningFields | None:
     from litellm.utils import ProviderConfigManager
 
@@ -1715,11 +1813,39 @@ def bridge_reasoning(
         for key, value in sent.items()
         if key in _REFUSABLE_REASONING_FIELDS and key not in accepted and value is not None
     )
-    if (
-        refused
-        and not drop_params
-        and responses_config is not None
-        and responses_config.ignores_unsupported_reasoning_fields()
-    ):
+    backend_stays_silent: Final = collapses_to_effort or (
+        responses_config is not None and responses_config.ignores_unsupported_reasoning_fields()
+    )
+    if refused and not drop_params and backend_stays_silent:
         return RefusedReasoningFields(refused)
     return (accepted if drop_params else sent) or None
+
+
+def chat_reasoning_effort(
+    *,
+    requested: Mapping[str, object],
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> str | RefusedReasoningFields | None:
+    checked: Final = bridge_reasoning(
+        requested=requested,
+        effort_kept=True,
+        summary_alias=None,
+        model=model,
+        base_model=base_model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
+        collapses_to_effort=True,
+    )
+    if isinstance(checked, RefusedReasoningFields):
+        return checked
+    effort: Final = None if checked is None else checked.get("effort")
+    return effort if isinstance(effort, str) else None

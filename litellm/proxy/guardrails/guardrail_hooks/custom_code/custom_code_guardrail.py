@@ -174,7 +174,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         self._compile_custom_code()
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel] | None:
+    def get_config_model() -> type[CustomCodeGuardrailConfigModel] | None:
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
 
@@ -233,6 +233,9 @@ class CustomCodeGuardrail(CustomGuardrail):
             except Exception as e:
                 self._compile_error = f"Failed to compile custom code: {e}"
                 raise CustomCodeCompilationError(self._compile_error) from e
+
+    def scans_each_text_separately(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(

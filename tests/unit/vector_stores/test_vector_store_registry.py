@@ -601,3 +601,111 @@ def test_vector_store_ids_to_run_merge_the_param_and_tools_once_per_request():
     )
     second: Final = registry.get_vector_store_ids_to_run({}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}])
     assert (first, second) == (["vs-a", "vs-b"], ["vs-c"])
+
+
+def test_fallback_config_resolves_forward_references_without_duplicating_indexes() -> None:
+    registry: Final = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "primary",
+                "litellm_params": {
+                    "vector_store_id": "documents",
+                    "custom_llm_provider": "azure_ai",
+                    "fallbacks": ["secondary"],
+                },
+            },
+            {
+                "vector_store_name": "secondary",
+                "litellm_params": {"vector_store_id": "secondary", "custom_llm_provider": "azure_ai"},
+            },
+        ]
+    )
+    assert tuple(store["vector_store_id"] for store in registry.vector_stores) == ("documents", "secondary")
+    assert registry.get_litellm_managed_vector_store_from_registry("documents")["litellm_params"]["fallbacks"] == [
+        "secondary"
+    ]
+
+
+@pytest.mark.parametrize("fallbacks", [["missing"], ["documents"], ["secondary", "secondary"], "secondary", [1], None])
+def test_invalid_fallback_config_keeps_previous_registry(fallbacks: object) -> None:
+    registry: Final = VectorStoreRegistry(
+        [LiteLLM_ManagedVectorStore(vector_store_id="previous", custom_llm_provider="openai")]
+    )
+    with pytest.raises(ValueError, match=r"fallback|fall back|validation error"):
+        registry.load_vector_stores_from_config(
+            [
+                {
+                    "vector_store_name": "primary",
+                    "litellm_params": {
+                        "vector_store_id": "documents",
+                        "custom_llm_provider": "azure_ai",
+                        "fallbacks": fallbacks,
+                    },
+                },
+                {
+                    "vector_store_name": "secondary",
+                    "litellm_params": {"vector_store_id": "secondary", "custom_llm_provider": "azure_ai"},
+                },
+            ]
+        )
+    assert registry.vector_stores == [
+        LiteLLM_ManagedVectorStore(vector_store_id="previous", custom_llm_provider="openai")
+    ]
+
+
+def test_nested_fallback_config_is_rejected() -> None:
+    registry: Final = VectorStoreRegistry()
+    with pytest.raises(ValueError, match="Nested"):
+        registry.load_vector_stores_from_config(
+            [
+                {
+                    "vector_store_name": store_id,
+                    "litellm_params": {
+                        "vector_store_id": store_id,
+                        "custom_llm_provider": "openai",
+                        "fallbacks": fallbacks,
+                    },
+                }
+                for store_id, fallbacks in (("first", ["second"]), ("second", ["third"]), ("third", []))
+            ]
+        )
+    assert registry.vector_stores == []
+
+
+@pytest.mark.parametrize("provider", ["unknown-vector-provider", "anthropic"])
+def test_fallback_provider_without_search_rejects_config_atomically(provider: str):
+    registry: Final = VectorStoreRegistry()
+    with pytest.raises(ValueError, match="provider"):
+        registry.load_vector_stores_from_config(
+            [
+                {
+                    "litellm_params": {
+                        "vector_store_id": "primary",
+                        "custom_llm_provider": "openai",
+                        "fallbacks": ["backup"],
+                    }
+                },
+                {"litellm_params": {"vector_store_id": "backup", "custom_llm_provider": provider}},
+            ]
+        )
+    assert registry.vector_stores == []
+
+
+def test_yaml_fallback_cannot_reference_a_database_store() -> None:
+    registry: Final = VectorStoreRegistry(
+        [LiteLLM_ManagedVectorStore(vector_store_id="db-backup", custom_llm_provider="openai")]
+    )
+    with pytest.raises(ValueError, match="exactly one registered store"):
+        registry.load_vector_stores_from_config(
+            [
+                {
+                    "litellm_params": {
+                        "vector_store_id": "primary",
+                        "custom_llm_provider": "openai",
+                        "fallbacks": ["db-backup"],
+                    }
+                }
+            ]
+        )
+    assert [store["vector_store_id"] for store in registry.vector_stores] == ["db-backup"]

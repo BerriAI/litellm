@@ -3,8 +3,7 @@ mod support;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use litellm_circuit_breaker::{Breaker, Config};
-use litellm_redis_client::commands;
+use litellm_circuit_breaker::{Breaker, Config, Failure, State};
 use litellm_redis_client::{
     Credentials, DEFAULT_TIMEOUT, Error, Namespace, Node, RedisClient, RedisConfig, Sentinel,
     Target, Timeouts,
@@ -36,10 +35,7 @@ async fn delivered(
     payload: &[u8],
 ) {
     eventually(async || {
-        publisher
-            .send(commands::publish(channel, payload))
-            .await
-            .ok()?;
+        publisher.publish(channel, &[payload.to_vec()]).await.ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
         while let Ok(Some(message)) = tokio::time::timeout_at(deadline, received.recv()).await {
             if message == payload {
@@ -115,7 +111,7 @@ async fn a_sentinel_subscriber_receives_from_the_master() {
     delivered(&client, CHANNEL, &mut received, b"payload").await;
 }
 
-async fn publish_calls(server: &RedisDeployment) -> Vec<String> {
+async fn publishes_received(server: &RedisDeployment) -> u64 {
     let replies = match server {
         RedisDeployment::Standalone(server) => {
             vec![server.cli(&["INFO", "commandstats"]).await.unwrap()]
@@ -128,14 +124,16 @@ async fn publish_calls(server: &RedisDeployment) -> Vec<String> {
     replies
         .iter()
         .flat_map(|reply| reply.lines())
-        .filter(|line| line.starts_with("cmdstat_publish:"))
-        .map(str::to_owned)
-        .collect()
+        .filter_map(|line| line.trim().strip_prefix("cmdstat_publish:calls="))
+        .filter_map(|rest| rest.split(',').next()?.parse::<u64>().ok())
+        .sum()
 }
 
+// main published through redis-py's pub/sub client, which the breaker does not wrap, so an
+// invalidation went out the moment Redis was back instead of waiting out the recovery timeout
 #[rstest]
 #[tokio::test]
-async fn an_open_breaker_rejects_a_publish_without_sending_it(
+async fn an_open_breaker_neither_refuses_nor_counts_a_publish(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
     let server = RedisDeployment::start(topology).await.unwrap();
@@ -147,24 +145,54 @@ async fn an_open_breaker_rejects_a_publish_without_sending_it(
         },
         Box::new(|_| {}),
     );
-    let client = connect_guarded(&server, "", Duration::from_millis(300), Some(breaker));
+    let client = connect_guarded(
+        &server,
+        "",
+        Duration::from_millis(300),
+        Some(breaker.clone()),
+    );
+    breaker.failed(Failure::Hard, Instant::now());
+    breaker.failed(Failure::Hard, Instant::now());
 
-    server.freeze().await.unwrap();
-    let opened = [client.ping().await, client.ping().await];
-    let started = Instant::now();
-    let rejected = client.send(commands::publish(CHANNEL, b"payload")).await;
-    let rejected_in = started.elapsed();
-    server.thaw().await.unwrap();
+    let alone = client.publish(CHANNEL, &[b"payload".to_vec()]).await;
+    let pipelined = client
+        .publish(CHANNEL, &[b"first".to_vec(), b"second".to_vec()])
+        .await;
+    let gated = client.ping().await;
+
+    assert!(alone.is_ok(), "{alone:?}");
+    assert!(pipelined.is_ok(), "{pipelined:?}");
+    assert!(matches!(gated, Err(Error::BreakerOpen)), "{gated:?}");
+    assert!(
+        matches!(breaker.state(), State::Open { .. }),
+        "{:?}",
+        breaker.state()
+    );
+    assert_eq!(publishes_received(&server).await, 3);
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_first_publish_after_redis_is_back_is_sent() {
+    let server = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let client = connect(&server, "", Duration::from_millis(500));
+    client
+        .publish(CHANNEL, &[b"before".to_vec()])
+        .await
+        .unwrap();
+    server.stop().await.unwrap();
+    let while_down = client.publish(CHANNEL, &[b"lost".to_vec()]).await;
+    server.resume().await.unwrap();
+    eventually(async || server.cli_on_every_node(&["PING"]).await.ok()).await;
+
+    let once_back = client.publish(CHANNEL, &[b"after".to_vec()]).await;
 
     assert!(
-        opened
-            .iter()
-            .all(|ping| matches!(ping, Err(Error::Transport(_)))),
-        "{opened:?}"
+        matches!(while_down, Err(Error::Transport(_))),
+        "{while_down:?}"
     );
-    assert!(matches!(rejected, Err(Error::BreakerOpen)), "{rejected:?}");
-    assert!(rejected_in < Duration::from_millis(50), "{rejected_in:?}");
-    assert_eq!(publish_calls(&server).await, Vec::<String>::new());
+    assert!(once_back.is_ok(), "{once_back:?}");
+    assert_eq!(publishes_received(&server).await, 1);
 }
 
 // redis-py's PubSub subscribes on a RESP2 connection, so it never sends HELLO

@@ -19,6 +19,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
@@ -47,6 +48,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
@@ -54,6 +56,7 @@ from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.litellm_pre_call_utils import (
     forwarded_anthropic_oauth_token,
+    request_routing_metadata,
     should_auto_drop_params_for_agentic_cli,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -69,7 +72,7 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return anthropic_handler_error_json_response(exc, request)
 
 
-_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
+_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "tool_choice", "system")
 
 
 def _token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ProxyException:
@@ -288,6 +291,7 @@ async def anthropic_response(
                 param=openai_error_param(answered),
                 code=error_status_code(answered, 500),
                 headers=headers,
+                provider_specific_fields=relayed_provider_specific_fields(answered),
             ),
             request,
         )
@@ -301,13 +305,22 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = (
+    "additional_drop_params",
+    "drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
 
 
 class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
     request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+    count_options: ReadOnly[Mapping[str, JsonValue]]
 
 
 def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
@@ -318,10 +331,17 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
         "request_litellm_params": MappingProxyType(
             {"drop_params": True, **sent_params} if auto_drop_params else sent_params
         ),
+        "count_options": MappingProxyType(
+            without_dropped_paths(
+                {name: data[name] for name in COUNT_TOKEN_OPTION_NAMES if name in data},
+                data.get("additional_drop_params"),
+            )
+        ),
     }
 
 
 _PROVIDER_COUNT_REPLY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_COUNT_REQUEST_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _provider_context_management(response: TokenCountResponse) -> Mapping[str, object]:
@@ -410,6 +430,10 @@ async def _count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(
+                request, _COUNT_REQUEST_FIELDS.validate_python(data), user_api_key_dict
+            ),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:

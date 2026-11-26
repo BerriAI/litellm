@@ -218,6 +218,20 @@ const eslintConfig = [
   },
   {
     files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/components/CreateUserButton.tsx"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "crypto",
+          property: "randomUUID",
+          message: "Use v4 from uuid (uuidv4) instead so IDs work on plain HTTP.",
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/**/*.test.{ts,tsx}", "src/**/*.spec.{ts,tsx}", "src/data/**"],
     rules: {
       "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],
@@ -293,6 +307,19 @@ const eslintConfig = [
       "jest-dom/prefer-to-have-style": "error",
       "jest-dom/prefer-to-have-text-content": "error",
     },
+  },
+  {
+    files: ["src/components/ui/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: { "local/no-large-inline-object-arg": "off" },
+  },
+  {
+    files: ["src/components/ui/sidebar.tsx"],
+    rules: { "local/no-ad-hoc-z-index": "off" },
+  },
+  {
+    files: ["src/hooks/use-mobile.ts"],
+    rules: { "react-hooks/set-state-in-effect": "off" },
   },
 ];
 

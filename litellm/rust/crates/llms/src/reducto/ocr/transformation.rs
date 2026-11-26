@@ -73,7 +73,7 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_python_compat::pydantic::LaxI64>")]
     pub num_pages: Option<i64>,
     #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
@@ -268,8 +268,10 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
 
 /// Reducto differs from the shared `BaseOcrConfig::prepare_request` flow:
 /// guardrails see the *source* document before it is uploaded, because the
-/// final body only carries the opaque Reducto file id.
-async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, String)>>>(
+/// final body only carries the opaque Reducto file id. Nace OCR uploads the same way.
+pub(crate) async fn prepare_upload_request<
+    C: BaseOcrConfig<Environment = Vec<(String, String)>>,
+>(
     config: &C,
     request: &PreparedOcrRequest,
     client: &OcrClient,

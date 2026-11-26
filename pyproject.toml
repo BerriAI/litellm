@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.110.0"
+version = "1.113.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.16"
@@ -56,6 +56,11 @@ Documentation = "https://docs.litellm.ai"
 [project.optional-dependencies]
 switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
+    "audioop-lts>=0.2.2,<1; python_version >= '3.13'",
+    "sqlalchemy>=2.0.49,<2.1",
+    "alembic>=1.18.4,<2.0",
+    "psycopg>=3.2,<4.0",
+    "psycopg-binary>=3.2,<4.0",
     "casbin==1.43.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
@@ -63,6 +68,10 @@ proxy = [
     "granian>=2.8.0,<3.0; python_version >= '3.15'",
     "uvloop>=0.22.1,<1.0; sys_platform != 'win32'",
     "fastapi>=0.136.3,<1.0",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "starlette>=1.0.1,<2.0",
     "backoff>=2.2.1,<3.0",
     "pyyaml>=6.0.3,<7.0",
@@ -74,6 +83,7 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
+    "ldap3>=2.9.1,<3.0",
     "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
@@ -87,8 +97,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.114",
-    "litellm-enterprise==0.1.83",
+    "litellm-proxy-extras==0.4.122",
+    "litellm-enterprise==0.1.90",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -127,7 +137,7 @@ extra_proxy = [
     "google-cloud-iam>=2.19.1,<3.0",
     # Not in PyPI proxy extra.
     "resend>=2.23.0,<3.0",
-    "redisvl>=0.4.1,<1.0",
+    "redisvl>=0.26.0,<1.0",
     "a2a-sdk>=1.1.0,<2.0",
 ]
 utils = [
@@ -186,10 +196,10 @@ proxy-runtime = [
     "grpcio==1.84.1",
     "prometheus-client>=0.20.0,<1.0",
     "langfuse>=4.7,<5.0",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp==1.45.1",
-    "opentelemetry-instrumentation-fastapi==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
@@ -232,10 +242,10 @@ dev = [
     "types-PyYAML==6.0.12.20250915",
     "botocore-stubs==1.43.14",
     "types-boto3[bedrock,bedrock-agent,bedrock-runtime,kms,s3,sagemaker-runtime,sts]==1.43.30",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp==1.45.1",
-    "opentelemetry-instrumentation-fastapi==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "langfuse>=4.7,<5.0",
     "fastapi-offline==1.7.6",
     "fakeredis==2.34.1",
@@ -247,6 +257,7 @@ dev = [
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
     "nvidia-riva-client==2.16.0",
+    "time-machine==2.19.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -260,15 +271,18 @@ admin-mcp = [
     "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz#sha256=5803a20a00a18177f4591706956f31be311879543049b8b38143ad90bb1cb0a6 ; python_version >= '3.12'",
 ]
 proxy-dev = [
+    "sqlalchemy==2.0.49",
+    "pynacl==1.6.2",
+    "alembic==1.18.4",
     { include-group = "admin-mcp" },
     "prisma==0.11.0",
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
     "sentry-sdk==2.21.0",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp==1.45.1",
-    "opentelemetry-instrumentation-fastapi==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
     "nemo-switchyard==0.4.0a1",
@@ -287,6 +301,7 @@ ci = [
     # The Riva tests serve NVIDIA's own message definitions, which checks
     # LiteLLM's hand-written copy of them on every run.
     "nvidia-riva-client==2.16.0",
+    "time-machine==2.19.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
@@ -406,13 +421,14 @@ cache-keys = [
 ]
 constraint-dependencies = [
     "tornado>=6.5.8",
-    "tornado>=6.6; python_version >= '3.11'",
+    "tornado>=6.6.1; python_version >= '3.11'",
     "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
-    "soupsieve>=2.8.4",
+    "soupsieve>=2.10",
+    "soupsieve>=4.0; python_full_version >= '3.11.5'",
     "httplib2>=0.32.0",
     "setuptools>=84.1.0",
-    "dnspython>=2.9.0; python_version >= '3.11'",
+    "dnspython>=2.9.2; python_version >= '3.11'",
     "filelock<3.20.4; python_version < '3.11'",
     "filelock>=4.2.1; python_version >= '3.11'",
 ]
@@ -441,9 +457,10 @@ litellm-enterprise = { workspace = true }
 members = ["litellm/enterprise", "litellm/proxy-extras", "litellm/packaging/litellm-proxy"]
 
 [tool.commitizen]
-version = "1.110.0"
+version = "1.113.0"
 version_files = [
     "pyproject.toml:^version",
+    "litellm/packaging/litellm-proxy/pyproject.toml:^version",
 ]
 
 [tool.pytest.ini_options]
@@ -528,6 +545,9 @@ lint.extend-select = [
     "SIM114", "SIM118", "SIM201", "SIM211", "SIM222", "TC005", "UP006", "UP007", "UP008",
     "UP012", "UP018", "UP024", "UP032", "UP034", "UP035", "UP036", "UP037", "UP045",
     "C404", "C419", "TID253",
+    # Rust repositories stay behind the Python repositories in litellm/repositories/.
+    # The banned names live in [tool.ruff.lint.flake8-tidy-imports.banned-api] below.
+    "TID251",
 ]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external
@@ -558,6 +578,29 @@ lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "t
 [tool.ruff.lint.flake8-tidy-imports]
 banned-module-level-imports = ["prisma"]
 
+# Only litellm/repositories/ reaches a Rust repository (the per-file-ignores below allow it
+# there); everything else goes through the Python repository that wraps it. tests/ is outside
+# this config's lint scope, so tests may patch and exercise rust_database directly.
+# .github/linters/ruff-strict.toml sets its own banned-api and per-file-ignores, which replace
+# these two tables rather than merge with them, so the strict gate's TID251 bans keep applying
+# to litellm/repositories/ and these Rust bans hard-fail here instead of being counted there.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm.repositories.rust_database".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustKeyRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustJwtKeyMappingRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustModelAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustBudgetRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustEndUserRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustUserRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustOrganizationRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustTeamMembershipRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustTeamRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustProjectRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustTagRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustObjectPermissionRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustSpendLogRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+
 [tool.ruff.lint.per-file-ignores]
 "litellm/main.py" = ["F401"]
 "litellm/types/caching.py" = ["F401"]
@@ -574,6 +617,11 @@ banned-module-level-imports = ["prisma"]
 "litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
 "litellm/llms/bedrock/chat/__init__.py" = ["F401"]
 "litellm/proxy/utils.py" = ["F401"]
+# The only TID251 bans in this config are the Rust repository ones above, so this unbans nothing else.
+"litellm/repositories/**" = ["TID251"]
+"litellm/rust_bridge/**" = ["TID251"]
+# Tests patch and exercise rust_database directly (tests/unit/proxy/rust_auth_stores.py).
+"tests/**" = ["TID251"]
 
 [tool.pyright]
 extraPaths = ["litellm/runtime"]

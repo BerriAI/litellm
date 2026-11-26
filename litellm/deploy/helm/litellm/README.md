@@ -67,6 +67,36 @@ backend:
   gatewayUrl: https://gateway.example.com
 ```
 
+## Control plane migrations
+
+Set `migrationJob.mode` to `control-plane` to migrate the control plane's PostgreSQL database. The default `data-plane` mode runs Prisma migrations for the gateway and backend. The control plane mode runs `litellm --control-plane --skip_server_startup` through the shared image's entrypoint.
+
+```yaml
+migrationJob:
+  mode: control-plane
+  controlPlane:
+    databaseSecret:
+      name: control-plane-migrations
+      key: database-url
+```
+
+Create this Secret before installation. Its key must contain a direct PostgreSQL URL for the control plane database. The Job needs at least two database connections. Control plane migrations use this Secret and `migrationJob.extraEnv`, without the data plane's database or Redis settings.
+
+Helm runs the Job before install and upgrade by default. For Argo CD, select its PreSync hook:
+
+```yaml
+migrationJob:
+  hooks:
+    helm:
+      enabled: false
+    argocd:
+      enabled: true
+```
+
+Argo CD deletes successful Jobs and recreates the named hook on the next sync. Failed Jobs remain until the next sync. The chart omits `ttlSecondsAfterFinished` when the Argo CD hook is enabled so the TTL controller cannot delete the Job before Argo CD records its result. Helm hooks retain the configured TTL. Run a full application sync because selective syncs skip hooks.
+
+`migrationJob.command` and `migrationJob.args` override either mode's command. Setting only `command` clears the default arguments.
+
 ## Testing
 
 ```bash
@@ -115,7 +145,7 @@ The `litellm-helm` chart (`oci://ghcr.io/berriai/litellm-helm`) is retired; its 
 | `ingress.className`, `ingress.annotations`, `ingress.tls` | same keys (routes to the monolith Service in monolith mode) |
 | `ingress.hosts[].host` | `ingress.host`, one host per release; the built-in paths are rendered for that host, so `ingress.hosts[].paths` has no equivalent. For more than one hostname, add a second Ingress through `extraResources` or point a DNS alias at the one host |
 | `autoscaling.*` | `gateway.hpa.*`. Defaults change from 100 to 10 maximum replicas and from 60% to 70% CPU utilization, with an 80% memory target now enabled. To keep the old scaling behavior, set `gateway.hpa.maxReplicas: 100`, `gateway.hpa.targetCPUUtilizationPercentage: 60` and `gateway.hpa.targetMemoryUtilizationPercentage: 0` |
-| `keda.*` | `gateway.keda.*` with these renames: `minReplicas` / `maxReplicas` are `minReplicaCount` / `maxReplicaCount` (the new default maximum is 10, the old one was 100), `behavior` moves to `advanced.horizontalPodAutoscalerConfig.behavior`, `restoreToOriginalReplicaCount` moves to `advanced.restoreToOriginalReplicaCount`, and `keda.prometheus.requestsPerSecond` / `tokensPerSecond` are `gateway.keda.prometheus.targetRequestsPerSecond` / `targetTokensPerSecond`. `pollingInterval`, `cooldownPeriod`, `fallback`, `triggers` and `scaledObject.annotations` (for example KEDA's pause annotations) keep their names |
+| `keda.*` | `gateway.keda.*` with these renames: `minReplicas` / `maxReplicas` are `minReplicaCount` / `maxReplicaCount` (the new default maximum is 10, the old one was 100), `behavior` moves to `advanced.horizontalPodAutoscalerConfig.behavior`, `restoreToOriginalReplicaCount` moves to `advanced.restoreToOriginalReplicaCount`, and `keda.prometheus.requestsPerSecond` / `tokensPerSecond` are `gateway.keda.prometheus.targetRequestsPerSecond` / `targetTokensPerSecond`. `pollingInterval`, `cooldownPeriod`, `fallback`, `triggers` and `scaledObject.annotations` (for example KEDA's pause annotations) keep their names. The render fails when `gateway.hpa.enabled` and `gateway.keda.enabled` are both on, so set `gateway.hpa.enabled: false` when turning KEDA on. `backend.keda.*` and `ui.keda.*` take the same shape without `prometheus` and follow the same rule with `backend.hpa.enabled` and `ui.hpa.enabled` |
 | `numWorkers` | `gateway.numWorkers` |
 | `pdb.*` | `gateway.pdb.*`, except `labels` and `annotations` are no longer supported. To retain custom PDB metadata, set `gateway.pdb.enabled: false` and define the PDB through `extraResources` |
 | `metricsServer.*` | `gateway.metricsServer.*` |
@@ -157,9 +187,9 @@ gateway:
   config:
     proxy_config:
       model_list:
-        - model_name: gpt-4o
+        - model_name: gpt-6.1-sol
           litellm_params:
-            model: openai/gpt-4o
+            model: openai/gpt-6.1-sol
             api_key: os.environ/OPENAI_API_KEY
   envSecrets:
     - litellm-provider-keys

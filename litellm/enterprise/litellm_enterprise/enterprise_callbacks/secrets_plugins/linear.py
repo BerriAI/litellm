@@ -15,7 +15,7 @@ class LinearDetector(RegexBasedDetector):
         return "Linear Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Linear API Token
             re.compile(r"""(?i)lin_api_[a-z0-9]{40}"""),

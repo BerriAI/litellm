@@ -28,7 +28,7 @@
     "api_key",
     "additional_args"
   ],
-  "messages_input": [
+  "messages_input_order": [
     "body",
     "kwargs"
   ],
@@ -43,7 +43,15 @@
     "status",
     "headers",
     "body",
+    "streamed",
     "sent"
+  ],
+  "record_route_cost": [
+    "logger",
+    "receipt",
+    "service_tier",
+    "data_residency",
+    "vertex_location"
   ],
   "retried_request": [
     "logger",
@@ -158,6 +166,8 @@
     "endpoint_type",
     "request_body",
     "chunks",
-    "error"
+    "error",
+    "head",
+    "detached"
   ]
 }

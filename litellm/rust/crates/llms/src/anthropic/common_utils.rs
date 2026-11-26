@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::base_llm::messages::context::MessagesModelCapabilities;
@@ -5,7 +6,6 @@ use fancy_regex::Regex;
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
 };
@@ -18,12 +18,14 @@ use litellm_llms_types::{
         API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
         DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
     },
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
+use litellm_python_compat::truthy::json_truthy;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
+    Error, ErrorDetail,
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers, ValidatedEnvironment},
 };
@@ -119,7 +121,7 @@ fn nonempty_secret(value: Option<String>) -> Option<String> {
     value
         .map(|value| {
             value
-                .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .trim_matches(litellm_python_compat::unicode::isspace)
                 .to_owned()
         })
         .filter(|value| !value.is_empty())
@@ -166,12 +168,16 @@ pub fn resolve_anthropic_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_non_empty(
-        api_base,
-        env_lookup,
-        &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
-    )
-    .unwrap_or_else(|| API_BASE.to_string())
+    api_base
+        .map(str::trim)
+        .filter(|api_base| !api_base.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            [ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV]
+                .iter()
+                .find_map(|name| env_lookup(name).filter(|value| !value.is_empty()))
+        })
+        .unwrap_or_else(|| API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -194,7 +200,7 @@ fn url_path(url: &str) -> &str {
 }
 
 /// Python's `_strip_trailing_slashes_keeping_the_scheme`.
-fn strip_trailing_slashes(api_base: &str) -> String {
+pub(crate) fn strip_trailing_slashes(api_base: &str) -> String {
     let stripped = api_base.trim_end_matches('/');
     if stripped.ends_with(':') && !stripped.contains('/') && !stripped.contains('?') {
         return api_base.to_string();
@@ -322,37 +328,72 @@ pub fn requires_native_compaction_beta(
     compaction: Option<&Value>,
     messages: &[Recognized<Message>],
 ) -> bool {
-    compaction.is_some()
-        || messages
-            .iter()
-            .filter_map(Recognized::known)
-            .flat_map(Message::blocks)
-            .any(|block| {
-                block.is_type(ContentBlockType::Compaction)
-                    && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+    compaction.is_some() || messages.iter().any(carries_signed_compaction_block)
+}
+
+/// Python's `carries_signed_compaction_block` reads any mapping, so a message that did not parse
+/// is scanned through its raw content too.
+fn carries_signed_compaction_block(message: &Recognized<Message>) -> bool {
+    match message {
+        Recognized::Known(message) => message.blocks().iter().any(|block| {
+            block.is_type(ContentBlockType::Compaction)
+                && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+        }),
+        Recognized::Unrecognized(Value::Object(fields)) => matches!(
+            fields.get("content"),
+            Some(Value::Array(blocks)) if blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("compaction")
+                    && block
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .is_some_and(|signature| !signature.is_empty())
             })
+        ),
+        Recognized::Unrecognized(_) => false,
+    }
 }
 
 fn is_blank(text: Option<&str>) -> bool {
     text.is_none_or(|text| text.trim().is_empty())
 }
 
-fn is_empty_text_block(block: &ContentBlock) -> bool {
-    block.is_type(ContentBlockType::Text) && is_blank(block.text.as_deref())
+/// A wide number reaches Rust as a marked string, which Python reads as the number it was.
+fn is_python_str_text(text: &str) -> bool {
+    litellm_host::raw_json::decode(text).is_none_or(|raw| raw.starts_with('"'))
+}
+
+fn is_python_str(value: &Value) -> bool {
+    value.as_str().is_some_and(is_python_str_text)
+}
+
+/// A user's text that is not a string is left for `drop_params` to drop. Any other turn's goes with
+/// the blank ones.
+fn is_empty_text_block(block: &ContentBlock, from_user: bool) -> bool {
+    block.is_type(ContentBlockType::Text)
+        && match block.text.as_deref() {
+            Some(text) if !is_python_str_text(text) => !from_user,
+            text => is_blank(text),
+        }
 }
 
 pub fn is_empty_thinking_block(block: &ContentBlock) -> bool {
     block.is_type(ContentBlockType::Thinking) && is_blank(block.thinking.as_deref())
 }
 
-fn retain_blocks(messages: Vec<Message>, keep: impl Fn(&ContentBlock) -> bool) -> Vec<Message> {
+fn retain_blocks(
+    messages: Vec<Message>,
+    keep: impl Fn(&str, &ContentBlock) -> bool,
+) -> Vec<Message> {
     messages
         .into_iter()
         .filter_map(|message| match message.content {
             MessageContent::Text(_) => Some(message),
             MessageContent::Blocks(ref blocks) => {
-                let kept: Vec<ContentBlock> =
-                    blocks.iter().filter(|block| keep(block)).cloned().collect();
+                let kept: Vec<ContentBlock> = blocks
+                    .iter()
+                    .filter(|block| keep(&message.role, block))
+                    .cloned()
+                    .collect();
                 if kept.len() == blocks.len() {
                     return Some(message);
                 }
@@ -362,10 +403,127 @@ fn retain_blocks(messages: Vec<Message>, keep: impl Fn(&ContentBlock) -> bool) -
         .collect()
 }
 
+fn is_empty_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    // Anthropic sends redacted thinking blocks, and the signature is used to
+    // match them to the appropriate thinking block on their servers. If there
+    // is a signature, we need to keep it.
+    is_empty_thinking_block(block) && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
 pub fn strip_empty_content_blocks(messages: Vec<Message>) -> Vec<Message> {
-    retain_blocks(messages, |block| {
-        !is_empty_text_block(block) && !is_empty_thinking_block(block)
+    retain_blocks(messages, |role, block| {
+        !is_empty_text_block(block, role == USER) && !is_empty_unsigned_thinking_block(block)
     })
+}
+
+fn is_non_string_text_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Text)
+        && block
+            .text
+            .as_deref()
+            .is_some_and(|text| !is_python_str_text(text))
+}
+
+/// Python's `non_string_user_text_error`: the first user text block that is not a string, as the
+/// field path its 400 names, counted over the blocks the caller sent.
+pub fn non_string_user_text_path(messages: &[Recognized<Message>]) -> Option<String> {
+    messages
+        .iter()
+        .enumerate()
+        .find_map(|(message_index, message)| {
+            let block_index = match message {
+                Recognized::Known(message) if message.role == USER => match &message.content {
+                    MessageContent::Blocks(blocks) => {
+                        blocks.iter().position(is_non_string_text_block)
+                    }
+                    MessageContent::Text(_) => None,
+                },
+                Recognized::Unrecognized(message) if is_raw_user_message(message) => message
+                    .get(CONTENT)
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .position(is_non_string_raw_text),
+                Recognized::Known(_) | Recognized::Unrecognized(_) => None,
+            }?;
+            Some(format!(
+                "messages.{message_index}.content.{block_index}.text"
+            ))
+        })
+}
+
+/// Python's `non_string_system_text_error`: the first system text block that is not a string, as
+/// the field path its 400 names.
+pub fn non_string_system_text_path(system: Option<&Recognized<SystemPrompt>>) -> Option<String> {
+    let block_index = match system? {
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => {
+            blocks.iter().position(is_non_string_text_block)
+        }
+        Recognized::Unrecognized(Value::Array(blocks)) => {
+            blocks.iter().position(is_non_string_raw_text)
+        }
+        Recognized::Known(SystemPrompt::Text(_)) | Recognized::Unrecognized(_) => None,
+    }?;
+    Some(format!("system.{block_index}.text"))
+}
+
+/// Python's `drop_non_string_system_texts` under `drop_params`: a system text block whose `text`
+/// is not a string goes, and a system prompt left with no blocks is dropped.
+pub fn drop_non_string_system_texts(
+    system: Recognized<SystemPrompt>,
+) -> Option<Recognized<SystemPrompt>> {
+    if non_string_system_text_path(Some(&system)).is_none() {
+        return Some(system);
+    }
+    match system {
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_non_string_text_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(Recognized::Known(SystemPrompt::Blocks(kept)))
+        }
+        Recognized::Unrecognized(Value::Array(blocks)) => {
+            let kept: Vec<Value> = blocks
+                .into_iter()
+                .filter(|block| !is_non_string_raw_text(block))
+                .collect();
+            (!kept.is_empty()).then_some(Recognized::Unrecognized(Value::Array(kept)))
+        }
+        system => Some(system),
+    }
+}
+
+fn without_non_string_tool_result_texts(block: ContentBlock) -> ContentBlock {
+    if !block.is_type(ContentBlockType::ToolResult) {
+        return block;
+    }
+    ContentBlock {
+        content: block.content.map(without_non_string_text_parts),
+        ..block
+    }
+}
+
+/// Python's `drop_non_string_texts` under `drop_params`: a user turn's text block whose `text` is
+/// not a string goes, so does such a part of a `tool_result`'s content list, and a turn left with
+/// no blocks is dropped.
+pub fn drop_non_string_user_texts(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .filter_map(|message| match message.content {
+            MessageContent::Blocks(blocks) if message.role == USER && !blocks.is_empty() => {
+                let kept: Vec<ContentBlock> = blocks
+                    .into_iter()
+                    .filter(|block| !is_non_string_text_block(block))
+                    .map(without_non_string_tool_result_texts)
+                    .collect();
+                (!kept.is_empty()).then(|| Message {
+                    content: MessageContent::Blocks(kept),
+                    ..message
+                })
+            }
+            content => Some(Message { content, ..message }),
+        })
+        .collect()
 }
 
 pub fn normalize_anthropic_tool_use_id(raw_id: &str) -> String {
@@ -396,7 +554,7 @@ fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
-    match block.block_type.as_ref() {
+    match block.known_type() {
         Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
             match normalized_if_changed(block.id.as_deref()) {
                 Some(id) => ContentBlock {
@@ -456,7 +614,7 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
 }
 
 pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
-    let field = match block.block_type.as_ref() {
+    let field = match block.known_type() {
         Some(ContentBlockType::Thinking) => block.signature.as_deref(),
         Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
         _ => None,
@@ -467,32 +625,133 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
 const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 fn is_billing_header_block(block: &ContentBlock) -> bool {
-    block.block_type == Some(ContentBlockType::Text)
+    block.is_type(ContentBlockType::Text)
         && block
             .text
             .as_deref()
             .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
 }
 
+fn is_raw_billing_header_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("text")
+        && block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
+}
+
 /// Python's `AnthropicMessagesConfig._filter_billing_headers_from_system`: the Claude Code
 /// attribution blocks the first-party API reads, dropped for hosts that reject them. `None`
-/// when nothing else was in the system prompt.
-pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
+/// when nothing else was in the system prompt. A list holding blocks Rust could not parse is
+/// filtered the same way, and any other value is left as sent.
+pub fn filter_billing_headers_from_system(
+    system: Recognized<SystemPrompt>,
+) -> Option<Recognized<SystemPrompt>> {
     match system {
-        SystemPrompt::Text(text) if text.starts_with(BILLING_HEADER_PREFIX) => None,
-        SystemPrompt::Text(text) => Some(SystemPrompt::Text(text)),
-        SystemPrompt::Blocks(blocks) => {
+        Recognized::Known(SystemPrompt::Text(text)) if text.starts_with(BILLING_HEADER_PREFIX) => {
+            None
+        }
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => {
             let kept: Vec<ContentBlock> = blocks
                 .into_iter()
                 .filter(|block| !is_billing_header_block(block))
                 .collect();
-            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+            (!kept.is_empty()).then_some(Recognized::Known(SystemPrompt::Blocks(kept)))
         }
+        Recognized::Unrecognized(Value::Array(blocks)) => {
+            let kept: Vec<Value> = blocks
+                .into_iter()
+                .filter(|block| !is_raw_billing_header_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(Recognized::Unrecognized(Value::Array(kept)))
+        }
+        system => Some(system),
     }
 }
 
+/// The billing strip of Python's `AnthropicMessagesConfig.transform_anthropic_messages_request`,
+/// which pops a system prompt the filter leaves empty, an empty string included.
+pub fn strip_billing_metadata_from_system(
+    system: Recognized<SystemPrompt>,
+) -> Option<Recognized<SystemPrompt>> {
+    filter_billing_headers_from_system(system).filter(|kept| match kept {
+        Recognized::Known(SystemPrompt::Text(text)) => !text.is_empty(),
+        Recognized::Unrecognized(Value::Object(fields)) => !fields.is_empty(),
+        _ => true,
+    })
+}
+
+/// Blocks carrying another provider's encrypted reasoning go, and a message left with no blocks
+/// goes with them, as main's native route strips them.
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
-    retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
+    retain_blocks(messages, |_, block| !is_encrypted_reasoning_block(block))
+}
+
+fn is_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Thinking)
+        && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
+/// Python's `strip_unsignable_thinking_blocks_for_claude` once the encrypted strip has run: Claude
+/// answers 400 to a thinking block with no signature, so an open model's reasoning goes.
+pub fn strip_unsigned_thinking_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |_, block| !is_unsigned_thinking_block(block))
+}
+
+/// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: the same strip, and a
+/// kept `redacted_thinking` block gets Claude's own `data` back from a Bedrock Converse wrapper.
+pub fn strip_encrypted_reasoning_blocks_restoring_redacted_data(
+    messages: Vec<Message>,
+) -> Vec<Message> {
+    messages
+        .into_iter()
+        .filter_map(|message| {
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return Some(message);
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_encrypted_reasoning_block(block))
+                .cloned()
+                .map(with_native_redacted_data)
+                .collect();
+            if &kept == blocks {
+                return Some(message);
+            }
+            (!kept.is_empty()).then(|| message.with_blocks(kept))
+        })
+        .collect()
+}
+
+fn with_native_redacted_data(block: ContentBlock) -> ContentBlock {
+    match block.data.as_deref().and_then(converse_wrapped_payload) {
+        Some(data) if block.is_type(ContentBlockType::RedactedThinking) => ContentBlock {
+            data: Some(data),
+            ..block
+        },
+        _ => block,
+    }
+}
+
+/// Python's `base64.b64decode(data, validate=True)`: the standard alphabet with its padding,
+/// whatever the unused bits of the last character hold.
+const PYTHON_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_allow_trailing_bits(true)
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::RequireCanonical),
+);
+
+/// Python's `_converse_wrapped_payload`, kept only when non-empty as `native_redacted_thinking_data`
+/// keeps it: Bedrock Converse wraps Claude's `data` in one more layer of base64, and Claude's own
+/// value never decodes twice.
+fn converse_wrapped_payload(data: &str) -> Option<String> {
+    use base64::Engine;
+    let payload = String::from_utf8(PYTHON_BASE64.decode(data).ok()?)
+        .ok()
+        .filter(|payload| payload.is_ascii() && !payload.is_empty())?;
+    PYTHON_BASE64.decode(&payload).ok()?;
+    Some(payload)
 }
 
 fn is_advisor_use(block: &ContentBlock) -> bool {
@@ -511,7 +770,7 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
             let MessageContent::Blocks(blocks) = &message.content else {
                 return message;
             };
-            let advisor_ids: Vec<&str> = blocks
+            let advisor_ids: HashSet<&str> = blocks
                 .iter()
                 .filter(|block| is_advisor_use(block))
                 .filter_map(|block| block.id.as_deref())
@@ -526,9 +785,34 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
                         && block
                             .tool_use_id
                             .as_deref()
-                            .is_some_and(|id| advisor_ids.contains(&id));
+                            .is_some_and(|id| advisor_ids.contains(id));
                     !is_advisor_use(block) && !is_result
                 })
+                .cloned()
+                .collect();
+            message.with_blocks(kept)
+        })
+        .collect()
+}
+
+fn is_advisor_block(block: &ContentBlock) -> bool {
+    (block.is_type(ContentBlockType::ServerToolUse) && block.name.as_deref() == Some("advisor"))
+        || block.is_type(ContentBlockType::AdvisorToolResult)
+}
+
+pub fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| {
+            if message.role != "assistant" {
+                return message;
+            }
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return message;
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_advisor_block(block))
                 .cloned()
                 .collect();
             message.with_blocks(kept)
@@ -570,7 +854,16 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
         return None;
     }
     let tool_use_id = block.tool_use_id.as_deref()?;
-    let results = match block.content.as_ref()? {
+    Some((
+        tool_use_id,
+        replayed_web_search_results(block.content.as_ref()?)?,
+    ))
+}
+
+/// The results a replayed `web_search_tool_result` block carries, `None` when Anthropic minted
+/// them, since only its search backend reads `encrypted_content`.
+fn replayed_web_search_results(content: &Value) -> Option<WebSearchResults> {
+    let results = match content {
         Value::Array(items) => {
             let results = items
                 .iter()
@@ -593,7 +886,7 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
         },
         _ => return None,
     };
-    Some((tool_use_id, results))
+    Some(results)
 }
 
 fn render_web_search_results(query: &str, results: &WebSearchResults) -> String {
@@ -653,7 +946,7 @@ fn server_tool_use_query(block: &ContentBlock) -> Option<(&str, &str)> {
 }
 
 fn flatten_web_search_results_in_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    let flattenable_ids: Vec<&str> = blocks
+    let flattenable_ids: HashSet<&str> = blocks
         .iter()
         .filter_map(flattenable_web_search_results)
         .map(|(tool_use_id, _)| tool_use_id)
@@ -661,21 +954,18 @@ fn flatten_web_search_results_in_blocks(blocks: Vec<ContentBlock>) -> Vec<Conten
     if flattenable_ids.is_empty() {
         return blocks;
     }
-    let queries: Vec<(&str, &str)> = blocks.iter().filter_map(server_tool_use_query).collect();
+    let queries: HashMap<&str, &str> = blocks.iter().filter_map(server_tool_use_query).collect();
     blocks
         .iter()
         .filter_map(|block| {
             if let Some((tool_use_id, results)) = flattenable_web_search_results(block) {
-                let query = queries
-                    .iter()
-                    .rfind(|(id, _)| *id == tool_use_id)
-                    .map_or("", |(_, query)| query);
+                let query = queries.get(tool_use_id).copied().unwrap_or("");
                 return Some(ContentBlock::text(render_web_search_results(
                     query, &results,
                 )));
             }
             if let Some((id, _)) = server_tool_use_query(block)
-                && flattenable_ids.contains(&id)
+                && flattenable_ids.contains(id)
             {
                 return None;
             }
@@ -695,6 +985,386 @@ pub fn flatten_unencrypted_web_search_results(messages: Vec<Message>) -> Vec<Mes
             MessageContent::Text(_) => message,
         })
         .collect()
+}
+
+const CONTENT: &str = "content";
+const USER: &str = "user";
+
+/// Python's message rewrites read any mapping, so a message Rust could not parse gets the same
+/// rewrite on its raw JSON: `known` rewrites each run of parsed messages and `raw` each unparsed
+/// one, returning `None` where Python drops the message. A raw message the rewrite left
+/// parseable is parsed again, so every later step reads it as Python does.
+pub fn map_messages(
+    messages: Vec<Recognized<Message>>,
+    known: impl FnMut(Vec<Message>) -> Vec<Message>,
+    raw: impl Fn(Value) -> Option<Value>,
+) -> Vec<Recognized<Message>> {
+    map_known_runs(messages, known)
+        .into_iter()
+        .filter_map(|message| match message {
+            Recognized::Unrecognized(message) => raw(message).map(reparsed),
+            known => Some(known),
+        })
+        .collect()
+}
+
+/// [`map_messages`] where a rewrite that leaves none of the caller's messages is a request
+/// error, as Python's `reject_emptied_messages` raises, never an empty list sent upstream.
+pub fn map_messages_rejecting_emptied(
+    messages: Vec<Recognized<Message>>,
+    known: impl FnMut(Vec<Message>) -> Vec<Message>,
+    raw: impl Fn(Value) -> Option<Value>,
+) -> Result<Vec<Recognized<Message>>, Error> {
+    let sent = !messages.is_empty();
+    let kept = map_messages(messages, known, raw);
+    if sent && kept.is_empty() {
+        return Err(Error::InvalidRequest(ErrorDetail::EmptiedMessages));
+    }
+    Ok(kept)
+}
+
+fn reparsed(message: Value) -> Recognized<Message> {
+    match Message::deserialize(&message) {
+        Ok(parsed) => Recognized::Known(parsed),
+        Err(_) => Recognized::Unrecognized(message),
+    }
+}
+
+/// Rewrites the content of a raw message whose content is a list, the only shape Python's
+/// block rewrites touch. `None` from `rewrite` drops the message.
+fn with_raw_blocks(
+    message: Value,
+    rewrite: impl FnOnce(Vec<Value>) -> Option<Vec<Value>>,
+) -> Option<Value> {
+    let Value::Object(mut fields) = message else {
+        return Some(message);
+    };
+    let Some(Value::Array(blocks)) = fields.get_mut(CONTENT) else {
+        return Some(Value::Object(fields));
+    };
+    let blocks = std::mem::take(blocks);
+    fields.insert(CONTENT.into(), Value::Array(rewrite(blocks)?));
+    Some(Value::Object(fields))
+}
+
+fn raw_block_type(block: &Value) -> Option<&str> {
+    block.get("type").and_then(Value::as_str)
+}
+
+fn is_raw_blank(text: Option<&Value>) -> bool {
+    is_blank(text.and_then(Value::as_str))
+}
+
+fn is_empty_raw_text_block(block: &Value, from_user: bool) -> bool {
+    raw_block_type(block) == Some("text")
+        && match block.get("text") {
+            Some(text) if !is_python_str(text) => !from_user,
+            text => is_raw_blank(text),
+        }
+}
+
+fn is_raw_user_message(message: &Value) -> bool {
+    message.get("role").and_then(Value::as_str) == Some(USER)
+}
+
+fn is_empty_unsigned_raw_thinking_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("thinking")
+        && is_raw_blank(block.get("thinking"))
+        && !block.get("signature").is_some_and(json_truthy)
+}
+
+/// [`strip_empty_content_blocks`] on a raw message: a text block with no `text`, a blank one, or
+/// outside a user turn one that is not a string goes, so does an empty thinking block with no
+/// signature, and a message left with no blocks is dropped.
+pub fn strip_empty_raw_content_blocks(message: Value) -> Option<Value> {
+    let from_user = is_raw_user_message(&message);
+    with_raw_blocks(message, |blocks| {
+        let sent = blocks.len();
+        let kept: Vec<Value> = blocks
+            .into_iter()
+            .filter(|block| {
+                !is_empty_raw_text_block(block, from_user)
+                    && !is_empty_unsigned_raw_thinking_block(block)
+            })
+            .collect();
+        (kept.len() == sent || !kept.is_empty()).then_some(kept)
+    })
+}
+
+fn is_non_string_raw_text(part: &Value) -> bool {
+    raw_block_type(part) == Some("text")
+        && part.get("text").is_some_and(|text| !is_python_str(text))
+}
+
+fn without_non_string_text_parts(content: Value) -> Value {
+    match content {
+        Value::Array(parts) => Value::Array(
+            parts
+                .into_iter()
+                .filter(|part| !is_non_string_raw_text(part))
+                .collect(),
+        ),
+        content => content,
+    }
+}
+
+fn without_non_string_raw_tool_result_texts(block: Value) -> Value {
+    match block {
+        Value::Object(fields)
+            if fields.get("type").and_then(Value::as_str) == Some("tool_result") =>
+        {
+            Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(key, value)| match key.as_str() {
+                        CONTENT => (key, without_non_string_text_parts(value)),
+                        _ => (key, value),
+                    })
+                    .collect(),
+            )
+        }
+        block => block,
+    }
+}
+
+/// [`drop_non_string_user_texts`] on a raw message.
+pub fn drop_raw_non_string_user_texts(message: Value) -> Option<Value> {
+    if !is_raw_user_message(&message) {
+        return Some(message);
+    }
+    with_raw_blocks(message, |blocks| {
+        if blocks.is_empty() {
+            return Some(blocks);
+        }
+        let kept: Vec<Value> = blocks
+            .into_iter()
+            .filter(|block| !is_non_string_raw_text(block))
+            .map(without_non_string_raw_tool_result_texts)
+            .collect();
+        (!kept.is_empty()).then_some(kept)
+    })
+}
+
+fn sanitize_raw_tool_use_id_block(block: Value) -> Value {
+    let key = match raw_block_type(&block) {
+        Some("tool_use" | "server_tool_use") => "id",
+        Some("tool_result") => "tool_use_id",
+        _ => return block,
+    };
+    let Value::Object(mut fields) = block else {
+        return block;
+    };
+    if let Some(normalized) = normalized_if_changed(fields.get(key).and_then(Value::as_str)) {
+        fields.insert(key.into(), Value::String(normalized));
+    }
+    Value::Object(fields)
+}
+
+/// [`sanitize_tool_use_ids`] on a raw message.
+pub fn sanitize_raw_tool_use_ids(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .map(sanitize_raw_tool_use_id_block)
+                .collect(),
+        )
+    })
+}
+
+fn raw_flattenable_web_search_results(block: &Value) -> Option<(&str, WebSearchResults)> {
+    if raw_block_type(block) != Some("web_search_tool_result") {
+        return None;
+    }
+    let tool_use_id = block.get("tool_use_id")?.as_str()?;
+    Some((
+        tool_use_id,
+        replayed_web_search_results(block.get(CONTENT)?)?,
+    ))
+}
+
+fn raw_server_tool_use_query(block: &Value) -> Option<(&str, &str)> {
+    if raw_block_type(block) != Some("server_tool_use") {
+        return None;
+    }
+    let id = block.get("id")?.as_str()?;
+    let query = match block.get("input") {
+        None => "",
+        Some(Value::Object(input)) => match input.get("query") {
+            None => "",
+            Some(query) => query.as_str()?,
+        },
+        Some(_) => return None,
+    };
+    Some((id, query))
+}
+
+/// [`flatten_unencrypted_web_search_results`] on a raw message.
+pub fn flatten_unencrypted_raw_web_search_results(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let flattenable_ids: HashSet<&str> = blocks
+            .iter()
+            .filter_map(raw_flattenable_web_search_results)
+            .map(|(tool_use_id, _)| tool_use_id)
+            .collect();
+        if flattenable_ids.is_empty() {
+            return Some(blocks);
+        }
+        let queries: HashMap<&str, &str> = blocks
+            .iter()
+            .filter_map(raw_server_tool_use_query)
+            .collect();
+        let flattened = blocks
+            .iter()
+            .filter_map(|block| {
+                if let Some((tool_use_id, results)) = raw_flattenable_web_search_results(block) {
+                    let query = queries.get(tool_use_id).copied().unwrap_or("");
+                    return Some(
+                        json!({"type": "text", "text": render_web_search_results(query, &results)}),
+                    );
+                }
+                if let Some((id, _)) = raw_server_tool_use_query(block)
+                    && flattenable_ids.contains(id)
+                {
+                    return None;
+                }
+                Some(block.clone())
+            })
+            .collect();
+        Some(flattened)
+    })
+}
+
+/// [`strip_provider_specific_fields`] on a raw message.
+pub fn strip_raw_provider_specific_fields(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .map(|block| match block {
+                    Value::Object(mut fields) => {
+                        fields.shift_remove("provider_specific_fields");
+                        Value::Object(fields)
+                    }
+                    block => block,
+                })
+                .collect(),
+        )
+    })
+}
+
+fn is_raw_advisor_use(block: &Value) -> bool {
+    raw_block_type(block) == Some("server_tool_use")
+        && block.get("name").and_then(Value::as_str) == Some("advisor")
+}
+
+/// Python's `strip_advisor_blocks_from_messages` on a raw assistant message: every advisor
+/// `server_tool_use` with a non-empty string id goes, with the `advisor_tool_result` answering it.
+pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Some(message);
+    }
+    with_raw_blocks(message, |blocks| {
+        let advisor_ids: HashSet<&str> = blocks
+            .iter()
+            .filter(|block| is_raw_advisor_use(block))
+            .filter_map(|block| block.get("id").and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
+            .collect();
+        let answers_advisor = |id: Option<&Value>| {
+            id.and_then(Value::as_str)
+                .is_some_and(|id| advisor_ids.contains(id))
+        };
+        let kept = blocks
+            .iter()
+            .filter(|block| {
+                let advisor_use = is_raw_advisor_use(block) && answers_advisor(block.get("id"));
+                let advisor_result = raw_block_type(block) == Some("advisor_tool_result")
+                    && answers_advisor(block.get("tool_use_id"));
+                !advisor_use && !advisor_result
+            })
+            .cloned()
+            .collect();
+        Some(kept)
+    })
+}
+
+fn is_raw_advisor_block(block: &Value) -> bool {
+    is_raw_advisor_use(block) || raw_block_type(block) == Some("advisor_tool_result")
+}
+
+pub fn drop_raw_advisor_blocks(message: Value) -> Option<Value> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Some(message);
+    }
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .filter(|block| !is_raw_advisor_block(block))
+                .collect(),
+        )
+    })
+}
+
+fn is_raw_encrypted_reasoning_block(block: &Value) -> bool {
+    let field = match raw_block_type(block) {
+        Some("thinking") => block.get("signature"),
+        Some("redacted_thinking") => block.get("data"),
+        _ => None,
+    };
+    field
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
+}
+
+fn with_native_raw_redacted_data(block: Value) -> Value {
+    if raw_block_type(&block) != Some("redacted_thinking") {
+        return block;
+    }
+    let Value::Object(mut fields) = block else {
+        return block;
+    };
+    if let Some(data) = fields
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(converse_wrapped_payload)
+    {
+        fields.insert("data".into(), Value::String(data));
+    }
+    Value::Object(fields)
+}
+
+/// [`strip_encrypted_reasoning_blocks`] on a raw message.
+pub fn strip_raw_encrypted_reasoning_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_encrypted_reasoning_block(block))
+            .cloned()
+            .map(with_native_raw_redacted_data)
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
+}
+
+fn is_raw_unsigned_thinking_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("thinking")
+        && block
+            .get("signature")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+}
+
+pub fn strip_raw_unsigned_thinking_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_unsigned_thinking_block(block))
+            .cloned()
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
 }
 
 pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
@@ -813,6 +1483,29 @@ mod tests {
 
     use super::*;
 
+    #[rstest]
+    #[case::one_left(
+        json!([{"type": "text", "text": null}, {"type": "text", "text": "be terse"}]),
+        Some(json!([{"type": "text", "text": "be terse"}]))
+    )]
+    #[case::none_left(json!([{"type": "text", "text": 5}]), None)]
+    #[case::only_strings(
+        json!([{"type": "text", "text": "be terse"}]),
+        Some(json!([{"type": "text", "text": "be terse"}]))
+    )]
+    #[case::empty_list(json!([]), Some(json!([])))]
+    #[case::text(json!("be terse"), Some(json!("be terse")))]
+    fn drop_params_drops_a_non_string_system_text_and_a_system_prompt_it_empties(
+        #[case] system: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        let system: Recognized<SystemPrompt> = serde_json::from_value(system).unwrap();
+        assert_eq!(
+            drop_non_string_system_texts(system).map(|kept| serde_json::to_value(kept).unwrap()),
+            expected
+        );
+    }
+
     fn apply(sanitizer: fn(Vec<Message>) -> Vec<Message>, messages: Value) -> Value {
         let parsed: Vec<Message> = serde_json::from_value(messages).unwrap();
         serde_json::to_value(sanitizer(parsed)).unwrap()
@@ -877,15 +1570,25 @@ mod tests {
         &[(ANTHROPIC_BASE_URL_ENV, "https://base-url.example.com")],
         "https://base-url.example.com"
     )]
-    #[case::blank_api_base_env_falls_back_to_base_url_env(
+    #[case::whitespace_api_base_env_is_kept(
         None,
         &[(ANTHROPIC_API_BASE_ENV, " \t "), (ANTHROPIC_BASE_URL_ENV, "https://base-url.example.com")],
-        "https://base-url.example.com"
+        " \t "
     )]
-    #[case::blank_envs_fall_back_to_public_endpoint(
+    #[case::empty_api_base_env_falls_back_to_base_url_env(
         None,
         &[(ANTHROPIC_API_BASE_ENV, ""), (ANTHROPIC_BASE_URL_ENV, "  ")],
+        "  "
+    )]
+    #[case::empty_envs_fall_back_to_public_endpoint(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, ""), (ANTHROPIC_BASE_URL_ENV, "")],
         "https://api.anthropic.com"
+    )]
+    #[case::padded_api_base_env_is_kept(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, " http://h ")],
+        " http://h "
     )]
     fn api_base_resolution(
         #[case] api_base: Option<&str>,
@@ -987,12 +1690,23 @@ mod tests {
         ]}]),
         json!([{"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "Bash", "input": {}}]}])
     )]
-    #[case::null_text(
+    #[case::blank_user_text(
         json!([{"role": "user", "content": [
-            {"type": "text", "text": null},
+            {"type": "text", "text": " \n"},
             {"type": "tool_result", "tool_use_id": "x", "content": "y"}
         ]}]),
         json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "y"}]}])
+    )]
+    #[case::blank_system_role_text(
+        json!([{"role": "system", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "ok"}]}]),
+        json!([{"role": "system", "content": [{"type": "text", "text": "ok"}]}])
+    )]
+    #[case::wide_number_assistant_text(
+        json!([{"role": "assistant", "content": [
+            {"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")},
+            {"type": "text", "text": "ok"}
+        ]}]),
+        json!([{"role": "assistant", "content": [{"type": "text", "text": "ok"}]}])
     )]
     #[case::missing_text(
         json!([{"role": "user", "content": [
@@ -1001,11 +1715,11 @@ mod tests {
         ]}]),
         json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "y"}]}])
     )]
-    #[case::empty_signed_thinking_beside_tool_use(
+    #[case::empty_unsigned_thinking_beside_tool_use(
         json!([
             {"role": "user", "content": "weather?"},
             {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "", "signature": "sig_abc"},
+                {"type": "thinking", "thinking": ""},
                 {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
             ]}
         ]),
@@ -1015,6 +1729,13 @@ mod tests {
                 {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
             ]}
         ])
+    )]
+    #[case::empty_thinking_with_empty_signature(
+        json!([{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "", "signature": ""},
+            {"type": "redacted_thinking", "data": "opaque"}
+        ]}]),
+        json!([{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "opaque"}]}])
     )]
     #[case::whitespace_thinking_beside_real_and_redacted_thinking(
         json!([{"role": "assistant", "content": [
@@ -1050,8 +1771,16 @@ mod tests {
     #[case::non_empty_text(json!([{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]))]
     #[case::padded_text(json!([{"role": "assistant", "content": [{"type": "text", "text": "  hi  "}]}]))]
     #[case::empty_string_content(json!([{"role": "user", "content": ""}]))]
+    #[case::wide_number_user_text(json!([{"role": "user", "content": [
+        {"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")}
+    ]}]))]
     #[case::textless_non_text_block(json!([{"role": "user", "content": [
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}
+    ]}]))]
+    #[case::empty_signed_thinking_beside_tool_use(json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "", "signature": "sig_abc"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
     ]}]))]
     #[case::encrypted_reasoning_left_for_the_responses_bridge(json!([{"role": "assistant", "content": [
         {"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")},
@@ -1243,6 +1972,648 @@ mod tests {
         assert_eq!(
             apply(strip_encrypted_reasoning_blocks, input.clone()),
             input
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_converse_wrapper("UVVKRA==", "QUJD")]
+    #[case::claude_own_data("QUJD", "QUJD")]
+    #[case::not_base64("EmwKAhgBEgy_anthropic_minted", "EmwKAhgBEgy_anthropic_minted")]
+    #[case::wrapping_nothing("", "")]
+    fn redacted_thinking_gets_claude_own_data_back(#[case] data: &str, #[case] expected: &str) {
+        let turn = |data: &str| {
+            json!([{"role": "assistant", "content": [
+                {"type": "redacted_thinking", "data": data},
+                {"type": "text", "text": "The answer."}
+            ]}])
+        };
+        assert_eq!(
+            apply(
+                strip_encrypted_reasoning_blocks_restoring_redacted_data,
+                turn(data)
+            ),
+            turn(expected)
+        );
+        assert_eq!(
+            apply(strip_encrypted_reasoning_blocks, turn(data)),
+            turn(data),
+            "main's strip keeps a Bedrock Converse wrapper as sent"
+        );
+    }
+
+    fn unparsed_block() -> Value {
+        json!({"type": "text", "text": "Note.", "id": 5})
+    }
+
+    fn turn(blocks: Value) -> Value {
+        json!({"role": "assistant", "content": blocks})
+    }
+
+    fn user_turn(blocks: Value) -> Value {
+        json!({"role": "user", "content": blocks})
+    }
+
+    #[rstest]
+    #[case::non_string_text(
+        json!([{"type": "text", "text": 5}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::blank_text(
+        json!([{"type": "text", "text": " \n"}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::empty_unsigned_thinking(
+        json!([{"type": "thinking", "thinking": "", "signature": null}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::empty_signed_thinking(
+        json!([{"type": "thinking", "thinking": "", "signature": "sig"}, unparsed_block()]),
+        Some(json!([{"type": "thinking", "thinking": "", "signature": "sig"}, unparsed_block()]))
+    )]
+    #[case::null_text(
+        json!([{"type": "text", "text": null}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::every_block_empty(json!([{"type": "text", "text": 5}, {"type": "text"}]), None)]
+    #[case::no_blocks(json!([]), Some(json!([])))]
+    fn strip_empty_raw_content_blocks_drops_what_python_drops(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_empty_raw_content_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    #[case::null_text_kept(
+        json!([{"type": "text", "text": null}]),
+        Some(json!([{"type": "text", "text": null}]))
+    )]
+    #[case::numeric_text_kept(
+        json!([{"type": "text", "text": 5}, unparsed_block()]),
+        Some(json!([{"type": "text", "text": 5}, unparsed_block()]))
+    )]
+    #[case::blank_text_stripped(
+        json!([{"type": "text", "text": " \n"}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::missing_text_stripped(
+        json!([{"type": "text"}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::only_blank_text(json!([{"type": "text", "text": ""}]), None)]
+    fn strip_empty_raw_content_blocks_leaves_a_user_s_non_string_text_to_the_provider(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_empty_raw_content_blocks(user_turn(blocks)),
+            expected.map(user_turn)
+        );
+    }
+
+    fn tool_result(content: Value) -> Value {
+        json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": content})
+    }
+
+    #[rstest]
+    #[case::null_text(
+        json!([{"type": "text", "text": null}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::numeric_text(
+        json!([{"type": "text", "text": 5}, {"type": "text", "text": {"a": 1}}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::wide_number_text(
+        json!([{"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::tool_result_part(
+        json!([tool_result(json!([{"type": "text", "text": null}, {"type": "text", "text": "ok"}])), unparsed_block()]),
+        Some(json!([tool_result(json!([{"type": "text", "text": "ok"}])), unparsed_block()]))
+    )]
+    #[case::tool_result_string_content(
+        json!([tool_result(json!("ok")), {"type": "text", "text": 5}]),
+        Some(json!([tool_result(json!("ok"))]))
+    )]
+    #[case::string_and_missing_text_kept(
+        json!([{"type": "text", "text": ""}, {"type": "text"}, unparsed_block()]),
+        Some(json!([{"type": "text", "text": ""}, {"type": "text"}, unparsed_block()]))
+    )]
+    #[case::emptied_turn(json!([{"type": "text", "text": null}, {"type": "text", "text": 5}]), None)]
+    #[case::no_blocks(json!([]), Some(json!([])))]
+    fn drop_raw_non_string_user_texts_drops_what_python_drops(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            drop_raw_non_string_user_texts(user_turn(blocks)),
+            expected.map(user_turn)
+        );
+    }
+
+    #[rstest]
+    #[case::assistant(turn(json!([{"type": "text", "text": null}])))]
+    #[case::string_content(json!({"role": "user", "content": "hi"}))]
+    #[case::not_an_object(json!("hi"))]
+    fn drop_raw_non_string_user_texts_leaves_other_messages(#[case] message: Value) {
+        assert_eq!(
+            drop_raw_non_string_user_texts(message.clone()),
+            Some(message)
+        );
+    }
+
+    #[rstest]
+    #[case::tool_result_part(
+        json!([{"role": "user", "content": [
+            tool_result(json!([{"type": "text", "text": null}, {"type": "text", "text": "ok"}]))
+        ]}]),
+        json!([{"role": "user", "content": [tool_result(json!([{"type": "text", "text": "ok"}]))]}])
+    )]
+    #[case::wide_number_text(
+        json!([{"role": "user", "content": [
+            {"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")},
+            {"type": "text", "text": "ok"}
+        ]}]),
+        json!([{"role": "user", "content": [{"type": "text", "text": "ok"}]}])
+    )]
+    #[case::emptied_turn(
+        json!([
+            {"role": "user", "content": [{"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")}]},
+            {"role": "user", "content": "hi"}
+        ]),
+        json!([{"role": "user", "content": "hi"}])
+    )]
+    #[case::assistant_left_alone(
+        json!([{"role": "assistant", "content": [
+            {"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")},
+            tool_result(json!([{"type": "text", "text": 5}]))
+        ]}]),
+        json!([{"role": "assistant", "content": [
+            {"type": "text", "text": litellm_host::raw_json::encode("18446744073709551616")},
+            tool_result(json!([{"type": "text", "text": 5}]))
+        ]}])
+    )]
+    #[case::no_blocks(
+        json!([{"role": "user", "content": []}]),
+        json!([{"role": "user", "content": []}])
+    )]
+    fn drop_non_string_user_texts_drops_what_python_drops(
+        #[case] messages: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(apply(drop_non_string_user_texts, messages), expected);
+    }
+
+    fn stripped_rejecting_emptied(messages: Value) -> Result<Vec<Recognized<Message>>, Error> {
+        map_messages_rejecting_emptied(
+            history(messages),
+            strip_empty_content_blocks,
+            strip_empty_raw_content_blocks,
+        )
+    }
+
+    #[rstest]
+    #[case::left_one(
+        json!([
+            {"role": "user", "content": [{"type": "text", "text": " "}]},
+            {"role": "user", "content": "hi"}
+        ]),
+        json!([{"role": "user", "content": "hi"}])
+    )]
+    #[case::sent_none(json!([]), json!([]))]
+    fn a_rewrite_that_leaves_a_message_keeps_it(#[case] messages: Value, #[case] expected: Value) {
+        assert_eq!(
+            stripped_rejecting_emptied(messages).unwrap(),
+            history(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::known(json!([{"role": "user", "content": [{"type": "text", "text": " "}]}]))]
+    #[case::raw(json!([{"role": "assistant", "content": [{"type": "text", "text": null}]}]))]
+    fn a_rewrite_that_leaves_no_message_is_a_request_error(#[case] messages: Value) {
+        assert!(matches!(
+            stripped_rejecting_emptied(messages),
+            Err(Error::InvalidRequest(ErrorDetail::EmptiedMessages))
+        ));
+    }
+
+    #[rstest]
+    #[case::empty_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": ""}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::non_string_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": 5}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::signed(
+        json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]),
+        Some(json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]))
+    )]
+    #[case::redacted_kept(
+        json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]),
+        Some(json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]))
+    )]
+    #[case::only_unsigned(json!([{"type": "thinking", "thinking": "plan"}]), None)]
+    fn strip_raw_unsigned_thinking_blocks_drops_what_claude_rejects(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_raw_unsigned_thinking_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    #[case::string_content(json!({"role": "user", "content": 5}))]
+    #[case::not_an_object(json!("hi"))]
+    fn raw_rewrites_leave_a_message_without_a_block_list(#[case] message: Value) {
+        assert_eq!(
+            strip_empty_raw_content_blocks(message.clone()),
+            Some(message.clone())
+        );
+        assert_eq!(
+            strip_raw_encrypted_reasoning_blocks(message.clone()),
+            Some(message)
+        );
+    }
+
+    #[rstest]
+    fn sanitize_raw_tool_use_ids_rewrites_ids_python_rejects() {
+        assert_eq!(
+            sanitize_raw_tool_use_ids(turn(json!([
+                unparsed_block(),
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}},
+                {"type": "server_tool_use", "id": "srvtoolu_ok", "name": "web_search"},
+                {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"},
+                {"type": "tool_result", "tool_use_id": 7}
+            ]))),
+            Some(turn(json!([
+                unparsed_block(),
+                {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}},
+                {"type": "server_tool_use", "id": "srvtoolu_ok", "name": "web_search"},
+                {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"},
+                {"type": "tool_result", "tool_use_id": 7}
+            ])))
+        );
+    }
+
+    #[rstest]
+    #[case::replayed_results(
+        json!([
+            unparsed_block(),
+            {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {"query": "paris"}},
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                {"type": "web_search_result", "url": "https://example.com", "title": "Paris", "snippet": "Capital."}
+            ]}
+        ]),
+        json!([
+            unparsed_block(),
+            {"type": "text", "text": "Web search results for 'paris':\n\nTitle: Paris\nURL: https://example.com\nSnippet: Capital."}
+        ])
+    )]
+    #[case::replayed_error(
+        json!([
+            unparsed_block(),
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": {"type": "web_search_tool_result_error"}}
+        ]),
+        json!([
+            unparsed_block(),
+            {"type": "text", "text": "Web search results:\n\nSearch failed: unavailable"}
+        ])
+    )]
+    #[case::anthropic_issued(
+        json!([
+            unparsed_block(),
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                {"type": "web_search_result", "url": "u", "encrypted_content": "blob"}
+            ]}
+        ]),
+        json!([
+            unparsed_block(),
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                {"type": "web_search_result", "url": "u", "encrypted_content": "blob"}
+            ]}
+        ])
+    )]
+    fn flatten_unencrypted_raw_web_search_results_follows_python(
+        #[case] blocks: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            flatten_unencrypted_raw_web_search_results(turn(blocks)),
+            Some(turn(expected))
+        );
+    }
+
+    #[rstest]
+    fn strip_raw_provider_specific_fields_drops_the_field_from_each_block() {
+        assert_eq!(
+            strip_raw_provider_specific_fields(turn(json!([
+                unparsed_block(),
+                {"type": "text", "text": "hi", "provider_specific_fields": {"x": 1}, "citations": null},
+                "raw"
+            ]))),
+            Some(turn(json!([
+                unparsed_block(),
+                {"type": "text", "text": "hi", "citations": null},
+                "raw"
+            ])))
+        );
+    }
+
+    fn advisor_exchange(id: Value) -> Value {
+        json!([
+            unparsed_block(),
+            {"type": "server_tool_use", "id": id, "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "tool_use_id": id, "content": {"type": "advisor_result", "text": "Use channels."}},
+            {"type": "text", "text": "Done."}
+        ])
+    }
+
+    #[rstest]
+    #[case::string_id(json!("srvtoolu_1"))]
+    fn strip_raw_advisor_blocks_drops_the_exchange_from_an_assistant_turn(#[case] id: Value) {
+        assert_eq!(
+            strip_raw_advisor_blocks(turn(advisor_exchange(id))),
+            Some(turn(
+                json!([unparsed_block(), {"type": "text", "text": "Done."}])
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case::user_turn(json!({"role": "user", "content": advisor_exchange(json!("srvtoolu_1"))}))]
+    #[case::empty_id(turn(advisor_exchange(json!(""))))]
+    #[case::numeric_id(turn(advisor_exchange(json!(7))))]
+    #[case::list_id(turn(advisor_exchange(json!(["srvtoolu_1"]))))]
+    #[case::object_id(turn(advisor_exchange(json!({"id": "srvtoolu_1"}))))]
+    fn strip_raw_advisor_blocks_leaves_other_turns(#[case] message: Value) {
+        assert_eq!(strip_raw_advisor_blocks(message.clone()), Some(message));
+    }
+
+    fn advisor_use(id: Value) -> Value {
+        json!({"type": "server_tool_use", "id": id, "name": "advisor", "input": {}})
+    }
+
+    fn advisor_result(tool_use_id: Value) -> Value {
+        json!({"type": "advisor_tool_result", "tool_use_id": tool_use_id, "content": {"type": "advisor_result", "text": "Advice."}})
+    }
+
+    #[rstest]
+    #[case::list_answering_a_string_id(
+        json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!(["srvtoolu_1"])), unparsed_block()]),
+        json!([advisor_result(json!(["srvtoolu_1"])), unparsed_block()])
+    )]
+    #[case::string_not_answered_by_int(
+        json!([advisor_use(json!("1")), advisor_result(json!(1)), unparsed_block()]),
+        json!([advisor_result(json!(1)), unparsed_block()])
+    )]
+    #[case::falsy_ids_are_kept(
+        json!([
+            advisor_use(json!(0)), advisor_result(json!(0)),
+            advisor_use(json!(0.0)), advisor_result(json!(0.0)),
+            advisor_use(json!(false)), advisor_result(json!(false)),
+            advisor_use(Value::Null), advisor_result(Value::Null),
+            {"type": "server_tool_use", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "content": {}},
+            advisor_use(json!("srvtoolu_1")), advisor_result(json!("srvtoolu_1"))
+        ]),
+        json!([
+            advisor_use(json!(0)), advisor_result(json!(0)),
+            advisor_use(json!(0.0)), advisor_result(json!(0.0)),
+            advisor_use(json!(false)), advisor_result(json!(false)),
+            advisor_use(Value::Null), advisor_result(Value::Null),
+            {"type": "server_tool_use", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "content": {}}
+        ])
+    )]
+    #[case::only_advisor_blocks_answer_advisor_ids(
+        json!([
+            advisor_use(json!("a")),
+            {"type": "server_tool_use", "id": "w", "name": "web_search", "input": {}},
+            advisor_result(json!("w")),
+            advisor_result(json!("unknown")),
+            {"type": "tool_use", "id": "a", "name": "advisor", "input": {}},
+            {"type": "tool_result", "tool_use_id": "a", "content": "ok"},
+            advisor_result(json!("a"))
+        ]),
+        json!([
+            {"type": "server_tool_use", "id": "w", "name": "web_search", "input": {}},
+            advisor_result(json!("w")),
+            advisor_result(json!("unknown")),
+            {"type": "tool_use", "id": "a", "name": "advisor", "input": {}},
+            {"type": "tool_result", "tool_use_id": "a", "content": "ok"}
+        ])
+    )]
+    fn strip_raw_advisor_blocks_matches_ids_as_python_does(
+        #[case] blocks: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(strip_raw_advisor_blocks(turn(blocks)), Some(turn(expected)));
+    }
+
+    #[rstest]
+    #[case::string_ids(json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!("srvtoolu_1"))]))]
+    #[case::non_string_ids(json!([
+        advisor_use(json!(["srvtoolu_1"])), advisor_result(json!(["srvtoolu_1"])),
+        advisor_use(json!({"id": "srvtoolu_2"})), advisor_result(json!({"id": "srvtoolu_2"})),
+        advisor_use(json!(7)), advisor_result(json!(7))
+    ]))]
+    #[case::list_use_id_beside_a_string_result_id(json!([
+        advisor_use(json!(["srvtoolu_1"])), advisor_result(json!("srvtoolu_1"))
+    ]))]
+    #[case::null_empty_and_missing_ids(json!([
+        advisor_use(Value::Null), advisor_result(Value::Null),
+        advisor_use(json!("")), advisor_result(json!("")),
+        {"type": "server_tool_use", "name": "advisor", "input": {}},
+        {"type": "advisor_tool_result", "content": {}}
+    ]))]
+    fn drop_raw_advisor_blocks_drops_every_advisor_block(#[case] advisor_blocks: Value) {
+        let web_search =
+            json!({"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}});
+        let blocks = [
+            advisor_blocks.as_array().unwrap().clone(),
+            vec![web_search.clone(), unparsed_block()],
+        ]
+        .concat();
+        assert_eq!(
+            drop_raw_advisor_blocks(turn(json!(blocks))),
+            Some(turn(json!([web_search, unparsed_block()])))
+        );
+    }
+
+    #[rstest]
+    fn drop_raw_advisor_blocks_leaves_a_user_turn() {
+        let message = json!({"role": "user", "content": advisor_exchange(json!(7))});
+        assert_eq!(drop_raw_advisor_blocks(message.clone()), Some(message));
+    }
+
+    const MANY_BLOCKS: usize = 20_000;
+    const MANY_BLOCKS_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+    fn many_ids() -> impl Iterator<Item = String> {
+        (0..MANY_BLOCKS).map(|index| format!("srvtoolu_{index:08}"))
+    }
+
+    fn many_advisor_exchanges() -> Value {
+        turn(Value::Array(
+            many_ids()
+                .map(|id| advisor_use(json!(id)))
+                .chain(many_ids().map(|id| advisor_result(json!(id))))
+                .chain([json!({"type": "text", "text": "Done."})])
+                .collect(),
+        ))
+    }
+
+    fn many_replayed_searches() -> Value {
+        turn(Value::Array(
+            many_ids()
+                .map(|id| json!({"type": "server_tool_use", "id": id, "name": "web_search", "input": {"query": "q"}}))
+                .chain(many_ids().map(
+                    |id| json!({"type": "web_search_tool_result", "tool_use_id": id, "content": []}),
+                ))
+                .collect(),
+        ))
+    }
+
+    fn timed<T>(rewrite: impl FnOnce() -> T) -> (T, std::time::Duration) {
+        let started = std::time::Instant::now();
+        let rewritten = rewrite();
+        (rewritten, started.elapsed())
+    }
+
+    fn raw_blocks(message: Option<Value>) -> usize {
+        message.unwrap()["content"].as_array().unwrap().len()
+    }
+
+    fn typed_blocks(messages: Vec<Message>) -> usize {
+        match &messages[0].content {
+            MessageContent::Blocks(blocks) => blocks.len(),
+            MessageContent::Text(_) => 0,
+        }
+    }
+
+    fn parsed(message: Value) -> Vec<Message> {
+        serde_json::from_value(json!([message])).unwrap()
+    }
+
+    fn strip_raw_advisor(message: Value) -> (usize, std::time::Duration) {
+        let (rewritten, elapsed) = timed(|| strip_raw_advisor_blocks(message));
+        (raw_blocks(rewritten), elapsed)
+    }
+
+    fn strip_typed_advisor(message: Value) -> (usize, std::time::Duration) {
+        let messages = parsed(message);
+        let (rewritten, elapsed) = timed(|| strip_advisor_blocks(messages));
+        (typed_blocks(rewritten), elapsed)
+    }
+
+    fn flatten_raw_searches(message: Value) -> (usize, std::time::Duration) {
+        let (rewritten, elapsed) = timed(|| flatten_unencrypted_raw_web_search_results(message));
+        (raw_blocks(rewritten), elapsed)
+    }
+
+    fn flatten_typed_searches(message: Value) -> (usize, std::time::Duration) {
+        let messages = parsed(message);
+        let (rewritten, elapsed) = timed(|| flatten_unencrypted_web_search_results(messages));
+        (typed_blocks(rewritten), elapsed)
+    }
+
+    #[rstest]
+    #[case::raw_advisor_exchanges(strip_raw_advisor, many_advisor_exchanges(), 1)]
+    #[case::typed_advisor_exchanges(strip_typed_advisor, many_advisor_exchanges(), 1)]
+    #[case::raw_replayed_searches(flatten_raw_searches, many_replayed_searches(), MANY_BLOCKS)]
+    #[case::typed_replayed_searches(flatten_typed_searches, many_replayed_searches(), MANY_BLOCKS)]
+    fn id_matching_scales_linearly_with_the_blocks(
+        #[case] rewrite: fn(Value) -> (usize, std::time::Duration),
+        #[case] message: Value,
+        #[case] expected_blocks: usize,
+    ) {
+        let (blocks, elapsed) = rewrite(message);
+        assert_eq!(blocks, expected_blocks);
+        assert!(elapsed < MANY_BLOCKS_BUDGET, "{elapsed:?}");
+    }
+
+    #[rstest]
+    #[case::bridge_tagged_blocks(
+        json!([
+            {"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")},
+            {"type": "redacted_thinking", "data": tagged("gAAAA_2")},
+            unparsed_block()
+        ]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::converse_wrapped_redacted_data(
+        json!([{"type": "redacted_thinking", "data": "UVVKRA=="}, unparsed_block()]),
+        Some(json!([{"type": "redacted_thinking", "data": "QUJD"}, unparsed_block()]))
+    )]
+    #[case::only_bridge_tagged_blocks(
+        json!([{"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")}]),
+        None
+    )]
+    #[case::no_blocks(json!([]), Some(json!([])))]
+    fn strip_raw_encrypted_reasoning_blocks_follows_python(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_raw_encrypted_reasoning_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    fn a_raw_message_the_rewrite_left_parseable_is_parsed_again() {
+        let rewritten = map_messages(
+            history(json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "ok"}]},
+                {"role": "user", "content": [{"type": "text", "text": 5}]}
+            ])),
+            strip_empty_content_blocks,
+            strip_empty_raw_content_blocks,
+        );
+        assert_eq!(
+            rewritten,
+            history(json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+                {"role": "user", "content": [{"type": "text", "text": 5}]}
+            ]))
+        );
+    }
+
+    fn system(value: Value) -> Recognized<SystemPrompt> {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::unparsed_list(
+        json!([{"type": "text", "text": "x-anthropic-billing-header: cc_version=1"}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::unparsed_list_of_billing_blocks(
+        json!([{"type": "text", "text": "x-anthropic-billing-header: cc_version=1"}, 5, {"type": "text", "text": 5}]),
+        Some(json!([5, {"type": "text", "text": 5}]))
+    )]
+    #[case::only_billing(json!([{"type": "text", "text": "x-anthropic-billing-header: cc_version=1", "id": 5}]), None)]
+    #[case::object(json!({"type": "text", "text": "hi"}), Some(json!({"type": "text", "text": "hi"})))]
+    #[case::empty_object(json!({}), None)]
+    #[case::empty_text(json!(""), None)]
+    fn strip_billing_metadata_from_a_system_prompt_as_sent(
+        #[case] sent: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_billing_metadata_from_system(system(sent)),
+            expected.map(system)
         );
     }
 
@@ -1918,6 +3289,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_signed_compaction_block_in_an_unparsed_message_counts() {
+        let messages = history(json!([{"role": "assistant", "content": [
+            {"type": "text", "text": 5},
+            {"type": "compaction", "content": "c", "signature": "s"}
+        ]}]));
+        assert!(requires_native_compaction_beta(None, &messages));
+    }
+
     #[rstest]
     #[case::minimal_only(tiers(true, false, false, false, false, false), [false, false, false, false, false])]
     #[case::low_only(tiers(false, true, false, false, false, false), [true, false, false, false, false])]
@@ -2091,6 +3471,7 @@ mod tests {
                 supports_speed: false,
                 supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
+                bedrock: Default::default(),
             }
         );
         assert_eq!(

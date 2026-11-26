@@ -7,6 +7,7 @@ confidence scoring and a tunable threshold (only block when confidence >= thresh
 """
 
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
@@ -282,7 +283,7 @@ def _normalize_language(tag: str) -> str:
 
 def _is_blocked_language(
     tag: str,
-    blocked_languages: list[str] | None,
+    blocked_languages: Sequence[str] | None,
     block_all: bool,
 ) -> bool:
     """True if this language tag should be considered blocked."""
