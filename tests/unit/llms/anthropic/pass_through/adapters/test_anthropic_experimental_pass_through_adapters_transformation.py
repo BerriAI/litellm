@@ -12,7 +12,10 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -2726,6 +2729,7 @@ def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
         pytest.param("turbo", False, "turbo", id="unknown-effort-goes-to-the-target"),
         pytest.param("turbo", True, "medium", id="drop-params-drops-an-unknown-effort-for-the-budget"),
         pytest.param("none", True, "none", id="drop-params-keeps-a-known-effort"),
+        pytest.param("default", False, "medium", id="default-names-no-level-so-the-budget-decides"),
     ],
 )
 def test_explicit_output_effort_beside_an_enabled_budget_reaches_a_non_claude_model_up_to_the_budget(
@@ -2768,6 +2772,57 @@ def test_explicit_output_effort_the_model_refuses_sends_what_the_budget_alone_se
         return new_kwargs.get("reasoning_effort")
 
     assert sent_effort({"output_config": {"effort": "low"}}) == (sent_effort({}) if drop_params else "low")
+
+
+def test_explicit_output_effort_beside_a_budget_on_a_custom_named_deployment_follows_its_base_model() -> None:
+    def sent_effort(model: str, base_model: str | None) -> object:
+        new_kwargs: Final = {"model": model}
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(
+                Any,
+                {
+                    "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET},
+                    "output_config": {"effort": "low"},
+                },
+            ),
+            cast(Any, new_kwargs),
+            custom_llm_provider="azure",
+            drop_params=True,
+            base_model=base_model,
+        )
+        return new_kwargs.get("reasoning_effort")
+
+    assert sent_effort("azure/my-pro-deployment", "azure/gpt-5.4-pro") == sent_effort("azure/gpt-5.4-pro", None)
+
+
+@pytest.mark.parametrize("report_reasoning_drops", [True, False], ids=["request-path", "side-caller"])
+@pytest.mark.parametrize("output_effort", ["low", "turbo"], ids=["refused-by-the-model", "unknown"])
+def test_only_the_request_path_warns_when_drop_params_swaps_the_output_effort_for_the_budgets(
+    openai_model_without_low_tiers: str,
+    output_effort: str,
+    report_reasoning_drops: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    new_kwargs: Final = {"model": openai_model_without_low_tiers}
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(
+                Any,
+                {
+                    "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                    "output_config": {"effort": output_effort},
+                },
+            ),
+            cast(Any, new_kwargs),
+            custom_llm_provider="openai",
+            drop_params=True,
+            report_reasoning_drops=report_reasoning_drops,
+        )
+
+    assert new_kwargs["reasoning_effort"] == "medium"
+    assert any(
+        "Dropping output_config.effort" in record.getMessage() for record in caplog.records
+    ) is report_reasoning_drops
 
 
 def test_unknown_output_effort_beside_disabled_thinking_sends_none_without_a_drop_warning(

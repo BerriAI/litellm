@@ -122,6 +122,7 @@ REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "x
 REASONING_EFFORT_STRENGTH_RANK: Final = MappingProxyType(
     {effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)}
 )
+DEFAULT_REASONING_EFFORT: Final = "default"
 
 
 def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -> str:
@@ -149,7 +150,7 @@ def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -
 
 def reasoning_effort_within_thinking_budget(requested: object, budget_effort: str | None) -> str | None:
     budget_rank: Final = REASONING_EFFORT_STRENGTH_RANK.get(budget_effort) if budget_effort else None
-    if budget_rank is None or not isinstance(requested, str) or not requested:
+    if budget_rank is None or not isinstance(requested, str) or requested in ("", DEFAULT_REASONING_EFFORT):
         return budget_effort
     requested_rank: Final = REASONING_EFFORT_STRENGTH_RANK.get(requested)
     return budget_effort if requested_rank is not None and requested_rank > budget_rank else requested

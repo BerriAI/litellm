@@ -380,6 +380,7 @@ class AnthropicAdapter:
             reasoning_summary=reasoning_summary,
             base_model=base_model,
             drop_params=drop_params,
+            report_reasoning_drops=True,
             translate_bare_output_effort=translate_bare_output_effort,
         )
 
@@ -1231,26 +1232,25 @@ class LiteLLMAnthropicMessagesAdapter:
         excludes_effort: Callable[[str], bool],
         *,
         drop_params: bool,
+        report_drops: bool,
     ) -> str | None:
         effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
         if not drop_params or effort is None or effort == budget_effort:
             return effort
-        if effort not in KNOWN_REASONING_EFFORTS:
+        drop_reason: Final = (
+            "no reasoning API defines it"
+            if effort not in KNOWN_REASONING_EFFORTS
+            else "its model cost map entry does not list it"
+            if excludes_effort(effort)
+            else None
+        )
+        if drop_reason is None:
+            return effort
+        if report_drops:
             verbose_logger.warning(
-                "Dropping output_config.effort=%r for %s, no reasoning API defines it, because drop_params is set",
-                effort,
-                model,
+                "Dropping output_config.effort=%r for %s, %s, because drop_params is set", effort, model, drop_reason
             )
-            return budget_effort
-        if excludes_effort(effort):
-            verbose_logger.warning(
-                "Dropping output_config.effort=%r for %s, its model cost map entry does not list it, "
-                "because drop_params is set",
-                effort,
-                model,
-            )
-            return budget_effort
-        return effort
+        return budget_effort
 
     @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
@@ -1265,8 +1265,10 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
         translate_bare_output_effort: bool = False,
         deployment_model_info: object = None,
+        base_model: str | None = None,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1329,9 +1331,14 @@ class LiteLLMAnthropicMessagesAdapter:
                     model_excludes_effort,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    deployment_model_info=deployment_model_info,
+                    deployment_model_info=(
+                        deployment_model_info
+                        if base_model is None
+                        else {**(as_str_mapping(deployment_model_info) or {}), "base_model": base_model}
+                    ),
                 ),
                 drop_params=drop_params,
+                report_drops=report_reasoning_drops,
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
@@ -1416,6 +1423,7 @@ class LiteLLMAnthropicMessagesAdapter:
         base_model: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
         translate_bare_output_effort: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
@@ -1466,8 +1474,10 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            report_reasoning_drops=report_reasoning_drops,
             translate_bare_output_effort=translate_bare_output_effort,
             deployment_model_info=deployment_model_info,
+            base_model=base_model,
         )
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI, after tools and thinking pick the route
         new_messages: Final = self.translate_anthropic_messages_to_openai(

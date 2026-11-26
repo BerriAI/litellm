@@ -48,6 +48,7 @@ from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import (
     messages_without_rejected_reasoning,
+    model_info_with_request_base_model,
     request_safeguards_evaluator,
     resent_without_rejected_reasoning,
 )
@@ -413,7 +414,7 @@ def _build_responses_kwargs(
         _reasoning_for_target,
         model=model,
         custom_llm_provider=provider,
-        deployment_model_info=forwarded_kwargs.get("model_info"),
+        deployment_model_info=model_info_with_request_base_model(forwarded_kwargs),
         drop_params=drop_params,
         off_switch=thinking_off_switch(anthropic_request),
     )
