@@ -12,6 +12,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Unpack
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 
+from litellm._internal_context import nested_tool_call_failure
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
@@ -538,7 +539,7 @@ class LiteLLM_Proxy_MCP_Handler:
             auth: "UserAPIKeyAuth | None", server_filter: Sequence[str] | None
         ) -> tuple[Sequence[MCPTool], Sequence[str]]:
             listing: Final = await _get_tools_from_mcp_servers(
-                user_api_key_auth=auth,
+                user_api_key_auth=None if auth is None else auth.model_copy(update={"budget_reservation": None}),
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=list(server_filter) if server_filter is not None else None,
                 mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1022,12 +1023,14 @@ class LiteLLM_Proxy_MCP_Handler:
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import mark_parallel_slot_reused_by_tool_calls
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
         from litellm.responses.mcp.direct_url_claims import unregistered_mcp_server
 
+        mark_parallel_slot_reused_by_tool_calls()
         tool_results: Final[list[MCPToolResult]] = []
         tool_call_id: str | None = None
         rules_obj: Final = Rules()
@@ -1108,7 +1111,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
                     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                         data=logging_request_data,
-                        user_api_key_dict=typed_user_api_key_auth,
+                        user_api_key_dict=typed_user_api_key_auth.model_copy(update={"budget_reservation": None}),
                         _metadata_variable_name="metadata",
                     )
                     user_identifier = getattr(typed_user_api_key_auth, "end_user_id", None) or getattr(
@@ -1413,13 +1416,14 @@ class LiteLLM_Proxy_MCP_Handler:
 
         try:
             traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-            await proxy_logging_obj.post_call_failure_hook(
-                request_data=request_data,
-                original_exception=error,
-                user_api_key_dict=user_api_key_auth,
-                route="/responses/mcp/call_tool",
-                traceback_str=traceback_str,
-            )
+            with nested_tool_call_failure():
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=error,
+                    user_api_key_dict=user_api_key_auth,
+                    route="/responses/mcp/call_tool",
+                    traceback_str=traceback_str,
+                )
         except Exception:
             verbose_logger.exception("Failed to log MCP tool call failure")
 

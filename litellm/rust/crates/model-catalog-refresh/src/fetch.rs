@@ -12,6 +12,8 @@ use url::Url;
 use crate::attempt::{self, Cause, Fetched, Rejected};
 use crate::{Location, RetryPolicy};
 
+const UNPARSEABLE_URL: &str = "<unparseable URL>";
+
 /// How an `s3://` fetch reaches S3
 #[derive(Clone, Debug)]
 pub enum S3Access {
@@ -58,7 +60,6 @@ pub struct RemoteSource {
     client: Client,
     access: Access,
     policy: RetryPolicy,
-    resumed: Option<Failed>,
 }
 
 impl RemoteSource {
@@ -73,15 +74,6 @@ impl RemoteSource {
             client,
             access,
             policy,
-            resumed: None,
-        }
-    }
-
-    /// Continues a fetch whose first attempt failed retryably elsewhere, waiting before its next attempt
-    pub fn resuming(self, failed: Failed) -> Self {
-        Self {
-            resumed: Some(failed),
-            ..self
         }
     }
 }
@@ -93,20 +85,11 @@ impl Source for RemoteSource {
             client,
             access,
             policy,
-            resumed,
         } = self;
         let shown = redacted(url);
         let location =
             Location::parse(url).map_err(|error| Failed::of(&shown, &Rejected::fatal(error), 1))?;
-        let mut backoff = policy.backoff();
         let made = AtomicU32::new(0);
-        if let Some(failed) = resumed {
-            let Some(wait) = backoff.next() else {
-                return Err(failed.clone());
-            };
-            tokio::time::sleep(policy.delay(wait, failed.retry_after)).await;
-            made.store(1, Ordering::Relaxed);
-        }
         let attempt = || {
             made.fetch_add(1, Ordering::Relaxed);
             async {
@@ -124,7 +107,7 @@ impl Source for RemoteSource {
             }
         };
         attempt
-            .retry(backoff)
+            .retry(policy.backoff())
             .sleep(tokio::time::sleep)
             .when(|rejected| rejected.retryable)
             .adjust(|rejected, wait| wait.map(|wait| policy.delay(wait, rejected.retry_after)))
@@ -163,10 +146,11 @@ fn reason(url: &str, cause: &Cause) -> String {
     }
 }
 
-/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials
-fn redacted(url: &str) -> Cow<'_, str> {
+/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials. A URL that does not parse
+/// could carry them anywhere, so it is not shown at all
+pub fn redacted(url: &str) -> Cow<'_, str> {
     let Ok(mut parsed) = Url::parse(url) else {
-        return Cow::Borrowed(url);
+        return Cow::Borrowed(UNPARSEABLE_URL);
     };
     if parsed.username().is_empty()
         && parsed.password().is_none()

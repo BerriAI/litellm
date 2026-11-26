@@ -67,6 +67,7 @@ from litellm.images.fan_out import (
     settle_image_answers,
     split_outcomes,
 )
+from litellm.images.retries import async_retried, retried
 from litellm.images.streaming import (
     AsyncImageStream,
     ImageStream,
@@ -7928,6 +7929,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Handles image generation requests.
@@ -7950,6 +7952,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
                 api_key=api_key,
+                max_retries=max_retries,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -8018,7 +8021,7 @@ class BaseLLMHTTPHandler:
                     model,
                     image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
                 ),
-                send,
+                retried(send, max_retries),
             )
         )
         served, unserved = partition_outcomes(
@@ -8060,6 +8063,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -8132,8 +8136,9 @@ class BaseLLMHTTPHandler:
             model,
             image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
+        retrying_send: Final = async_retried(send, max_retries)
         responses, failure = split_outcomes(
-            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+            await asyncio.gather(*(retrying_send() for _ in range(request_count)), return_exceptions=True)
         )
         served, unserved = partition_outcomes(
             await asyncio.gather(

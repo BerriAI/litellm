@@ -208,13 +208,6 @@ MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG"
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
 
-# Model cost map validation constants
-MODEL_COST_MAP_MIN_MODEL_COUNT: Final = get_env_int(
-    "MODEL_COST_MAP_MIN_MODEL_COUNT", 50
-)  # Minimum number of models a fetched cost map must contain to be considered valid
-MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = get_env_float(
-    "MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5
-)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH: Final = get_env_int("DEFAULT_IMAGE_WIDTH", 300)
 DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)

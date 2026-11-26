@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 import litellm
+from litellm._internal_context import reporting_nested_tool_call_failure
 from litellm._uuid import uuid
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
@@ -243,6 +244,7 @@ def spend_log_failure_input(args: HookArgs) -> SpendLogCall | None:
         },
         "enrich": not isinstance(exception, DBLookupDeadlineExceeded),
         "track": track,
+        "nested_tool_call": reporting_nested_tool_call_failure(),
         "window_resets": _window_resets(auth.budget_reservation),
         "rows": [
             _row(

@@ -77,10 +77,17 @@ _IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
 )
 
 
-def _deployment_prices_images_without_an_output_price(pricing: ModelInfo | None) -> bool:
+_FLAT_OUTPUT_IMAGE_PRICE: Final[frozenset[str]] = frozenset({"output_cost_per_image"})
+_VOLCENGINE_OUTPUT_IMAGE_PRICES: Final[frozenset[str]] = frozenset(
+    {"output_cost_per_image", "output_cost_per_image_1K", "output_cost_per_image_2K"}
+)
+
+
+def _deployment_prices_images_without_an_output_price(
+    pricing: ModelInfo | None, output_prices: frozenset[str] = _FLAT_OUTPUT_IMAGE_PRICE
+) -> bool:
     return pricing is not None and (
-        "input_cost_per_pixel" in pricing
-        or ("input_cost_per_image" in pricing and "output_cost_per_image" not in pricing)
+        "input_cost_per_pixel" in pricing or ("input_cost_per_image" in pricing and output_prices.isdisjoint(pricing))
     )
 
 
@@ -1561,6 +1568,14 @@ def _model_priced_image_cost_calculator(
                 if is_tokenhub_image_model(model)
                 else None
             )
+        case litellm.LlmProviders.VOLCENGINE.value:
+            if _deployment_prices_images_without_an_output_price(pricing, _VOLCENGINE_OUTPUT_IMAGE_PRICES):
+                return None
+            from litellm.llms.volcengine.image_generation.cost_calculator import (
+                cost_calculator as volcengine_image_cost_calculator,
+            )
+
+            return volcengine_image_cost_calculator
         case litellm.LlmProviders.DASHSCOPE.value:
             if _deployment_prices_images_without_an_output_price(pricing):
                 return None

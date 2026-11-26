@@ -24,11 +24,11 @@ pub fn resolve_retry_policy<'a>(
 }
 
 impl RetryPolicy {
-    /// `get_num_retries_from_retry_policy`: `DefaultRetries` for an `UnsupportedEndpointError`;
-    /// else `NotFoundErrorRetries` for any 404 answer, then the most specific exception class
-    /// the policy names, then `DefaultRetries`.
+    /// `get_num_retries_from_retry_policy`: `DefaultRetries` for an `UnsupportedEndpointError` or a
+    /// `DocumentFetchError`; else `NotFoundErrorRetries` for any 404 answer, then the most specific
+    /// exception class the policy names, then `DefaultRetries`.
     pub fn retries_for(&self, failure: &AttemptError) -> Option<u32> {
-        if failure.is_a("UnsupportedEndpointError") {
+        if failure.is_retried_refusal() {
             return self.DefaultRetries;
         }
         let not_found = (failure.status == Some(404))
@@ -85,7 +85,7 @@ pub fn should_retry(failure: &AttemptError, ctx: RetryContext) -> bool {
     if let Some(status) = failure.status
         && !should_retry_status(status)
         && !matches!(status, 401 | 403)
-        && !failure.is_a("UnsupportedEndpointError")
+        && !failure.is_retried_refusal()
     {
         return false;
     }
@@ -254,6 +254,10 @@ mod tests {
         failure(FailureKind::Declined, Some(400), &["UnsupportedEndpointError", "BadRequestError"]),
         Some(7)
     )]
+    #[case::document_fetch(
+        failure(FailureKind::Declined, Some(400), &["DocumentFetchError", "BadRequestError"]),
+        Some(7)
+    )]
     #[case::malformed_reads_bad_request(
         failure(FailureKind::Declined, Some(400), &["MalformedRequestFieldError", "BadRequestError"]),
         Some(3)
@@ -295,10 +299,19 @@ mod tests {
         AttemptError::new(FailureKind::BadRequest, Some(400))
     }
 
+    fn document_fetch() -> AttemptError {
+        failure(
+            FailureKind::Declined,
+            Some(400),
+            &["DocumentFetchError", "BadRequestError"],
+        )
+    }
+
     #[rstest]
     #[case::a_retry_is_left(server_error(), 2, 1, false, Some(false))]
     #[case::the_budget_is_spent(server_error(), 2, 2, false, Some(true))]
     #[case::the_budget_grants_none(server_error(), 0, 0, false, Some(true))]
+    #[case::an_unreachable_document_is_retried(document_fetch(), 2, 1, false, Some(false))]
     #[case::nothing_retries_the_failure(bad_request(), 2, 0, false, None)]
     #[case::a_spent_budget_still_raises_what_nothing_retries(bad_request(), 2, 2, false, None)]
     #[case::a_retry_policy_is_not_asked_whether_to_retry(bad_request(), 2, 0, true, Some(false))]

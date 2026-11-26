@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._internal_context import reporting_nested_tool_call_failure
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX
@@ -342,6 +343,8 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                     hook, reads, view, ctx, {"call_id": _call_id(data), "batch": _batch_response(response)}
                 )
             case Hook.post_call_failure:
+                if reporting_nested_tool_call_failure():
+                    return None
                 return await self._call(
                     hook,
                     reads,
