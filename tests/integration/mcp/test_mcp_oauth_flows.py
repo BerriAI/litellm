@@ -2562,19 +2562,6 @@ def _user_credential_row_count(user_id: str, server_id: str) -> int:
     return len(rows)
 
 
-def _short_lived_issue(monkeypatch: pytest.MonkeyPatch, *, include_expiry: bool) -> None:
-    original_issue: Final = AuthorizationServer.issue
-
-    def issue(instance: AuthorizationServer, grant: str, client_id: str, subject: str, scope: str) -> dict[str, object]:
-        body: Final = dict(original_issue(instance, grant, client_id, subject, scope))
-        if include_expiry and grant == "authorization_code":
-            body["expires_in"] = 1
-        else:
-            body.pop("expires_in", None)
-        return body
-
-    monkeypatch.setattr(AuthorizationServer, "issue", issue)
-
 
 @contextmanager
 def _live_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, Wire]]:
@@ -2676,10 +2663,9 @@ def test_valid_access_token_is_reused_without_another_token_endpoint_call(gatewa
 
 
 def test_expired_access_token_with_a_valid_refresh_grant_is_refreshed_transparently(
-    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    gateway: Gateway, tmp_path: Path
 ) -> None:
-    _short_lived_issue(monkeypatch, include_expiry=True)
-    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+    with mcp_peer() as peer, oauth_server(authorization_code_expires_in=1) as auth, gateway.scenario() as scenario:
         alias: Final = "fresh" + uuid.uuid4().hex[:8]
         user_id: Final = scenario.user()
         identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
@@ -2703,10 +2689,9 @@ def test_expired_access_token_with_a_valid_refresh_grant_is_refreshed_transparen
 
 
 def test_expired_access_with_a_transient_refresh_failure_preserves_the_grant_and_is_retryable(
-    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    gateway: Gateway, tmp_path: Path
 ) -> None:
-    _short_lived_issue(monkeypatch, include_expiry=True)
-    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+    with mcp_peer() as peer, oauth_server(authorization_code_expires_in=1) as auth, gateway.scenario() as scenario:
         alias: Final = "busy" + uuid.uuid4().hex[:8]
         user_id: Final = scenario.user()
         identity, key, _issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
@@ -2733,12 +2718,30 @@ def test_expired_access_with_a_transient_refresh_failure_preserves_the_grant_and
         assert _user_credential_row_count(user_id, identity) == 1
 
 
-def test_expired_access_with_dead_refresh_grant_is_revoked_and_challenges_for_reauth(
-    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _short_lived_issue(monkeypatch, include_expiry=True)
-    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+def test_rejected_access_with_dead_refresh_grant_is_invalidated_and_challenges_for_reauth(gateway: Gateway) -> None:
+    with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
         alias: Final = "dead" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        assert _user_credential_row_count(user_id, identity) == 1
+        peer.drain()
+        wire.drain()
+        auth.drain()
+        with auth.lock:
+            auth.revoked.add(_issued_token(issued))
+            auth.refresh_tokens.clear()
+        outcome: Final = McpCaller(gateway, key, "server_mcp", alias).call(f"{alias}-add", ADD)
+        assert outcome.status == 401, outcome.raw
+        assert _user_credential_row_count(user_id, identity) == 1
+        assert tool_calls(peer.drain()) == ()
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+
+
+def test_expired_access_with_dead_refresh_grant_is_invalidated_and_listing_challenges_for_reauth(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with mcp_peer() as peer, oauth_server(authorization_code_expires_in=1) as auth, gateway.scenario() as scenario:
+        alias: Final = "deadlist" + uuid.uuid4().hex[:8]
         user_id: Final = scenario.user()
         identity, key, _issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
         assert _user_credential_row_count(user_id, identity) == 1
@@ -2754,7 +2757,7 @@ def test_expired_access_with_dead_refresh_grant_is_revoked_and_challenges_for_re
             "  store_model_in_db: true\n"
         )
         with owned_proxy(gateway, tmp_path, {}, config=config, remove_environment=("REDIS_HOST", "REDIS_PORT")) as cold:
-            outcome: Final = McpCaller(cold, key, "server_mcp", alias).call(f"{alias}-add", ADD)
+            outcome: Final = McpCaller(cold, key, "server_mcp", alias).list_tools()
         assert outcome.status == 401, outcome.raw
         assert _user_credential_row_count(user_id, identity) == 1
         assert tool_calls(peer.drain()) == ()
