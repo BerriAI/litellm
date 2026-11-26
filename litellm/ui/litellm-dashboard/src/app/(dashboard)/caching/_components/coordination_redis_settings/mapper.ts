@@ -8,10 +8,8 @@ import {
   CoordinationRedisType,
   CoordinationSection,
 } from "./coordinationRedisFields";
+import type { CoordinationFormValue, CoordinationFormValues } from "./schema";
 import { CoordinationRedisSettings, CoordinationRedisSource, REDACTED_VALUE } from "./types";
-
-export type CoordinationFormValue = string | number | boolean | undefined;
-export type CoordinationFormValues = Record<string, CoordinationFormValue>;
 
 export const isFieldVisible = (field: CoordinationField, redisType: CoordinationRedisType): boolean =>
   field.redisType === null || field.redisType === redisType;

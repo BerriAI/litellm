@@ -9,5 +9,7 @@
 - Every message is in `#[error(...)]`, built from the variant's fields. Constants and formatting helpers a message needs stay private to the same file
 - A variant carries the values its message and its public mapping need, typed, never a pre-rendered string
 - `crate::Error` has one `#[from]` variant per family and never lists a family's denials itself. Denials that no single family owns (budgets, routes, licenses, an unavailable dependency) stay there
+- A request `authz/` refuses for a caller the core authenticated, whichever credential it presented, is an `AuthzDenial` in `error.rs`. A model list's refusal is `ModelAccess` with the `DeniedList` that says whose list it was, so a new list adds a case and never a second variant with the same message. That message is `ModelAccessDenied`, the one copy of the sentence every model denial shows a client
+  - `AuthzDenial` is not in `crate::Error` and has no `public` yet. Only the gateway's routes raise it today, and the proxy raises a model denial as a class of its own, so mapping it needs a new `PublicDenial` variant. Both land with the PR that makes Python raise it
 - `public.rs` gives each of those enums a `public` method, and a nested one is reached through its family's. The matches are exhaustive, so a new variant without a status does not compile
 - Keep each message's opening sentence stable. Clients match on it, so a change goes through the parity tests in `public.rs` as a deliberate update

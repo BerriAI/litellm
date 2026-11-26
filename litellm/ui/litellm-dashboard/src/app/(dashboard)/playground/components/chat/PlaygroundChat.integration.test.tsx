@@ -370,6 +370,105 @@ describe("PlaygroundChat", () => {
     expect(screen.queryByText("late reply")).not.toBeInTheDocument();
   });
 
+  it("resends the answered turns once the session is lost and keeps sending them on later turns", async () => {
+    const user = userEvent.setup();
+    const resentHistories: unknown[] = [];
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        resentHistories.push(args[29]?.());
+        args[15]?.("resp-second");
+        args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "Still Ada", args[2]);
+      });
+    preload({ endpointType: "responses", selectedModel: "gpt-fast", useApiSessionManagement: "true" });
+    renderChat();
+
+    await send(user, "I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await send(user, "Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await send(user, "And now?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(3));
+    const followUp = responsesRequest.mock.calls[1] as ResponsesArgs;
+    expect(followUp[14]).toBe("resp-first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
+    expect(resentHistories).toEqual([
+      [
+        { role: "user", content: "I am Ada" },
+        { role: "assistant", content: "Hi Ada" },
+        { role: "user", content: "Who am I?" },
+      ],
+    ]);
+    const afterResend = responsesRequest.mock.calls[2] as ResponsesArgs;
+    expect(afterResend[14]).toBeNull();
+    expect(afterResend[0]).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "And now?" },
+    ]);
+  });
+
+  it("starts a fresh session on the model picked after a resend and continues it by response id", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      { model_group: "gpt-fast", mode: "chat", providers: ["openai"] },
+      { model_group: "gpt-chained", mode: "chat", providers: ["openai"] },
+    ]);
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[29]?.();
+        args[15]?.("resp-resent");
+        args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-switched");
+        args[1]("assistant", "Ada again", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "Still Ada", args[2]);
+      });
+    preload({ endpointType: "responses", selectedModel: "gpt-fast", useApiSessionManagement: "true" });
+    renderChat();
+
+    await send(user, "I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await send(user, "Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-chained" }));
+    await send(user, "Again?");
+    expect(await screen.findByText("Ada again")).toBeInTheDocument();
+    await send(user, "And now?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(4));
+    const switched = responsesRequest.mock.calls[2] as ResponsesArgs;
+    expect(switched[2]).toBe("gpt-chained");
+    expect(switched[14]).toBeNull();
+    expect(switched[0]).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "Again?" },
+    ]);
+    const continued = responsesRequest.mock.calls[3] as ResponsesArgs;
+    expect(continued[14]).toBe("resp-switched");
+    expect(continued[0]).toEqual([{ role: "user", content: "And now?" }]);
+  });
+
   it("keeps a stopped request's response id out of the next request", async () => {
     const user = userEvent.setup();
     const first = deferred();

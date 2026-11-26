@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
     get_prometheus_logger_from_callbacks,
@@ -643,6 +644,9 @@ class RouterBudgetLimiting(CustomLogger):
                         response_cost=response_cost,
                         job=job,
                     )
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
 
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
