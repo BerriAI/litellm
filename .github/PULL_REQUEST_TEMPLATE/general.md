@@ -9,12 +9,36 @@
 <!-- The author writes this in their own words, and it can be left empty. AI agents never write here and leave the
      placeholder line below as is, and when updating an existing PR they keep whatever the author wrote. Keep this heading
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
-     No bullets, tables, or code names here. Everything else goes inside the Details block below
+     No bullets, tables, or code names here. Caveats come right below this section, and everything else goes inside the Details block
      One exception for agents: when the PR breaks a supported public contract (see the conventional commits rule in AGENTS.md),
      add one sentence here starting "Breaking change:" naming who is affected and what to change before upgrading, and put `!`
      after the type or scope in the title, e.g. `refactor(proxy)!: ...`. Never add either one to a PR that does not meet that bar -->
 
 [insert handwritten description here]
+
+## Caveats (if any)
+
+<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
+     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
+     Call out known limitations, follow-up work, or anything a reviewer should watch out for
+     Include only the tiers that have caveats; drop the empty ones
+     - Severe: an evidenced rollout hazard inherent to the intended change, requiring operator planning,
+       such as downtime, destructive data changes or a supported workflow requiring migration.
+       A changed value or auth implementation alone is not such a hazard. For compatibility breaks,
+       name the previously valid request/config, before/after behavior and required migration, and
+       still add the `!` title and "Breaking change:" sentence, which this caveat does not replace.
+       Provider price refreshes and fixes restoring intended behavior are not breaking by themselves.
+       Keep billing and security risks assessed separately (2026-11-03, price correction false positive)
+     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
+       unsafe to ship as is
+     - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
+     - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
+     Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
+     human reader
+     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
+     user-observable behavior difference", list it here too with what breaks if it is wrong
+     Keep this section here, top-level and right below the handwritten description, never inside the Details block
+     Drop this section if there are none -->
 
 <details>
 <summary>Details</summary>
@@ -141,29 +165,6 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 📖 Documentation
 🚄 Infrastructure
 ✅ Test
-
-## Caveats (if any)
-
-<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
-     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
-     Call out known limitations, follow-up work, or anything a reviewer should watch out for
-     Include only the tiers that have caveats; drop the empty ones
-     - Severe: an evidenced rollout hazard inherent to the intended change, requiring operator planning,
-       such as downtime, destructive data changes or a supported workflow requiring migration.
-       A changed value or auth implementation alone is not such a hazard. For compatibility breaks,
-       name the previously valid request/config, before/after behavior and required migration, and
-       still add the `!` title and "Breaking change:" sentence, which this caveat does not replace.
-       Provider price refreshes and fixes restoring intended behavior are not breaking by themselves.
-       Keep billing and security risks assessed separately (2026-11-03, price correction false positive)
-     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
-       unsafe to ship as is
-     - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
-     - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
-     Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
-     human reader
-     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
-     user-observable behavior difference", list it here too with what breaks if it is wrong
-     Drop this section if there are none -->
 
 ## QA runbook
 

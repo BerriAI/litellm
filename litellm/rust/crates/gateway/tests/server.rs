@@ -1346,6 +1346,17 @@ async fn a_deployment_param_from_the_environment_reaches_the_provider_resolved(
     assert_eq!(forwarded.pointer(pointer), Some(&expected));
 }
 
+#[tokio::test]
+async fn a_param_the_model_does_not_support_is_dropped_under_the_global_drop_params() {
+    let forwarded = forwarded_body(
+        "litellm_settings:\n  drop_params: true\n",
+        json!({"speed": "fast"}),
+    )
+    .await;
+
+    assert_eq!(forwarded.get("speed"), None);
+}
+
 #[rstest]
 #[case::listed("      additional_drop_params: [temperature]\n", None)]
 #[case::unlisted("", Some(json!(0.5)))]

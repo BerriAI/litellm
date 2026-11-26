@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use litellm_env::Lookup;
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::Caller;
+use litellm_gateway_auth_core::{Caller, record::EndUserRecord};
 use litellm_repositories::{ConfigParam, Credential, ProxyModel, RawJson, StoredObjects};
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
@@ -12,7 +12,7 @@ use crate::{host::NativeRows, stored::StoredRows};
 
 /// The caller the master key authenticates.
 pub(crate) fn master() -> Authenticated<NativeRows> {
-    Authenticated::from(Caller::MasterKey)
+    Authenticated::from(Caller::master_key(EndUserRecord::default()))
 }
 
 pub(crate) type Variables = &'static [(&'static str, &'static str)];

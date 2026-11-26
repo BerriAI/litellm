@@ -27,11 +27,15 @@ from litellm.types.vector_stores import (
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
 
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_VECTOR_STORE_ROWS: Final = TypeAdapter(
+    tuple[LiteLLM_ManagedVectorStore, ...], config=ConfigDict(hide_input_in_errors=True)
+)
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
@@ -139,6 +143,29 @@ class VectorStoreIndexRegistry:
         return vector_stores_from_db
 
     _get_vector_store_indexes_from_db = get_vector_store_indexes_from_db
+
+    @staticmethod
+    async def get_vector_store_indexes_from_db_writer(
+        client: "WriterPinnedClient",
+    ) -> tuple[LiteLLM_ManagedVectorStoreIndex, ...]:
+        rows: Final = await ManagedVectorStoreIndexRepository(client).table.find_many()
+        indexes: Final = tuple(VectorStoreIndexRegistry._valid_index_from_db_row(row) for row in rows)
+        return tuple(index for index in indexes if index is not None)
+
+    @staticmethod
+    def index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex:
+        return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
+
+    @staticmethod
+    def _valid_index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex | None:
+        try:
+            return VectorStoreIndexRegistry.index_from_db_row(row)
+        except ValidationError as e:
+            verbose_logger.warning(
+                "Skipping a vector store index row that fails validation: %s",
+                e.errors(include_url=False, include_context=False, include_input=False),
+            )
+            return None
 
 
 class VectorStoreRegistry:
@@ -519,6 +546,16 @@ class VectorStoreRegistry:
         return vector_stores_from_db
 
     _get_vector_stores_from_db = get_vector_stores_from_db
+
+    @staticmethod
+    async def get_vector_stores_by_name_from_db(
+        client: "WriterPinnedClient", vector_store_name: str
+    ) -> tuple[LiteLLM_ManagedVectorStore, ...]:
+        rows: Final = await ManagedVectorStoresRepository(client).table.find_many(
+            where={"vector_store_name": vector_store_name},
+            order={"created_at": "desc"},
+        )
+        return _VECTOR_STORE_ROWS.validate_python(tuple(dict(row) for row in rows))
 
     def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, object]:
         """

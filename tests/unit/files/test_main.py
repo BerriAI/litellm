@@ -449,3 +449,24 @@ async def test_a_rate_limited_file_upload_waits_the_providers_retry_after_before
     waits: Final = tuple(call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list))
     assert upload_route.call_count == 2
     assert any(2 <= wait <= 2 + JITTER for wait in waits), waits
+
+
+@pytest.mark.parametrize(
+    "litellm_call_id, expected",
+    [(None, "generated-call-id"), (123, "123")],
+    ids=["explicit-none-gets-a-generated-id", "non-string-is-stringified"],
+)
+def test_file_retrieve_gives_its_own_logging_object_a_string_call_id(
+    monkeypatch: pytest.MonkeyPatch, litellm_call_id: int | None, expected: str
+) -> None:
+    from litellm.files import main as files_main
+
+    retrieve_file: Final = MagicMock(return_value="SENTINEL")
+    monkeypatch.setattr(files_main.base_llm_http_handler, "retrieve_file", retrieve_file)
+    monkeypatch.setattr(files_main.uuid_module, "uuid4", lambda: "generated-call-id")
+
+    files_main.file_retrieve.__wrapped__(
+        file_id="file-abc123", custom_llm_provider="anthropic", api_key="sk-test", litellm_call_id=litellm_call_id
+    )
+
+    assert retrieve_file.call_args.kwargs["logging_obj"].litellm_call_id == expected
