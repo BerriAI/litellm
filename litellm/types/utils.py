@@ -4949,6 +4949,7 @@ class LlmProviders(str, Enum):
     SCX_AI = "scx-ai"
     PRISM = "prism"
     OPENINFER = "openinfer"
+    RIGHTNOW = "rightnow"
     INFERENCEAPIS = "inferenceapis"
     HOSTINGER_ROUTER = "hostinger_router"
     ZEROGPU = "zerogpu"

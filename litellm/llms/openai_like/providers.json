@@ -283,6 +283,14 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "rightnow": {
+    "base_url": "https://api.rightnowai.co/v1",
+    "api_key_env": "RIGHTNOW_API_KEY",
+    "api_base_env": "RIGHTNOW_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "perplexity_orchestrator": {
     "base_url": "https://api.perplexity.ai/orchestrator/v1",
     "api_key_env": ["PERPLEXITYAI_API_KEY", "PERPLEXITY_API_KEY"],

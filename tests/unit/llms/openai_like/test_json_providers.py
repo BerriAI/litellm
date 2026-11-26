@@ -2,6 +2,7 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -614,3 +615,107 @@ def test_json_provider_realtime_call_without_its_key_sends_the_callers_ephemeral
 
     assert route.call_count == 1
     assert route.calls.last.request.headers["authorization"] == "Bearer ek_caller"
+
+
+class TestRightNow:
+    MODEL = "rightnow/deepseek-v4-1-flash-1017"
+
+    def test_rightnow_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        rightnow = JSONProviderRegistry.get("rightnow")
+        assert rightnow is not None
+        assert rightnow.base_url == "https://api.rightnowai.co/v1"
+        assert rightnow.api_key_env == "RIGHTNOW_API_KEY"
+        assert rightnow.api_base_env == "RIGHTNOW_API_BASE"
+        assert rightnow.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_rightnow_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model=self.MODEL, custom_llm_provider=None, api_base=None, api_key=None
+        )
+
+        assert model == "deepseek-v4-1-flash-1017"
+        assert provider == "rightnow"
+        assert api_key is None
+        assert api_base == "https://api.rightnowai.co/v1"
+
+    def test_rightnow_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        config = create_config_class(JSONProviderRegistry.get("rightnow"))()
+
+        api_base, _ = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.rightnowai.co/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info("https://custom.example/v1", "test-key")
+        assert api_base == "https://custom.example/v1"
+        assert api_key == "test-key"
+
+    def test_rightnow_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        config = create_config_class(JSONProviderRegistry.get("rightnow"))()
+        url = config.get_complete_url(
+            api_base="https://api.rightnowai.co/v1",
+            api_key="test-key",
+            model=self.MODEL,
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.rightnowai.co/v1/chat/completions"
+
+    def test_rightnow_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="deepseek-v4-1-flash-1017", provider=LlmProviders.RIGHTNOW
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "rightnow"
+
+    def test_rightnow_model_cost_map(self):
+        with open(os.path.join(workspace_path, "model_prices_and_context_window.json")) as f:
+            model_cost = json.load(f)
+
+        # model: (input, output, cache read) per token, max input, max output, image input
+        expected_models = {
+            "rightnow/deepseek-v4-1-flash": (1.4e-07, 5.8e-07, 3e-08, 1048576, 65536, False),
+            "rightnow/deepseek-v4-1-flash-1017": (1.5e-07, 6e-07, 1e-08, 1048576, 65536, True),
+            "rightnow/glm-5-3": (1.3e-06, 4.2e-06, 1.3e-07, 1048576, 65536, False),
+            "rightnow/glm-5-3-flash": (1.1e-07, 4.5e-07, 3e-08, 1048576, 65536, True),
+            "rightnow/kimi-k3-1-pro": (1.6e-06, 8e-06, 1.6e-07, 1048576, 32768, True),
+            "rightnow/nemotron-3-5-lightning-30b": (5e-08, 1.5e-07, 1e-08, 262144, 65536, False),
+            "rightnow/ornith-1-5-35b": (1e-07, 4e-07, 1e-08, 262144, 65536, True),
+            "rightnow/qwen3-8-27b": (1e-07, 4e-07, 1e-08, 262144, 32768, True),
+        }
+        # Every RightNow entry is pinned here, so a retired model left in the cost map,
+        # or a new one added without its prices, reddens this test.
+        assert {k for k, v in model_cost.items() if v.get("litellm_provider") == "rightnow"} == set(expected_models)
+        for model, (input_cost, output_cost, cache_read, max_input, max_output, vision) in expected_models.items():
+            entry = model_cost[model]
+            assert entry["input_cost_per_token"] == input_cost
+            assert entry["output_cost_per_token"] == output_cost
+            assert entry["cache_read_input_token_cost"] == cache_read
+            assert entry["supports_prompt_caching"] is True
+            assert entry["max_input_tokens"] == max_input
+            assert entry["max_output_tokens"] == max_output
+            assert entry["max_tokens"] == max_output
+            assert entry["supports_function_calling"] is True
+            assert entry["supports_tool_choice"] is True
+            assert entry["supports_response_schema"] is True
+            assert entry["supports_reasoning"] is True
+            assert entry.get("supports_vision", False) is vision
+
+        with open(os.path.join(workspace_path, "litellm", "model_prices_and_context_window_backup.json")) as f:
+            backup = json.load(f)
+        for model in expected_models:
+            assert backup[model] == model_cost[model]

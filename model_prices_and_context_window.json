@@ -85485,6 +85485,171 @@
         "supports_reasoning": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
+    "rightnow/deepseek-v4-1-flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 5.8e-07,
+        "source": "https://www.rightnowai.co/models/deepseek-v4-1-flash",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "rightnow/deepseek-v4-1-flash-1017": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://www.rightnowai.co/models/deepseek-v4-1-flash-1017",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "rightnow/glm-5-3": {
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 1.3e-06,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-06,
+        "source": "https://www.rightnowai.co/models/glm-5-3",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "rightnow/glm-5-3-flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.1e-07,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-07,
+        "source": "https://www.rightnowai.co/models/glm-5-3-flash",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "rightnow/kimi-k3-1-pro": {
+        "cache_read_input_token_cost": 1.6e-07,
+        "input_cost_per_token": 1.6e-06,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://www.rightnowai.co/models/kimi-k3-1-pro",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "rightnow/nemotron-3-5-lightning-30b": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://www.rightnowai.co/models/nemotron-3-5-lightning-30b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "rightnow/ornith-1-5-35b": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://www.rightnowai.co/models/ornith-1-5-35b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "rightnow/qwen3-8-27b": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "rightnow",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://www.rightnowai.co/models/qwen3-8-27b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "xai/grok-voice-3.0": {
         "input_cost_per_second": 0.001333333333333,
         "input_cost_per_text_message": 0.004,

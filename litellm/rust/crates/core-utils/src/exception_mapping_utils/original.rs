@@ -109,6 +109,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[&str] = &[
     "ragflow",
     "pinstripes",
     "openinfer",
+    "rightnow",
     "darkbloom",
     "meta",
     "cognition",
