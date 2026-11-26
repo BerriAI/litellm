@@ -270,14 +270,25 @@ def _sub_call_proxy_request(
 
 
 def _classifier_group_admits_client_headers(
-    classifier_model: str, litellm_metadata: Mapping[str, object] | None, llm_router: "Router | None"
+    classifier_model: str, user_api_key_auth: "UserAPIKeyAuth | None", llm_router: "Router | None"
 ) -> bool:
-    from litellm.router_rust.invoke.shaping import client_header_forwarding_admits
+    """Whether the forwarding scope an operator configured covers the model group the classifier request lands on.
+    The caller's team alias on the classifier's name only resolves that destination, and having a team alias never
+    stands in for the group being listed in the scope."""
+    from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+    from litellm.proxy.auth.auth_checks import check_model_access_helper
 
-    return (
-        litellm_metadata is not None
-        and llm_router is not None
-        and client_header_forwarding_admits(classifier_model, {"litellm_metadata": litellm_metadata}, llm_router)
+    settings: Final = litellm.model_group_settings
+    scope: Final = settings.forward_client_headers_to_llm_api if settings is not None else None
+    if scope is None or llm_router is None:
+        return False
+    aliases: Final = user_api_key_auth.team_model_aliases if user_api_key_auth is not None else None
+    destination: Final = resolve_model_group_alias(aliases, classifier_model) or classifier_model
+    return check_model_access_helper(
+        model=destination,
+        llm_router=llm_router,
+        models=scope,
+        team_id=user_api_key_auth.team_id if user_api_key_auth is not None else None,
     )
 
 
@@ -337,7 +348,7 @@ def build_safeguards_evaluator(
         if forwarded_headers is not None
         and (
             not forwarded_headers.stamp.model_group_scoped
-            or _classifier_group_admits_client_headers(classifier_model, litellm_metadata, llm_router)
+            or _classifier_group_admits_client_headers(classifier_model, user_api_key_auth, llm_router)
         )
         else None
     )

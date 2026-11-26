@@ -253,6 +253,40 @@ async def test_classifier_call_drops_a_header_the_proxy_did_not_forward_to_the_p
     assert router.calls[0]["headers"] == caller_headers
 
 
+async def _scoped_classifier_call(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    scope: Sequence[str],
+    caller: UserAPIKeyAuth,
+    deployments: Sequence[str] = ("classifier",),
+) -> Mapping[str, object]:
+    router: Final = Router(
+        model_list=[_mock_deployment(name, '{"verdicts": {"call_1": {"flagged": false}}}') for name in deployments]
+    )
+    recorder: Final = _ClassifierCall()
+    monkeypatch.setattr(
+        litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=list(scope))
+    )
+    forwarded_headers: Final = {
+        **_forwarded_stamp({"X-User-Id": "user-42"}, model_group_scoped=True),
+        "headers": {"X-User-Id": "user-42"},
+    }
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        evaluator: Final = build_safeguards_evaluator(
+            safeguards=SAFEGUARDS,
+            messages=MESSAGES,
+            litellm_metadata={"user_api_key_auth": caller},
+            user_api_key_auth=caller,
+            llm_router=router,
+            logging_kwargs={},
+            forwarded_headers=proxy_sub_call_forwarded_headers(forwarded_headers),
+        )
+    assert evaluator is not None
+    recorded: Final = replace(evaluator, acompletion=recorder, caller_model_verdict=_allowed)
+    await recorded.evaluate((ToolUseUnderReview(id="call_1", name="Bash", input={"command": "ls"}),))
+    return recorder.calls[0]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scope, expected",
@@ -262,31 +296,31 @@ async def test_classifier_call_drops_a_header_the_proxy_did_not_forward_to_the_p
 async def test_a_model_group_scoped_forwarding_reaches_the_classifier_only_when_its_scope_covers_it(
     monkeypatch: pytest.MonkeyPatch, scope: Sequence[str], expected: Mapping[str, str] | None
 ) -> None:
-    router: Final = Router(model_list=[_mock_deployment("classifier", '{"verdicts": {"call_1": {"flagged": false}}}')])
-    recorder: Final = _ClassifierCall()
-    monkeypatch.setattr(
-        litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=list(scope))
+    classifier_call: Final = await _scoped_classifier_call(
+        monkeypatch, scope=scope, caller=UserAPIKeyAuth(api_key="sk-test", team_id="team-1")
     )
-    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
-        evaluator: Final = build_safeguards_evaluator(
-            safeguards=SAFEGUARDS,
-            messages=MESSAGES,
-            litellm_metadata={"user_api_key_auth": UserAPIKeyAuth(api_key="sk-test", team_id="team-1")},
-            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", team_id="team-1"),
-            llm_router=router,
-            logging_kwargs={},
-            forwarded_headers=proxy_sub_call_forwarded_headers(
-                {
-                    **_forwarded_stamp({"X-User-Id": "user-42"}, model_group_scoped=True),
-                    "headers": {"X-User-Id": "user-42"},
-                }
-            ),
-        )
-    assert evaluator is not None
-    recorded: Final = replace(evaluator, acompletion=recorder, caller_model_verdict=_allowed)
-    await recorded.evaluate((ToolUseUnderReview(id="call_1", name="Bash", input={"command": "ls"}),))
-    assert recorder.calls[0].get("headers") == expected
-    assert (recorder.calls[0].get("proxy_server_request") is not None) is (expected is not None)
+    assert classifier_call.get("headers") == expected
+    assert (classifier_call.get("proxy_server_request") is not None) is (expected is not None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope, expected",
+    [(["team-classifier"], {"X-User-Id": "user-42"}), (["parent-group"], None)],
+    ids=["scope-covers-the-alias-destination", "scope-excludes-the-alias-destination"],
+)
+async def test_a_team_alias_on_the_classifier_name_does_not_widen_the_forwarding_scope(
+    monkeypatch: pytest.MonkeyPatch, scope: Sequence[str], expected: Mapping[str, str] | None
+) -> None:
+    classifier_call: Final = await _scoped_classifier_call(
+        monkeypatch,
+        scope=scope,
+        caller=UserAPIKeyAuth(
+            api_key="sk-test", team_id="team-1", team_model_aliases={"classifier": "team-classifier"}
+        ),
+        deployments=("classifier", "team-classifier"),
+    )
+    assert classifier_call.get("headers") == expected
 
 
 @pytest.mark.asyncio
