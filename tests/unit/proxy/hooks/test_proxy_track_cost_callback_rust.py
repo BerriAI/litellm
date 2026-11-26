@@ -20,6 +20,7 @@ from litellm.proxy.db.native_database import ServiceLoggingEvents
 from litellm.proxy.db.rust_spend_log_writer import install_rust_spend_log_writer, uninstall_rust_spend_log_writer
 from litellm.proxy.hooks.rust_spend_logger import (
     _SPEND_LOG_CALL,  # pyright: ignore[reportPrivateUsage]  # the host reads the call it serves from here
+    _request_admitted_at,  # pyright: ignore[reportPrivateUsage]  # the instant run_rust resolves schedules at
     SpendLogHost,
     bill_failure_in_rust,
     rust_spend_loggers,
@@ -582,8 +583,6 @@ def test_each_attempt_carries_the_current_metadata_retention(
     assert _SETTINGS.validate_python(call.document["settings"])["spend_logs_metadata_fields"] == sent
 
 
-
-
 @pytest.mark.asyncio
 async def test_spend_log_windows_resolve_schedules_at_the_request_start(
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch
@@ -634,3 +633,11 @@ async def test_spend_log_windows_resolve_schedules_at_the_instant_auth_admitted_
     _ = await proxy.rows()
 
     assert seen == [admitted]
+
+
+def test_a_batch_mixing_a_receive_stamp_and_a_naive_start_resolves_at_the_earliest_instant() -> None:
+    admitted: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+    stamped: Final = {"litellm_params": {"metadata": {"litellm_received_at": admitted}}}
+    unstamped: Final = {"start_time": datetime(2026, 11, 27, 12, 0)}
+
+    assert _request_admitted_at(SpendLogCall(document={}, rows=(stamped, unstamped), response=None)) == admitted

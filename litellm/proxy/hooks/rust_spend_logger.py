@@ -3,7 +3,7 @@ import json
 from collections.abc import Awaitable, Coroutine, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -99,7 +99,8 @@ def _started_at(kwargs: Mapping[str, object]) -> datetime | None:
 
 
 def _admitted_at(kwargs: Mapping[str, object]) -> datetime | None:
-    return request_admitted_at(kwargs) or _started_at(kwargs)
+    admitted: Final = request_admitted_at(kwargs) or _started_at(kwargs)
+    return None if admitted is None else admitted.astimezone(timezone.utc)
 
 
 def _request_admitted_at(call: SpendLogCall | None) -> datetime | None:
