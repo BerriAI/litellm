@@ -4318,6 +4318,7 @@ dependencies = [
  "litellm-config",
  "litellm-fnmatch",
  "litellm-python-compat",
+ "litellm-router-types",
  "litellm-secret-value",
  "litellm-starlette",
  "rstest",
