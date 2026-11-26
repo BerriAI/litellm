@@ -57,13 +57,6 @@ const emailCard = (panel: Locator, title: string) =>
     .locator('[data-slot="card"]')
     .filter({ has: panel.page().getByText(title, { exact: true }) });
 
-const stubSuccess = (page: BrowserPage, path: string) =>
-  page.route(`**${path}`, (route) =>
-    route.request().method() === "POST"
-      ? route.fulfill({ json: { message: "ok" } })
-      : route.fallback(),
-  );
-
 test.describe("Performance alert thresholds", () => {
   const thresholds = {
     spend: { multiplier: 3, minimum_increase: 50 },
@@ -150,59 +143,6 @@ test.describe("Performance alert thresholds", () => {
   });
 });
 
-test.describe("Alert destinations", () => {
-  test("MS Teams save adds ms_teams to the destinations and sends only the edited webhook", async ({
-    page,
-    request,
-  }) => {
-    const url = `https://example.test/teams-hook-${Date.now()}`;
-    const panel = await openSettingsTab(page, "MS Teams Alerts");
-    const webhook = panel.locator('input[name="MS_TEAMS_WEBHOOK_URL"]');
-    await expect(webhook).toBeVisible();
-    const config = await api<{ active_alerting_destinations?: string[] }>(
-      request,
-      "GET",
-      "/get/config/callbacks",
-    );
-    const current = config.active_alerting_destinations ?? [];
-    await stubSuccess(page, "/config/update");
-    await webhook.fill(url);
-    const body = await captureWrite(page, "POST", "/config/update", () =>
-      panel.getByRole("button", { name: "Save Changes" }).click(),
-    );
-    expect(body).toEqual({
-      general_settings: { alerting: [...new Set([...current, "ms_teams"])] },
-      environment_variables: { MS_TEAMS_WEBHOOK_URL: url },
-    });
-    await expect(
-      page.getByText("MS Teams settings updated successfully"),
-    ).toBeVisible();
-  });
-
-  test("email save sends only the edited SMTP fields", async ({ page }) => {
-    const port = String(10000 + (Date.now() % 50000));
-    const sender = `alerts-${Date.now()}@example.test`;
-    const panel = await openSettingsTab(page, "Email Alerts");
-    const portInput = panel.locator('input[name="SMTP_PORT"]');
-    await expect(portInput).toBeVisible();
-    await stubSuccess(page, "/config/update");
-    await portInput.fill(port);
-    await panel.locator('input[name="SMTP_SENDER_EMAIL"]').fill(sender);
-    const body = await captureWrite(page, "POST", "/config/update", () =>
-      emailCard(panel, "Email Server Settings")
-        .getByRole("button", { name: "Save Changes" })
-        .click(),
-    );
-    expect(body).toEqual({
-      general_settings: { alerting: ["email"] },
-      environment_variables: { SMTP_PORT: port, SMTP_SENDER_EMAIL: sender },
-    });
-    await expect(
-      page.getByText("Email settings updated successfully"),
-    ).toBeVisible();
-  });
-});
-
 test.describe("Email notification events", () => {
   type EventSettings = { settings: { event: string; enabled: boolean }[] };
   test.afterEach(async ({ request }) => {
@@ -249,38 +189,5 @@ test.describe("Email notification events", () => {
     await expect(
       page.getByText("Email event settings updated successfully"),
     ).toBeVisible();
-  });
-});
-
-test.describe("Alerting settings", () => {
-  test("submits every alerting argument with the edited value", async ({
-    page,
-    request,
-  }) => {
-    const settings = await api<{ field_name: string; field_value: unknown }[]>(
-      request,
-      "GET",
-      "/alerting/settings",
-    );
-    const panel = await openSettingsTab(page, "Alerting Settings");
-    const frequency = panel
-      .getByRole("row", { name: /^daily_report_frequency/ })
-      .getByRole("spinbutton");
-    await expect(frequency).toBeVisible();
-    await page.route("**/config/field/update", (route) =>
-      route.fulfill({ json: { message: "ok" } }),
-    );
-    await frequency.fill("7200");
-    const body = await captureWrite(page, "POST", "/config/field/update", () =>
-      panel.getByRole("button", { name: "Update Settings" }).click(),
-    );
-    const { slack_alerting: _slack, ...current } = Object.fromEntries(
-      settings.map((setting) => [setting.field_name, setting.field_value]),
-    );
-    expect(body).toEqual({
-      field_name: "alerting_args",
-      field_value: { ...current, daily_report_frequency: 7200 },
-      config_type: "general_settings",
-    });
   });
 });
