@@ -1,6 +1,7 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -20,6 +21,7 @@ from litellm.llms.anthropic.common_utils import system_without_claude_code_billi
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.messages.utils import (
+    KNOWN_REASONING_EFFORTS,
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
     ClientEffort,
@@ -28,6 +30,8 @@ from litellm.llms.anthropic.messages.utils import (
     json_copy_or_original,
     local_model_name,
     maps_bare_output_effort,
+    model_excludes_effort,
+    normalize_reasoning_effort_value,
     object_mapping,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
@@ -163,6 +167,8 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
     reasoning_effort_from_thinking_silently,
+    reasoning_effort_within_thinking_budget,
+    warn_dropped_reasoning,
 )
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
@@ -1254,6 +1260,37 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
     @staticmethod
+    def _effort_within_thinking_budget(
+        output_effort: object,
+        budget_effort: str | None,
+        model: str,
+        excludes_effort: Callable[[str], bool],
+        normalize_effort: Callable[[str], str],
+        *,
+        drop_params: bool,
+        report_drops: bool,
+    ) -> str | None:
+        effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
+        if effort is None or effort == budget_effort:
+            return effort
+        normalized: Final = normalize_effort(effort)
+        drop_reason: Final = (
+            None
+            if not drop_params
+            else "no reasoning API defines it"
+            if effort not in KNOWN_REASONING_EFFORTS
+            else "its model cost map entry does not list it"
+            if excludes_effort(normalized)
+            else None
+        )
+        if drop_reason is not None and report_drops:
+            warn_dropped_reasoning("output_config.effort", normalized, model, drop_reason, drop_params_gated=True)
+        if drop_reason is not None:
+            return budget_effort
+        normalized_within_budget: Final = reasoning_effort_within_thinking_budget(normalized, budget_effort)
+        return budget_effort if normalized_within_budget == budget_effort else effort
+
+    @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
         if not is_between_tool_calls(anthropic_message_request):
             return REASONING_EFFORT_OFF
@@ -1324,11 +1361,29 @@ class LiteLLMAnthropicMessagesAdapter:
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
-            else self.translate_anthropic_thinking_to_reasoning_effort(
-                cast(AnthropicThinkingParam, thinking),
-                model=model,
+            else self._effort_within_thinking_budget(
+                output_effort,
+                self.translate_anthropic_thinking_to_reasoning_effort(
+                    cast(AnthropicThinkingParam, thinking),
+                    model=model,
+                    drop_params=drop_params,
+                    report_reasoning_drops=report_reasoning_drops,
+                ),
+                model,
+                partial(
+                    model_excludes_effort,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=deployment_model_info,
+                ),
+                partial(
+                    normalize_reasoning_effort_value,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=deployment_model_info,
+                ),
                 drop_params=drop_params,
-                report_reasoning_drops=report_reasoning_drops,
+                report_drops=report_reasoning_drops,
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
