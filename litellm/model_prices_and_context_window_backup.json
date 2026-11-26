@@ -357,14 +357,14 @@
             "max"
         ]
     },
-    "commentllm/deepseek-v4.1-flash-1017-abliterated": {
-        "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 3e-06,
+    "commentllm/deepseek-v4.1-flash-abliterated": {
+        "cache_read_input_token_cost": 1.9e-08,
+        "input_cost_per_token": 1.2e-07,
         "litellm_provider": "commentllm",
         "max_input_tokens": 1048576,
         "max_output_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 5e-06,
+        "output_cost_per_token": 4.5e-07,
         "source": "https://commentllm.com/pricing",
         "supported_modalities": [
             "text"
@@ -377,14 +377,54 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "commentllm/qwen3.8-27b-abliterated": {
-        "cache_read_input_token_cost": 8e-08,
-        "input_cost_per_token": 8e-07,
+    "commentllm/deepseek-v4.1-flash-abliterated-fast": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 1.2e-07,
         "litellm_provider": "commentllm",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-07,
+        "source": "https://commentllm.com/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
+    },
+    "commentllm/glm-5.3-abliterated": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "commentllm",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://commentllm.com/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
+    },
+    "commentllm/glm-5.3-flash-abliterated": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "commentllm",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
         "source": "https://commentllm.com/pricing",
         "supported_modalities": [
             "text"

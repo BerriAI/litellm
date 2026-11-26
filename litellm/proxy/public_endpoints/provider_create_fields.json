@@ -99,7 +99,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "commentllm/qwen3.8-27b-abliterated"
+    "default_model_placeholder": "commentllm/deepseek-v4.1-flash-abliterated"
   },
   {
     "provider": "AIML",

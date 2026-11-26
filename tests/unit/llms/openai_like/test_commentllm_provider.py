@@ -19,8 +19,10 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 COMMENTLLM_BASE_URL: Final = "https://api.commentllm.com/v1"
 COMMENTLLM_MODELS: Final = (
-    "commentllm/deepseek-v4.1-flash-1017-abliterated",
-    "commentllm/qwen3.8-27b-abliterated",
+    "commentllm/deepseek-v4.1-flash-abliterated",
+    "commentllm/deepseek-v4.1-flash-abliterated-fast",
+    "commentllm/glm-5.3-abliterated",
+    "commentllm/glm-5.3-flash-abliterated",
 )
 
 
@@ -51,7 +53,7 @@ def test_commentllm_complete_url_appends_endpoint():
     url = config.get_complete_url(
         api_base=COMMENTLLM_BASE_URL,
         api_key="test-key",
-        model="commentllm/qwen3.8-27b-abliterated",
+        model="commentllm/deepseek-v4.1-flash-abliterated",
         optional_params={},
         litellm_params={},
         stream=False,
@@ -80,7 +82,7 @@ def test_commentllm_chat_sends_the_key_and_accounts_for_cache(local_model_cost_m
                 "id": "chatcmpl-test",
                 "object": "chat.completion",
                 "created": 1,
-                "model": "qwen3.8-27b-abliterated",
+                "model": "deepseek-v4.1-flash-abliterated",
                 "choices": [
                     {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
                 ],
@@ -93,16 +95,16 @@ def test_commentllm_chat_sends_the_key_and_accounts_for_cache(local_model_cost_m
             },
         )
         response: Final = litellm.completion(
-            model="commentllm/qwen3.8-27b-abliterated",
+            model="commentllm/deepseek-v4.1-flash-abliterated",
             api_key="fake-test-key",
             messages=[{"role": "user", "content": "Say hello"}],
         )
     request: Final = route.calls.last.request
     body: Final = json.loads(request.content)
     assert request.headers["authorization"] == "Bearer fake-test-key"
-    assert body["model"] == "qwen3.8-27b-abliterated"
+    assert body["model"] == "deepseek-v4.1-flash-abliterated"
     assert response.choices[0].message.content == "hello"
-    rates: Final = litellm.model_cost["commentllm/qwen3.8-27b-abliterated"]
+    rates: Final = litellm.model_cost["commentllm/deepseek-v4.1-flash-abliterated"]
     expected: Final = (
         20 * rates["input_cost_per_token"]
         + 80 * rates["cache_read_input_token_cost"]
