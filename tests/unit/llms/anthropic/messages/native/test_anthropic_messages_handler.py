@@ -483,6 +483,14 @@ def test_replayed_tool_use_ids_are_rewritten_for_a_host_that_can_serve_claude_un
     assert prepared == _replayed_tool_round("functions_Bash_0")
 
 
+def test_replayed_tool_use_ids_are_rewritten_when_no_provider_can_be_resolved_for_the_model() -> None:
+    from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+
+    prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model="kimi-k2")
+
+    assert prepared == _replayed_tool_round("functions_Bash_0")
+
+
 _TOOL_USE_ID_REJECTION: Final = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
 _THINKING_REJECTION: Final = "messages.1.content.0: Invalid `signature` in `thinking` block"
 _STRICT_TOOLS_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools supported is 20."
