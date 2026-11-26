@@ -9,7 +9,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Generic, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -88,6 +88,7 @@ from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
+    TeamMemberBudgetSnapshot,
     UserBudgetSnapshot,
 )
 from litellm.types.utils import (
@@ -2398,6 +2399,7 @@ class PrometheusLogger(CustomLogger):
             and isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric)
             and isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric)
             and self._customer_budget_gauges_are_noop()
+            and self._team_member_budget_gauges_are_noop()
         ):
             return
 
@@ -2492,6 +2494,17 @@ class PrometheusLogger(CustomLogger):
                         end_user_id=end_user_id,
                         response_cost=response_cost,
                         committed_spend=committed.end_user,
+                    ),
+                ),
+                (
+                    "team_member",
+                    self._set_team_member_budget_metrics_after_api_request(
+                        team_id=user_api_team,
+                        team_alias=user_api_team_alias,
+                        user_id=user_id,
+                        user_email=_user_email if isinstance(_user_email, str) else None,
+                        carried=TeamMemberBudgetSnapshot.from_metadata(_carried_metadata),
+                        response_cost=response_cost,
                     ),
                 ),
             )
@@ -5075,6 +5088,28 @@ class PrometheusLogger(CustomLogger):
             isinstance(self.litellm_remaining_team_member_budget_metric, NoOpMetric)
             and isinstance(self.litellm_team_member_max_budget_metric, NoOpMetric)
             and isinstance(self.litellm_team_member_budget_remaining_hours_metric, NoOpMetric)
+        )
+
+    async def _set_team_member_budget_metrics_after_api_request(
+        self,
+        team_id: str | None,
+        team_alias: str | None,
+        user_id: str | None,
+        user_email: str | None,
+        carried: TeamMemberBudgetSnapshot | None,
+        response_cost: float,
+    ) -> None:
+        if self._team_member_budget_gauges_are_noop() or carried is None or not team_id or not user_id:
+            return
+        self._set_team_member_budget_metrics(
+            team_id=team_id,
+            team_alias=team_alias,
+            user_id=user_id,
+            user_email=user_email,
+            max_budget=carried.max_budget,
+            spend=carried.spend + response_cost,
+            budget_reset_at=carried.budget_reset_at,
+            now=datetime.now(timezone.utc),
         )
 
     def _team_member_labels(

@@ -74,6 +74,20 @@ class OrgBudgetSnapshot(_BudgetSnapshot):
     )
 
 
+class TeamMemberBudgetSnapshot(_BudgetSnapshot):
+    max_budget: float = Field(
+        validation_alias="user_api_key_team_member_max_budget",
+        serialization_alias="user_api_key_team_member_max_budget",
+    )
+    spend: float = Field(
+        validation_alias="user_api_key_team_member_spend", serialization_alias="user_api_key_team_member_spend"
+    )
+    budget_reset_at: datetime | None = Field(
+        validation_alias="user_api_key_team_member_budget_reset_at",
+        serialization_alias="user_api_key_team_member_budget_reset_at",
+    )
+
+
 class EntitySpendCounterKeys(LiteLLMBaseModel):
     """Spend counter of each entity whose remaining budget a gauge reports. ``None`` for an entity with no budget."""
 

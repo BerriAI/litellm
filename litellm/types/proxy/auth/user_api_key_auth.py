@@ -22,6 +22,7 @@ from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
+    TeamMemberBudgetSnapshot,
     UserBudgetSnapshot,
 )
 from litellm.types.router import AllowedModelRegion
@@ -274,6 +275,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
+    team_member_budget_snapshot: TeamMemberBudgetSnapshot | None = Field(default=None, exclude=True)
     committed_budget_spend: CommittedBudgetSpend | None = Field(default=None, exclude=True, repr=False)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
