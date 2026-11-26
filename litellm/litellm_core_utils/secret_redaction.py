@@ -17,7 +17,7 @@ from litellm.rust_bridge import _native, diagnostics
 REDACTED: Final = "REDACTED"
 _MINIMUM_TOKEN_LENGTH: Final = min(MINIMUM_CUSTOM_KEY_LENGTH, len("xoxb-") + 10)
 
-_PEM_PRIVATE_KEY_BLOCK: Final = r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----"
+_PEM_PRIVATE_KEY_BLOCK: Final = r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"
 
 
 def _build_secret_patterns() -> "re.Pattern[str]":
@@ -69,7 +69,7 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # regardless of what the value looks like.
         # e.g. 'master_key': 'any-value-here', "database_url": "postgres://..."
         # private_key with PEM-aware value capture
-        r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
+        r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
         r"(?:master_key|xai_key|database_url|db_url|connection_string|"
         r"aws_secret_access_key|aws_session_token|aws_access_key_id|s3_secret_access_key|s3_access_key_id|"
         r"signing_key|encryption_key|"

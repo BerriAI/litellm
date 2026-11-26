@@ -1285,3 +1285,97 @@ async def test_datadog_secret_redaction_pem_delimiters_and_truncation(
     # 3. Oversized string > 50,000 characters is masked with REDACTED
     oversized = "a" * 60_000
     assert DataDogLogger.redact_payload_secrets(oversized) == "REDACTED"
+
+
+@pytest.mark.asyncio
+async def test_datadog_backtracking_linear_time_and_work_budget() -> None:
+    """
+    Verify:
+    1. Repeated '-----BEGIN ' strings do not trigger catastrophic regex backtracking
+       and complete in linear time (< 0.2s).
+    2. Operations exceeding the redaction work budget fail closed to 'REDACTED'.
+    """
+    import time
+
+    # 1. Linear-time matching on repeated BEGIN prefixes
+    repeated_prefix = "-----BEGIN " * 4544
+    t0 = time.perf_counter()
+    res = DataDogLogger._redact_structured_leaf("content", repeated_prefix)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 0.2
+    assert res == repeated_prefix
+
+    # 2. Timeout budget triggers fail-closed fallback
+    with patch.object(
+        DataDogLogger,
+        "_do_redact_payload_secrets",
+        side_effect=lambda payload: time.sleep(0.7) or payload,
+    ):
+        result = DataDogLogger.redact_payload_secrets({"password": "secret"})
+        assert result == "REDACTED"
+
+
+@pytest.mark.asyncio
+async def test_datadog_service_events_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Verify service-event hooks (failure and success) apply secret redaction
+    to both payload fields and event_metadata when redaction is enabled.
+    """
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+
+    # 1. Failure hook redaction
+    failure_payload = ServiceLoggerPayload(
+        is_error=True,
+        error="Postgres connection failed: password=ServiceSecret123",
+        service=ServiceTypes.DB,
+        duration=0.1,
+        call_type="query",
+        caller="test",
+        target="auth_objects",
+        event_metadata={"connection_string": "postgres://user:SuperPass@host:5432/db", "safe_field": "val"},
+    )
+
+    await dd_logger.async_service_failure_hook(
+        payload=failure_payload,
+        event_metadata={"password": "AnotherSecret123", "db_name": "production"},
+    )
+
+    assert len(dd_logger.log_queue) == 1
+    logged_item = dd_logger.log_queue[-1]
+    assert logged_item["status"] == "warning"
+    logged_msg = json.loads(logged_item["message"])
+    assert "ServiceSecret123" not in str(logged_msg)
+    assert "SuperPass" not in str(logged_msg)
+    assert "AnotherSecret123" not in str(logged_msg)
+    assert logged_msg["db_name"] == "production"
+
+    # 2. Success hook redaction
+    success_payload = ServiceLoggerPayload(
+        is_error=False,
+        error=None,
+        service=ServiceTypes.RESET_BUDGET_JOB,
+        duration=0.05,
+        call_type="reset",
+        caller="test",
+        target="budget",
+        event_metadata={"api_key": "sk-secret-key-123", "initial_val": 100},
+    )
+
+    await dd_logger.async_service_success_hook(
+        payload=success_payload,
+        event_metadata={"master_key": "master-secret-abc", "healthy": True},
+    )
+
+    assert len(dd_logger.log_queue) == 2
+    success_item = dd_logger.log_queue[-1]
+    assert success_item["status"] == "info"
+    success_msg = json.loads(success_item["message"])
+    assert "sk-secret-key-123" not in str(success_msg)
+    assert "master-secret-abc" not in str(success_msg)
+    assert success_msg["healthy"] is True
