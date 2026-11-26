@@ -695,6 +695,9 @@ def test_responses_ignores_a_shared_session_that_is_not_a_client_session() -> No
     with patch.object(
         responses_main.base_llm_http_handler, "response_api_handler", return_value=MagicMock()
     ) as handler:
-        litellm.responses(input="Hi", model="openai/gpt-4o", api_key="sk-test", shared_session="not-a-session")
+        response: Final = litellm.responses(
+            input="Hi", model="openai/gpt-4o", api_key="sk-test", shared_session="not-a-session"
+        )
 
+    assert response is handler.return_value
     assert handler.call_args.kwargs["shared_session"] is None
