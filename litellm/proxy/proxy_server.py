@@ -752,6 +752,7 @@ from litellm.proxy.discovery_endpoints import (
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
+from litellm.proxy.google_endpoints.endpoints import google_token_count_request
 from litellm.proxy.google_endpoints.endpoints import router as google_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
@@ -16415,23 +16416,27 @@ async def token_counter(
         user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
-    return await answered_with_litellm_call_id(
-        count_request_tokens(
-            request=request,
-            call_endpoint=call_endpoint,
-            request_litellm_params=MappingProxyType(
-                {}
-                if request.additional_drop_params is None
-                else {"additional_drop_params": request.additional_drop_params}
-            ),
-            litellm_call_id=call_id,
-            caller=user_api_key_dict,
-            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
-        ),
-        call_id,
-        http_request,
-        fastapi_response,
-    )
+    match google_token_count_request(request):
+        case ProxyException() as invalid_body:
+            raise with_litellm_call_id(rejected_token_count(invalid_body, call_id, request.model), call_id)
+        case counted_request:
+            return await answered_with_litellm_call_id(
+                count_request_tokens(
+                    request=counted_request,
+                    call_endpoint=call_endpoint,
+                    request_litellm_params=MappingProxyType(
+                        {}
+                        if counted_request.additional_drop_params is None
+                        else {"additional_drop_params": counted_request.additional_drop_params}
+                    ),
+                    litellm_call_id=call_id,
+                    caller=user_api_key_dict,
+                    request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
+                ),
+                call_id,
+                http_request,
+                fastapi_response,
+            )
 
 
 async def count_request_tokens(
