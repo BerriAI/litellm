@@ -966,7 +966,7 @@ class AmazonConverseConfig(BaseConfig):
         return self._is_deepseek_r1_model(model=model, base_model=base_model)
 
     @classmethod
-    def _supports_sampling_params(cls, model: str) -> bool:
+    def supports_sampling_params(cls, model: str) -> bool:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
@@ -985,7 +985,7 @@ class AmazonConverseConfig(BaseConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
-        supports_sampling: Final = self._supports_sampling_params(model)
+        supports_sampling: Final = self.supports_sampling_params(model)
         supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
@@ -1437,7 +1437,7 @@ class AmazonConverseConfig(BaseConfig):
                         drop_params=drop_params,
                         output_key="topP" if param == "top_p" else param,
                     )
-                elif not self._supports_sampling_params(model):
+                elif not self.supports_sampling_params(model):
                     if not (litellm.drop_params or drop_params):
                         raise litellm.utils.UnsupportedParamsError(
                             message=f"{model} does not support {param}={value}. {DROP_UNSUPPORTED_PARAMS_HINT}",

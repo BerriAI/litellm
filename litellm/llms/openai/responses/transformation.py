@@ -442,7 +442,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _model_map_row_keys(self, model: str) -> tuple[str, ...]:
         return (model,) if self.custom_llm_provider == LlmProviders.OPENAI else ()
 
-    def _refused_sampling_params(self, params: Mapping[str, object], model: str, drop_params: bool) -> frozenset[str]:
+    def _declares_no_sampling(self, model: str) -> bool:
         rows: Final = model_cost_table.published()
         declared: Final = next(
             (
@@ -452,7 +452,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ),
             None,
         )
-        if declared is not False:
+        return declared is False
+
+    def _refused_sampling_params(self, params: Mapping[str, object], model: str, drop_params: bool) -> frozenset[str]:
+        if not self._declares_no_sampling(model):
             return frozenset()
         defaults: Final = frozenset(name for name in ("temperature", "top_p") if params.get(name) == 1)
         sent: Final = tuple(name for name in ("temperature", "top_p") if params.get(name) not in (None, 1))

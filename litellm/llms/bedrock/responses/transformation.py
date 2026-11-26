@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
     BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
@@ -239,6 +240,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         )
         base: Final = strip_bedrock_runtime_route_suffix(host, BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES)
         return join_api_base(base, BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH)
+
+    def _declares_no_sampling(self, model: str) -> bool:
+        return not AmazonConverseConfig.supports_sampling_params(model)
 
     def supports_native_file_search(self) -> bool:
         return False
