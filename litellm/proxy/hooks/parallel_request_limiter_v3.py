@@ -72,6 +72,7 @@ from litellm.litellm_core_utils.token_counter import (
     estimate_media_block_tokens,
     split_embedding_input_tokens,
 )
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_own_model_rate_limit,
@@ -1435,6 +1436,9 @@ class ParallelRequestLimiterHook(CustomLogger):
         )
         return kwargs, result
 
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_failure_event(
         self, kwargs: object, response_obj: object, start_time: object, end_time: object
@@ -1453,13 +1457,15 @@ class ParallelRequestLimiterHook(CustomLogger):
             native_state: Final = _native_state(self, get_request_stash() if turn else stash)
             if native_state is None and not turn:
                 return
+            provider_billed: Final = is_answer_without_an_image(failed_call.get("exception"))
             await self.native_companion.log_failure(
                 native_state,
                 failed_call,
-                _settlement_resolved(self, failed_call, native_state) if turn else {},
+                _settlement_resolved(self, failed_call, native_state) if turn or provider_billed else {},
                 token_rate_limit_type(),
                 request=post_call_request() if self.rate_limits.has_redis else None,
                 turn=turn,
+                provider_billed=provider_billed,
             )
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
@@ -1559,7 +1565,12 @@ class ParallelRequestLimiterHook(CustomLogger):
             native_state: Final = _native_state(self, get_request_stash())
             if native_state is None:
                 return
-            await self.native_companion.log_post_call_failure(native_state, request_data, token_rate_limit_type())
+            await self.native_companion.log_post_call_failure(
+                native_state,
+                request_data,
+                token_rate_limit_type(),
+                provider_billed=is_answer_without_an_image(original_exception),
+            )
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
 

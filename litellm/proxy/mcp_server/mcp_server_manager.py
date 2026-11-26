@@ -1340,7 +1340,11 @@ def _authorization_is_litellm_admission_credential_with_settings(
     authorization: Final = _raw_header_value(raw_headers, "authorization")
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
-    return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+    return bool(
+        user_api_key_auth
+        and (user_api_key_auth.api_key or user_api_key_auth.mcp_authorization_is_admission_credential)
+        and not admission_header
+    )
 
 
 def _authorization_is_admission_jwt(

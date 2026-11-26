@@ -46,7 +46,7 @@ _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempot
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
 _PRIVATE: Final = MappingProxyType({"cache-control": "private, no-store"})
 _UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
-_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
+_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options", "x-lens-ui-auth"})
 _UI_FRAME: Final = "frame-ancestors 'self'"
 
 
