@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [labeled]
   schedule:
-    - cron: "5 8-20/3 * * 1-6"
+    - cron: "5 10,14,18 * * 1-6"
       timezone: America/Los_Angeles
   workflow_dispatch:
 

@@ -1,9 +1,8 @@
-from pathlib import Path
 from typing import Final
 
 import pytest
 
-from tests.integration.run import GROUPS, _write_assignment, assign_shards, select, uncollected, worker_settings
+from tests.integration.run import GROUPS, select, uncollected, worker_settings
 
 _GROUP: Final = (
     "tests/integration/cost_calculation/test_cost_tracking.py",
@@ -47,38 +46,3 @@ def test_every_group_run_by_several_workers_gives_each_worker_its_own_stack(grou
 @pytest.mark.parametrize("group", tuple(GROUPS))
 def test_a_single_worker_run_keeps_the_supplied_deployment(group: str) -> None:
     assert worker_settings(group, 1) == {}
-
-
-def test_a_file_heavier_than_the_rest_combined_gets_a_shard_to_itself() -> None:
-    durations: Final = {"heavy.py": 100.0, "a.py": 10.0, "b.py": 10.0, "c.py": 10.0}
-    assert assign_shards(("a.py", "b.py", "c.py", "heavy.py"), durations, 2) == (
-        ("heavy.py",),
-        ("a.py", "b.py", "c.py"),
-    )
-
-
-@pytest.mark.parametrize("count", (1, 2, 3, 7))
-def test_every_file_lands_in_exactly_one_shard(count: int) -> None:
-    files: Final = tuple(f"test_{index}.py" for index in range(10))
-    shards: Final = assign_shards(files, {f"test_{index}.py": float(index % 4) for index in range(10)}, count)
-    assert len(shards) == count
-    assert sorted(file for shard in shards for file in shard) == sorted(files)
-
-
-def test_files_missing_from_the_durations_are_spread_across_shards() -> None:
-    files: Final = ("known_a.py", "known_b.py", "new_1.py", "new_2.py", "new_3.py", "new_4.py")
-    shards: Final = assign_shards(files, {"known_a.py": 10.0, "known_b.py": 10.0}, 2)
-    assert [len(shard) for shard in shards] == [3, 3], shards
-
-
-def test_more_shards_than_files_leaves_the_extra_shards_empty() -> None:
-    assert assign_shards(("only.py",), {}, 3) == (("only.py",), (), ())
-
-
-def test_the_written_assignments_of_every_index_cover_the_selection_once(tmp_path: Path) -> None:
-    nodes: Final = (*_GROUP, f"{_GROUP[0]}::test_cell")
-    written: Final = tuple(
-        _write_assignment(tmp_path / f"shard-{index}.txt", nodes, 2, index).read_text().splitlines()
-        for index in range(2)
-    )
-    assert sorted(file for files in written for file in files) == sorted(_GROUP)

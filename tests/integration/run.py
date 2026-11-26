@@ -4,17 +4,13 @@ import argparse
 import importlib.util
 import json
 import os
-import statistics
 import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import reduce
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import Final
-
-from pydantic import TypeAdapter
 
 GROUPS: Final = MappingProxyType(
     {
@@ -44,8 +40,6 @@ GITHUB_FILES: Final = frozenset(
 
 PEER_GROUPS: Final = frozenset({"management", "mcp", "accounting"})
 COST_MAP_GROUPS: Final = frozenset({"cost"})
-SHARD_DURATIONS: Final = Path(__file__).with_name("shard_durations.json")
-DURATIONS: Final = TypeAdapter(dict[str, float])
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,25 +63,6 @@ def select(requested: tuple[str, ...], group_files: tuple[str, ...]) -> Selectio
 def uncollected(nodes: tuple[str, ...], collected: frozenset[str]) -> tuple[str, ...]:
     collected_files: Final = frozenset(file_of(node) for node in collected)
     return tuple(node for node in nodes if file_of(node) not in collected_files)
-
-
-def assign_shards(files: tuple[str, ...], durations: Mapping[str, float], count: int) -> tuple[tuple[str, ...], ...]:
-    known: Final = tuple(durations[file] for file in files if file in durations)
-    fallback: Final = statistics.median(known) if known else 1.0
-    weight: Final = MappingProxyType({file: durations.get(file, fallback) for file in files})
-
-    def place(
-        shards: tuple[tuple[float, tuple[str, ...]], ...], file: str
-    ) -> tuple[tuple[float, tuple[str, ...]], ...]:
-        target: Final = min(range(count), key=lambda index: (shards[index][0], index))
-        return tuple(
-            (load + weight[file], (*members, file)) if index == target else (load, members)
-            for index, (load, members) in enumerate(shards)
-        )
-
-    ordered: Final = sorted(dict.fromkeys(files), key=lambda file: (-weight[file], file))
-    empty: Final = tuple((0.0, ()) for _ in range(count))
-    return tuple(tuple(sorted(members)) for _, members in reduce(place, ordered, empty))
 
 
 def _without_provider_api_keys(environment: Mapping[str, str]) -> dict[str, str]:
@@ -116,13 +91,6 @@ def _budget() -> ModuleType:
     return module
 
 
-def _write_assignment(path: Path, nodes: tuple[str, ...], count: int, index: int) -> Path:
-    files: Final = tuple(dict.fromkeys(file_of(node) for node in nodes))
-    durations: Final = DURATIONS.validate_json(SHARD_DURATIONS.read_bytes())
-    path.write_text("".join(f"{file}\n" for file in assign_shards(files, durations, count)[index]))
-    return path
-
-
 def main() -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("group", choices=tuple(GROUPS))
@@ -148,18 +116,11 @@ def main() -> int:
         parser.error(f"Not in the {options.group} group: {', '.join(selection.foreign)}")
     if not selection.nodes:
         parser.error(f"No integration test files selected for {options.group}")
-    if not 0 <= options.shard_index < options.shards:
-        parser.error(f"Shard index {options.shard_index} is outside {options.shards} shards")
     if options.list:
         sys.stdout.write("\n".join(sorted({file_of(node) for node in selection.nodes})) + "\n")
         return 0
     output: Final = options.results.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    shard_files: Final = options.shard_files or (
-        _write_assignment(output / "node-files.txt", selection.nodes, options.shards, options.shard_index)
-        if options.shards > 1
-        else None
-    )
     environment: Final = {
         **_without_provider_api_keys(os.environ),
         "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
@@ -195,7 +156,7 @@ def main() -> int:
             f"--integration-order-seed={options.order_seed}",
             f"--integration-shard-count={options.shards}",
             f"--integration-shard-index={options.shard_index}",
-            *(("--integration-shard-files", str(shard_files)) if shard_files is not None else ()),
+            *(("--integration-shard-files", str(options.shard_files)) if options.shard_files is not None else ()),
             f"--junitxml={output / 'junit.xml'}",
             "-o",
             "junit_family=xunit1",
