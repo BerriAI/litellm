@@ -82,8 +82,15 @@ def test_litellm_instances_are_not_attributes_of_litellm_utils():
     assert not hasattr(litellm.utils, "module_level_client")
 
 
-def test_litellm_lazy_attributes_are_not_attributes_of_litellm_utils():
-    assert not hasattr(litellm.utils, "run_server")
+@pytest.mark.parametrize("name", ["DualCache", "KeyManagementSystem", "all_litellm_params", "get_modified_max_tokens"])
+def test_names_litellm_utils_exported_before_lazy_loading_still_import_from_it(name: str):
+    """`litellm.utils` imported these at module level up to 1.80, so callers import them from there."""
+    assert getattr(litellm.utils, name) is _declared(LAZY_ATTRIBUTES["litellm"][name])
+
+
+@pytest.mark.parametrize("name", sorted(LAZY_ATTRIBUTES["litellm"]))
+def test_litellm_lazy_attribute_resolves_from_litellm_utils(name: str):
+    assert getattr(litellm.utils, name) is getattr(litellm, name)
 
 
 def test_disable_lazy_loading_resolves_every_lazy_attribute_at_import():
