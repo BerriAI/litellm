@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import decoded_json
 from litellm.litellm_core_utils.logging_utils import (
     speech_create_params,
     speech_request_body,
@@ -364,7 +365,7 @@ class OpenAIConfig(BaseConfig):
         final_response_obj: Final = cast(
             ModelResponse,
             convert_to_model_response_object(
-                response_object=raw_response.json(),
+                response_object=decoded_json(raw_response),
                 model_response_object=model_response,
                 hidden_params={"headers": raw_response.headers},
                 _response_headers=dict(raw_response.headers),

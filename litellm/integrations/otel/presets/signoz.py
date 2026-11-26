@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
@@ -12,9 +13,8 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import dynamic_param_text, ensure_mappers
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
-from litellm.types.utils import StandardCallbackDynamicParams
 
 SIGNOZ_INGESTION_ENDPOINT_ENV: Final = "SIGNOZ_INGESTION_ENDPOINT"
 
@@ -69,12 +69,12 @@ def _warn_endpoint_without_key(endpoint: str) -> None:
     )
 
 
-def _tenant_endpoint_is_unusable(params: StandardCallbackDynamicParams) -> bool:
+def _tenant_endpoint_is_unusable(params: Mapping[str, object]) -> bool:
     return bool(params.get("signoz_ingestion_endpoint")) and signoz_dynamic_endpoint(params) is None
 
 
-def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
-    endpoint: Final = params.get("signoz_ingestion_endpoint")
+def signoz_dynamic_endpoint(params: Mapping[str, object]) -> str | None:
+    endpoint: Final = dynamic_param_text(params, "signoz_ingestion_endpoint")
     if not endpoint or not endpoint.startswith(("http://", "https://")):
         return None
     if not params.get("signoz_ingestion_key"):
@@ -87,9 +87,9 @@ def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None
 
 
 def signoz_dynamic_headers(
-    params: StandardCallbackDynamicParams,
+    params: Mapping[str, object],
 ) -> dict[str, str]:  # mutable-ok: DYNAMIC_HEADERS_BY_CALLBACK returns a dict
-    key: Final = params.get("signoz_ingestion_key")
+    key: Final = dynamic_param_text(params, "signoz_ingestion_key")
     if _tenant_endpoint_is_unusable(params) or not key:
         return {}
     return {"signoz-ingestion-key": key}

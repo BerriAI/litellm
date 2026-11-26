@@ -6,6 +6,7 @@ import httpx
 from openai import OpenAI
 
 import litellm
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import decoded_json
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.azure_ai.common_utils import (
     OPENAI_V1_PATH,
@@ -111,7 +112,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        embedding_response: Final = response.json()
+        embedding_response: Final = decoded_json(response)
         embedding_headers: Final = dict(response.headers)
         returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=embedding_response,
@@ -154,7 +155,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        embedding_response: Final = response.json()
+        embedding_response: Final = decoded_json(response)
         embedding_headers: Final = dict(response.headers)
         returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=embedding_response,

@@ -14,6 +14,10 @@ def safe_json_loads(data: str, default: object = None) -> Any:
     """
     Safely parse a JSON string. If parsing fails, return the default value (None by default).
     """
+    return safe_json_loads_value(data, default)
+
+
+def safe_json_loads_value(data: str, default: object = None) -> object:
     try:
         return _DECODED_JSON.validate_python(json.loads(data))
     except Exception:

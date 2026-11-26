@@ -19,6 +19,7 @@ import litellm
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import decoded_json
 from litellm.litellm_core_utils.logging_utils import (
     speech_create_params,
     speech_request_body,
@@ -1007,7 +1008,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: float | httpx.Timeout | None = None,
         model: str | None = None,
     ) -> ImageResponse:
-        response: dict | None = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
             api_base: str = azure_client_params.get("api_base", "")  # "https://example-endpoint.openai.azure.com"
@@ -1055,9 +1055,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
             else:
-                response = httpx_response.json()
-
-                stringified_response: Final = response
+                stringified_response: Final = decoded_json(httpx_response)
                 ## LOGGING
                 logging_obj.post_call(
                     input=input,
@@ -1190,7 +1188,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     encoding=litellm.encoding,
                 )
 
-            response: Final = httpx_response.json()
+            response: Final = decoded_json(httpx_response)
 
             ## LOGGING
             logging_obj.post_call(

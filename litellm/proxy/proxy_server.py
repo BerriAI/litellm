@@ -57,6 +57,7 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
+    overload,
 )
 from urllib.parse import urlparse
 
@@ -128,7 +129,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
 )
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads_value
 from litellm.litellm_core_utils.token_counter import (
     UnsupportedContentTypeError,
     deployment_openai_model,
@@ -1347,8 +1348,8 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
         return None
     if isinstance(worker_config, dict):
         return _redact_secret_values_in_obj(worker_config)
-    parsed: Final[JsonValue] = safe_json_loads(worker_config, default=None)
-    if isinstance(parsed, dict):
+    parsed: Final = as_str_mapping(safe_json_loads_value(worker_config))
+    if parsed is not None:
         return safe_dumps(_redact_secret_values_in_obj(parsed))
     return worker_config
 
@@ -21763,7 +21764,15 @@ def _is_secret_general_setting_field(field_name: str) -> bool:
 _REDACT_SECRET_MAX_DEPTH: Final = 10
 
 
-def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
+@overload
+def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue: ...
+
+
+@overload
+def _redact_secret_values_in_obj(value: object, depth: int = 0) -> object: ...
+
+
+def _redact_secret_values_in_obj(value: object, depth: int = 0) -> object:
     """Recursively redact secret leaves inside a structured field so a nested
     credential (e.g. aws_web_identity_token under database_args) is never
     returned to a non-admin, while non-secret siblings stay visible. At
@@ -21771,13 +21780,15 @@ def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
     so depth-overrun fails closed."""
     if depth >= _REDACT_SECRET_MAX_DEPTH:
         return "REDACTED"
-    if isinstance(value, dict):
+    fields: Final = as_str_mapping(value)
+    if isinstance(fields, dict):
         return {
             key: ("REDACTED" if _is_secret_general_setting_field(key) else _redact_secret_values_in_obj(sub, depth + 1))
-            for key, sub in value.items()
+            for key, sub in fields.items()
         }
-    if isinstance(value, list):
-        return [_redact_secret_values_in_obj(item, depth + 1) for item in value]
+    items: Final = as_object_list(value)
+    if items is not None:
+        return [_redact_secret_values_in_obj(item, depth + 1) for item in items]
     return value
 
 

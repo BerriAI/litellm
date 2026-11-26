@@ -14,10 +14,10 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.presets.utils import (
     credential_gated_exporters,
+    dynamic_param_text,
     ensure_mappers,
 )
 from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 def langfuse_environment_attributes(environment: str | None = None) -> Mapping[str, str]:
@@ -63,10 +63,10 @@ def langfuse_preset(
     )
 
 
-def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def langfuse_dynamic_headers(params: Mapping[str, object]) -> dict[str, str]:
     """Per-request Langfuse OTLP headers from team/key dynamic params."""
-    public_key: Final = params.get("langfuse_public_key")
-    secret_key: Final = params.get("langfuse_secret_key")
+    public_key: Final = dynamic_param_text(params, "langfuse_public_key")
+    secret_key: Final = dynamic_param_text(params, "langfuse_secret_key")
     if public_key and secret_key:
         return _V1Langfuse._build_langfuse_otel_headers(
             _V1Langfuse._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)

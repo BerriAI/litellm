@@ -16,6 +16,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from prisma import models as prisma_models
     from prisma.types import HttpConfig
 
@@ -366,6 +368,8 @@ class RoutingPrismaWrapper:
         async def execute_raw(self, query: str, *args: object) -> int: ...
 
         async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
         def tx(
             self, *, max_wait: int | timedelta = _DEFAULT_TX_MAX_WAIT, timeout: int | timedelta = _DEFAULT_TX_TIMEOUT

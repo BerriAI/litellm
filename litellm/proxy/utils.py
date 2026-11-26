@@ -198,6 +198,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     has_attributes,
     independent_snapshot,
+    int_of,
     is_expected_client_error,
     iter_items,
     json_contains,
@@ -409,10 +410,6 @@ else:
     Span = Any
 
 _T = TypeVar("_T")
-
-
-class _RelTuplesRow(TypedDict):
-    reltuples: ReadOnly[int]
 
 
 class _DualCacheGetKwargs(TypedDict, total=False, extra_items=object):
@@ -8760,8 +8757,8 @@ class PrismaClient:
             FROM pg_class
             WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
             """
-            result: Final[Sequence[_RelTuplesRow]] = await self.db.query_raw(query=sql_query)
-            return result[0]["reltuples"]
+            result: Final = await self.db.query_raw(query=sql_query)
+            return int_of(result[0]["reltuples"])
 
         try:
             return await _fetch_row_count()

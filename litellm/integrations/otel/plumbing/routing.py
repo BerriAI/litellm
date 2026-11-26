@@ -36,7 +36,6 @@ from litellm.integrations.otel.presets import (
     dynamic_otlp_headers,
     project_routing_headers,
 )
-from litellm.types.utils import StandardCallbackDynamicParams
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
 _NON_OTLP_KINDS: Final = ("console", "in_memory", "inmemory", "memory")
@@ -216,7 +215,7 @@ class TenantTracerCache:
     def route_for(
         self,
         default: Tracer,
-        dynamic_params: StandardCallbackDynamicParams | None,
+        dynamic_params: Mapping[str, object] | None,
         auth_metadata: Mapping[str, str] | None = None,
     ) -> TenantRoute:
         """Return the tracer (and trace-detachment flag) for this request.
@@ -313,7 +312,7 @@ class TenantTracerCache:
         self._open_span_counts.pop(overflowed, None)
         return overflowed
 
-    def _credential_headers(self, dynamic_params: StandardCallbackDynamicParams | None) -> Mapping[str, str]:
+    def _credential_headers(self, dynamic_params: Mapping[str, object] | None) -> Mapping[str, str]:
         """The per-request dynamic OTLP credentials, if this cache can apply them.
 
         A callback owning only a console/in_memory exporter has nowhere to stamp

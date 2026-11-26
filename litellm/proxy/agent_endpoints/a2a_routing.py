@@ -5,8 +5,8 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Final, Protocol
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -18,7 +18,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, callable_of
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, callable_of, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
@@ -39,6 +39,10 @@ _CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_field
 _PER_SECOND_PRICES: Final = frozenset({"cost_per_second", "input_cost_per_second", "output_cost_per_second"})
 _PROXY_HEADER_PREFIX: Final = "x-litellm-"
 _REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+
+
+class _AsyncEndpoint(Protocol):
+    __call__: Callable[..., Awaitable[object]]
 
 
 def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
@@ -131,7 +135,7 @@ async def route_a2a_agent_request(
     data: dict[str, object],  # mutable-ok: the URL agent path writes api_base into the caller's request
     route_type: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> Any | None:
+) -> Awaitable[object] | None:
     """
     Route A2A agent requests directly to litellm with injected API base.
 
@@ -267,6 +271,6 @@ def _agent_params_under_client_prices(
     return {**unpriced, **_agent_prices_the_client_left_unset(litellm_params, data)}
 
 
-def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
+def _call_route(route_type: str, request_data: Mapping[str, object]) -> Awaitable[object]:
     endpoint: Final = _ROUTE_ENDPOINT.validate_python(getattr(litellm, route_type))
-    return callable_of(endpoint)(**request_data)
+    return require_attributes(callable_of(endpoint), _AsyncEndpoint, "__call__")(**request_data)

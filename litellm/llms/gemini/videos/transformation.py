@@ -1,6 +1,6 @@
 import base64
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
 import httpx
 from httpx._types import FileContent, RequestFiles
@@ -9,6 +9,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -42,7 +43,15 @@ else:
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
+class _Seekable(Protocol):
+    def seek(self, offset: int, /) -> object: ...
+
+
+class _BinaryReadable(Protocol):
+    def read(self) -> bytes: ...
+
+
+def _convert_image_to_gemini_format(image_file: object) -> dict[str, str]:
     """
     Convert image file to Gemini format with base64 encoding and MIME type.
 
@@ -54,9 +63,9 @@ def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
     """
     mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_file)
 
-    if hasattr(image_file, "seek"):
+    if has_attributes(image_file, _Seekable, "seek"):
         image_file.seek(0)
-    image_bytes: Final = image_file.read()
+    image_bytes: Final = require_attributes(image_file, _BinaryReadable, "read").read()
     base64_encoded: Final = base64.b64encode(image_bytes).decode("utf-8")
 
     return {"bytesBase64Encoded": base64_encoded, "mimeType": mime_type}

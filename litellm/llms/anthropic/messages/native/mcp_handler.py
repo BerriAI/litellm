@@ -9,7 +9,7 @@ tool through a ``tool_use`` content block, and results are fed back as
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, NamedTuple
+from typing import Final, NamedTuple
 
 from litellm._logging import verbose_logger
 from litellm.responses.mcp.request_context import MCPRequestContext
@@ -70,7 +70,7 @@ async def anthropic_messages_with_mcp(
     messages: Sequence[Mapping[str, object]],
     model: str,
     tools: Sequence[Mapping[str, object]] | None = None,
-    **kwargs: Any,  # kwargs-ok: forwarded verbatim to litellm.anthropic_messages, which owns the param contract
+    **kwargs: object,  # kwargs-ok: forwarded verbatim to litellm.anthropic_messages, which owns the param contract
 ) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
     """
     Expand litellm_proxy MCP references for `/v1/messages` and run the tool loop.

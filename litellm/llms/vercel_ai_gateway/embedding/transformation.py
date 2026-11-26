@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import decoded_json
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -122,7 +123,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # Vercel AI Gateway returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
+        response_json: Final = decoded_json(raw_response)
 
         return convert_to_model_response_object(
             response_object=response_json,

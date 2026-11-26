@@ -41,7 +41,6 @@ from litellm.integrations.otel.presets.signoz import (
     signoz_preset,
 )
 from litellm.integrations.otel.presets.weave import weave_dynamic_headers, weave_preset
-from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
@@ -64,31 +63,27 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
 #: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps don't, so they use the logger's
 #: default tracer.
-DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = (
-    MappingProxyType(
-        {
-            "arize": arize_dynamic_headers,
-            "langfuse_otel": langfuse_dynamic_headers,
-            "mixpanel": mixpanel_dynamic_headers,
-            "newrelic": newrelic_dynamic_headers,
-            "signoz": signoz_dynamic_headers,
-            "weave_otel": weave_dynamic_headers,
-        }
-    )
+DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[Mapping[str, object]], dict[str, str]]]] = MappingProxyType(
+    {
+        "arize": arize_dynamic_headers,
+        "langfuse_otel": langfuse_dynamic_headers,
+        "mixpanel": mixpanel_dynamic_headers,
+        "newrelic": newrelic_dynamic_headers,
+        "signoz": signoz_dynamic_headers,
+        "weave_otel": weave_dynamic_headers,
+    }
 )
 
 #: Callback name → per-request OTLP endpoint resolver. Only integrations whose
 #: destination host varies per tenant (from a fixed region table, never a
 #: caller-supplied URL) appear here; for everyone else the preset's endpoint is
 #: authoritative.
-DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = (
-    MappingProxyType(
-        {
-            "mixpanel": mixpanel_dynamic_endpoint,
-            "newrelic": newrelic_dynamic_endpoint,
-            "signoz": signoz_dynamic_endpoint,
-        }
-    )
+DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[Mapping[str, object]], str | None]]] = MappingProxyType(
+    {
+        "mixpanel": mixpanel_dynamic_endpoint,
+        "newrelic": newrelic_dynamic_endpoint,
+        "signoz": signoz_dynamic_endpoint,
+    }
 )
 
 
@@ -111,7 +106,7 @@ _NO_PROJECT_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 def dynamic_otlp_headers(
     callback_name: str | None,
-    dynamic_params: StandardCallbackDynamicParams | None,
+    dynamic_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """Per-request OTLP headers for ``callback_name``, or ``None`` if N/A.
 
@@ -141,7 +136,7 @@ def project_routing_headers(
 
 def dynamic_otlp_endpoint(
     callback_name: str | None,
-    dynamic_params: StandardCallbackDynamicParams | None,
+    dynamic_params: Mapping[str, object] | None,
 ) -> str | None:
     """Per-request OTLP endpoint for ``callback_name``, or ``None`` if N/A.
 

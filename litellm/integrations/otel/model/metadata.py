@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast, get_args
+from typing import TYPE_CHECKING, Final, cast, get_args
 
 from pydantic import TypeAdapter
 
@@ -55,6 +55,7 @@ from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, G
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
 from litellm.integrations.otel.routing import routed_model_name
+from litellm.litellm_core_utils import core_helpers
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.utils import InternalCallOrigin
 
@@ -265,7 +266,7 @@ class LLMCallEvent:
     payload: StandardLoggingPayload | None
     # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
     # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
-    dynamic_params: Any
+    dynamic_params: Mapping[str, object] | None
     # The key/team config the proxy resolved at auth (``user_api_key_auth_metadata``),
     # routing the call to that tenant's telemetry project. Server-set and so
     # trusted, unlike ``dynamic_params``, which carries client-supplied metadata.
@@ -316,7 +317,7 @@ class LLMCallEvent:
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
-            dynamic_params=kwargs.get("standard_callback_dynamic_params"),
+            dynamic_params=core_helpers.as_str_mapping(kwargs.get("standard_callback_dynamic_params")),
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             upstream_started=kwargs.get("api_call_start_time") is not None,
