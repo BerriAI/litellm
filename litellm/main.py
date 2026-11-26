@@ -2964,6 +2964,14 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
         return AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=ctx.model
         )
+    if ctx.custom_llm_provider == "dulus" and not ctx.api_key:
+        return AuthenticationError(
+            message="Missing DULUS_API_KEY - set DULUS_API_KEY or pass api_key. "
+            "Dulus keys look like dulus_sk_live_... . Refusing to fall back to "
+            "OPENAI_API_KEY for https://control.dulus.ai/v1.",
+            llm_provider="dulus",
+            model=ctx.model,
+        )
     return missing_json_provider_key_error(
         ctx.custom_llm_provider,
         ctx.model,
@@ -3048,7 +3056,7 @@ def _complete_custom_openai(
     )
     organization = (
         organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
+        or (None if custom_llm_provider in ("bigmodel", "dulus") else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
