@@ -1476,25 +1476,33 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __init__(
         self,
-        response: httpx.Response,
+        response: httpx.Response | ResponsesAPIResponse,
         model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: LiteLLMLoggingObj,
+        responses_api_provider_config: BaseResponsesAPIConfig | None = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
     ):
-        transformed: Final = responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-        )
+        effective_logging_obj: Final = logging_obj or LiteLLMLoggingObj()
+        if isinstance(response, ResponsesAPIResponse):
+            transformed: Final = response
+            self._persist_completed_response_before_logging = False
+        elif responses_api_provider_config is not None:
+            transformed = responses_api_provider_config.transform_response_api_response(
+                model=model,
+                raw_response=response,
+                logging_obj=effective_logging_obj,
+            )
+        else:
+            raise ValueError("Either responses_api_provider_config or a ResponsesAPIResponse must be provided")
+
         super().__init__(
-            response=httpx.Response(200),
+            response=httpx.Response(200) if isinstance(response, ResponsesAPIResponse) else response,
             model=model,
             responses_api_provider_config=None,
-            logging_obj=logging_obj,
+            logging_obj=effective_logging_obj,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_data,
@@ -1506,7 +1514,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=litellm_metadata,
             ),
-            logging_obj=logging_obj,
+            logging_obj=effective_logging_obj,
         )
 
     def _set_events_from_response(

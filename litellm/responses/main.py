@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 import json
+import time
 from collections.abc import Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -219,6 +220,7 @@ def _has_file_search_tool(tools: Iterable[Mapping[str, object]] | None) -> bool:
 
 def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
+    model: str | None = None,
 ):
     return ResponsesAPIResponse.model_validate(
         {
@@ -230,7 +232,7 @@ def mock_responses_api_response(
             "incomplete_details": None,
             "instructions": None,
             "max_output_tokens": None,
-            "model": "gpt-4.1-2025-04-14",
+            "model": model or "gpt-4.1-2025-04-14",
             "output": [
                 {
                     "type": "message",
@@ -1094,6 +1096,16 @@ async def aresponses(
         loop: Final = asyncio.get_event_loop()
         kwargs["aresponses"] = True
 
+        mock_delay: Final = kwargs.get("mock_delay") or getattr(kwargs.get("litellm_params"), "mock_delay", None)
+        mock_response: Final = kwargs.get("mock_response") or getattr(kwargs.get("litellm_params"), "mock_response", None)
+        if mock_delay is not None and mock_response is not None:
+            try:
+                delay_float = float(mock_delay)
+                if delay_float > 0:
+                    await asyncio.sleep(delay_float)
+            except (ValueError, TypeError):
+                pass
+
         # Convert text_format to text parameter if provided
         text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(text_format=text_format, text=text)
         if text is not None:
@@ -1824,8 +1836,47 @@ def responses(
         #########################################################
         # MOCK RESPONSE LOGIC
         #########################################################
-        if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
-            return mock_responses_api_response(mock_response=litellm_params.mock_response)
+        mock_response_val: Final = (
+            litellm_params.mock_response
+            if getattr(litellm_params, "mock_response", None) is not None
+            else kwargs.get("mock_response")
+        )
+        if mock_response_val is not None:
+            mock_delay_val: Final = (
+                getattr(litellm_params, "mock_delay", None)
+                if getattr(litellm_params, "mock_delay", None) is not None
+                else kwargs.get("mock_delay")
+            )
+            if mock_delay_val is not None and not _is_async:
+                try:
+                    delay_float = float(mock_delay_val)
+                    if delay_float > 0:
+                        time.sleep(delay_float)
+                except (ValueError, TypeError):
+                    pass
+
+            if isinstance(mock_response_val, str):
+                mock_resp = mock_responses_api_response(mock_response=mock_response_val, model=model)
+            elif isinstance(mock_response_val, ResponsesAPIResponse):
+                mock_resp = mock_response_val
+            elif isinstance(mock_response_val, dict):
+                mock_resp = ResponsesAPIResponse.model_validate(mock_response_val)
+            else:
+                mock_resp = mock_responses_api_response(mock_response=str(mock_response_val), model=model)
+
+            if stream is True:
+                from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
+
+                return MockResponsesAPIStreamingIterator(
+                    response=mock_resp,
+                    model=model,
+                    logging_obj=litellm_logging_obj,
+                    custom_llm_provider=custom_llm_provider or "openai",
+                    litellm_metadata=as_str_mapping(kwargs.get("litellm_metadata", {})),
+                    request_data=local_vars,
+                    call_type="responses",
+                )
+            return mock_resp
 
         model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
