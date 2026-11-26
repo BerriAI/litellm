@@ -1,0 +1,40 @@
+//! One database column read as one field of the record the auth cache holds.
+
+use chrono::NaiveDateTime;
+use jiff::Timestamp;
+use litellm_python_compat::{Value, json};
+use litellm_redis_store::FromValue;
+use litellm_repositories::RawJson;
+
+use crate::Error;
+
+/// A JSON column as the record's field `V`, or the column the model would refuse the row for.
+pub(crate) fn column<V: FromValue>(name: &'static str, raw: &RawJson) -> Result<V, Error> {
+    json::loads(raw.get())
+        .ok()
+        .and_then(|value| V::from_value(&value).ok())
+        .ok_or(Error::Row { column: name })
+}
+
+/// [`column`] for a field the model lets be unset: no value and a JSON `null` are both unset.
+pub(crate) fn nullable<V: FromValue>(
+    name: &'static str,
+    raw: Option<&RawJson>,
+) -> Result<Option<V>, Error> {
+    match raw.map(|raw| json::loads(raw.get())) {
+        None | Some(Ok(Value::None)) => Ok(None),
+        Some(Ok(value)) => V::from_value(&value)
+            .map(Some)
+            .map_err(|_| Error::Row { column: name }),
+        Some(Err(_)) => Err(Error::Row { column: name }),
+    }
+}
+
+pub(crate) fn time(
+    column: &'static str,
+    at: Option<NaiveDateTime>,
+) -> Result<Option<Timestamp>, Error> {
+    at.map(|at| Timestamp::from_microsecond(at.and_utc().timestamp_micros()))
+        .transpose()
+        .map_err(|_| Error::Row { column })
+}

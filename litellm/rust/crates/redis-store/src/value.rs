@@ -18,6 +18,15 @@ impl FromValue for Value {
     }
 }
 
+impl<T: FromValue> FromValue for Vec<T> {
+    fn from_value(value: &Value) -> Result<Self, DecodeError> {
+        match value {
+            Value::List(items) => items.iter().map(T::from_value).collect(),
+            _ => Err(DecodeError::Shape("a list")),
+        }
+    }
+}
+
 impl IntoValue for Value {
     fn into_value(self) -> Value {
         self
