@@ -480,10 +480,7 @@ def image_generation(
                 client=_image_http_handler(supplied_openai_client, call_kwargs.get("client")),
                 _is_async=aimg_generation is True and custom_llm_provider == litellm.LlmProviders.VOLCENGINE,
                 max_retries=(
-                    _sdk_max_retries(
-                        max_retries if supplied_openai_client is None else supplied_openai_client.max_retries,
-                        is_router_call,
-                    )
+                    _sdk_max_retries(max_retries, is_router_call)
                     if custom_llm_provider == litellm.LlmProviders.VOLCENGINE
                     else 0
                 ),

@@ -4,6 +4,7 @@ from typing import Final
 import httpx
 import openai
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -453,10 +454,12 @@ def _sent_with_the_supplied_clients_key_and_base(request: httpx.Request) -> bool
 
 
 @pytest.mark.parametrize(
-    ("client_max_retries", "unanswered"), [(0, 1), (1, 0)], ids=["client-retries-off", "client-retries-once"]
+    ("client_max_retries", "call_max_retries", "unanswered"),
+    [(0, None, 0), (1, 0, 1), (0, 1, 0)],
+    ids=["litellm-default-retries-win", "call-retries-off-wins", "call-retries-once-wins"],
 )
 def test_a_supplied_openai_client_sends_generation_through_its_own_http_client_and_retries(
-    monkeypatch: pytest.MonkeyPatch, client_max_retries: int, unanswered: int
+    monkeypatch: pytest.MonkeyPatch, client_max_retries: int, call_max_retries: int | None, unanswered: int
 ) -> None:
     _without_ark_env(monkeypatch)
     answers: Final = iter([httpx.Response(503, json=ARK_UNAVAILABLE), httpx.Response(200, json=ONE_IMAGE)])
@@ -474,7 +477,9 @@ def test_a_supplied_openai_client_sends_generation_through_its_own_http_client_a
     )
 
     def generate() -> litellm.ImageResponse:
-        return litellm.image_generation(model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", client=client)
+        return litellm.image_generation(
+            model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", client=client, max_retries=call_max_retries
+        )
 
     if unanswered:
         with pytest.raises(litellm.ServiceUnavailableError):
@@ -506,6 +511,46 @@ async def test_a_supplied_async_openai_client_sends_generation_through_its_own_h
     )
 
     assert len(response.data) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("call_max_retries", [0, None], ids=["call-retries-off", "litellm-default-retries"])
+async def test_a_connection_error_on_a_supplied_async_openai_client_is_never_retried_outside_it(
+    monkeypatch: pytest.MonkeyPatch, call_max_retries: int | None
+) -> None:
+    _without_ark_env(monkeypatch)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    outside_the_client: Final = respx.post(f"{SUPPLIED_CLIENT_BASE}/images/generations").respond(200, json=ONE_IMAGE)
+    answers: Final = iter(
+        [httpx.ConnectError("the caller's proxy refused the connection"), httpx.Response(200, json=ONE_IMAGE)]
+    )
+
+    async def refuse_once(request: httpx.Request) -> httpx.Response:
+        answer: Final = next(answers)
+        if isinstance(answer, httpx.ConnectError):
+            raise answer
+        return answer
+
+    async def generate() -> litellm.ImageResponse:
+        return await litellm.aimage_generation(
+            model=f"volcengine/{SEEDREAM_5_5}",
+            prompt="a cat",
+            client=openai.AsyncOpenAI(
+                api_key="client-key",
+                base_url=SUPPLIED_CLIENT_BASE,
+                http_client=httpx.AsyncClient(transport=httpx.MockTransport(refuse_once)),
+                max_retries=0,
+            ),
+            max_retries=call_max_retries,
+        )
+
+    if call_max_retries is None:
+        assert len((await generate()).data) == 1
+    else:
+        with pytest.raises(litellm.InternalServerError, match="the caller's proxy refused the connection"):
+            await generate()
+    assert not outside_the_client.called
 
 
 def test_generation_surfaces_the_ark_error_message() -> None:

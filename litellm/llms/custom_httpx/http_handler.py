@@ -642,6 +642,7 @@ class AsyncHTTPHandler:
         self.transport = transport
         self.follow_redirects = follow_redirects
         self._owns_client = client is None
+        self._keeps_callers_client = client is not None
         self._client = (
             self.create_client(
                 timeout=timeout,
@@ -858,6 +859,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
+            if self._keeps_callers_client:
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
