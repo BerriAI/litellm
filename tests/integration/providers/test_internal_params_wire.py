@@ -540,10 +540,10 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "llamafile", "lm_studio", "maritalk", "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot",
     "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
     "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity",
-    "perplexity_orchestrator", "petals",
-    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "resetdata", "sail",
+    "pentestllm", "perplexity_orchestrator", "petals",
+    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "relayswitch", "resetdata", "sail",
     "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
-    "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
+    "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "uncensoredllm", "uplinkswitch", "v0",
     "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
     "zerogpu",
 )  # fmt: skip
