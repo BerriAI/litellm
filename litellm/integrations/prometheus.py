@@ -5249,7 +5249,9 @@ class PrometheusLogger(CustomLogger):
         carried: TeamMemberBudgetSnapshot | None,
         response_cost: float,
     ) -> None:
-        if self._team_member_budget_gauges_are_noop() or carried is None or not team_id or not user_id:
+        if self._team_member_budget_gauges_are_noop() or carried is None:
+            return
+        if not team_id or not user_id:
             return
         self._set_team_member_budget_metrics(
             team_id=team_id,
@@ -5264,7 +5266,7 @@ class PrometheusLogger(CustomLogger):
 
     def _team_member_labels(
         self, metric_name: DEFINED_PROMETHEUS_METRICS, enum_values: UserAPIKeyLabelValues
-    ) -> dict[str, str | None]:
+    ) -> Mapping[str, str | None]:
         return prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric(metric_name), enum_values=enum_values
         )
