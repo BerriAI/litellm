@@ -32,6 +32,11 @@ record! {
         user_email: Option<String>,
         role: MemberRole = required!("role"),
     }
+    refuse_unless names_a_user;
+}
+
+fn names_a_user(member: &MemberEntry) -> bool {
+    member.user_id.is_some() || member.user_email.is_some()
 }
 
 #[cfg(test)]
@@ -40,7 +45,21 @@ mod tests {
     use rstest::rstest;
 
     use super::MemberEntry;
-    use crate::{FromValue, IntoValue, auth_cache::ObjectPermissionEntry};
+    use crate::{DecodeError, FromValue, IntoValue, auth_cache::ObjectPermissionEntry};
+
+    #[rstest]
+    #[case::neither_id(r#"{"role": "user"}"#, "MemberEntry")]
+    #[case::null_ids(
+        r#"{"user_id": null, "user_email": null, "role": "user"}"#,
+        "MemberEntry"
+    )]
+    #[case::a_role_the_model_does_not_take(r#"{"user_id": "u", "role": "owner"}"#, "role")]
+    fn a_member_the_model_refuses_does_not_decode(#[case] entry: &str, #[case] refused: &str) {
+        assert!(matches!(
+            MemberEntry::from_value(&json::loads(entry).unwrap()),
+            Err(DecodeError::Shape(field)) if field == refused
+        ));
+    }
 
     #[rstest]
     fn a_member_and_a_permission_keep_what_they_do_not_name() {

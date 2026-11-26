@@ -140,14 +140,16 @@ pub(super) use required;
 /// in its order, which is the order they are written in, and each takes only the shapes the
 /// model takes, so nothing the model would refuse decodes or is written. A field the entry lacks
 /// takes the model's default, and one this build does not name is kept in `unread` and written
-/// after the named ones, so an entry a newer pod wrote loses nothing when it is read. A field
-/// held as plain data may hold credentials, so `Debug` redacts it.
+/// after the named ones, so an entry a newer pod wrote loses nothing when it is read. A record
+/// with `refuse_unless check;` is refused as a whole where the model's own validator refuses it.
+/// A field held as plain data may hold credentials, so `Debug` redacts it.
 macro_rules! record {
     (
         $(#[$meta:meta])*
         pub struct $name:ident {
             $($(#[$field_meta:meta])* $field:ident: $kind:ty $(= $default:expr)?,)+
         }
+        $(refuse_unless $check:path;)?
     ) => {
         $(#[$meta])*
         #[derive(Clone, PartialEq, veil::Redact)]
@@ -165,7 +167,7 @@ macro_rules! record {
                     return Err($crate::DecodeError::Shape(stringify!($name)));
                 };
                 let mut unnamed = $crate::auth_cache::types::record::fields(entries);
-                Ok(Self {
+                let record = Self {
                     $($field: match unnamed.remove(stringify!($field)) {
                         None => record!(@default $($default)?),
                         Some(value) => <$kind as $crate::auth_cache::types::record::Field>::read(value)
@@ -180,7 +182,11 @@ macro_rules! record {
                             _ => None,
                         })
                         .collect(),
-                })
+                };
+                $(if !$check(&record) {
+                    return Err($crate::DecodeError::Shape(stringify!($name)));
+                })?
+                Ok(record)
             }
         }
 

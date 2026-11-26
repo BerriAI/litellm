@@ -579,7 +579,8 @@ async fn a_writer_read_fails_on_an_object_permission_the_model_refuses() {
         matches!(
             read,
             Err(litellm_auth_store::Error::Row {
-                column: "mcp_tool_permissions"
+                column: "mcp_tool_permissions",
+                within: Some("object_permission"),
             })
         ),
         "{:?}",
@@ -589,30 +590,40 @@ async fn a_writer_read_fails_on_an_object_permission_the_model_refuses() {
 
 #[rstest]
 #[case::metadata_that_is_a_list(
+    BARE,
     r#"UPDATE "LiteLLM_VerificationToken" SET metadata = '[]'"#,
-    "metadata"
+    ("metadata", None)
 )]
 #[case::fallbacks_that_are_not_lists(
+    BARE,
     r#"UPDATE "LiteLLM_VerificationToken" SET budget_fallbacks = '{"m": "n"}'"#,
-    "budget_fallbacks"
+    ("budget_fallbacks", None)
 )]
 #[case::budget_limits_that_are_no_list(
+    BARE,
     r#"UPDATE "LiteLLM_VerificationToken" SET budget_limits = '{"m": 1}'"#,
-    "budget_limits"
+    ("budget_limits", None)
+)]
+#[case::a_team_member_role_the_model_does_not_take(
+    TEAM_KEY,
+    r#"UPDATE "LiteLLM_TeamTable" SET members_with_roles = '[{"user_id": "kv-user", "role": "owner"}]'"#,
+    ("role", Some("team_member"))
 )]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_key_row_the_model_refuses_fails_the_read(
+    #[case] token: &str,
     #[case] corrupt: &'static str,
-    #[case] column: &str,
+    #[case] refused: (&str, Option<&str>),
 ) {
     let postgres = MigratedPostgres::start().await.unwrap();
     insert_bare_key(postgres.pool()).await;
+    insert_team_key(postgres.pool()).await;
     execute(postgres.pool(), corrupt).await;
 
-    let read = key_database(&postgres).read(&hash(BARE), Side::Read).await;
+    let read = key_database(&postgres).read(&hash(token), Side::Read).await;
 
     assert!(
-        matches!(&read, Err(litellm_auth_store::Error::Row { column: refused }) if *refused == column),
+        matches!(&read, Err(litellm_auth_store::Error::Row { column, within }) if (*column, *within) == refused),
         "{:?}",
         read.err()
     );
