@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CacheField } from "./cacheSettingsFields";
-import type { CacheFormValues } from "./cacheSettingsUtils";
+import type { CacheFormValues } from "./schema";
 
 export interface EmbeddingModelOption {
   value: string;

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 import httpx
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -3817,6 +3818,11 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     parallel_tool_calls: JsonValue = None
     response_format: JsonValue = None
     web_search_options: JsonValue = None
+    system_instruction: JsonValue = Field(
+        default=None,
+        validation_alias=AliasChoices("systemInstruction", "system_instruction"),
+        description="Google systemInstruction, counted with contents",
+    )
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
