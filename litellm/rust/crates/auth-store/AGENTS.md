@@ -56,6 +56,13 @@ Each object has one entry here, in the same form, and a later object adds its ow
 - Not read: the proxy-wide default end-user budget, which the host merges in for an end user with no budget of its own
 - Host: `get_end_user_object` turns every failure into no end user, so a host serving Python's behavior maps `Error::Row` and `Error::Database` to "no end user" rather than failing the request
 
+### Organization
+
+- Query: `OrganizationDatabase::organization`, the organization's row, joined to its budget when the caller asks for it (`find_with_optional_budget`), one query
+- Entry: `OrganizationEntry` under `AuthObject::OrgWithBudget` with the budget and `AuthObject::Org` without it, the `LiteLLM_OrganizationTable` dump. `get_org_object_by_alias` caches the same budget-less shape under `AuthObject::OrgAlias` too, and `get_org_object_for_request` copies the with-budget entry to `AuthObject::OrgWithBudgetLastKnown`, which has no read of its own
+- Nested: the budget when asked for, as `LiteLLM_BudgetTable` dumps it (`BudgetEntry`), refused for what the project's budget is refused for
+- Not read: the organization by alias, which a miss under `AuthObject::OrgAlias` needs, with the 404 and 400 `get_org_object_by_alias` answers for no row and a shared alias, the object permission the organization points at, and `users`, which the readers above never set
+
 ## The cached shape
 
 - What the database gives is not what the cache holds. Python's entry is `Model(**row).model_dump(mode="json")`, so each shaper converts its row field by field into the entry, and the entry dumps to the bytes Python writes for the same row
@@ -67,7 +74,7 @@ Each object has one entry here, in the same form, and a later object adds its ow
 
 ## Other writers
 
-- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, `get_project_object` does the same for a project, the team member budget check and `get_team_membership` do it for a membership, and `get_end_user_object` does it for an end user. So no host reads a team, a project, a membership or an end user through this crate yet. All of them write the bytes this crate shapes for the same row
+- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, `get_project_object` does the same for a project, the team member budget check and `get_team_membership` do it for a membership, `get_end_user_object` does it for an end user, and `get_org_object` and `get_org_object_by_alias` do it for an organization. So no host reads a team, a project, a membership, an end user or an organization through this crate yet. All of them write the bytes this crate shapes for the same row
 - A writer whose bytes differ from this crate's is listed here with the difference, and is left alone on purpose
   - `get_end_user_object` caches an end user with no budget of its own with the proxy-wide default end-user budget (`litellm.max_end_user_budget_id`) in `litellm_budget_table` and `budget_id` still unset, so the budget it caches is not always the one the row names. `EndUserEntry` carries either budget, and the merge stays with the host
-  - The auth prefetch (`auth_object_prefetch.py`) writes `project_id:{id}`, `{team_id}_{user_id}` and `team_membership:{user_id}:{team_id}` from the key owners row instead, with budget times without a `Z` and `[]` for a NULL budget `allowed_models`, and the project's object permission nested, so its bytes differ from this shape for the same row
+  - The auth prefetch (`auth_object_prefetch.py`) writes `project_id:{id}`, `{team_id}_{user_id}`, `team_membership:{user_id}:{team_id}`, `org_id:{id}` and `org_id:{id}:with_budget` from the key owners row instead, with budget times without a `Z` and `[]` for a NULL budget `allowed_models`, the project's and the organization's object permission nested, and the organization's budget nested under `org_id:{id}` too, so its bytes differ from this shape for the same row

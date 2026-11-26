@@ -5,6 +5,7 @@ mod end_user;
 mod key;
 mod member;
 mod object_permission;
+mod organization;
 mod project;
 mod record;
 mod settings;
@@ -20,6 +21,7 @@ pub use self::{
     key::KeyEntry,
     member::{MemberEntry, MemberRole},
     object_permission::ObjectPermissionEntry,
+    organization::OrganizationEntry,
     project::ProjectEntry,
     record::ExcludedIfNone,
     settings::Settings,
