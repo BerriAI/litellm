@@ -1319,6 +1319,11 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         mirrors_responses_bridge: Final = custom_llm_provider in RESPONSES_API_PROVIDERS
+        base_model_info: Final = (
+            deployment_model_info
+            if base_model is None
+            else {**(as_str_mapping(deployment_model_info) or {}), "base_model": base_model}
+        )
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
@@ -1330,13 +1335,14 @@ class LiteLLMAnthropicMessagesAdapter:
                     model_excludes_effort,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    deployment_model_info=(
-                        deployment_model_info
-                        if base_model is None
-                        else {**(as_str_mapping(deployment_model_info) or {}), "base_model": base_model}
-                    ),
+                    deployment_model_info=base_model_info,
                 ),
-                partial(normalize_reasoning_effort_value, model=model, custom_llm_provider=custom_llm_provider),
+                partial(
+                    normalize_reasoning_effort_value,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=base_model_info,
+                ),
                 drop_params=drop_params,
                 report_drops=report_reasoning_drops,
             )

@@ -268,7 +268,9 @@ def _reasoning_for_target(
             model,
         )
         return ClientEffort.DROPPED
-    normalized: Final = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+    normalized: Final = normalize_reasoning_effort_value(
+        effort, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+    )
     if drop_params and model_excludes_effort(
         normalized, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
     ):

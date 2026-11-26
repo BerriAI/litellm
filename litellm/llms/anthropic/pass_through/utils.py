@@ -560,6 +560,7 @@ def normalize_reasoning_effort_value(
     effort: str,
     model: str,
     custom_llm_provider: str | None = None,
+    deployment_model_info: object = None,
 ) -> str:
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
 
@@ -579,7 +580,7 @@ def normalize_reasoning_effort_value(
     if chain is None or _provider_rounds_reasoning_effort(model, custom_llm_provider):
         return effort
 
-    supported: Final = model_reasoning_efforts(model, custom_llm_provider)
+    supported: Final = model_reasoning_efforts(_cost_map_model(model, deployment_model_info), custom_llm_provider)
     if not supported:
         return chain[-1]
 
