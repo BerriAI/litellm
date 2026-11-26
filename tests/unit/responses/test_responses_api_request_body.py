@@ -1603,7 +1603,7 @@ def test_responses_with_litellm_metadata_that_is_not_a_mapping_raises_the_same_a
 
 
 @pytest.mark.asyncio
-async def test_aresponses_websocket_reads_a_user_api_key_dict_without_auth_attributes_as_unset() -> None:
+async def test_aresponses_websocket_refuses_a_user_api_key_dict_without_auth_attributes_before_the_relay() -> None:
     from unittest.mock import MagicMock
 
     from litellm.responses.main import (
@@ -1615,13 +1615,24 @@ async def test_aresponses_websocket_reads_a_user_api_key_dict_without_auth_attri
         "async_responses_websocket",
         new_callable=AsyncMock,
     ) as relay:
+        with pytest.raises(AttributeError, match="api_key"):
+            await _aresponses_websocket(
+                model="openai/gpt-5.6",
+                websocket=MagicMock(),
+                api_key="sk-test",
+                litellm_logging_obj=MagicMock(async_failure_handler=AsyncMock()),
+                user_api_key_dict={"user_id": "plain-dict"},
+            )
+        refused_relay_calls: Final = relay.await_count
+
         outcome: Final = await _aresponses_websocket(
             model="openai/gpt-5.6",
             websocket=MagicMock(),
             api_key="sk-test",
             litellm_logging_obj=MagicMock(),
-            user_api_key_dict={"user_id": "plain-dict"},
+            user_api_key_dict=None,
         )
 
+    assert refused_relay_calls == 0
     assert outcome is relay.return_value
     assert relay.call_args.kwargs["user_api_key_dict"] is None
