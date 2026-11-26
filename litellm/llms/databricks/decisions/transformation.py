@@ -8,7 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-from litellm.llms.databricks.common_utils import DatabricksBase
+from litellm.llms.databricks.common_utils import DatabricksBase, deployment_oauth_credentials
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
@@ -76,11 +76,22 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("DATABRICKS_API_KEY", "DATABRICKS_TOKEN")
     api_base_env = ("DATABRICKS_API_BASE",)
 
+    def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        return self.resolve_api_base(api_base), api_key
+
     def resolve_credential(
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
         if api_key:
             return api_key
+        deployment_credentials: Final = deployment_oauth_credentials(
+            litellm_params.get("client_id"), litellm_params.get("client_secret")
+        )
+        if deployment_credentials:
+            return DatabricksBase().get_cached_oauth_m2m_token(api_base, *deployment_credentials)
+        env_api_key: Final = self._first_secret(self.api_key_env)
+        if env_api_key:
+            return env_api_key
         client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
         client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
         if not client_id or not client_secret:

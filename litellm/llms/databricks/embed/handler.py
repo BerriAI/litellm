@@ -8,7 +8,7 @@ from typing import Final
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import EmbeddingResponse
 
-from ...openai_like.embedding.handler import OpenAILikeEmbeddingHandler
+from ...openai_like.embedding.handler import EmbeddingCallLogger, OpenAILikeEmbeddingHandler
 from ..common_utils import DatabricksBase
 
 
@@ -18,7 +18,7 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         model: str,
         input: list,
         timeout: float,
-        logging_obj,
+        logging_obj: EmbeddingCallLogger,
         api_key: str | None,
         api_base: str | None,
         optional_params: dict,
@@ -28,6 +28,8 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         custom_endpoint: bool | None = None,
         headers: dict[str, str] | None = None,
         drop_params: bool = False,
+        client_id: object = None,
+        client_secret: object = None,
     ) -> EmbeddingResponse:
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
@@ -46,6 +48,8 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
             custom_endpoint=custom_endpoint,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            client_id=client_id,
+            client_secret=client_secret,
         )
         return super().embedding(
             model=model,

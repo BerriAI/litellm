@@ -273,7 +273,7 @@ class RustHealthCallbacks:
         so the failure is the caller's. ``sent`` holds the request's own values."""
         from litellm.router_utils.cooldown_handlers import (
             is_caller_credential_failure,
-            is_caller_entra_credential_failure,
+            is_caller_oauth_credential_failure,
         )
 
         deployment: Final = self._deployment_of(deployment_id)
@@ -284,7 +284,7 @@ class RustHealthCallbacks:
         status: Final[object] = getattr(exception, "status_code", "")
         if is_caller_credential_failure(deployment, defaults, details, status):
             return True
-        return is_caller_entra_credential_failure(deployment, defaults, details, status, exception)  # pyright: ignore[reportArgumentType]  # the status as raised
+        return is_caller_oauth_credential_failure(deployment, defaults, details, status, exception)  # pyright: ignore[reportArgumentType]  # the status as raised
 
     def failure_exits(
         self, exception: object, logged: Mapping[str, object], deployment_id: object, sent: Mapping[str, object]

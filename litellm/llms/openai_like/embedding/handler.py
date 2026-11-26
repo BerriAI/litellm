@@ -45,7 +45,7 @@ _HEADER_VALUE: Final = re.compile(r"[\t\x20-\x7e]*")
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-class _CallLogger(Protocol):
+class EmbeddingCallLogger(Protocol):
     def pre_call(self, input: object, api_key: object, *, additional_args: Mapping[str, object]) -> object: ...
 
     def post_call(
@@ -105,7 +105,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         timeout: float,
         api_key: str,
         api_base: str,
-        logging_obj: _CallLogger,
+        logging_obj: EmbeddingCallLogger,
         headers: dict,
         client: AsyncHTTPHandler | HTTPHandler | None = None,
     ) -> EmbeddingResponse:
@@ -160,7 +160,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         model: str,
         input: list,
         timeout: float,
-        logging_obj: _CallLogger,
+        logging_obj: EmbeddingCallLogger,
         api_key: str | None,
         api_base: str | None,
         optional_params: dict[str, object],

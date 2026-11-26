@@ -939,7 +939,7 @@ def is_stream_stall(exception: BaseException) -> bool:
     return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
 
 
-def is_caller_entra_credential_failure(
+def is_caller_azure_entra_failure(
     deployment: Deployment | None,
     router_defaults: Mapping[str, object],
     model_call_details: Mapping[str, object],
@@ -955,14 +955,69 @@ def is_caller_entra_credential_failure(
         return False
     from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, azure_entra_environment_defaults
 
+    return _caller_sent_another_credential(
+        deployment,
+        router_defaults,
+        model_call_details,
+        AZURE_ENTRA_LITELLM_PARAM_KEYS,
+        azure_entra_environment_defaults(),
+    )
+
+
+def is_caller_databricks_oauth_failure(
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    exception: BaseException,
+) -> bool:
+    if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
+        return False
+
+    from litellm.llms.databricks.common_utils import (
+        caused_by_databricks_oauth_rejection,
+        databricks_oauth_environment_defaults,
+    )
+
+    if not caused_by_databricks_oauth_rejection(exception):
+        return False
+    return _caller_sent_another_credential(
+        deployment,
+        router_defaults,
+        model_call_details,
+        frozenset({"client_id", "client_secret"}),
+        databricks_oauth_environment_defaults(),
+    )
+
+
+def is_caller_oauth_credential_failure(
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    exception: BaseException,
+) -> bool:
+    return is_caller_azure_entra_failure(
+        deployment, router_defaults, model_call_details, exception_status, exception
+    ) or is_caller_databricks_oauth_failure(
+        deployment, router_defaults, model_call_details, exception_status, exception
+    )
+
+
+def _caller_sent_another_credential(
+    deployment: Deployment,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    credential_keys: Collection[str],
+    environment: Mapping[str, object],
+) -> bool:
     call_params: Final = _call_credential_values(model_call_details)
     configured_by_precedence: Final = _configured_by_precedence(deployment, router_defaults)
-    environment: Final = azure_entra_environment_defaults()
     return any(
         call_params.get(key) is not None
         and (call_params.get(key) or environment.get(key))
         != (_first_configured(configured_by_precedence, key) or environment.get(key))
-        for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
+        for key in credential_keys
     )
 
 

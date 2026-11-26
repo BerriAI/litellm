@@ -22,7 +22,7 @@ from litellm.llms.databricks.agent.responses_output import (
     DatabricksAgentResponsesIterator,
     output_text,
 )
-from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
+from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException, deployment_oauth_credentials
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -200,11 +200,29 @@ def _env_oauth_m2m_token(api_base: str | None) -> str | None:
         raise DatabricksException(
             status_code=400,
             message=(
-                "DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET are set but the OAuth token endpoint is unknown: "
-                "set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
+                "Unknown OAuth token endpoint for DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET, "
+                "so set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
             ),
         )
     return DatabricksBase().get_cached_oauth_m2m_token(workspace, client_id, client_secret)
+
+
+def _deployment_oauth_m2m_token(api_base: str | None, litellm_params: Mapping[str, object]) -> str | None:
+    credentials: Final = deployment_oauth_credentials(
+        litellm_params.get("client_id"), litellm_params.get("client_secret")
+    )
+    if credentials is None:
+        return None
+    workspace: Final = workspace_url_from_api_base(api_base) or get_secret_str("DATABRICKS_HOST")
+    if workspace is None:
+        raise DatabricksException(
+            status_code=400,
+            message=(
+                "Unknown OAuth token endpoint for a deployment that sets client_id and client_secret, "
+                "so set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
+            ),
+        )
+    return DatabricksBase().get_cached_oauth_m2m_token(workspace, *credentials)
 
 
 def _resolved_env_reference(value: str | None) -> str | None:
@@ -275,6 +293,12 @@ class DatabricksAgentConfig(BaseConfig):
             _resolved_env_reference(api_key),
         )
 
+    @staticmethod
+    def global_api_key(litellm_params: Mapping[str, object]) -> str | None:
+        if deployment_oauth_credentials(litellm_params.get("client_id"), litellm_params.get("client_secret")):
+            return None
+        return litellm.api_key
+
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors override contract
         return ["stream", *_OUTPUT_TOKEN_PARAMS, *_SAMPLING_PARAMS]
 
@@ -298,7 +322,12 @@ class DatabricksAgentConfig(BaseConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        bearer: Final = api_key or _env_oauth_m2m_token(api_base) or get_secret_str("DATABRICKS_API_KEY")
+        bearer: Final = (
+            api_key
+            or _deployment_oauth_m2m_token(api_base, litellm_params)
+            or _env_oauth_m2m_token(api_base)
+            or get_secret_str("DATABRICKS_API_KEY")
+        )
         if bearer:
             return {
                 **_without_authorization(headers),
