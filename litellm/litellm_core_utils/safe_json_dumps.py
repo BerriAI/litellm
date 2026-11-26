@@ -17,12 +17,6 @@ class _Orderable(Protocol):
     def __lt__(self, other: Never, /) -> bool: ...
 
 
-def _orderable(value: object) -> _Orderable:
-    if isinstance(value, _Orderable):
-        return value
-    raise TypeError(f"{type(value).__name__!r} object does not support ordering")
-
-
 def strip_null_bytes(value: str) -> str:
     """Strip NUL bytes, which PostgreSQL text/jsonb columns reject (error 22P05)."""
     return value.replace("\x00", "")
@@ -96,7 +90,9 @@ def safe_json_structure(
             return tuple_result
         elif isinstance(obj, set):
             members: Final = [_serialize(item, seen, depth + 1, key) for item in obj]
-            present: Final = sorted(_orderable(member) for member in members if member is not None)
+            present: Final = sorted(
+                member for member in members if member is not None and isinstance(member, _Orderable)
+            )
             set_result: Final = present + [None] * members.count(None)
             seen.remove(id(obj))
             return set_result
