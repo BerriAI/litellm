@@ -2008,6 +2008,17 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
     def hold_primary_partial(self) -> None:
         self._primary_partial = _held_partial(self._source_iterator)
 
+    def outlive_consumer_until_settled(self) -> None:
+        from litellm.responses.streaming_iterator import keep_responses_stream_open_for_disconnect_drain
+
+        keep_responses_stream_open_for_disconnect_drain(self._source_iterator)
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        from litellm.responses.streaming_iterator import settle_responses_stream_after_consumer_left
+
+        primary_alone: Final = self._billing_source is self._source_iterator and self._primary_partial is None
+        return await settle_responses_stream_after_consumer_left(self._source_iterator, drain=drain and primary_alone)
+
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 

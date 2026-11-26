@@ -11976,6 +11976,118 @@ class TestStreamingClientDisconnectBilling:
         assert partial_response.usage.total_tokens > 0
 
     @pytest.mark.asyncio
+    async def test_disconnect_before_any_output_bills_the_usage_the_provider_reports_and_releases_the_slot_once(self):
+        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+        from litellm.responses.streaming_iterator import (
+            ResponsesAPIStreamingIterator,
+            keep_responses_stream_open_for_disconnect_drain,
+        )
+
+        response_fields: Final = {
+            "id": "resp_cut_while_reasoning",
+            "object": "response",
+            "created_at": 1700000000.0,
+            "model": "gpt-4o-mini",
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+        provider_usage: Final = {
+            "input_tokens": 1200,
+            "input_tokens_details": {"cached_tokens": 1024},
+            "output_tokens": 900,
+            "output_tokens_details": {"reasoning_tokens": 832},
+            "total_tokens": 2100,
+        }
+        client_left: Final = asyncio.Event()
+
+        class UpstreamStillReasoningWhenTheClientLeaves:
+            headers: dict[str, str] = {}
+            closed = False
+
+            async def aiter_bytes(self):
+                created: Final = {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**response_fields, "status": "in_progress"},
+                }
+                yield f"data: {json.dumps(created)}\n\n".encode()
+                await client_left.wait()
+                completed: Final = {
+                    "type": "response.completed",
+                    "sequence_number": 1,
+                    "response": {**response_fields, "status": "completed", "usage": provider_usage},
+                }
+                yield f"data: {json.dumps(completed)}\n\n".encode()
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        class CountsExplicitSlotReleases:
+            releases = 0
+
+            async def arelease_max_parallel_requests_on_disconnect(self, user_api_key_dict: object) -> None:
+                self.releases += 1
+
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "think hard"}],
+            stream=True,
+            call_type="aresponses",
+            start_time=datetime.datetime(2026, 11, 26, 12, 0, 0),
+            litellm_call_id="cut-while-reasoning",
+            function_id="cut-while-reasoning",
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-4o-mini",
+            optional_params={"stream": True},
+            litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+        )
+        logging_obj.dynamic_async_success_callbacks = [recorder]
+        upstream: Final = UpstreamStillReasoningWhenTheClientLeaves()
+        stream: Final = ResponsesAPIStreamingIterator(
+            response=upstream,
+            model="gpt-4o-mini",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+            request_data={"model": "gpt-4o-mini", "input": "think hard"},
+            custom_llm_provider="openai",
+        )
+        keep_responses_stream_open_for_disconnect_drain(stream)
+        assert (await stream.__anext__()).type == "response.created"
+        waiting_on_the_provider: Final = asyncio.ensure_future(stream.__anext__())
+        await asyncio.sleep(0)
+        waiting_on_the_provider.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting_on_the_provider
+        await stream.aclose()
+        client_left.set()
+        slot_releases: Final = CountsExplicitSlotReleases()
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": logging_obj},
+            response=stream,
+            stream_completed=False,
+            client_disconnected=True,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-cut"),
+            proxy_logging_obj=slot_releases,
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+        (success_event,) = recorder.success_events
+        logged: Final = success_event["kwargs"]["standard_logging_object"]
+        assert (logged["prompt_tokens"], logged["completion_tokens"], logged["total_tokens"]) == (1200, 900, 2100)
+        assert logged["response"]["usage"]["completion_tokens_details"]["reasoning_tokens"] == 832
+        assert logged["response"]["usage"]["prompt_tokens_details"]["cached_tokens"] == 1024
+        assert slot_releases.releases == 0, (
+            "the success event releases the slot, a second release would free another request's"
+        )
+        assert upstream.closed is True
+
+    @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks

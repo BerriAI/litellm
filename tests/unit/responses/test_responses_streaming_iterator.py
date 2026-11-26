@@ -668,3 +668,155 @@ def test_partial_response_on_disconnect_reports_the_relayed_text_of_a_background
 
     assert incomplete_event is not None
     assert incomplete_event.response.output[0].content[0].text == "Once upon a time"
+
+
+_PROVIDER_USAGE_AFTER_THE_CLIENT_LEFT: Final[Mapping[str, object]] = {
+    "input_tokens": 1200,
+    "input_tokens_details": {"cached_tokens": 1024},
+    "output_tokens": 900,
+    "output_tokens_details": {"reasoning_tokens": 832},
+    "total_tokens": 2100,
+}
+
+
+class _UpstreamThatReasonsUntilReleased:
+    """Sends response.created, then nothing until released, then a reasoning item and the provider's terminal usage."""
+
+    headers: dict[str, str] = {}
+
+    def __init__(self, fails_after_release: bool = False) -> None:
+        self.released: Final = asyncio.Event()
+        self.closed = False
+        self._fails_after_release: Final = fails_after_release
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        yield f"data: {json.dumps(_CREATED_WITH_PRIORITY_TIER)}\n\n".encode()
+        await self.released.wait()
+        if self._fails_after_release:
+            raise httpx.ReadError("connection reset by peer")
+        completed: Final = {
+            "type": "response.completed",
+            "sequence_number": 9,
+            "response": {
+                **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+                "status": "completed",
+                "usage": _PROVIDER_USAGE_AFTER_THE_CLIENT_LEFT,
+            },
+        }
+        yield f"data: {json.dumps(completed)}\n\n".encode()
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _recorded_stream(
+    monkeypatch: pytest.MonkeyPatch, upstream: _UpstreamThatReasonsUntilReleased
+) -> tuple[ResponsesAPIStreamingIterator, FailureRecorder]:
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    return _live_iterator(logging_obj, upstream=upstream), recorder
+
+
+async def _cancel_the_consumer_while_the_provider_is_reasoning(iterator: ResponsesAPIStreamingIterator) -> None:
+    """What a client disconnect does: the read waiting on the provider is cancelled, then the wrappers close the stream."""
+    assert (await iterator.__anext__()).type == "response.created"
+    waiting_on_the_provider: Final = asyncio.ensure_future(iterator.__anext__())
+    await asyncio.sleep(0)
+    waiting_on_the_provider.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_on_the_provider
+    await iterator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_cut_before_any_output_bills_the_usage_the_provider_reports_once_it_is_drained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    assert upstream.closed is False, "closing here loses the provider's terminal usage"
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert drained is True
+    assert upstream.closed is True
+    (success_payload,) = recorder.success_payloads
+    assert recorder.failure_payloads == ()
+    assert (
+        success_payload["prompt_tokens"],
+        success_payload["completion_tokens"],
+        success_payload["total_tokens"],
+    ) == (1200, 900, 2100)
+    usage: Final = cast(dict[str, dict[str, object]], cast(dict[str, object], success_payload["response"])["usage"])
+    assert usage["prompt_tokens_details"]["cached_tokens"] == 1024
+    assert usage["completion_tokens_details"]["reasoning_tokens"] == 832
+    assert iterator.partial_response_on_disconnect() is None, "a drained stream must not be billed a second time"
+
+
+@pytest.mark.parametrize("outlives_its_consumer", [True, False], ids=["told_to_close", "never_kept_open"])
+@pytest.mark.asyncio
+async def test_a_cut_stream_that_is_not_drained_closes_the_provider_connection_and_bills_no_success(
+    monkeypatch: pytest.MonkeyPatch, outlives_its_consumer: bool
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    if outlives_its_consumer:
+        iterator.outlive_consumer_until_settled()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    assert upstream.closed is not outlives_its_consumer
+    drained: Final = await iterator.settle_after_consumer_left(drain=outlives_its_consumer is False)
+
+    assert drained is False
+    assert upstream.closed is True
+    assert recorder.success_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_a_kept_open_stream_nobody_settles_closes_the_provider_connection_after_the_grace_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(responses_streaming_iterator_module, "RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS", 0)
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, _ = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert upstream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_while_draining_a_cut_stream_is_logged_as_a_failure_not_a_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased(fails_after_release=True)
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+
+    assert drained is False
+    assert upstream.closed is True
+    assert recorder.success_payloads == ()
+    assert len(recorder.failure_payloads) == 1
