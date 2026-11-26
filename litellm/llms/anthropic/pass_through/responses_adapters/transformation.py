@@ -48,6 +48,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     requested_reasoning_summary,
 )
 from litellm.llms.base_llm.base_utils import as_json_object
+from litellm.router_utils.reasoning_effort_capability import reasoning_effort_within_thinking_budget
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
@@ -1102,7 +1103,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             case "enabled":
                 raw_budget: Final = thinking.get("budget_tokens", 0)
                 budget_tokens: Final = int(raw_budget) if isinstance(raw_budget, (int, float)) else 0
-                return reasoning_effort_from_thinking_budget(budget_tokens)
+                return reasoning_effort_within_thinking_budget(
+                    configured_effort, reasoning_effort_from_thinking_budget(budget_tokens)
+                )
             case "disabled":
                 return REASONING_EFFORT_OFF
             case "between_tools":

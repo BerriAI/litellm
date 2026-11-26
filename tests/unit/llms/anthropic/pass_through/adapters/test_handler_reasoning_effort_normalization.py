@@ -15,6 +15,11 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
@@ -919,3 +924,62 @@ class TestTheOffSwitchUsesMinimalOnlyWhereTheDeploymentConfirmsIt:
         )
 
         assert (sent["reasoning_effort"] if uses_chat_route else sent["reasoning"]["effort"]) == expected
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_an_explicit_effort_the_model_raises_never_outranks_what_the_thinking_budget_alone_sends(
+    azure_model_without_low_tiers: str, drop_params: bool
+) -> None:
+    def sent_effort(output_config: Mapping[str, object]) -> object:
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=6000,
+            messages=MESSAGES,
+            model=azure_model_without_low_tiers,
+            thinking={"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET},
+            extra_kwargs={"drop_params": drop_params, **output_config},
+        )
+        return completion_kwargs.get("reasoning_effort")
+
+    assert sent_effort({"output_config": {"effort": "minimal"}}) == sent_effort({})
+
+def test_drop_params_rounds_an_explicit_effort_the_model_can_take_instead_of_sending_the_budgets(
+    azure_model_without_minimal: str,
+) -> None:
+    def sent_effort(*, drop_params: bool) -> object:
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=6000,
+            messages=MESSAGES,
+            model=azure_model_without_minimal,
+            thinking={"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+            extra_kwargs={"drop_params": drop_params, "output_config": {"effort": "minimal"}},
+        )
+        return completion_kwargs.get("reasoning_effort")
+
+    assert sent_effort(drop_params=True) == sent_effort(drop_params=False) == "low"
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize(
+    "base_model_kwargs",
+    [{"base_model": "azure/gpt-5.4-pro"}, {"model_info": {"base_model": "azure/gpt-5.4-pro"}}],
+    ids=["litellm_params", "model_info"],
+)
+def test_a_custom_named_deployment_gets_the_effort_its_base_model_gets_beside_a_thinking_budget(
+    base_model_kwargs: dict[str, object], drop_params: bool
+) -> None:
+    def sent_effort(model: str, deployment_kwargs: Mapping[str, object]) -> object:
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=6000,
+            messages=MESSAGES,
+            model=model,
+            thinking={"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET},
+            extra_kwargs={
+                "custom_llm_provider": "azure",
+                "drop_params": drop_params,
+                "output_config": {"effort": "minimal"},
+                **deployment_kwargs,
+            },
+        )
+        return completion_kwargs.get("reasoning_effort")
+
+    assert sent_effort("azure/my-pro-deployment", base_model_kwargs) == sent_effort("azure/gpt-5.4-pro", {})
