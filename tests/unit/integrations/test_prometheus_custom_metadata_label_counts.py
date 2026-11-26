@@ -1,13 +1,21 @@
+import asyncio
+import contextlib
 import logging
 import sys
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from typing import Final, TypeAlias
 
 import pytest
+from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
 import litellm
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.responses.streaming_iterator import drain_logging_tasks
 
 
 def _clear_prometheus_registry() -> None:
@@ -351,6 +359,336 @@ async def test_fallback_metrics_without_custom_metadata_labels_emit_no_metadata_
 
     assert not any(name.startswith("metadata_") for name in labels)
     assert labels["fallback_model"] == "model-b"
+
+
+_AUTO_ROUTED_LABELS: Final = (
+    "routing_decision.tier",
+    "routing_decision.cause",
+    "routing_decision.routed_model",
+    "nested.caller",
+)
+_LABEL_NAMES: Final = tuple(label.replace(".", "_") for label in _AUTO_ROUTED_LABELS)
+_SUCCESS_REQUEST_METRICS: Final = (
+    "litellm_proxy_total_requests_metric_total",
+    "litellm_requests_metric_total",
+    "litellm_spend_metric_total",
+    "litellm_total_tokens_metric_total",
+    "litellm_request_total_latency_metric_count",
+    "litellm_llm_api_latency_metric_count",
+    "litellm_deployment_total_requests_total",
+    "litellm_deployment_success_responses_total",
+)
+_FAILURE_EVENT_METRICS: Final = (
+    "litellm_llm_api_failed_requests_metric_total",
+    "litellm_deployment_failure_responses_total",
+    "litellm_deployment_total_requests_total",
+)
+_FAILURE_HOOK_METRICS: Final = (
+    "litellm_proxy_failed_requests_metric_total",
+    "litellm_proxy_total_requests_metric_total",
+)
+
+
+def _custom_labels_of(metric_name: str) -> list[tuple[str, ...]]:
+    return [tuple(sample.labels[name] for name in _LABEL_NAMES) for sample in _metric_samples(metric_name)]
+
+
+def _complexity_router_deployment(name: str, target: str) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {tier: target for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")}
+            },
+        },
+    }
+
+
+@pytest.fixture
+def auto_routed_logger(monkeypatch: pytest.MonkeyPatch) -> Iterator[PrometheusLogger]:
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", list(_AUTO_ROUTED_LABELS))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    _clear_prometheus_registry()
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    yield logger
+    _clear_prometheus_registry()
+
+
+@pytest.fixture
+def auto_router(auto_routed_logger: PrometheusLogger) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "tier-up",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "unused", "mock_response": "hello"},
+            },
+            {
+                "model_name": "tier-down",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "unused",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            _complexity_router_deployment("smart-router", "tier-up"),
+            _complexity_router_deployment("smart-router-down", "tier-down"),
+        ],
+        num_retries=0,
+    )
+
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+
+async def _call(
+    router: litellm.Router,
+    model: str,
+    key_metadata: Mapping[str, object] | None = None,
+    **spend_logs_metadata: object,
+) -> None:
+    with contextlib.suppress(litellm.InternalServerError):
+        await router.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"spend_logs_metadata": spend_logs_metadata, "user_api_key_auth_metadata": key_metadata},
+        )
+    await drain_logging_tasks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+
+@pytest.mark.parametrize(
+    ("model", "metric_names", "expected"),
+    [
+        pytest.param(
+            "smart-router",
+            _SUCCESS_REQUEST_METRICS,
+            ("SIMPLE", "heuristic_scorer", "tier-up", "from-header"),
+            id="auto-routed success",
+        ),
+        pytest.param(
+            "tier-up", _SUCCESS_REQUEST_METRICS, ("None", "None", "None", "from-header"), id="direct success"
+        ),
+        pytest.param(
+            "smart-router-down",
+            _FAILURE_EVENT_METRICS,
+            ("SIMPLE", "heuristic_scorer", "tier-down", "from-header"),
+            id="auto-routed failure",
+        ),
+        pytest.param(
+            "tier-down", _FAILURE_EVENT_METRICS, ("None", "None", "None", "from-header"), id="direct failure"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_request_metrics_carry_the_routing_decision_of_an_auto_routed_call(
+    auto_router: litellm.Router, model: str, metric_names: tuple[str, ...], expected: tuple[str, ...]
+):
+    await _call(auto_router, model, nested={"caller": "from-header"}, routing_decision={"tier": "CALLER"})
+
+    assert {name: _custom_labels_of(name) for name in metric_names} == {name: [expected] for name in metric_names}
+
+
+_KEY_GAUGES: Final = ("litellm_remaining_api_key_requests_for_model", "litellm_remaining_api_key_tokens_for_model")
+_KEY_METADATA_LABELS: Final = ("KEY-META", "None", "None", "from-header")
+
+
+@pytest.mark.parametrize(
+    ("model", "metric_names", "request_labels"),
+    [
+        pytest.param(
+            "smart-router",
+            _SUCCESS_REQUEST_METRICS,
+            ("SIMPLE", "heuristic_scorer", "tier-up", "from-header"),
+            id="auto-routed success",
+        ),
+        pytest.param("tier-up", _SUCCESS_REQUEST_METRICS, _KEY_METADATA_LABELS, id="direct success"),
+        pytest.param("tier-down", _FAILURE_EVENT_METRICS, _KEY_METADATA_LABELS, id="direct failure"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_metadata_labels_what_the_router_did_not_route_and_the_key_gauges(
+    auto_router: litellm.Router, model: str, metric_names: tuple[str, ...], request_labels: tuple[str, ...]
+):
+    await _call(
+        auto_router,
+        model,
+        key_metadata={"routing_decision": {"tier": "KEY-META"}},
+        nested={"caller": "from-header"},
+        routing_decision={"tier": "CALLER"},
+    )
+
+    gauges: Final = _KEY_GAUGES if metric_names is _SUCCESS_REQUEST_METRICS else ()
+    assert {name: _custom_labels_of(name) for name in (*metric_names, *gauges)} == {
+        **{name: [request_labels] for name in metric_names},
+        **{name: [_KEY_METADATA_LABELS] for name in gauges},
+    }
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[dict[str, object], object, object, object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append((kwargs, response_obj, start_time, end_time))
+
+
+_PROVIDER_HEADERS: Final = {"x_ratelimit_remaining_requests": 99, "x_ratelimit_remaining_tokens": 9999}
+_V3_LIMITER_HEADERS: Final = {"x-ratelimit-api_key-limit-requests": 100, "x-ratelimit-api_key-remaining-requests": 99}
+_ROUTER_REMAINING_LIMITS: Final = {"x-ratelimit-remaining-requests": 9, "x-ratelimit-remaining-tokens": 75}
+_REMAINING_GAUGES: Final = ("litellm_remaining_requests_metric", "litellm_remaining_tokens_metric")
+_V3_GAUGES: Final = ("litellm_api_key_rate_limit_allowed_metric", "litellm_api_key_rate_limit_used_metric")
+
+
+class _RouterWithRemainingLimits:
+    def __init__(self, remaining: Mapping[str, int]) -> None:
+        self.remaining = remaining
+
+    def health(self) -> "_RouterWithRemainingLimits":
+        return self
+
+    async def usage(self, model_group: str, kind: str) -> Mapping[str, int]:
+        return self.remaining
+
+
+@pytest.mark.parametrize(
+    ("logged_headers", "router_remaining", "gauges"),
+    [
+        pytest.param(_PROVIDER_HEADERS, {}, _REMAINING_GAUGES, id="provider headers"),
+        pytest.param(_V3_LIMITER_HEADERS, {}, _V3_GAUGES, id="v3 limiter headers"),
+        pytest.param({}, _ROUTER_REMAINING_LIMITS, _REMAINING_GAUGES, id="router remaining limits"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("key_metadata", "gauge_labels"),
+    [
+        pytest.param({"routing_decision": {"tier": "KEY-META"}}, _KEY_METADATA_LABELS, id="key metadata"),
+        pytest.param(None, ("None", "None", "None", "from-header"), id="no key metadata"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_rate_limit_gauges_of_an_auto_routed_call_never_take_its_tier(
+    auto_routed_logger: PrometheusLogger,
+    auto_router: litellm.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    logged_headers: Mapping[str, int],
+    router_remaining: Mapping[str, int],
+    gauges: tuple[str, ...],
+    key_metadata: Mapping[str, object] | None,
+    gauge_labels: tuple[str, ...],
+):
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    await _call(auto_router, "smart-router", key_metadata=key_metadata, nested={"caller": "from-header"})
+    kwargs, response_obj, start_time, end_time = recorder.events[0]
+    payload: Final = kwargs["standard_logging_object"]
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _RouterWithRemainingLimits(router_remaining))
+
+    await auto_routed_logger.async_log_success_event(
+        kwargs={
+            **kwargs,
+            "standard_logging_object": {
+                **payload,
+                "hidden_params": {**payload["hidden_params"], "additional_headers": dict(logged_headers)},
+            },
+        },
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert _custom_labels_of("litellm_requests_metric_total") == [
+        ("SIMPLE", "heuristic_scorer", "tier-up", "from-header")
+    ]
+    assert {name: _custom_labels_of(name) for name in gauges} == {name: [gauge_labels] for name in gauges}
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        pytest.param(
+            {
+                "standard_logging_object": {
+                    "metadata": {
+                        "routing_decision": {
+                            "tier": "SIMPLE",
+                            "cause": "heuristic_scorer",
+                            "routed_model": "tier-down",
+                        },
+                        "spend_logs_metadata": {"nested": {"caller": "from-header"}},
+                    }
+                }
+            },
+            ("SIMPLE", "heuristic_scorer", "tier-down", "from-header"),
+            id="logged payload",
+        ),
+        pytest.param(
+            {
+                key: {
+                    "routing_decision": {"tier": "CALLER"},
+                    "nested": {"caller": "body"},
+                    "spend_logs_metadata": {"nested": {"caller": "body"}},
+                }
+                for key in ("metadata", "litellm_metadata")
+            },
+            ("None", "None", "None", "None"),
+            id="caller body without a logged payload",
+        ),
+        pytest.param({"standard_logging_object": None}, ("None", "None", "None", "None"), id="null payload"),
+        pytest.param({}, ("None", "None", "None", "None"), id="no payload"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_failure_metrics_take_custom_labels_only_from_the_logged_payload(
+    auto_routed_logger: PrometheusLogger, request_data: dict[str, object], expected: tuple[str, ...]
+):
+    await auto_routed_logger.async_post_call_failure_hook(
+        request_data={"model": "smart-router", **request_data},
+        original_exception=litellm.InternalServerError("boom", llm_provider="openai", model="smart-router"),
+        user_api_key_dict=UserAPIKeyAuth(token="test-token"),
+    )
+
+    assert {name: _custom_labels_of(name) for name in _FAILURE_HOOK_METRICS} == {
+        name: [expected] for name in _FAILURE_HOOK_METRICS
+    }
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [
+        pytest.param(401, ("None", "expired-alias"), id="401"),
+        pytest.param(429, ("bad-key-hash", "expired-alias"), id="429"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_failure_metrics_never_label_a_401_with_the_key_hash(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, expected: tuple[str, str]
+):
+    monkeypatch.setattr(
+        litellm, "custom_prometheus_metadata_labels", ["user_api_key_hash", "metadata.user_api_key_alias"]
+    )
+    _clear_prometheus_registry()
+    await PrometheusLogger().async_post_call_failure_hook(
+        request_data={
+            "model": "smart-router",
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": "bad-key-hash", "user_api_key_alias": "expired-alias"}
+            },
+        },
+        original_exception=HTTPException(status_code=status_code, detail="refused"),
+        user_api_key_dict=UserAPIKeyAuth(token="test-token"),
+    )
+
+    assert {
+        name: [
+            (sample.labels["user_api_key_hash"], sample.labels["metadata_user_api_key_alias"])
+            for sample in _metric_samples(name)
+        ]
+        for name in _FAILURE_HOOK_METRICS
+    } == {name: [expected] for name in _FAILURE_HOOK_METRICS}
+    _clear_prometheus_registry()
 
 
 _COOLDOWN_LABELS: Final = {
