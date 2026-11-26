@@ -496,6 +496,7 @@ from litellm.proxy.auth.auth_utils import (
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
+from litellm.proxy.auth.candidate_model_access import router_candidate_access_check
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
@@ -7543,6 +7544,7 @@ class ProxyConfig:
                     ),
                     ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
                     fallback_access_check=router_fallback_access_check,
+                    candidate_access_check=router_candidate_access_check,
                     fallback_budget_check=RouterFallbackBudgetCheck(
                         is_enforced=router_fallback_budget_check.is_enforced,
                         team_member_model_budget_limiter=model_max_budget_limiter,
@@ -8058,6 +8060,7 @@ class ProxyConfig:
                                 search_tools=search_tools,
                                 ignore_invalid_deployments=True,
                                 fallback_access_check=router_fallback_access_check,
+                                candidate_access_check=router_candidate_access_check,
                                 fallback_budget_check=RouterFallbackBudgetCheck(
                                     is_enforced=router_fallback_budget_check.is_enforced,
                                     team_member_model_budget_limiter=model_max_budget_limiter,

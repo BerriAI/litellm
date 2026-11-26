@@ -78,6 +78,10 @@ pub enum Error {
     MultipleTeams { model: String },
     #[error("model `{model}` matches deployments from multiple model groups")]
     MultipleModelGroups { model: String },
+    /// The host let the caller use none of the deployments `model` resolved to
+    /// ([`crate::RouterHost::authorize_candidates`]): the call ends, with no retry or fallback.
+    #[error("the caller may use no deployment of `{model}`")]
+    NoAccessibleDeployment { model: String },
     /// Every deployment `model` resolved to is reserved for other teams by an active access
     /// window, the first of which ends at `until` (`HH:MM`) in `timezone`.
     #[error("deployment `{model}` is reserved for another team until {until} {timezone}")]
@@ -171,6 +175,7 @@ impl Error {
             | Self::PtuReserved { .. }
             | Self::MultipleTeams { .. }
             | Self::MultipleModelGroups { .. }
+            | Self::NoAccessibleDeployment { .. }
             | Self::Reserved { .. }
             | Self::ContextWindowExceeded { .. }
             | Self::UnsupportedParams { .. }
@@ -225,6 +230,7 @@ impl Error {
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
+            | Self::NoAccessibleDeployment { .. }
             | Self::ModelInfo { .. } => return None,
         };
         let mut failure = AttemptError::host_raised(classes);
@@ -263,6 +269,9 @@ impl Error {
                 model: model.clone(),
             },
             Self::MultipleModelGroups { model } => Self::MultipleModelGroups {
+                model: model.clone(),
+            },
+            Self::NoAccessibleDeployment { model } => Self::NoAccessibleDeployment {
                 model: model.clone(),
             },
             Self::Reserved {

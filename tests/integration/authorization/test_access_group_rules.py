@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import httpx
 import jwt
 import pytest
 import yaml
@@ -12,8 +13,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from litellm.proxy.mcp_server.idp_token_exchange import REJECTED_SUBJECT_TOKEN
 from tests.integration._support.client import Gateway, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy
+from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -219,3 +220,202 @@ def test_teamless_jwt_cannot_provision_credentials_without_native_team_access(
                 assert exchanged.json() == {"error": "invalid_request", "error_description": REJECTED_SUBJECT_TOKEN}, (
                     exchanged.text
                 )
+
+
+def _completion(request: Request) -> Reply:
+    if (request.method, request.target) == ("GET", "/v1/models"):
+        return Reply(body=b'{"object":"list","data":[]}')
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"chatcmpl-{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "served"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 1},
+            }
+        ).encode()
+    )
+
+
+def _chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": f"uncached {uuid.uuid4().hex}"}]},
+        key=key,
+    )
+
+
+def _error_type(response: httpx.Response) -> str | None:
+    return response.json()["error"]["type"] if response.status_code != 200 else None
+
+
+def _outcome(gateway: Gateway, wire: Wire, model: str, key: str, calls: int) -> tuple[set[int], set[str | None]]:
+    wire.drain()
+    statuses: Final = {_chat(gateway, model, key).status_code for _ in range(calls)}
+    return statuses, {
+        entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+    }
+
+
+def test_a_deployment_named_by_its_litellm_model_is_served_only_by_the_deployments_the_caller_is_granted(
+    gateway: Gateway,
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group_a: Final = f"group-a-{suffix}"
+        group_b: Final = f"group-b-{suffix}"
+        shared: Final = f"openai/shared-{suffix}"
+        lone: Final = f"openai/lone-{suffix}"
+        upstream: Final = f"{wire.url}/v1"
+        name_a: Final = scenario.model(
+            model=shared, api_base=upstream, api_key="group-a", model_info={"access_groups": [group_a]}
+        )
+        name_b: Final = scenario.model(
+            model=shared, api_base=upstream, api_key="group-b", model_info={"access_groups": [group_b]}
+        )
+        scenario.model(model=lone, api_base=upstream, api_key="lone", model_info={"access_groups": [group_a]})
+        group_key: Final = scenario.key(models=[group_a])
+        name_key: Final = scenario.key(models=[name_a])
+        ungranted_key: Final = scenario.key(models=[f"group-c-{suffix}"])
+        literal_key: Final = scenario.key(models=[shared])
+        team_key: Final = scenario.key(team_id=scenario.team(models=[group_a]))
+        other_team_key: Final = scenario.key(models=[group_a], team_id=scenario.team(models=[group_b]))
+        rows: Final = (
+            ("group key, litellm model of its one deployment", group_key, lone, 1, {200}, {"Bearer lone"}),
+            ("group key, litellm model shared with group b", group_key, shared, 12, {200}, {"Bearer group-a"}),
+            ("public name key, litellm model shared with group b", name_key, shared, 12, {200}, {"Bearer group-a"}),
+            ("team restricted key, litellm model shared with group b", team_key, shared, 12, {200}, {"Bearer group-a"}),
+            ("key granted neither deployment", ungranted_key, shared, 1, {403}, set()),
+            ("group a key in a group b team", other_team_key, shared, 1, {403}, set()),
+            ("key listing the litellm model", literal_key, shared, 24, {200}, {"Bearer group-a", "Bearer group-b"}),
+            ("group key, granted public name", group_key, name_a, 1, {200}, {"Bearer group-a"}),
+            ("group key, ungranted public name", group_key, name_b, 1, {403}, set()),
+        )
+        observed: Final = tuple(
+            (label, *_outcome(gateway, wire, model, key, calls)) for label, key, model, calls, _, _ in rows
+        )
+        assert observed == tuple((label, statuses, served_by) for label, _, _, _, statuses, served_by in rows)
+        assert {_error_type(_chat(gateway, shared, key)) for key in (ungranted_key, other_team_key)} == {
+            "key_model_access_denied"
+        }
+
+
+def _owned_config(tmp_path: Path, name: str, **sections: object) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    path: Final = tmp_path / name
+    path.write_text(yaml.safe_dump({**config, **sections}))
+    return path
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_a_wildcard_deployment_outside_the_callers_groups_never_serves_a_litellm_model_it_matches(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"group-a-{suffix}"
+        unmatched: Final = f"openai/unmatched-{suffix}"
+        matched: Final = f"openai/matched-{suffix}-model"
+        upstream: Final = f"{wire.url}/v1"
+        for litellm_model in (unmatched, matched):
+            scenario.model(
+                model=litellm_model, api_base=upstream, api_key="group-a", model_info={"access_groups": [group]}
+            )
+        key: Final = scenario.key(models=[group])
+        base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        path: Final = _owned_config(
+            tmp_path,
+            "wildcard_route.yaml",
+            model_list=[
+                *base["model_list"],
+                {
+                    "model_name": f"openai/matched-{suffix}-*",
+                    "litellm_params": {"model": "openai/*", "api_base": upstream, "api_key": "wildcard"},
+                },
+            ],
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=path, workers=2) as candidate:
+            observed: Final = tuple(
+                _outcome(candidate, wire, model, caller, 4)
+                for model, caller in ((unmatched, key), (matched, key), (matched, candidate.key))
+            )
+        assert observed == (({200}, {"Bearer group-a"}), ({403}, set()), ({200}, {"Bearer wildcard"}))
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_a_user_config_router_never_serves_a_litellm_model_the_caller_holds_only_through_a_deployment(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"group-a-{suffix}"
+        litellm_model: Final = f"openai/user-config-{suffix}"
+        upstream: Final = f"{wire.url}/v1"
+        scenario.model(model=litellm_model, api_base=upstream, api_key="group-a", model_info={"access_groups": [group]})
+        key: Final = scenario.key(models=[group])
+        base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        path: Final = _owned_config(
+            tmp_path,
+            "client_side_credentials.yaml",
+            general_settings={**base["general_settings"], "allow_client_side_credentials": True},
+        )
+        user_config: Final = {
+            "model_list": [
+                {
+                    "model_name": litellm_model,
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_base": upstream, "api_key": "user-config"},
+                }
+            ]
+        }
+        with owned_proxy(gateway, tmp_path, {}, config=path, workers=2) as candidate:
+            wire.drain()
+            responses: Final = tuple(
+                candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": litellm_model,
+                        "messages": [{"role": "user", "content": f"uncached {uuid.uuid4().hex}"}],
+                        "user_config": user_config,
+                    },
+                    key=caller,
+                )
+                for caller in (key, candidate.key)
+            )
+            served_by: Final = [
+                entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+            ]
+        assert [(response.status_code, _error_type(response)) for response in responses] == [
+            (403, "key_model_access_denied"),
+            (200, None),
+        ], [response.text for response in responses]
+        assert served_by == ["Bearer user-config"]
+
+
+def test_a_failed_pick_never_hands_an_inaccessible_litellm_model_to_the_provider_under_its_own_name(
+    gateway: Gateway,
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group_a: Final = f"group-a-{suffix}"
+        group_b: Final = f"group-b-{suffix}"
+        litellm_model: Final = f"openai/container-{suffix}"
+        for group in (group_a, group_b):
+            scenario.model(
+                model=litellm_model,
+                api_base=f"{wire.url}/v1",
+                api_key=group,
+                model_info={"access_groups": [group]},
+            )
+        key: Final = scenario.key(models=[group_a], team_id=scenario.team(models=[group_b]))
+        wire.drain()
+        refused: Final = gateway.request(
+            "POST", "/v1/containers", {"name": f"container-{suffix}", "model": litellm_model}, key=key
+        )
+        assert (refused.status_code, _error_type(refused)) == (403, "key_model_access_denied"), refused.text
+        assert wire.drain() == ()

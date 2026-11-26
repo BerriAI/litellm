@@ -960,6 +960,14 @@ async def _route_request_single_attempt(
     def direct_litellm_endpoint() -> Callable[..., Awaitable[object]]:
         return without_global_fallbacks_around(_named_endpoint(litellm, route_type))
 
+    async def refuse_direct_dispatch() -> None:
+        from litellm.proxy.auth.candidate_model_access import refuse_ungranted_deployment_selector
+
+        if llm_router is not None:
+            await refuse_ungranted_deployment_selector(
+                JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict, llm_router
+            )
+
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
@@ -996,6 +1004,7 @@ async def _route_request_single_attempt(
         return batch_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
+        await refuse_direct_dispatch()
         return _route_user_config_request(data, route_type)
 
     elif llm_router is not None:
@@ -1015,6 +1024,7 @@ async def _route_request_single_attempt(
             "acancel_run",
             "adelete_run",
         ]:
+            await refuse_direct_dispatch()
             # If a model is provided, get its credentials from the router
             model: Final = data.get("model")
             if model and llm_router:
@@ -1143,6 +1153,7 @@ async def _route_request_single_attempt(
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.settings().router_general_settings.pass_through_all_models:
+                await refuse_direct_dispatch()
                 return direct_litellm_endpoint()(**direct_litellm_kwargs())
             elif (
                 llm_router.settings().default_deployment is not None

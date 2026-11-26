@@ -58,6 +58,10 @@ struct ScriptedHost {
     pre_call_facts: PreCallFacts,
     callback_filter_runs: Mutex<usize>,
     text_only_ids: &'static [&'static str],
+    /// The deployments the caller of a request that asks may use, `None` for any.
+    accessible_ids: Option<&'static [&'static str]>,
+    /// The candidate ids each access check was asked about, in order.
+    access_checks: Mutex<Vec<Vec<String>>>,
 }
 
 impl ScriptedHost {
@@ -325,6 +329,22 @@ impl RouterHost for ScriptedHost {
             kept,
             preferred: None,
         })
+    }
+
+    async fn authorize_candidates(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+    ) -> Result<Option<Vec<Arc<Deployment>>>, Error> {
+        let asked = candidates.iter().map(|d| d.id.clone()).collect();
+        self.access_checks.lock().push(asked);
+        Ok(self.accessible_ids.map(|accessible| {
+            candidates
+                .iter()
+                .filter(|d| accessible.contains(&d.id.as_str()))
+                .cloned()
+                .collect()
+        }))
     }
 
     async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
@@ -5869,5 +5889,240 @@ async fn a_router_not_told_to_enforce_the_limits_counts_nothing() {
             .await
             .unwrap(),
         None
+    );
+}
+
+/// `openai/shared` is the litellm model of one deployment in each of two groups, next to a
+/// wildcard deployment and a fallback group.
+fn shared_litellm_model() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "granted", "litellm_params": {"model": "openai/shared"}, "model_info": {"id": "g1"}},
+            {"model_name": "other", "litellm_params": {"model": "openai/shared"}, "model_info": {"id": "o1"}},
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "w1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/c"}, "model_info": {"id": "b1"}},
+        ]
+    }))
+    .unwrap()
+}
+
+fn authorizing(model: &str, specific_deployment: bool) -> RouterRequest {
+    RouterRequest {
+        model: model.to_owned(),
+        specific_deployment,
+        authorize_candidates: true,
+        ..RouterRequest::default()
+    }
+}
+
+fn access_checked(accessible_ids: &'static [&'static str]) -> Hosted {
+    let host = Arc::new(ScriptedHost {
+        accessible_ids: Some(accessible_ids),
+        ..ScriptedHost::default()
+    });
+    let fallbacks = json!({"num_retries": 2, "fallbacks": [{"openai/shared": ["backup"]}, {"granted": ["backup"]}]});
+    router(shared_litellm_model(), fallbacks, host)
+}
+
+#[rstest]
+#[case::its_litellm_model("openai/shared", true, &["g1", "o1"])]
+#[case::its_litellm_model_a_wildcard_matches("openai/shared", false, &["w1"])]
+#[case::a_wildcard("openai/unlisted", false, &["w1"])]
+#[case::its_group("granted", false, &["g1"])]
+#[case::its_id("g1", false, &["g1"])]
+#[tokio::test]
+async fn a_request_that_asks_is_served_only_by_the_resolved_deployments_its_caller_may_use(
+    #[case] model: &str,
+    #[case] specific_deployment: bool,
+    #[case] resolved: &[&str],
+    #[values(0, 1, 2, 3, 4, 5, 6, 7)] _draw: u8,
+) {
+    let router = access_checked(&["g1", "w1"]);
+
+    let served = router
+        .call(
+            Op::from("acompletion"),
+            authorizing(model, specific_deployment),
+        )
+        .await
+        .map(|response| response.deployment_id);
+
+    let accessible: Vec<&str> = resolved.iter().copied().filter(|id| *id != "o1").collect();
+    assert_eq!(served.ok().as_deref(), accessible.first().copied());
+    assert_eq!(
+        router.host.access_checks.lock().first().map(Vec::len),
+        Some(resolved.len())
+    );
+}
+
+#[rstest]
+#[case::its_litellm_model(true)]
+#[case::its_litellm_model_a_wildcard_matches(false)]
+#[tokio::test]
+async fn a_caller_that_may_use_no_resolved_deployment_is_refused_without_retry_fallback_or_passthrough(
+    #[case] specific_deployment: bool,
+    #[values(false, true)] passthrough_on_no_deployment: bool,
+) {
+    let router = access_checked(&["b1"]);
+
+    let refused = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                passthrough_on_no_deployment,
+                ..authorizing("openai/shared", specific_deployment)
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(&refused, Err(Error::NoAccessibleDeployment { model }) if model == "openai/shared"),
+        "{refused:?}"
+    );
+    assert_eq!(router.host.params_sent.lock().len(), 0);
+    assert_eq!(router.host.retries(), 0);
+}
+
+#[tokio::test]
+async fn a_request_that_does_not_ask_never_reaches_the_access_check() {
+    let router = access_checked(&[]);
+
+    let served = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                authorize_candidates: false,
+                ..authorizing("openai/shared", true)
+            },
+        )
+        .await;
+
+    assert!(served.is_ok(), "{served:?}");
+    assert!(router.host.access_checks.lock().is_empty());
+}
+
+#[rstest]
+#[case::may_use_it(&["o1"], true)]
+#[case::may_not_use_it(&["g1"], false)]
+#[tokio::test]
+async fn a_custom_strategys_pick_is_served_only_when_the_caller_may_use_it(
+    #[case] accessible_ids: &'static [&'static str],
+    #[case] served: bool,
+    #[values(false, true)] through_the_call: bool,
+) {
+    let picked = access_checked(&[]).registry().deployment("o1").unwrap();
+    let host = Arc::new(ScriptedHost {
+        accessible_ids: Some(accessible_ids),
+        pre_routes: Some(("openai/shared", PreRouted::Deployment(picked))),
+        ..ScriptedHost::default()
+    });
+    let router = router(shared_litellm_model(), json!({}), host);
+    let request = RouterRequest {
+        pre_routes: true,
+        ..authorizing("openai/shared", true)
+    };
+
+    let outcome = if through_the_call {
+        let called = router.call(Op::from("acompletion"), request).await;
+        called.map(|response| response.deployment_id)
+    } else {
+        let selected = router.select(&Op::from("acompletion"), &request).await;
+        selected.map(|deployment| deployment.id.clone())
+    };
+
+    if served {
+        assert_eq!(outcome.ok().as_deref(), Some("o1"));
+    } else {
+        assert!(
+            matches!(outcome, Err(Error::NoAccessibleDeployment { .. })),
+            "{outcome:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_selection_that_asks_picks_among_the_deployments_its_caller_may_use() {
+    let router = access_checked(&["o1"]);
+
+    let request = authorizing("openai/shared", true);
+    let selected = router.select(&Op::from("acompletion"), &request).await;
+    let healthy = router.healthy(&Op::from("acompletion"), &request).await;
+
+    assert_eq!(selected.unwrap().id, "o1");
+    let healthy_ids: Vec<String> = healthy
+        .unwrap()
+        .healthy
+        .iter()
+        .map(|d| d.id.clone())
+        .collect();
+    assert_eq!(healthy_ids, ["o1"]);
+}
+
+#[tokio::test]
+async fn a_host_without_an_access_check_serves_no_request_that_asks() {
+    let host = SteppedHost::default();
+    let router = Router::builder(shared_litellm_model(), RouterDynamicConfig::default())
+        .build()
+        .unwrap();
+
+    let refused = router
+        .select(
+            &host,
+            &Op::from("acompletion"),
+            &authorizing("openai/shared", true),
+        )
+        .await;
+
+    assert!(
+        matches!(refused, Err(Error::NoAccessibleDeployment { .. })),
+        "{refused:?}"
+    );
+}
+
+/// `team/owned` is the litellm model of one deployment, which another team owns.
+fn owned_by_another_team() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [{
+            "model_name": "theirs",
+            "litellm_params": {"model": "team/owned"},
+            "model_info": {"id": "t1", "team_id": "another-team"},
+        }]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::a_caller_the_host_restricts_is_refused(Some(&[] as &[&str]), false)]
+#[case::a_caller_that_may_use_any_passes_through(None, true)]
+#[tokio::test]
+async fn a_request_that_asks_and_resolves_to_nothing_passes_through_only_for_a_caller_that_may_use_any(
+    #[case] accessible_ids: Option<&'static [&'static str]>,
+    #[case] passes_through: bool,
+) {
+    let host = Arc::new(ScriptedHost {
+        accessible_ids,
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        owned_by_another_team(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+
+    let outcome = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                passthrough_on_no_deployment: true,
+                ..authorizing("team/owned", true)
+            },
+        )
+        .await;
+
+    assert_eq!(host.params_sent.lock().len(), usize::from(passes_through));
+    assert_eq!(
+        matches!(outcome, Err(Error::NoAccessibleDeployment { .. })),
+        !passes_through,
+        "{outcome:?}"
     );
 }

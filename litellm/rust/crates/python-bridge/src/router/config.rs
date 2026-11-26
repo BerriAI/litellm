@@ -210,6 +210,7 @@ struct RequestSpec {
     mock_failure: Option<MockFailure>,
     cooldown_time: Option<f64>,
     health_check_probe: Option<bool>,
+    authorize_candidates: Option<bool>,
     outcome_callbacks: Option<OutcomeCallbacks>,
     body: Option<Value>,
 }
@@ -278,6 +279,7 @@ pub(crate) fn parse_request(value: Value, model: Option<&str>) -> Result<RouterR
         mock_failure: spec.mock_failure,
         cooldown_time: spec.cooldown_time,
         health_check_probe: spec.health_check_probe.unwrap_or(false),
+        authorize_candidates: spec.authorize_candidates.unwrap_or(false),
         outcome_callbacks: spec.outcome_callbacks.unwrap_or_default(),
     })
 }

@@ -148,6 +148,10 @@ pub struct RouterRequest {
     /// `health_check_probe`: a health check's own pick, which sees no deployment when every
     /// one is marked unhealthy (the safety net keeps them all for any other request).
     pub health_check_probe: bool,
+    /// The host decides which of the deployments a name resolved to this caller may use
+    /// ([`RouterHost::authorize_candidates`]): set when the caller named a deployment's litellm
+    /// model, which no model access check of the host's keys by.
+    pub authorize_candidates: bool,
 }
 
 /// A per-request `num_retries` that is no count of retries. `async_function_with_retries` only
@@ -798,6 +802,18 @@ pub trait RouterHost: Send + Sync {
                 preferred: None,
             })
         }
+    }
+
+    /// The `candidates` the caller may use, asked on every resolution of a request that sets
+    /// `authorize_candidates`, or `None` for a caller that may use whatever `ctx.name` resolves
+    /// to. A host without the check keeps none.
+    fn authorize_candidates(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+    ) -> impl Future<Output = Result<Option<Vec<Arc<Deployment>>>, Error>> + Send {
+        let _ = (ctx, candidates);
+        async { Ok(Some(Vec::new())) }
     }
 
     // Fallback

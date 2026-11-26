@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, TypeVar
 from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
+    from litellm.router_api import RouterRegistry
     from litellm.types.llms.openai import OpenAIFileObject
 
 import litellm
@@ -155,6 +156,11 @@ def deployment_ids_failed_in_request(request_kwargs: Mapping[str, object]) -> fr
             *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
         )
     )
+
+
+def names_deployment_selector(name: str, registry: "RouterRegistry") -> bool:
+    """Whether ``name`` selects deployments by their ``litellm_params.model`` and names no model group."""
+    return name not in registry.index("model_name") and name in registry.names(kind="deployment_names")
 
 
 def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:

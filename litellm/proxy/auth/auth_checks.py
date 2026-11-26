@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import rate_card
+from litellm.litellm_core_utils.routing_common_utils import names_deployment_selector
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -842,6 +843,7 @@ async def _run_project_checks(
     skip_budget_checks: bool,
     valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
+    admit_deployment_selector: bool = False,
 ) -> None:
     """
     Run all project-level checks: blocked, model access, budget, soft budget.
@@ -863,6 +865,7 @@ async def _run_project_checks(
             project_object=project_object,
             llm_router=llm_router,
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            admit_deployment_selector=admit_deployment_selector,
         )
 
     if not skip_budget_checks:
@@ -1330,6 +1333,7 @@ async def common_checks(
     request: Request,
     skip_budget_checks: bool | None = None,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
+    admit_deployment_selector: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -1485,6 +1489,7 @@ async def common_checks(
                     llm_router=llm_router,
                     team_model_aliases=(valid_token.team_model_aliases if valid_token else None),
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    admit_deployment_selector=admit_deployment_selector,
                 )
             except ProxyException as team_denial:
                 if team_denial.type != ProxyErrorTypes.team_model_access_denied:
@@ -1495,6 +1500,7 @@ async def common_checks(
                     team_object=team_object,
                     llm_router=llm_router,
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    admit_deployment_selector=admit_deployment_selector,
                 ):
                     raise
 
@@ -1512,6 +1518,7 @@ async def common_checks(
                 team_membership=loaded_team_membership,
                 team_membership_loaded=team_membership_loaded,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                admit_deployment_selector=admit_deployment_selector,
             )
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
@@ -1632,6 +1639,7 @@ async def common_checks(
                 llm_router=llm_router,
                 user_object=user_object,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                admit_deployment_selector=admit_deployment_selector,
             )
 
     if end_user_object is not None and end_user_object.models:
@@ -1642,6 +1650,7 @@ async def common_checks(
                     end_user_object=end_user_object,
                     llm_router=llm_router,
                     valid_token=valid_token,
+                    admit_deployment_selector=admit_deployment_selector,
                 )
             for fallback_model in request_fallback_model_names(_typed_request_body(request_body)):
                 can_customer_access_model(
@@ -1653,16 +1662,15 @@ async def common_checks(
 
     if _model and valid_token is not None and personal_key_team_model_access_applies(valid_token):
         await can_personal_key_call_model_via_teams(
-            model=(
-                *((_model,) if isinstance(_model, str) else _model),
-                *request_fallback_model_names(_typed_request_body(request_body)),
-            ),
+            model=_model,
             user_object=user_object,
             valid_token=valid_token,
             llm_router=llm_router,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            admit_deployment_selector=admit_deployment_selector,
+            fallback_models=request_fallback_model_names(_typed_request_body(request_body)),
         )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
@@ -1674,6 +1682,7 @@ async def common_checks(
             skip_budget_checks=skip_all_budget_checks,
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
+            admit_deployment_selector=admit_deployment_selector,
         )
 
     # 2.3 Which model access groups authorized this request
@@ -5104,6 +5113,66 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
+class _ModelInfoAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    access_groups: tuple[object, ...]
+
+
+class _DeploymentAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _ModelInfoAccessGroups
+
+
+def deployment_access_groups(deployment: object) -> frozenset[str]:
+    match deployment:
+        case {"model_info": {"access_groups": list()}}:
+            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
+            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
+        case _:
+            return frozenset()
+
+
+def deployment_public_name(deployment: object) -> str | None:
+    match deployment:
+        case {"model_info": {"team_public_model_name": str(public_name)}} if public_name:
+            return public_name
+        case {"model_name": str(model_name)}:
+            return model_name
+        case _:
+            return None
+
+
+def _is_selected_by(deployment: object, model: str) -> bool:
+    match deployment:
+        case {"litellm_params": {"model": str(litellm_model)}}:
+            return litellm_model == model
+        case _:
+            return False
+
+
+def _grants_deployment(
+    deployment: object, llm_router: RegistryReader, models: Sequence[str], team_id: str | None
+) -> bool:
+    if not deployment_access_groups(deployment).isdisjoint(models):
+        return True
+    public_name: Final = deployment_public_name(deployment)
+    return public_name is not None and check_model_access_helper(
+        model=public_name, llm_router=llm_router, models=list(models), team_id=team_id
+    )
+
+
+def _grants_a_deployment_selected_by(
+    model: str, llm_router: RegistryReader, models: Sequence[str], team_id: str | None
+) -> bool:
+    registry: Final = llm_router.registry()
+    if not names_deployment_selector(model, registry):
+        return False
+    selected: Final = (deployment for deployment in registry.deployments() or () if _is_selected_by(deployment, model))
+    return any(_grants_deployment(deployment, llm_router, models, team_id) for deployment in selected)
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: RegistryReader | None,
@@ -5113,6 +5182,7 @@ def _can_object_call_model(
     key_model_aliases: Mapping[str, str] | None = None,
     object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -5143,6 +5213,7 @@ def _can_object_call_model(
                 key_model_aliases=key_model_aliases,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
+                admit_deployment_selector=admit_deployment_selector,
             )
         return True
 
@@ -5198,6 +5269,12 @@ def _can_object_call_model(
         for name in owning_team_names
     ):
         return True
+    if (
+        admit_deployment_selector
+        and llm_router is not None
+        and _grants_a_deployment_selected_by(model, llm_router, models, team_id)
+    ):
+        return True
 
     internal_message: Final = (
         f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "
@@ -5223,7 +5300,7 @@ def _resolve_team_alias(
     model: str | list[str],
     team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
 ) -> str | list[str]:
     if not team_model_aliases:
         return model
@@ -5249,7 +5326,7 @@ def _live_team_alias_target(
 async def can_agent_call_model(
     model: str | list[str] | None,  # mutable-ok: the model checks it delegates to take list[str]
     valid_token: UserAPIKeyAuth | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -5313,7 +5390,7 @@ async def agent_model_grants(
 async def _check_agent_access_group_model_access(
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
     """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
@@ -5352,7 +5429,7 @@ CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerU
 async def _check_agent_caller_model_access(
     model: str | list[str] | None,  # mutable-ok: the model checks it delegates to take list[str]
     valid_token: UserAPIKeyAuth | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -5649,6 +5726,7 @@ async def can_key_call_model(
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
     prisma_client: DatabaseClient | None = None,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -5682,6 +5760,7 @@ async def can_key_call_model(
             prisma_client=dashboard_prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            admit_deployment_selector=admit_deployment_selector,
         )
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
@@ -5693,6 +5772,7 @@ async def can_key_call_model(
             team_id=valid_token.team_id,
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             object_type="key",
+            admit_deployment_selector=admit_deployment_selector,
         )
     except ProxyException:
         # Fallback: check key's access_group_ids
@@ -5711,6 +5791,7 @@ async def can_key_call_model(
                     team_id=valid_token.team_id,
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="key",
+                    admit_deployment_selector=admit_deployment_selector,
                 )
         raise
 
@@ -5912,6 +5993,7 @@ async def can_team_access_model(
     team_model_aliases: dict[str, str] | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
     prisma_client: DatabaseClient | None = None,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -5928,6 +6010,7 @@ async def can_team_access_model(
             team_id=team_object.team_id if team_object else None,
             key_model_aliases=key_model_aliases,
             object_type="team",
+            admit_deployment_selector=admit_deployment_selector,
         )
     except ProxyException:
         # Fallback: check team's access_group_ids
@@ -5946,6 +6029,7 @@ async def can_team_access_model(
                     team_id=team_object.team_id if team_object else None,
                     key_model_aliases=key_model_aliases,
                     object_type="team",
+                    admit_deployment_selector=admit_deployment_selector,
                 )
         raise
 
@@ -6019,6 +6103,7 @@ async def key_access_group_grants_model(
     team_object: LiteLLM_TeamTable | None,
     llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
+    admit_deployment_selector: bool = False,
 ) -> bool:
     """
     Returns True if the key's `access_group_ids` expand to models that grant
@@ -6041,6 +6126,7 @@ async def key_access_group_grants_model(
             team_id=valid_token.team_id if valid_token else None,
             key_model_aliases=key_model_aliases,
             object_type="key",
+            admit_deployment_selector=admit_deployment_selector,
         )
         return True
     except ProxyException:
@@ -6055,6 +6141,7 @@ def can_project_access_model(
     project_object: LiteLLM_ProjectTable,
     llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
     """
     Returns True if the project can access a specific model.
@@ -6068,6 +6155,7 @@ def can_project_access_model(
         team_id=project_object.team_id if project_object else None,
         key_model_aliases=key_model_aliases,
         object_type="project",
+        admit_deployment_selector=admit_deployment_selector,
     )
 
 
@@ -6076,6 +6164,7 @@ def _can_customer_scope_call_model(
     models: Sequence[str],
     llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
     team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
     team_id: Final = valid_token.team_id if valid_token is not None else None
@@ -6093,6 +6182,7 @@ def _can_customer_scope_call_model(
             models=list(models),
             key_model_aliases=key_model_aliases,
             object_type="customer",
+            admit_deployment_selector=admit_deployment_selector,
         )
 
     for name in (model,) if isinstance(model, str) else model:
@@ -6105,22 +6195,29 @@ def can_customer_access_model(
     end_user_object: LiteLLM_EndUserTable,
     llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
-    return _can_customer_scope_call_model(model, end_user_object.models or (), llm_router, valid_token)
+    return _can_customer_scope_call_model(
+        model, end_user_object.models or (), llm_router, valid_token, admit_deployment_selector
+    )
 
 
 def check_customer_model_access(
-    model: str | Sequence[str], valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
+    model: str | Sequence[str],
+    valid_token: UserAPIKeyAuth,
+    llm_router: RegistryReader | None,
+    admit_deployment_selector: bool = False,
 ) -> None:
     for scope in valid_token.customer_model_scopes:
-        _can_customer_scope_call_model(model, scope, llm_router, valid_token)
+        _can_customer_scope_call_model(model, scope, llm_router, valid_token, admit_deployment_selector)
 
 
 async def can_user_call_model(
     model: str | list[str],
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     user_object: LiteLLM_UserTable | None,
     key_model_aliases: Mapping[str, str] | None = None,
+    admit_deployment_selector: bool = False,
 ) -> Literal[True]:
     if user_object is None:
         return True
@@ -6144,6 +6241,7 @@ async def can_user_call_model(
         models=user_object.models,
         key_model_aliases=key_model_aliases,
         object_type="user",
+        admit_deployment_selector=admit_deployment_selector,
     )
 
 
@@ -6181,6 +6279,7 @@ def _dashboard_user_grants_model(
     valid_token: UserAPIKeyAuth,
     user_object: LiteLLM_UserTable | None,
     llm_router: RegistryReader | None,
+    admit_deployment_selector: bool = False,
 ) -> bool:
     if not _is_dashboard_session(valid_token) or user_object is None:
         return False
@@ -6196,6 +6295,7 @@ def _dashboard_user_grants_model(
             llm_router=llm_router,
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             object_type="user",
+            admit_deployment_selector=admit_deployment_selector,
         )
     except (ProxyException, ValidationError):
         return False
@@ -6290,6 +6390,7 @@ async def _team_grants_personal_key_model(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    admit_deployment_selector: bool = False,
 ) -> bool:
     key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
     try:
@@ -6299,6 +6400,7 @@ async def _team_grants_personal_key_model(
             llm_router=llm_router,
             key_model_aliases=key_model_aliases,
             prisma_client=prisma_client,
+            admit_deployment_selector=admit_deployment_selector,
         )
         await _check_team_member_model_access(
             model=model,
@@ -6309,6 +6411,7 @@ async def _team_grants_personal_key_model(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
             key_model_aliases=key_model_aliases,
+            admit_deployment_selector=admit_deployment_selector,
         )
         if _is_dashboard_session(valid_token):
             return prisma_client is not None and await _personal_key_team_within_budget(
@@ -6336,6 +6439,7 @@ async def _loaded_teams_allow_model(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    admit_deployment_selector: bool = False,
 ) -> bool:
     loaded: Final = tuple(team for team in teams if team is not None)
     if not loaded:
@@ -6350,6 +6454,7 @@ async def _loaded_teams_allow_model(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                admit_deployment_selector=admit_deployment_selector,
             )
             for team in loaded
         )
@@ -6710,8 +6815,14 @@ async def can_personal_key_call_model_via_teams(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    admit_deployment_selector: bool = False,
+    fallback_models: Sequence[str] = (),
 ) -> Literal[True]:
-    requested_models: Final = (model,) if isinstance(model, str) else tuple(model)
+    own_models: Final = (model,) if isinstance(model, str) else tuple(model)
+    requested_models: Final = (
+        *((own_model, admit_deployment_selector) for own_model in own_models),
+        *((fallback_model, False) for fallback_model in fallback_models),
+    )
     teams: Final = (
         await _load_personal_key_teams(
             user_object=user_object,
@@ -6723,8 +6834,8 @@ async def can_personal_key_call_model_via_teams(
         if user_object is not None
         else ()
     )
-    for requested_model in requested_models:
-        if _dashboard_user_grants_model(requested_model, valid_token, user_object, llm_router):
+    for requested_model, admits_selector in requested_models:
+        if _dashboard_user_grants_model(requested_model, valid_token, user_object, llm_router, admits_selector):
             continue
         if user_object is None or not await _loaded_teams_allow_model(
             model=requested_model,
@@ -6734,6 +6845,7 @@ async def can_personal_key_call_model_via_teams(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            admit_deployment_selector=admits_selector,
         ):
             raise ModelAccessDeniedProxyException(
                 message=model_access_denied_client_message(model=requested_model),
@@ -7598,6 +7710,7 @@ async def check_team_member_model_access(
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
     key_model_aliases: Mapping[str, str] | None = None,
+    admit_deployment_selector: bool = False,
 ) -> None:
     """
     Check if a team member's per-member model scope allows access to the requested model.
@@ -7634,6 +7747,7 @@ async def check_team_member_model_access(
             object_type="team",
             team_id=team_object.team_id,
             key_model_aliases=key_model_aliases,
+            admit_deployment_selector=admit_deployment_selector,
         )
     except ProxyException:
         internal_message: Final = (

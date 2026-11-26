@@ -1381,6 +1381,23 @@ class FallbackRateLimitCheck(Protocol):
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
+class CandidateAccessCheck(Protocol):
+    """
+    Answers which of the deployments `model` resolved to (`candidate_ids`) the caller behind `request_kwargs` may
+    use, or None for a caller that may use whatever `model` resolves to.
+
+    The router asks it, on every resolution, for a request whose caller named a deployment's
+    `litellm_params.model`: no model access check keys by that name, so access is decided per resolved
+    deployment. `denied` is the error a request left with no deployment raises.
+    """
+
+    async def __call__(
+        self, *, model: str, candidate_ids: Sequence[str], request_kwargs: Mapping[str, object], ctx: "RouterContext"
+    ) -> Sequence[str] | None: ...
+
+    def denied(self, model: str) -> Exception: ...
+
+
 class AutoRouterCapabilityLimit(Protocol):
     """
     Resolves how many complexity routers may claim each licensed capability right now; None means unlimited.

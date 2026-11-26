@@ -78,6 +78,8 @@ enum ErrorKind {
     MultipleTeams,
     #[strum(serialize = "multiple_model_groups")]
     MultipleModelGroups,
+    #[strum(serialize = "no_accessible_deployment")]
+    NoAccessibleDeployment,
     #[strum(serialize = "reserved")]
     Reserved,
     #[strum(serialize = "invalid_router_weights")]
@@ -115,6 +117,7 @@ impl From<&Error> for ErrorKind {
             Error::RoutingPluginsNeedAsync => Self::RoutingPluginsNeedAsync,
             Error::MultipleTeams { .. } => Self::MultipleTeams,
             Error::MultipleModelGroups { .. } => Self::MultipleModelGroups,
+            Error::NoAccessibleDeployment { .. } => Self::NoAccessibleDeployment,
             Error::Reserved { .. } => Self::Reserved,
             Error::InvalidRouterWeights => Self::InvalidRouterWeights,
             Error::NonNumericWeight { .. } => Self::NonNumericWeight,
@@ -1160,7 +1163,8 @@ fn host_call_response(
                 .map_err(|error| PyValueError::new_err(format!("bad pre-call facts: {error}")))
         }
         HostCall::Select {
-            stage: Stage::RoutingPlugins { .. } | Stage::ProviderRequest,
+            stage:
+                Stage::RoutingPlugins { .. } | Stage::ProviderRequest | Stage::AuthorizeCandidates,
             ..
         } => {
             // `{"models": [...] | None}`: a bare None would read as no outcome.
@@ -1456,6 +1460,7 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::PtuReserved { model }
         | Error::MultipleTeams { model }
         | Error::MultipleModelGroups { model }
+        | Error::NoAccessibleDeployment { model }
         | Error::DefaultDeploymentRaises { model }
         | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
         Error::ContextWindowExceeded { model, detail, .. } => {
@@ -1827,6 +1832,7 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                 Stage::EmbeddingBatch => ("embedding_batch", None),
                 Stage::OverrideCheck(strategy) => ("override_check", Some(strategy)),
                 Stage::ProviderRequest => ("provider_request", None),
+                Stage::AuthorizeCandidates => ("authorize_candidates", None),
                 Stage::CallbackFilters {
                     excluded_ids,
                     skipped_ids,

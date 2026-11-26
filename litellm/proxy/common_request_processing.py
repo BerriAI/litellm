@@ -3524,6 +3524,7 @@ class ProxyBaseLLMRequestProcessing:
             _REQUEST_FIELDS.validate_python(self.data),  # pyright: ignore[reportUnknownMemberType]  # validate the legacy request carrier at this boundary
             customer_auth,
             llm_router,
+            admit_deployment_selector=True,
         )
 
         return self.data, logging_obj

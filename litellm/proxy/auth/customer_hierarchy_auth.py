@@ -606,13 +606,20 @@ def _check_customer_window_usage(hierarchy: CustomerHierarchyAuth) -> None:
 
 
 def check_customer_hierarchy_model_access(
-    hierarchy: CustomerHierarchyAuth, model: str, llm_router: "RegistryReader | None"
+    hierarchy: CustomerHierarchyAuth,
+    model: str,
+    llm_router: "RegistryReader | None",
+    admit_deployment_selector: bool = False,
 ) -> None:
     """Every level with an ``allowed_models`` list must permit ``model``; a level without one permits every model."""
     for scope in hierarchy.scopes:
         if scope.allowed_models:
             can_object_call_model(
-                model=model, llm_router=llm_router, models=list(scope.allowed_models), object_type="customer"
+                model=model,
+                llm_router=llm_router,
+                models=list(scope.allowed_models),
+                object_type="customer",
+                admit_deployment_selector=admit_deployment_selector,
             )
 
 
@@ -842,6 +849,7 @@ async def resolve_customer_hierarchy(
     register_organization: OrganizationRegistrar = ensure_customer_organization,
     *,
     header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
+    admit_deployment_selector: bool = False,
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
     ``request_model`` is the model the route will actually serve, which may differ from the body.
@@ -867,6 +875,7 @@ async def resolve_customer_hierarchy(
         route,
         key_metadata,
         member_header=header_names.member_id,
+        admit_deployment_selector=admit_deployment_selector,
     )
 
 
@@ -879,6 +888,7 @@ async def check_customer_hierarchy_access(
     *,
     member_header: str = CUSTOMER_MEMBER_ID_HEADER,
     now: datetime | None = None,
+    admit_deployment_selector: bool = False,
 ) -> CustomerHierarchyAuth:
     """The admitted hierarchy with its budget windows read. A level over budget raises
     ``CustomerBudgetExceededError`` carrying the same readings."""
@@ -886,7 +896,7 @@ async def check_customer_hierarchy_access(
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:
-            check_customer_hierarchy_model_access(hierarchy, model, llm_router)
+            check_customer_hierarchy_model_access(hierarchy, model, llm_router, admit_deployment_selector)
     if RouteChecks.is_info_route(route):
         return hierarchy
     measured, unavailable = (
