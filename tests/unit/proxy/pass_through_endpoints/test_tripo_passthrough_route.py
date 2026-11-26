@@ -194,7 +194,6 @@ async def test_tripo_rejects_streaming_before_forwarding(
     from typing import Final
 
     import httpx
-    from fastapi import HTTPException
     from starlette.requests import Request
     from starlette.types import Message
 
@@ -238,11 +237,18 @@ async def test_tripo_rejects_streaming_before_forwarding(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
         monkeypatch.setitem(client_cache, cache_key, SimpleNamespace(client=client))
-        with pytest.raises(HTTPException) as rejected:
-            await endpoints.tripo_proxy_route(
-                endpoint="v3/generation/text-to-model", request=request,
-                user_api_key_dict=UserAPIKeyAuth(models=["tripo-stream-test"]),
-                credentials_router=PassthroughEndpointRouter(llm_router_getter=lambda: router),
-            )
-    assert rejected.value.status_code == 400
-    assert rejected.value.detail == "Streaming is not supported for Tripo requests"
+        rejected: Final = await endpoints.tripo_proxy_route(
+            endpoint="v3/generation/text-to-model", request=request,
+            user_api_key_dict=UserAPIKeyAuth(models=["tripo-stream-test"]),
+            credentials_router=PassthroughEndpointRouter(llm_router_getter=lambda: router),
+        )
+    body: Final = json.loads(rejected.body)
+    assert rejected.status_code == 400
+    assert body == {
+        "code": 1004,
+        "status": "error",
+        "message": "Streaming is not supported for Tripo requests",
+        "suggestion": "Refer to the API documentation for parameter requirements",
+        "request_id": body["request_id"],
+    }
+    assert len(body["request_id"]) == 32
