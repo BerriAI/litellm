@@ -14,6 +14,11 @@ import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "../batchLogUtils";
 import type { LogEntry } from "../types";
+import {
+  formatPromptCacheSummary,
+  formatSessionPromptCacheSummary,
+  requestPromptCacheTokens,
+} from "../promptCacheSummary";
 import { customerLogIdentity } from "../customerIdentity";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { readMetaString } from "../detail/utils";
@@ -396,7 +401,7 @@ export const getRequestLogsTableColumns = (
     header: ({ column }) => (
       <DataTableSortHeader column={column} title={t("logs.request.columns.tokens")} variant="dropdown-tristate" />
     ),
-    size: 140,
+    size: 200,
     enableSorting: true,
     meta: { numeric: true },
     cell: ({ row }) => {
@@ -405,6 +410,9 @@ export const getRequestLogsTableColumns = (
       const total = showSessionTotal ? log.session_total_tokens : log.total_tokens;
       const prompt = showSessionTotal ? log.session_total_prompt_tokens : log.prompt_tokens;
       const completion = showSessionTotal ? log.session_total_completion_tokens : log.completion_tokens;
+      const promptCache = showSessionTotal
+        ? formatSessionPromptCacheSummary(t, log)
+        : formatPromptCacheSummary(t, requestPromptCacheTokens(log));
       return (
         <div className="flex flex-col items-end">
           <span className="text-sm">
@@ -413,6 +421,7 @@ export const getRequestLogsTableColumns = (
               ({String(prompt || "0")}+{String(completion || "0")})
             </span>
           </span>
+          {promptCache && <span className="text-xs text-muted-foreground">{promptCache}</span>}
           {showSessionTotal && (
             <span className="text-[10px] text-muted-foreground">{t("logs.request.columns.sessionTotal")}</span>
           )}

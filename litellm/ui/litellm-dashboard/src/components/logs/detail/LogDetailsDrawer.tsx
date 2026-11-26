@@ -4,7 +4,8 @@ import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LogEntry } from "../types";
+import type { LogEntry, SessionPromptCacheTotals } from "../types";
+import { formatSessionPromptCacheSummary } from "../promptCacheSummary";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "./eventDisplayName";
@@ -170,7 +171,12 @@ export function LogDetailsDrawer({
         request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
       }));
 
-      return { logs, total };
+      const promptCacheTotals: SessionPromptCacheTotals = {
+        session_cache_read_tokens: firstPage.session_cache_read_tokens,
+        session_cache_write_tokens: firstPage.session_cache_write_tokens,
+        session_provider_prompt_tokens: firstPage.session_provider_prompt_tokens,
+      };
+      return { logs, total, promptCacheTotals };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
@@ -288,6 +294,8 @@ export function LogDetailsDrawer({
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
   const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
+  const sessionPromptCache =
+    sessionData?.promptCacheTotals && formatSessionPromptCacheSummary(t, sessionData.promptCacheTotals);
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -387,6 +395,9 @@ export function LogDetailsDrawer({
                   <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
                     {t("logs.detail.drawer.cachedCount", { hits: cacheHitCount, total: logsForList.length })}
                   </div>
+                )}
+                {isSessionMode && sessionPromptCache && (
+                  <div className="text-[11px] text-muted-foreground">{sessionPromptCache}</div>
                 )}
                 {isSessionMode && sessionTruncated && (
                   <div className="mt-1 text-[11px] text-warning font-mono">

@@ -214,6 +214,16 @@ describe("Internal User column", () => {
 });
 
 describe("Tokens column", () => {
+  it("shows prompt cache tokens for provider calls and omits replayed usage on response-cache hits", () => {
+    const metadata = { additional_usage_values: { cache_read_input_tokens: 4, cache_creation_input_tokens: 1 } };
+    renderRows([
+      logEntry({ request_id: "provider-request", metadata }),
+      logEntry({ request_id: "response-cache-request", metadata, cache_hit: "True" }),
+    ]);
+
+    expect(screen.getByText("Prompt cache: 4 read / 1 written")).toBeInTheDocument();
+  });
+
   const sessionRow: Partial<LogEntry> = {
     request_id: "req-session-tokens",
     total_tokens: 10,
@@ -228,12 +238,16 @@ describe("Tokens column", () => {
       ...sessionRow,
       session_total_tokens: 60,
       session_total_prompt_tokens: 42,
+      session_cache_read_tokens: 10,
+      session_cache_write_tokens: 6,
+      session_provider_prompt_tokens: 40,
       session_total_completion_tokens: 18,
     };
     renderRows([logEntry(aggregatedRow)]);
 
     const tokensCell = screen.getByRole("cell", { name: /\(42\+18\)/ });
     expect(tokensCell).toHaveTextContent("60");
+    expect(tokensCell).toHaveTextContent("Prompt cache: 10 read / 6 written (25% of input read from cache)");
     expect(tokensCell).toHaveTextContent("session total");
     expect(screen.queryByText("10")).not.toBeInTheDocument();
     expect(screen.queryByText("(7+3)")).not.toBeInTheDocument();

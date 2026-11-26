@@ -233,7 +233,17 @@ class _DailyTagSpendRow(TypedDict):
     total_spend: float
 
 
-class _SessionSpendRow(TypedDict):
+class _SessionPromptCacheTotals(TypedDict):
+    session_cache_read_tokens: ReadOnly[int | None]
+    session_cache_write_tokens: ReadOnly[int | None]
+    session_provider_prompt_tokens: ReadOnly[int | None]
+
+
+class _SessionPromptCacheSummaryRow(_SessionPromptCacheTotals):
+    total_records: ReadOnly[int]
+
+
+class _SessionSpendRow(_SessionPromptCacheTotals):
     session_id: str
     api_key: ReadOnly[str]
     session_total_count: ReadOnly[int]
@@ -266,6 +276,9 @@ class _SessionSpendStats(NamedTuple):
     session_total_prompt_tokens: int
     session_total_completion_tokens: int
     session_total_tokens: int
+    session_cache_read_tokens: int | None
+    session_cache_write_tokens: int | None
+    session_provider_prompt_tokens: int | None
     session_models: Sequence[str]
     session_models_truncated: bool
 
@@ -4650,6 +4663,42 @@ async def ui_get_spend_by_tags(
     return {"spend_per_tag": ui_tags}
 
 
+_PROMPT_CACHE_USAGE_SQL: Final = "metadata -> 'additional_usage_values'"
+_PROMPT_CACHE_DETAILS_SQL: Final = (
+    f"COALESCE(NULLIF(({_PROMPT_CACHE_USAGE_SQL}) -> 'prompt_tokens_details', 'null'::jsonb), "
+    f"({_PROMPT_CACHE_USAGE_SQL}) -> 'input_tokens_details')"
+)
+_PROVIDER_REQUEST_FILTER_SQL: Final = "FILTER (WHERE LOWER(cache_hit) IS DISTINCT FROM 'true')"
+
+
+def _cache_token_count_sql(*fields: str) -> str:
+    return (
+        "COALESCE("
+        + ", ".join(
+            f"CASE WHEN jsonb_typeof({field}) = 'number' THEN "
+            f"CASE WHEN ({field})::numeric >= 0 THEN ({field})::numeric END END"
+            for field in fields
+        )
+        + ")"
+    )
+
+
+_CACHE_READ_TOKENS_SQL: Final = _cache_token_count_sql(
+    f"({_PROMPT_CACHE_USAGE_SQL}) -> 'cache_read_input_tokens'",
+    f"({_PROMPT_CACHE_DETAILS_SQL}) -> 'cached_tokens'",
+)
+_CACHE_WRITE_TOKENS_SQL: Final = _cache_token_count_sql(
+    f"({_PROMPT_CACHE_USAGE_SQL}) -> 'cache_creation_input_tokens'",
+    f"({_PROMPT_CACHE_DETAILS_SQL}) -> 'cache_creation_tokens'",
+    f"({_PROMPT_CACHE_DETAILS_SQL}) -> 'cache_write_tokens'",
+)
+_PROVIDER_PROMPT_CACHE_AGGREGATES_SQL: Final = f"""
+    (SUM({_CACHE_READ_TOKENS_SQL}) {_PROVIDER_REQUEST_FILTER_SQL})::bigint AS session_cache_read_tokens,
+    (SUM({_CACHE_WRITE_TOKENS_SQL}) {_PROVIDER_REQUEST_FILTER_SQL})::bigint AS session_cache_write_tokens,
+    (SUM(prompt_tokens) {_PROVIDER_REQUEST_FILTER_SQL})::bigint AS session_provider_prompt_tokens
+"""
+
+
 @router.get(
     "/spend/logs/session/ui",
     tags=["Budget & Spend Tracking"],
@@ -4707,14 +4756,32 @@ async def ui_view_session_spend_logs(
         )
         scope_clause, scope_params = read_scope_sql(read_scope, 4)
         scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
-        where_conditions: Final = {"session_id": session_id, **_read_scope_where(read_scope)}
+        prompt_cache_summary: Mapping[str, object] = {}
+        if page == 1:
+            summary_clause, summary_params = read_scope_sql(read_scope, 2)
+            summary_scope_sql: Final = f" AND {summary_clause}" if summary_clause else ""
+            summary_rows: Final[Sequence[_SessionPromptCacheSummaryRow]] = await _query_raw(
+                prisma_client,
+                f"""
+                SELECT COUNT(*)::bigint AS total_records, {_PROVIDER_PROMPT_CACHE_AGGREGATES_SQL}
+                FROM "LiteLLM_SpendLogs"
+                WHERE session_id = $1{summary_scope_sql}
+                """,
+                session_id,
+                *summary_params,
+            )
+            summary: Final = summary_rows[0]
+            total_records = summary["total_records"]
+            prompt_cache_summary = {
+                "session_cache_read_tokens": summary["session_cache_read_tokens"],
+                "session_cache_write_tokens": summary["session_cache_write_tokens"],
+                "session_provider_prompt_tokens": summary["session_provider_prompt_tokens"],
+            }
+        else:
+            where_conditions: Final = {"session_id": session_id, **_read_scope_where(read_scope)}
+            total_records = await _count_spend_logs(prisma_client, where_conditions)
 
-        # Calculate pagination offsets
         skip: Final = (page - 1) * page_size
-
-        # Get total count for pagination metadata
-        total_records: Final = await _count_spend_logs(prisma_client, where_conditions)
-
         # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
         sql_query: Final = f"""
             SELECT
@@ -4736,9 +4803,9 @@ async def ui_view_session_spend_logs(
         _hydrate_spend_log_metadata(result)
 
         total_pages: Final = (total_records + page_size - 1) // page_size
-
         return {
             "data": result,
+            **prompt_cache_summary,
             "total": total_records,
             "page": page,
             "page_size": page_size,
@@ -4849,7 +4916,8 @@ async def _build_ui_spend_logs_response(
                            COUNT(*) FILTER (WHERE call_type = {AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
                            COALESCE(SUM(prompt_tokens), 0)::bigint AS session_total_prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0)::bigint AS session_total_completion_tokens,
-                           COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens
+                           COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens,
+                           {_PROVIDER_PROMPT_CACHE_AGGREGATES_SQL}
                     FROM "LiteLLM_SpendLogs"
                     WHERE session_id = ANY($1::text[])
                       AND api_key = ANY($2::text[])
@@ -4889,6 +4957,9 @@ async def _build_ui_spend_logs_response(
                     session_total_prompt_tokens=int(row.get("session_total_prompt_tokens") or 0),
                     session_total_completion_tokens=int(row.get("session_total_completion_tokens") or 0),
                     session_total_tokens=int(row.get("session_total_tokens") or 0),
+                    session_cache_read_tokens=row.get("session_cache_read_tokens"),
+                    session_cache_write_tokens=row.get("session_cache_write_tokens"),
+                    session_provider_prompt_tokens=row.get("session_provider_prompt_tokens"),
                     session_models=models[:_SESSION_MODELS_LIMIT],
                     session_models_truncated=len(models) > _SESSION_MODELS_LIMIT,
                 )
@@ -4922,6 +4993,9 @@ async def _build_ui_spend_logs_response(
                 row_dict["session_total_prompt_tokens"] = session_stats.session_total_prompt_tokens
                 row_dict["session_total_completion_tokens"] = session_stats.session_total_completion_tokens
                 row_dict["session_total_tokens"] = session_stats.session_total_tokens
+                row_dict["session_cache_read_tokens"] = session_stats.session_cache_read_tokens
+                row_dict["session_cache_write_tokens"] = session_stats.session_cache_write_tokens
+                row_dict["session_provider_prompt_tokens"] = session_stats.session_provider_prompt_tokens
                 row_dict["session_models"] = session_stats.session_models
                 row_dict["session_models_truncated"] = session_stats.session_models_truncated
             enriched.append(row_dict)
