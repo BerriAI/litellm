@@ -718,6 +718,35 @@ async fn replayed_history_is_cleaned_before_sending(
 }
 
 #[rstest]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
 #[case::deepseek("deepseek")]
@@ -827,6 +856,48 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
     let body = request.json();
     assert_eq!(body.get("model"), None);
     assert_eq!(body["anthropic_version"], json!("vertex-2023-10-16"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn vertex_ai_drops_another_models_unsigned_thinking_before_claude(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+
+    run(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: LitellmParams {
+                vertex: VertexParams {
+                    vertex_project: Some("proj".into()),
+                    vertex_location: Some("us-east5".into()),
+                    ..VertexParams::default()
+                },
+                ..LitellmParams::default()
+            },
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Authorization", "Bearer caller-token")]),
+            ..with_model(call, "claude-sonnet-4-5@20250929")
+        },
+        json!({"messages": [
+            {"role": "user", "content": "Pick a number."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Gemini's plan", "signature": ""},
+                {"type": "thinking", "thinking": "Claude's plan", "signature": "sig-1"},
+                {"type": "text", "text": "Seven."}
+            ]},
+            {"role": "user", "content": "Double it."}
+        ]}),
+    ))
+    .await
+    .expect("messages call succeeds");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"][1]["content"],
+        json!([
+            {"type": "thinking", "thinking": "Claude's plan", "signature": "sig-1"},
+            {"type": "text", "text": "Seven."}
+        ])
+    );
 }
 
 #[rstest]
@@ -1042,5 +1113,127 @@ async fn edenai_preserves_native_thinking_and_strips_billing_and_cache_extension
             "thinking": thinking, "temperature": 0.25,
             "system": [{"type": "text", "text": "keep", "cache_control": {"type": "ephemeral"}}],
         })
+    );
+}
+
+const TOOL_USE_ID_PATTERN: &str =
+    "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'";
+
+fn tool_round(id: &str) -> Value {
+    json!([
+        {"role": "user", "content": "run ls"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}
+    ])
+}
+
+fn pattern_rejection(message: &str) -> ResponseTemplate {
+    status_response(
+        400,
+        json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}}),
+    )
+}
+
+fn gateway_replay(call: MessagesCall, api_base: String, id: &str, stream: bool) -> MessagesCall {
+    MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(api_base),
+        ..with_fields(
+            call,
+            json!({"model": "sonnet-prod", "stream": stream, "messages": tool_round(id)}),
+        )
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_tool_use_id_is_sent_once_more_renamed(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let success = if stream {
+        ResponseTemplate::new(200).set_body_raw(
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "text/event-stream",
+        )
+    } else {
+        message_response()
+    };
+    let upstream = upstream([pattern_rejection(TOOL_USE_ID_PATTERN), success]).await;
+
+    run(gateway_replay(
+        call,
+        upstream.uri(),
+        "functions.Bash:0",
+        stream,
+    ))
+    .await
+    .expect("the renamed resend succeeds");
+
+    let [first, second] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    assert_eq!(first.json()["messages"], tool_round("functions.Bash:0"));
+    let mut expected = first.json();
+    expected["messages"] = tool_round("functions_Bash_0");
+    assert_eq!(second.json(), expected);
+    assert_eq!(second.header("x-api-key"), Some("sk-ant"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_renamed_resend_that_is_rejected_again_reaches_the_caller(call: MessagesCall) {
+    let upstream = upstream([
+        pattern_rejection(TOOL_USE_ID_PATTERN),
+        pattern_rejection(TOOL_USE_ID_PATTERN),
+        message_response(),
+    ])
+    .await;
+
+    let error = run(gateway_replay(
+        call,
+        upstream.uri(),
+        "functions.Bash:0",
+        false,
+    ))
+    .await
+    .expect_err("the second rejection is raised");
+
+    assert_eq!(received(&upstream).await.len(), 2);
+    assert!(
+        matches!(
+            error,
+            Error::Transport(litellm_http::transport::Error::Http { status: 400, .. })
+        ),
+        "{error:?}"
+    );
+}
+
+#[rstest]
+#[case::ids_already_match("toolu_01", TOOL_USE_ID_PATTERN)]
+#[case::other_field(
+    "functions.Bash:0",
+    "tools.0.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'"
+)]
+#[tokio::test]
+async fn a_pattern_rejection_that_renaming_cannot_fix_reaches_the_caller(
+    call: MessagesCall,
+    #[case] id: &str,
+    #[case] message: &str,
+) {
+    let upstream = upstream([pattern_rejection(message), message_response()]).await;
+
+    let error = run(gateway_replay(call, upstream.uri(), id, false))
+        .await
+        .expect_err("the rejection is raised");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"],
+        tool_round(id)
+    );
+    assert!(
+        matches!(
+            error,
+            Error::Transport(litellm_http::transport::Error::Http { status: 400, .. })
+        ),
+        "{error:?}"
     );
 }

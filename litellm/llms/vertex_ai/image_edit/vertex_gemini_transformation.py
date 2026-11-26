@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -11,12 +12,22 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, vertex_top_level_request_fields
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini_image_params import (
+    map_vertex_gemini_image_params,
+    raise_unsupported_image_param,
+    vertex_gemini_image_config,
+)
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.images.main import (
+    IMAGE_CONFIG_FIELDS,
+    ImageEditOptionalRequestParams,
+    UnsupportedImageParam,
+)
 from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxContentType,
@@ -52,7 +63,14 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: list[str] = ["size"]
+    SUPPORTED_PARAMS: list[str] = [
+        "size",
+        *IMAGE_CONFIG_FIELDS,
+        "aspectRatio",
+        "aspect_ratio",
+        "imageSize",
+        "image_size",
+    ]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -66,13 +84,12 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, str]:
-        supported_params: Final = self.get_supported_openai_params(model)
-        if "size" not in supported_params or "size" not in image_edit_optional_params:
-            return {}
-
-        size: Final = image_edit_optional_params.get("size")
-        return {"aspectRatio": self._map_size_to_aspect_ratio(size or "")}
+    ) -> dict[str, object]:
+        params: Final[Mapping[str, object]] = image_edit_optional_params
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
+        if isinstance(image_params, UnsupportedImageParam):
+            raise_unsupported_image_param(image_params, model)
+        return dict(image_params)
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -182,15 +199,10 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         # Correct format for Vertex AI Gemini image editing
         contents: Final[dict[str, object]] = {"role": "USER", "parts": parts}
 
-        # Add image-specific configuration
-        image_config: Final = (
-            {"aspect_ratio": image_edit_optional_request_params["aspectRatio"]}
-            if "aspectRatio" in image_edit_optional_request_params
-            else None
-        )
-
+        image_config: Final = vertex_gemini_image_config(image_edit_optional_request_params)
         generation_config: Final[dict[str, object]] = {
-            key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
+            "responseModalities": ["IMAGE"],
+            **({"imageConfig": image_config} if image_config else {}),
         }
 
         label_fields: Final = (
@@ -236,24 +248,18 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
-        return ImageResponse(
+        model_response: Final = ImageResponse(
             data=data_list,
             usage=transform_gemini_image_usage(usage_metadata) if usage_metadata else None,
             hidden_params={"provider_specific_fields": {"traffic_type": traffic_type}}
             if isinstance(traffic_type, str) and traffic_type
             else {},
         )
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """Map OpenAI size format to Gemini aspect ratio format"""
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
+        if not data_list:
+            raise empty_image_response_error(
+                response_json, model, "vertex_ai", raw_response, model_response, logging_obj
+            )
+        return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
         images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]

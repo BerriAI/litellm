@@ -8,10 +8,19 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.pass_through.deferred_tools import (
+    native_messages_deferred_tools_refusal,
+    refusal_unless_dropped,
+    unknown_deferred_tools_refusal,
+)
+from litellm.llms.anthropic.pass_through.messages.handler import messages_request_bridges
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
+from litellm.rust_bridge.host.callbacks_legacy_python import ProviderStreamHead
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
@@ -69,7 +78,8 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
         anthropic_messages_stream_hidden_params,
     )
 
-    return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
+    response_headers: Final = httpx.Headers(list(headers))
+    return ProviderStreamHead(anthropic_messages_stream_hidden_params(response_headers), dict(response_headers))
 
 
 def map_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
@@ -96,7 +106,28 @@ def _additional_drop_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(path for path in configured if isinstance(path, str))
 
 
+def _refuse_unusable_deferred_tools(kwargs: Mapping[str, object]) -> None:
+    """Python's handler refuses a model_info.deferred_tools it cannot apply, or ignores it under drop_params."""
+    model_info: Final = kwargs.get("model_info")
+    if (as_str_mapping(model_info) or {}).get("deferred_tools") is None:
+        return
+    drop_params: Final = drops_unsupported_params(kwargs.get("drop_params"))
+    model, provider, _, _ = get_llm_provider(str(kwargs["model"]), optional_str(kwargs.get("custom_llm_provider")))
+    refusal: Final = refusal_unless_dropped(
+        unknown_deferred_tools_refusal(model_info)
+        or (
+            None
+            if messages_request_bridges(model, provider, model_info)
+            else native_messages_deferred_tools_refusal(model_info, provider)
+        ),
+        drop_params,
+    )
+    if refusal is not None:
+        raise AnthropicError(status_code=400, message=refusal)
+
+
 def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
+    _refuse_unusable_deferred_tools(kwargs)
     return asdict(
         MessagesSettings(
             drop_params=_drop_params(kwargs),

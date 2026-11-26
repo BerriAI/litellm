@@ -4,6 +4,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.types.utils import ImageResponse
@@ -430,7 +431,7 @@ def _transform_response(model: str, payload: object) -> ImageResponse:
         model=model,
         raw_response=httpx.Response(200, json=payload),
         model_response=ImageResponse(data=[]),
-        logging_obj=Mock(),
+        logging_obj=Mock(response_cost_calculator=Mock(return_value=None)),
         request_data={},
         optional_params={},
         litellm_params={},
@@ -482,7 +483,6 @@ _GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image-preview"
         {"candidates": ""},
         {"candidates": {}},
         {"candidates": [{}]},
-        {"candidates": [{"finishReason": "SAFETY"}]},
         {"candidates": [{"content": {}}]},
         {"candidates": [{"content": {"parts": ""}}]},
         {"candidates": [{"content": {"parts": "plain text"}}]},
@@ -494,8 +494,9 @@ _GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image-preview"
         {"candidates": [{"content": {"parts": [{"inline_data": {"data": "snake-case-is-not-read"}}]}}]},
     ],
 )
-def test_gemini_image_generation_response_without_inline_image_data_has_no_images(payload: object):
-    assert _transform_response(_GEMINI_IMAGE_MODEL, payload).data == []
+def test_gemini_image_generation_response_without_inline_image_data_is_unprocessable(payload: object):
+    with pytest.raises(UnprocessableEntityError):
+        _transform_response(_GEMINI_IMAGE_MODEL, payload)
 
 
 def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():

@@ -17,7 +17,7 @@ import litellm
 from litellm._internal_context import resent_on
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -30,6 +30,8 @@ from litellm.litellm_core_utils.tool_fields import (
     tools_without_mcp_servers,
 )
 from litellm.llms.anthropic.common_utils import (
+    is_anthropic_tool_use_id_pattern_error,
+    messages_with_renamed_tool_use_ids,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
     strip_unsignable_thinking_blocks_for_claude,
 )
@@ -50,12 +52,18 @@ from litellm.llms.anthropic.pass_through.safeguards import (
     with_safeguard_results,
 )
 from litellm.llms.anthropic.pass_through.utils import (
+    KNOWN_REASONING_EFFORTS,
+    REASONING_EFFORT_OFF,
+    RESPONSES_API_PROVIDERS,
     ProxySubCallLoggingKwargs,
+    drops_off_switch,
     is_reasoning_auto_summary_enabled,
+    is_unconfirmed_none,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
+    requested_reasoning_summary,
 )
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -94,6 +102,23 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
+def _declared_base_model(kwargs: Mapping[str, object]) -> str | None:
+    base_model: Final = kwargs.get("base_model")
+    if isinstance(base_model, str) and base_model:
+        return base_model
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    info_base_model: Final = None if model_info is None else model_info.get("base_model")
+    return info_base_model if isinstance(info_base_model, str) else None
+
+
+def model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    base_model: Final = kwargs.get("base_model")
+    if not isinstance(base_model, str) or not base_model:
+        return model_info
+    return {**(model_info or {}), "base_model": base_model}
+
+
 def _provider_error_code(body: object) -> str | None:
     mapping: Final = as_str_mapping(body)
     if mapping is None:
@@ -104,12 +129,16 @@ def _provider_error_code(body: object) -> str | None:
     return code if isinstance(code, str) else None
 
 
+def _names_invalid_encrypted_content(error: litellm.BadRequestError) -> bool:
+    return (
+        error.code == "invalid_encrypted_content"
+        or _provider_error_code(error.body) == "invalid_encrypted_content"
+        or "invalid_encrypted_content" in str(error)
+    )
+
+
 def _logged_rejection_code(error: litellm.BadRequestError) -> str:
-    if error.code == "invalid_encrypted_content" or _provider_error_code(error.body) == "invalid_encrypted_content":
-        return "invalid_encrypted_content"
-    if "invalid_encrypted_content" in str(error):
-        return "invalid_encrypted_content"
-    return "could_not_be_verified"
+    return "invalid_encrypted_content" if _names_invalid_encrypted_content(error) else "could_not_be_verified"
 
 
 def _completion_text(completion_kwargs: _CompletionKwargs, key: str) -> str:
@@ -134,10 +163,7 @@ def _sends_encrypted_reasoning(completion_kwargs: _CompletionKwargs) -> bool:
 
 
 def _rejects_encrypted_reasoning(error: litellm.BadRequestError) -> bool:
-    error_message: Final = str(error)
-    return (
-        "invalid_encrypted_content" in error_message or _UNVERIFIED_ENCRYPTED_CONTENT.search(error_message) is not None
-    )
+    return _names_invalid_encrypted_content(error) or _UNVERIFIED_ENCRYPTED_CONTENT.search(str(error)) is not None
 
 
 def _is_rejected_reasoning(error: Exception) -> bool:
@@ -187,6 +213,32 @@ def _messages_without_rejected_reasoning(
     )
 
 
+def _messages_with_renamed_tool_use_ids(messages: _AnthropicMessages, error: Exception) -> "_AnthropicMessages | None":
+    renamed: Final = (
+        messages_with_renamed_tool_use_ids(messages)
+        if isinstance(error, litellm.BadRequestError) and is_anthropic_tool_use_id_pattern_error(str(error))
+        else None
+    )
+    return None if renamed is None else _ANTHROPIC_MESSAGES.validate_python(list(renamed))
+
+
+def _is_resent_rejection(messages: _AnthropicMessages, sent_encrypted_reasoning: bool, error: Exception) -> bool:
+    return (sent_encrypted_reasoning and _is_rejected_reasoning(error)) or (
+        _messages_with_renamed_tool_use_ids(messages, error) is not None
+    )
+
+
+def _replayed_messages(
+    messages: _AnthropicMessages,
+    error: litellm.BadRequestError,
+    completion_kwargs: _CompletionKwargs,
+    sent_encrypted_reasoning: bool,
+) -> "_AnthropicMessages | None":
+    return _messages_without_rejected_reasoning(
+        messages, error, completion_kwargs, sent_encrypted_reasoning
+    ) or _messages_with_renamed_tool_use_ids(messages, error)
+
+
 async def _acompletion_without_rejected_reasoning(
     completion_kwargs: _CompletionKwargs,
     messages: _AnthropicMessages,
@@ -194,12 +246,10 @@ async def _acompletion_without_rejected_reasoning(
 ) -> "ChatResult":
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(completion_kwargs)
     try:
-        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+        with resent_on(partial(_is_resent_rejection, messages, sent_encrypted_reasoning)):
             return await litellm.acompletion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(
-            messages, error, completion_kwargs, sent_encrypted_reasoning
-        )
+        replayed_messages: Final = _replayed_messages(messages, error, completion_kwargs, sent_encrypted_reasoning)
         if replayed_messages is None:
             raise
         return await litellm.acompletion(**prepare_replay(replayed_messages))
@@ -212,12 +262,10 @@ def _completion_without_rejected_reasoning(
 ) -> "ChatResult | Coroutine[object, object, ChatResult]":
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(completion_kwargs)
     try:
-        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+        with resent_on(partial(_is_resent_rejection, messages, sent_encrypted_reasoning)):
             return litellm.completion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(
-            messages, error, completion_kwargs, sent_encrypted_reasoning
-        )
+        replayed_messages: Final = _replayed_messages(messages, error, completion_kwargs, sent_encrypted_reasoning)
         if replayed_messages is None:
             raise
         return litellm.completion(**prepare_replay(replayed_messages))
@@ -591,28 +639,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
-    def _requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
-        if thinking.get("type") == "disabled":
-            return None
-        summary: Final = thinking.get("summary")
-        if isinstance(summary, str):
-            return summary
-        display: Final = thinking.get("display")
-        return "auto" if display is not None and display != "omitted" else None
-
-    @staticmethod
     def _chat_target_reasoning(
         completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
     ) -> _ChatTargetReasoning | None:
-        if not thinking:
-            return None
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        if not thinking or reasoning_effort == REASONING_EFFORT_OFF:
+            return None
         wraps_summary: Final = isinstance(reasoning_effort, dict) and "summary" in reasoning_effort
-        requested_summary: Final = LiteLLMMessagesToCompletionTransformationHandler._requested_reasoning_summary(
-            thinking
-        )
+        requested_summary: Final = requested_reasoning_summary(thinking)
         if not wraps_summary and requested_summary is None:
             return None
         effort: Final[object] = (
@@ -653,8 +689,83 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
+            base_model=_declared_base_model(completion_kwargs),
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
+
+    @staticmethod
+    def _drops_client_off_switch(
+        request: Mapping[str, object],
+        model: str,
+        target_provider: str | None,
+        provider_kwargs: Mapping[str, object],
+        *,
+        drop_params: bool,
+    ) -> bool:
+        if (
+            not drop_params
+            or target_provider not in RESPONSES_API_PROVIDERS
+            or not drops_off_switch(
+                request,
+                model,
+                target_provider,
+                deployment_model_info=provider_kwargs.get("model_info"),
+                drop_params=drop_params,
+            )
+        ):
+            return False
+        verbose_logger.warning(
+            "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
+            "supports_none_reasoning_effort, because drop_params is set",
+            model,
+        )
+        return True
+
+    @staticmethod
+    def _drops_client_effort(
+        completion_kwargs: _CompletionKwargs, target_provider: str | None, *, drop_params: bool
+    ) -> bool:
+        if not drop_params or target_provider not in RESPONSES_API_PROVIDERS:
+            return False
+        return LiteLLMMessagesToCompletionTransformationHandler._drops_unknown_client_effort(
+            completion_kwargs
+        ) or LiteLLMMessagesToCompletionTransformationHandler._drops_unconfirmed_client_none(completion_kwargs)
+
+    @staticmethod
+    def _client_effort(completion_kwargs: _CompletionKwargs) -> object:
+        reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        effort_options: Final = as_str_mapping(reasoning_effort)
+        return reasoning_effort if effort_options is None else effort_options.get("effort")
+
+    @staticmethod
+    def _drops_unknown_client_effort(completion_kwargs: _CompletionKwargs) -> bool:
+        effort: Final = LiteLLMMessagesToCompletionTransformationHandler._client_effort(completion_kwargs)
+        if not isinstance(effort, str) or effort in KNOWN_REASONING_EFFORTS:
+            return False
+        verbose_logger.warning(
+            "Dropping reasoning_effort=%r for %s, no reasoning API defines it, because drop_params is set",
+            effort,
+            completion_kwargs.get("model", ""),
+        )
+        return True
+
+    @staticmethod
+    def _drops_unconfirmed_client_none(completion_kwargs: _CompletionKwargs) -> bool:
+        effort: Final = LiteLLMMessagesToCompletionTransformationHandler._client_effort(completion_kwargs)
+        model: Final = completion_kwargs.get("model", "")
+        if not is_unconfirmed_none(
+            effort,
+            model,
+            completion_kwargs.get("custom_llm_provider"),
+            deployment_model_info=completion_kwargs.get("model_info"),
+        ):
+            return False
+        verbose_logger.warning(
+            "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
+            "supports_none_reasoning_effort, because drop_params is set",
+            model,
+        )
+        return True
 
     @staticmethod
     def _normalize_reasoning_effort(
@@ -676,16 +787,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        deployment_model_info: Final = model_info_with_request_base_model(completion_kwargs)
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(
-                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+                reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
             )
             if normalized != reasoning_effort:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort: Final = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+            normalized = normalize_reasoning_effort_value(
+                effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+            )
             if normalized != effort:
                 completion_kwargs["reasoning_effort"] = {
                     **reasoning_effort,
@@ -726,6 +846,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        api_base: Final = provider_kwargs.get("api_base")
+        drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
         request_tools: Final = (
             tools_without_mcp_servers(
@@ -742,7 +864,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": strip_unsignable_thinking_blocks_for_claude(
-                messages, model, base_model if isinstance(base_model, str) else None
+                messages,
+                model,
+                base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=target_provider,
+                api_base=api_base if isinstance(api_base, str) else None,
             ),
             "max_tokens": max_tokens,
         }
@@ -778,7 +904,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        api_base: Final = provider_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
@@ -786,13 +911,31 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
+            deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
+            base_model=_declared_base_model(provider_kwargs),
+            drop_params=drop_params,
+            translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
         )
 
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
 
-        completion_kwargs: Final[_CompletionKwargs] = {**openai_request}
+        from litellm.responses.bridge_check import empty_user_turn_for_model_turn_end
+
+        completion_kwargs: Final[_CompletionKwargs] = {
+            **openai_request,
+            "messages": [
+                *openai_request["messages"],
+                *empty_user_turn_for_model_turn_end(
+                    messages[-1] if messages else None,
+                    openai_request["messages"],
+                    model,
+                    target_provider,
+                    provider_kwargs,
+                ),
+            ],
+        }
 
         if stream:
             completion_kwargs["stream"] = stream
@@ -818,6 +961,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ANTHROPIC_ONLY_REQUEST_KEYS
             | CONVERTED_STREAM_KEYS
             | ({"anthropic_messages", "mcp_servers"} if strips_mcp_servers else {"anthropic_messages"})
+            | (
+                {"reasoning_effort"}
+                if LiteLLMMessagesToCompletionTransformationHandler._drops_client_off_switch(
+                    request_data, model, target_provider, provider_kwargs, drop_params=drop_params
+                )
+                else set()
+            )
         )
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
@@ -829,6 +979,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 setattr(value, "stream_options", completion_kwargs.get("stream_options"))
             if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
+
+        if (
+            "reasoning_effort" in openai_request
+            and LiteLLMMessagesToCompletionTransformationHandler._drops_client_effort(
+                completion_kwargs, target_provider, drop_params=drop_params
+            )
+        ):
+            del completion_kwargs["reasoning_effort"]
 
         explicit_prompt_cache_key: Final = extra_kwargs.get("prompt_cache_key")
         if explicit_prompt_cache_key is not None:

@@ -31,7 +31,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
                 continue
             try:
                 parsed = json.loads(payload)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(parsed, dict):
                 events.append(parsed)
@@ -312,6 +312,14 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
     function: Final = tool.get("function") if tool.get("type") == "function" else None
     function_name: Final = function.get("name") if isinstance(function, dict) else None
     return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
+
+
+def anthropic_mcp_server_name(server: object) -> str | None:
+    try:
+        name: Final = _FIELDS.validate_python(server).get("name")
+    except ValidationError:
+        return None
+    return name if isinstance(name, str) and name else None
 
 
 def anthropic_tool_name(tool: object) -> str | None:

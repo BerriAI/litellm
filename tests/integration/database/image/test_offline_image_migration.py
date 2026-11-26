@@ -14,11 +14,12 @@ the normal unit-test run and exercised only where an image has been built (the
 image-scan workflow). Requires a working docker CLI.
 """
 
+import os
 import shutil
 import subprocess
 import uuid
+from typing import Final
 
-import os
 import pytest
 
 IMAGE = os.getenv("LITELLM_IMAGE")
@@ -70,6 +71,20 @@ def offline_postgres():
     finally:
         _docker("rm", "-f", pg, check=False)
         _docker("network", "rm", network, check=False)
+
+
+def test_prisma_openssl_abi_uses_the_lts_series() -> None:
+    assert IMAGE is not None
+    probe: Final = _docker(
+        "run", "--rm", "--user", NON_ROOT_UID, "--entrypoint", "python", IMAGE, "-c",
+        "from ctypes import CDLL, c_char_p;"
+        " lib = CDLL('libssl.so.3');"
+        " lib.OpenSSL_version.restype = c_char_p;"
+        " print(lib.OpenSSL_version(0).decode())",
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert probe.stdout.startswith("OpenSSL 3.5."), probe.stdout
 
 
 def _wait_until_ready(pg: str, attempts: int = 60) -> None:

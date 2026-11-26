@@ -205,6 +205,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
+    supports_part_media_resolution: ReadOnly[bool | None]
+    supports_media_in_tool_response: ReadOnly[bool | None]
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
     supports_bedrock_native_structured_output: ReadOnly[bool | None]
@@ -216,6 +218,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_per_turn_control: ReadOnly[bool | None]
+    supports_server_side_fallback: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
@@ -443,6 +446,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_512: ReadOnly[float | None]
     output_cost_per_image_1024: ReadOnly[float | None]
     output_cost_per_image_1536: ReadOnly[float | None]
+    output_cost_per_image_1K: ReadOnly[float | None]
+    output_cost_per_image_2K: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -3978,6 +3983,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_512: float | None = None
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
+    output_cost_per_image_1K: float | None = None
+    output_cost_per_image_2K: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -4123,6 +4130,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_regex_lookaround",
         "supports_bedrock_native_structured_output",
         "supports_per_turn_control",
+        "supports_server_side_fallback",
     }
 )
 

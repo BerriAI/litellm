@@ -28,7 +28,9 @@ def capabilities(monkeypatch: pytest.MonkeyPatch, *, sampling: bool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(server: RecordingServer) -> None:
+async def test_replayed_history_is_cleaned_but_keeps_a_claude_models_tool_ids_on_a_custom_base(
+    server: RecordingServer,
+) -> None:
     history: Final = [
         {"role": "user", "content": "run it"},
         {
@@ -52,9 +54,26 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
     body, _ = sent(server)
     assert body["messages"] == [
         {"role": "user", "content": "run it"},
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False])
+async def test_replayed_tool_ids_reach_a_non_claude_model_on_its_own_host_unchanged(
+    server: RecordingServer, asynchronous: bool
+) -> None:
+    history: Final = [
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
+    ]
+
+    await call(server, asynchronous=asynchronous, model="anthropic/moonshotai/kimi-k2.7-code", messages=history)
+
+    body, _ = sent(server)
+    assert body["messages"] == history
 
 
 @pytest.mark.asyncio
@@ -133,6 +152,55 @@ async def test_unsupported_params_are_rejected_before_io_without_drop_params(
         await call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
 
     assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_deferred_tools_setting_is_rejected_before_io_without_drop_params(
+    server: RecordingServer,
+) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="passthrough, native, emulate, drop"):
+        await call(server, model_info={"deferred_tools": "loaded"})
+
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_deferred_tools_setting_is_ignored_under_drop_params(server: RecordingServer) -> None:
+    await call(server, model_info={"deferred_tools": "loaded"}, drop_params=True)
+
+    sent(server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["emulate", "native", "drop"])
+async def test_a_deferred_tools_setting_but_passthrough_is_rejected_before_io_without_drop_params(
+    server: RecordingServer, setting: str
+) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="Provider anthropic takes /v1/messages natively"):
+        await call(server, model_info={"deferred_tools": setting})
+
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "setting, drop_params",
+    [("passthrough", False), ("emulate", True)],
+    ids=["passthrough", "emulate_under_drop_params"],
+)
+async def test_a_native_messages_route_sends_deferred_tools_as_sent_under_passthrough_or_drop_params(
+    server: RecordingServer, setting: str, drop_params: bool
+) -> None:
+    tools: Final = [{"name": "Lookup", "input_schema": {"type": "object"}, "defer_loading": True}]
+
+    await call(server, model_info={"deferred_tools": setting}, drop_params=drop_params, tools=tools)
+
+    body, _ = sent(server)
+    assert body["tools"] == tools
 
 
 @pytest.mark.asyncio

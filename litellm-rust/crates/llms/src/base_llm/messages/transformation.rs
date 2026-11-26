@@ -25,6 +25,14 @@ pub trait BaseMessagesConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        true
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -88,6 +96,15 @@ pub trait BaseMessagesConfig: Sync {
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {
         body
+    }
+
+    fn retry_after_http_error(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+    ) -> Option<Value> {
+        None
     }
 }
 

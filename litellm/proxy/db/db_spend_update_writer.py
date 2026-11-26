@@ -103,6 +103,7 @@ else:
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARG_VALUE: Final = TypeAdapter(object)
 
 
 def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Router | None") -> bool:
@@ -784,6 +785,7 @@ class DBSpendUpdateWriter:
                 return
             from litellm.proxy.db.spend_log_tool_index import (
                 build_tool_usage_transaction,
+                logged_full_tool_names,
             )
 
             transaction: Final = build_tool_usage_transaction(
@@ -794,6 +796,7 @@ class DBSpendUpdateWriter:
                 total_tokens=payload["total_tokens"],
                 completion_response=completion_response,
                 realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+                full_names=logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {})),
             )
             if transaction is None:
                 return
@@ -997,6 +1000,9 @@ class DBSpendUpdateWriter:
             _metadata: Final = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
             user_agent: Final = _metadata.get("user_agent") or None
+            from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+
+            full_names: Final = logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {}))
 
             def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
                 self.tool_discovery_queue.add_update(
@@ -1027,8 +1033,8 @@ class DBSpendUpdateWriter:
                     continue
                 fn = tool_def.get("function") or {}
                 name = fn.get("name") if isinstance(fn, dict) else None
-                if name:
-                    _enqueue(name)
+                if isinstance(name, str) and name:
+                    _enqueue(full_names.get(name, name))
 
             # --- Tools from Anthropic /messages pass-through request body
             #     (Anthropic format: tools[].name, no "function" wrapper) ---
@@ -1044,9 +1050,7 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
-
-            for tool_name in response_tool_call_names(completion_response):
+            for tool_name in response_tool_call_names(completion_response, full_names):
                 _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)

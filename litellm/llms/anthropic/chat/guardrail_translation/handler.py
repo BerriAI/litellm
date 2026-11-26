@@ -13,25 +13,30 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+import sys
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, repeat
+from itertools import chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_undecodable_json_object, loads_json_object
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
+    is_anthropic_web_search_tool,
     is_provider_native_tool_dict,
-    truncate_tool_name,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_part
+from litellm.llms.anthropic.pass_through.deferred_tools import client_tool_search_name, is_deferred
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -42,6 +47,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    anthropic_mcp_server_name,
     anthropic_tool_name,
     anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
@@ -55,6 +61,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     unappliable_request_rewrite,
 )
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -75,6 +82,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
+    from litellm import Router
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -128,6 +136,27 @@ class ToolUseInputTarget:
 
 MessageTextTarget = MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
 InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
+
+
+class DeploymentLookup(Protocol):
+    def get_model_list(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]] | None: ...
+
+
+def _proxy_router() -> "Router | None":
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return None
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+def _deployment_consumes_cache_control(deployment: Mapping[str, object]) -> bool:
+    deployment_model: Final = (as_str_mapping(deployment.get("litellm_params")) or {}).get("model")
+    return isinstance(deployment_model, str) and LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(
+        deployment_model
+    )
 
 
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -190,9 +219,36 @@ class _ToolCallShape:
     arguments: str
 
 
-def _is_client_tool_use(block: Mapping[str, object]) -> bool:
+def _is_web_search_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and is_anthropic_web_search_tool(fields)
+
+
+def _with_web_search_tools(
+    tools: Sequence[object], translated_tools: Sequence[ChatCompletionToolParam]
+) -> Sequence[ChatCompletionToolParam]:
+    """
+    The request's tools as a guardrail sees them: each web search tool as the caller sent it, at its
+    position in the request, among the translated tools. The OpenAI translation carries web search as
+    `web_search_options` rather than as a tool, so it is absent from `translated_tools`.
+    """
+    web_search_tools: Final = [
+        cast(ChatCompletionToolParam, tool)  # cast-ok: hosted tools reach guardrails in Anthropic format
+        for tool in tools
+        if _is_web_search_tool(tool)
+    ]
+    if not web_search_tools:
+        return translated_tools
+    if len(translated_tools) != len(tools) - len(web_search_tools):
+        return [*translated_tools, *web_search_tools]
+    translated: Final = iter(translated_tools)
+    web_search: Final = iter(web_search_tools)
+    return [next(web_search) if _is_web_search_tool(tool) else next(translated) for tool in tools]
+
+
+def _is_scannable_tool_use(block: Mapping[str, object]) -> bool:
     return (
-        block.get("type") == "tool_use"
+        block.get("type") in _TOOL_CALL_BLOCK_TYPES
         and isinstance(block.get("id"), str)
         and isinstance(block.get("name"), str)
         and isinstance(block.get("input"), dict)
@@ -253,6 +309,136 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     return {**tool, "function": {**function, "name": original}}
 
 
+def _converted_tool(
+    anthropic_config: AnthropicConfig, tool: ChatCompletionToolParam, original_names: Mapping[str, str]
+) -> AllAnthropicToolsValues | None:
+    if _is_web_search_tool(tool):
+        return cast(AllAnthropicToolsValues, tool)  # cast-ok: shown to the guardrail in Anthropic format
+    return anthropic_config.map_tool_helper(_with_original_name(tool, original_names))[0]
+
+
+def _converted_tools(
+    tools: Sequence[ChatCompletionToolParam], original_names: Mapping[str, str]
+) -> tuple[AllAnthropicToolsValues, ...]:
+    anthropic_config: Final = AnthropicConfig()
+    converted: Final = (_converted_tool(anthropic_config, tool, original_names) for tool in tools)
+    return tuple(tool for tool in converted if tool is not None)
+
+
+def _is_hidden_from_guardrail(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and is_provider_native_tool_dict(fields)
+
+
+def _is_openai_format_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and fields.get("type") == "function" and "function" in fields
+
+
+def _is_deferred_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and fields.get("defer_loading") is True
+
+
+def _deferred_tool_names(tools: Iterable[object]) -> frozenset[str]:
+    names: Final = (
+        (as_str_mapping(tool) or {}).get("name") for tool in tools if is_deferred(as_str_mapping(tool) or {})
+    )
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _with_request_deferral(tool: AllAnthropicToolsValues, deferred_names: frozenset[str]) -> AllAnthropicToolsValues:
+    name: Final = (as_str_mapping(tool) or {}).get("name")
+    if not isinstance(name, str) or name not in deferred_names:
+        return tool
+    return cast(AllAnthropicToolsValues, {**tool, "defer_loading": True})  # cast-ok: same tool, one more field
+
+
+def _without_deferral(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return tool
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _loaded_up_front(tools: Sequence[object], removed_tool_search: bool) -> Sequence[object]:
+    """
+    Deferred tools load only through the tool search tool, and Anthropic rejects a request whose tools
+    are all deferred, so when a guardrail removed the search tool or every tool that was not deferred,
+    the ones it kept are sent without `defer_loading`.
+    """
+    if not tools or not (removed_tool_search or all(map(_is_deferred_tool, tools))):
+        return tools
+    return tuple(map(_without_deferral, tools))
+
+
+def _as_sent_by_fingerprint(
+    shown_tools: Sequence[object], shown_fingerprints: Sequence[str], returned_counts: Mapping[str, int]
+) -> Mapping[str, Iterator[object]]:
+    """
+    The caller's tools the guardrail returned unchanged, keyed by what the guardrail was shown.
+    When it returned fewer of an identical-looking group than it was shown, the last ones are kept.
+    """
+    if len(shown_tools) != len(shown_fingerprints):
+        return {}
+    by_fingerprint: Final[dict[str, list[object]]] = {}  # mutable-ok: built here, read-only to the caller
+    for tool, fingerprint in zip(shown_tools, shown_fingerprints):
+        if not _is_openai_format_tool(tool):
+            by_fingerprint.setdefault(fingerprint, []).append(tool)
+    return {
+        fingerprint: iter(tools[max(0, len(tools) - returned_counts.get(fingerprint, 0)) :])
+        for fingerprint, tools in by_fingerprint.items()
+    }
+
+
+_NOT_AS_SENT: Final = object()
+
+
+def _tools_after_guardrail(
+    request_tools: Sequence[object],
+    shown_fingerprints: Sequence[str],
+    returned_tools: Iterable[ChatCompletionToolParam],
+    original_names: Mapping[str, str],
+) -> list[object]:  # mutable-ok: becomes the request body's tools
+    """
+    The guardrail's tools in the order it returned them: a tool it left alone as the caller sent it,
+    any other converted to Anthropic format and still deferred if the caller deferred a tool of that
+    name. Tools it was never shown go first.
+    """
+    never_shown: Final = tuple(tool for tool in request_tools if _is_hidden_from_guardrail(tool))
+    shown: Final = tuple(tool for tool in request_tools if not _is_hidden_from_guardrail(tool))
+    returned: Final = tuple(returned_tools)
+    returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned))
+    as_sent: Final = _as_sent_by_fingerprint(shown, shown_fingerprints, Counter(returned_fingerprints))
+    anthropic_config: Final = AnthropicConfig()
+    deferred_names: Final = _deferred_tool_names(shown)
+    matched: Final = tuple(
+        next(as_sent.get(fingerprint, iter(())), _NOT_AS_SENT) for fingerprint in returned_fingerprints
+    )
+    converted: Final = tuple(
+        _converted_tool(anthropic_config, returned_tool, original_names) if original is _NOT_AS_SENT else None
+        for returned_tool, original in zip(returned, matched)
+    )
+    kept: Final = tuple(
+        tool
+        for tool in (
+            (None if changed is None else _with_request_deferral(changed, deferred_names))
+            if original is _NOT_AS_SENT
+            else original
+            for changed, original in zip(converted, matched)
+        )
+        if tool is not None
+    )
+    all_as_sent: Final = _NOT_AS_SENT not in matched
+    removed_tool_search: Final = client_tool_search_name(shown) is not None and client_tool_search_name(kept) is None
+    if not all_as_sent:
+        return list(_loaded_up_front((*never_shown, *kept), removed_tool_search))
+    return [
+        *never_shown,
+        *(_loaded_up_front(kept, removed_tool_search) if len(returned) < len(shown) else kept),
+    ]
+
+
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
     if not isinstance(system, list):
         return
@@ -282,8 +468,32 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
             assert_never(target)
 
 
+def _mcp_tool_result_texts(block: Mapping[str, object]) -> tuple[tuple[int | None, str], ...]:
+    content: Final = block.get("content")
+    if isinstance(content, str):
+        return ((None, content),) if content else ()
+    return tuple(
+        (nested_idx, text)
+        for nested_idx, text in enumerate(map(tool_result_text_part, list_field(block, "content")))
+        if text
+    )
+
+
+def _write_back_mcp_tool_result_text(block: _WritableMessage, nested_idx: int | None, response: str) -> None:
+    content: Final = block.get("content")
+    if nested_idx is None:
+        if isinstance(content, str):
+            block["content"] = response  # rebind-ok: the mcp_tool_result block is the client-visible object rewritten
+        return
+    nested: Final = list_field(block, "content")
+    text_block: Final = nested[nested_idx] if nested_idx < len(nested) else None
+    if isinstance(text_block, dict):
+        text_block["text"] = response
+
+
+_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result"})
+_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "mcp_tool_use"})
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_DECODED_SSE_DATA: Final = TypeAdapter(object)
 _RELEASED_TOOL_USE_STOP: Final = (
     b"event: message_delta\n"
     b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
@@ -344,14 +554,23 @@ def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...
     )
 
 
-class _AnthropicSSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
-    text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
+def _sse_delta(data_line: str) -> Mapping[str, object] | None:
+    data: Final = loads_json_object(data_line)
+    if data is None:
+        verbose_proxy_logger.warning("Skipping an SSE event that is not a JSON object")
+        return None
+    return as_str_mapping(data.get("delta"))
 
 
-class _AnthropicSSEEvent(TypedDict, total=False):
-    delta: ReadOnly[_AnthropicSSEDelta]
+def _sse_text_delta(data_line: str) -> str:
+    delta: Final = _sse_delta(data_line)
+    text: Final = None if delta is None or delta.get("type") != "text_delta" else delta.get("text")
+    return text if isinstance(text, str) else ""
+
+
+def _sse_stop_reason(data_line: str) -> object:
+    delta: Final = _sse_delta(data_line)
+    return None if delta is None else delta.get("stop_reason")
 
 
 def _mapping_type(value: object) -> object:
@@ -369,9 +588,10 @@ class AnthropicMessagesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def __init__(self):
+    def __init__(self, deployment_lookup: Callable[[], DeploymentLookup | None] = _proxy_router):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+        self._deployment_lookup: Final = deployment_lookup
 
     def post_call_hook_response(self, response: object) -> object:
         if not isinstance(response, ModelResponse):
@@ -559,14 +779,23 @@ class AnthropicMessagesHandler(BaseTranslation):
         line: Final = raw_line.strip()
         if not line.startswith("data:"):
             return ()
-        try:
-            parsed: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
-        except json.JSONDecodeError:
-            return ()
-        event: Final = as_str_mapping(parsed)
-        if event is None:
-            return ()
-        return (event,)
+        event: Final = loads_json_object(line[len("data:") :])
+        return () if event is None else (event,)
+
+    @staticmethod
+    def _stripped_sse_lines(responses_so_far: Sequence[object]) -> Iterator[str]:
+        joined: Final = b"".join(item for item in responses_so_far if isinstance(item, (bytes, bytearray)))
+        return (line.strip() for line in joined.decode("utf-8", errors="replace").split("\n"))
+
+    @classmethod
+    def _has_unreadable_event(cls, responses_so_far: Sequence[object]) -> bool:
+        lines: Final = tuple(cls._stripped_sse_lines(responses_so_far))
+        data_payloads: Final = tuple(line[len("data:") :] for line in lines if line.startswith("data:"))
+        return any(is_undecodable_json_object(payload) for payload in data_payloads) or any(
+            sum(line.startswith("data:") for line in event_lines) > 1
+            for has_lines, event_lines in groupby(lines, key=bool)
+            if has_lines
+        )
 
     @staticmethod
     def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
@@ -587,12 +816,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             for event in AnthropicMessagesHandler._parse_sse_data_line(line)
         )
 
-    def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
+    def _translate_to_openai(self, data: dict, *, keep_cache_control: bool = False) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(keep_cache_control=keep_cache_control).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
             preserve_midturn_system=True,
         )
@@ -634,7 +863,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
         translation_source: Final = {key: value for key, value in data.items() if key != "system"}
-        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
+        request_fields: Final = _as_str_mapping(data)
+        request_model: Final = request_fields.get("model")
+        keep_cache_control: Final = self._serves_cache_control(
+            request_model if isinstance(request_model, str) else "", get_request_team_id(request_fields)
+        )
+        chat_completion_compatible_request: Final = self._translate_to_openai(
+            translation_source, keep_cache_control=keep_cache_control
+        )
 
         full_structured_messages: Final = cast(
             list[AllMessageValues],
@@ -643,7 +879,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_midturn_system_message: Final = any(
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        hoisted_system_message: Final = (
+            None if skip_system else self._hoisted_top_level_system_message(request_fields, keep_cache_control)
+        )
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
         # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
@@ -661,7 +899,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             if scan_only_tool_results
             else [
                 tool
-                for tool in chat_completion_compatible_request.get("tools", [])
+                for tool in _with_web_search_tools(
+                    list_field(cast(Mapping[str, object], data), "tools"),  # cast-ok: Anthropic request body
+                    chat_completion_compatible_request.get("tools", []),
+                )
                 if not is_provider_native_tool_dict(tool)
             ]
         )
@@ -701,6 +942,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            request_tools_as_sent: Final = tuple(data.get("tools") or ())
+            shown_tool_fingerprints: Final = (
+                () if scan_only_tool_results else tuple(map(stream_item_fingerprint, tools_to_check))
+            )
             original_structured_messages: Final = structured_messages
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
@@ -721,27 +966,19 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                # Convert tools back from OpenAI format to Anthropic format
-                anthropic_config: Final = AnthropicConfig()
-                anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
-                for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config.map_tool_helper(
-                        _with_original_name(tool, original_tool_names.declared)
-                    )
-                    if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
-                    # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
                         request_tools=data.get("tools"),
-                        returned_tools=anthropic_tools,
+                        returned_tools=_converted_tools(guardrailed_tools, original_tool_names.declared),
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
-                        *anthropic_tools,
-                    ]
+                    else _tools_after_guardrail(
+                        request_tools=request_tools_as_sent,
+                        shown_fingerprints=shown_tool_fingerprints,
+                        returned_tools=guardrailed_tools,
+                        original_names=original_tool_names.declared,
+                    )
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
@@ -783,7 +1020,16 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
+    def _serves_cache_control(self, model: str, team_id: str | None) -> bool:
+        if LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(model):
+            return True
+        router: Final = self._deployment_lookup() if model else None
+        deployments: Final = router.get_model_list(model_name=model, team_id=team_id) if router is not None else None
+        return any(map(_deployment_consumes_cache_control, deployments or ()))
+
+    def _hoisted_top_level_system_message(
+        self, data: Mapping[str, object], keep_cache_control: bool
+    ) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
@@ -793,7 +1039,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 "model": data.get("model") or "",
                 "messages": [],
                 "system": system,
-            }
+            },
+            keep_cache_control=keep_cache_control,
         )
         hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None
@@ -945,6 +1192,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         messages=[run[index] for index in group],
                         model=model,
                         llm_provider="anthropic",
+                        rewrites_tool_use_ids=False,
                     )
                 )
 
@@ -1022,9 +1270,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
-        """Extract every tool name in an Anthropic messages request: tools[].name, plus
-        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
+        """Extract every tool name in an Anthropic messages request: tools[].name,
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim, and
+        mcp_servers[].name, which the Responses bridge sends as the MCP tool's server_label."""
+        tool_names: Final = chain.from_iterable(map(anthropic_tool_names, list_field(data, "tools")))
+        server_names: Final = (name for name in map(anthropic_mcp_server_name, list_field(data, "mcp_servers")) if name)
+        return [*tool_names, *server_names]
 
     @classmethod
     def _extract_input_text_and_images(
@@ -1073,7 +1324,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             else tuple(
                 (content_idx, content_item)
                 for content_idx, content_item in enumerate(content)
-                if isinstance(content_item, dict) and _is_client_tool_use(content_item)
+                if isinstance(content_item, dict)
+                and _is_scannable_tool_use(cast(Mapping[str, object], content_item))  # cast-ok: a content block
             )
         )
         return ExtractedInput(
@@ -1097,7 +1349,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_tool_message: bool,
         scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
-        if content_item.get("type") == "tool_result":
+        if content_item.get("type") in _TOOL_RESULT_BLOCK_TYPES:
             if skip_tool_message:
                 return EMPTY_EXTRACTED_INPUT
             return cls._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
@@ -1324,6 +1576,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
+        if self._has_unreadable_event(responses_so_far):
+            raise GuardrailRaisedException(
+                guardrail_name=guardrail_to_apply.guardrail_name,
+                message="The guardrail could not read an event in the upstream stream, so it cannot check the response",
+                should_wrap_with_default_message=False,
+            )
         has_ended: Final = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
@@ -1469,7 +1727,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 continue
             block_type, block_dict = fields
 
-            if block_type in ["text", "tool_use"]:
+            if block_type in ("text", "tool_use", "mcp_tool_use", "mcp_tool_result"):
                 self._extract_output_text_and_images(
                     content_block=block_dict,
                     content_idx=content_idx,
@@ -1658,18 +1916,15 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _rewrite_sse_line(line: str, rewrite_event: _SSEEventRewriter) -> str:
         if not line.startswith("data:"):
             return line
-        try:
-            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
-                line[len("data:") :].strip()
-            )
-        except json.JSONDecodeError:
+        event: Final = loads_json_object(line[len("data:") :])
+        if not isinstance(event, dict):
             return line
-        if not isinstance(data, dict):
-            return line
-        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
-        return line if rewritten is data else "data: " + json.dumps(rewritten)
+        rewritten: Final = _rewritten_event(event, rewrite_event)
+        return line if rewritten is event else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        if self._has_unreadable_event(responses_so_far):
+            return None
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
         tool_use_fingerprints: Final = self._streamed_tool_use_fingerprints(responses_so_far)
         return StreamingScanKey(
@@ -1766,13 +2021,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
-                    try:
-                        data: _AnthropicSSEEvent = json.loads(data_line)
-                        delta: _AnthropicSSEDelta = data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            text += delta.get("text", "")
-                    except json.JSONDecodeError:
-                        verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                    text += _sse_text_delta(data_line)
 
         except Exception as e:
             verbose_proxy_logger.error("Error extracting text from SSE: %s", e)
@@ -1828,15 +2077,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                                 data_line = line[5:].strip()
 
                         # Check for message_delta event with stop_reason
-                        if event_type == "message_delta" and data_line:
-                            try:
-                                data: _AnthropicSSEEvent = json.loads(data_line)
-                                delta: _AnthropicSSEDelta = data.get("delta", {})
-                                stop_reason: str | None = delta.get("stop_reason")
-                                if stop_reason is not None:
-                                    return True
-                            except json.JSONDecodeError:
-                                verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                        if event_type == "message_delta" and data_line and _sse_stop_reason(data_line) is not None:
+                            return True
 
                 except Exception as e:
                     verbose_proxy_logger.error("Error checking streaming end in SSE: %s", e)
@@ -1896,8 +2138,13 @@ class AnthropicMessagesHandler(BaseTranslation):
                 texts_to_check.append(content_text)
                 task_mappings.append((content_idx, None))
 
+        elif content_type == "mcp_tool_result":
+            nested_texts: Final = _mcp_tool_result_texts(content_block)
+            texts_to_check.extend(text for _, text in nested_texts)
+            task_mappings.extend((content_idx, nested_idx) for nested_idx, _ in nested_texts)
+
         # Extract tool calls
-        elif content_type == "tool_use" and isinstance(content_block, dict):
+        elif content_type in _TOOL_CALL_BLOCK_TYPES and isinstance(content_block, dict):
             tool_call: Final = AnthropicConfig.convert_tool_use_to_openai_format(
                 anthropic_tool_content=content_block,
                 index=content_idx,
@@ -1946,6 +2193,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 block = _as_writable(content_block)
                 if block.get("type") == "text":
                     block["text"] = guardrail_response
+                elif block.get("type") == "mcp_tool_result":
+                    _write_back_mcp_tool_result_text(block, mapping[1], guardrail_response)
             elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
                 if isinstance(content_block, _TextAttrBlock):

@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",
@@ -42,6 +43,7 @@ IGNORE_FUNCTIONS = [
     "_decrypted_param",  # max depth set.
     "contains_encrypted_marker",  # max depth set.
     "_rotate_guardrail_row",  # bounded by attempts_left.
+    "_responses_dropping_refused_fields",  # bounded by _REFUSED_FIELDS, each retry drops a field it sent.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
@@ -87,6 +89,7 @@ IGNORE_FUNCTIONS = [
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
     "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
+    "_redacted_client_field",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning REDACTED for anything nested past the cap.
 ]
 
 

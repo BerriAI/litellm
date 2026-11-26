@@ -25,6 +25,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -1744,22 +1745,32 @@ class TestAnthropicThinkingSignatureSelfHeal:
         msgs = ["hi", {"role": "user", "content": "hello"}]
         assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
 
-    def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
+    @pytest.mark.parametrize("text", (None, 123, {"nested": "x"}), ids=("null", "number", "object"))
+    def test_strip_empty_text_blocks_keeps_a_non_string_user_text_for_the_route_to_reject_or_drop(self, text):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": None},
-                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
-                ],
-            }
+            {"role": "user", "content": [{"type": "text", "text": text}]},
+            {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": text}]},
         ]
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+        assert out == [msgs[0], {"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    @pytest.mark.parametrize("text", (None, 123), ids=("null", "number"))
+    def test_strip_empty_text_blocks_still_strips_a_non_string_assistant_text(self, text):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
+        msgs = [
+            {"role": "assistant", "content": [{"type": "text", "text": text}, tu]},
+            {"role": "assistant", "content": [{"type": "text", "text": text}]},
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert out == [{"role": "assistant", "content": [tu]}]
 
     def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1786,23 +1797,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
-
-    def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
-        from litellm.llms.anthropic.common_utils import (
-            strip_empty_content_blocks_from_anthropic_messages,
-        )
-
-        msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": 123},
-                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
-                ],
-            }
-        ]
-        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
         from litellm.llms.anthropic.common_utils import (
@@ -2048,7 +2042,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
 
         config = AnthropicMessagesConfig()
-        assert config.max_retry_on_anthropic_messages_http_error == 2
+        assert config.max_retry_on_anthropic_messages_http_error == 3
 
         req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         err_text = (
@@ -2058,7 +2052,13 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
         resp = httpx.Response(400, request=req, text=err_text)
         err = httpx.HTTPStatusError("bad", request=req, response=resp)
-        assert config.should_retry_anthropic_messages_on_http_error(err, {}) is True
+        signed_turn = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "y"}]}
+        assert config.should_retry_anthropic_messages_on_http_error(err, {}, {"messages": [signed_turn]}) is True
+        assert config.should_retry_anthropic_messages_on_http_error(err, {}, {"messages": []}) is False
+
+        id_text = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
+        id_err = httpx.HTTPStatusError("bad", request=req, response=httpx.Response(400, request=req, text=id_text))
+        assert config.should_retry_anthropic_messages_on_http_error(id_err, {}, {"model": "claude-sonnet-4-6"}) is False
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
@@ -4568,3 +4568,41 @@ def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_stil
         {"role": "assistant", "content": [search_use, search_result("get_weather"), weather_call]},
         messages[2],
     )
+
+
+def test_process_anthropic_headers_keeps_the_rate_limit_headers_a_provider_sends_under_openai_names():
+    foundry_headers: Final = httpx.Headers(
+        {
+            "x-ratelimit-remaining-requests": "49",
+            "x-ratelimit-remaining-tokens": "49900",
+            "x-ratelimit-limit-requests": "50",
+            "x-ratelimit-limit-tokens": "50000",
+            "apim-request-id": "req-1",
+        }
+    )
+
+    processed: Final = process_anthropic_headers(foundry_headers)
+
+    assert processed == {
+        "x-ratelimit-remaining-requests": "49",
+        "x-ratelimit-remaining-tokens": "49900",
+        "x-ratelimit-limit-requests": "50",
+        "x-ratelimit-limit-tokens": "50000",
+        "llm_provider-x-ratelimit-remaining-requests": "49",
+        "llm_provider-x-ratelimit-remaining-tokens": "49900",
+        "llm_provider-x-ratelimit-limit-requests": "50",
+        "llm_provider-x-ratelimit-limit-tokens": "50000",
+        "llm_provider-apim-request-id": "req-1",
+    }
+
+
+def test_process_anthropic_headers_prefers_the_anthropic_rate_limit_when_both_names_are_sent():
+    processed: Final = process_anthropic_headers(
+        {
+            "x-ratelimit-remaining-tokens": "49900",
+            "anthropic-ratelimit-tokens-remaining": "11999000",
+        }
+    )
+
+    assert processed["x-ratelimit-remaining-tokens"] == "11999000"
+    assert processed["llm_provider-x-ratelimit-remaining-tokens"] == "49900"

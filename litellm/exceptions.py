@@ -312,7 +312,7 @@ class BadRequestError(openai.BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -356,7 +356,7 @@ class ImageFetchError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -397,12 +397,20 @@ class MalformedRequestFieldError(BadRequestError):
     pass
 
 
+class UnresolvablePreviousResponseError(MalformedRequestFieldError):
+    pass
+
+
+class UnknownPreviousResponseError(UnresolvablePreviousResponseError):
+    pass
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -756,7 +764,7 @@ class ContentPolicyViolationError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -1105,6 +1113,7 @@ class UnsupportedParamsError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -1114,6 +1123,7 @@ class UnsupportedParamsError(BadRequestError):
             litellm_debug_info=litellm_debug_info,
             max_retries=max_retries,
             num_retries=num_retries,
+            body=body,
         )
         self.message = f"litellm.UnsupportedParamsError: {message}"
         self.args = (self.message,)

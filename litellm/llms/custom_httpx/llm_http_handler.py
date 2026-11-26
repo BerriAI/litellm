@@ -41,6 +41,7 @@ from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, up
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.retries import async_retried, retried
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
@@ -2911,12 +2912,15 @@ class BaseLLMHTTPHandler:
             )
             result: Final = final_response if final_response is not None else initial_response
             if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-                return self._wrap_responses_response_as_fake_stream(
-                    result=result,
+                return MockResponsesAPIStreamingIterator(
+                    response=self._completed_result_as_raw_response(result),
                     model=model,
-                    responses_api_provider_config=responses_api_provider_config,
                     logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             return result
 
@@ -3108,12 +3112,15 @@ class BaseLLMHTTPHandler:
 
         result: Final = final_response if final_response is not None else initial_response
         if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-            return self._wrap_responses_response_as_fake_stream(
-                result=result,
+            return MockResponsesAPIStreamingIterator(
+                response=self._completed_result_as_raw_response(result),
                 model=model,
-                responses_api_provider_config=responses_api_provider_config,
                 logging_obj=logging_obj,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_metadata=litellm_metadata,
                 custom_llm_provider=custom_llm_provider,
+                request_data=request_context,
+                call_type=CallTypes.responses.value,
             )
         return result
 
@@ -5901,35 +5908,10 @@ class BaseLLMHTTPHandler:
                 str(e),
             )
 
-    def _wrap_responses_response_as_fake_stream(
-        self,
-        result: ResponsesAPIResponse,
-        model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: "LiteLLMLoggingObj",
-        custom_llm_provider: str,
-    ) -> MockResponsesAPIStreamingIterator:
-        """
-        Wrap a completed responses result as a synthetic stream.
-
-        Used when an interceptor forced stream=False to run the agentic loop on
-        the non-streaming path, but the caller originally asked for streaming.
-        """
-        import httpx
-
-        from litellm.responses.streaming_iterator import (
-            MockResponsesAPIStreamingIterator,
-        )
-
+    @staticmethod
+    def _completed_result_as_raw_response(result: ResponsesAPIResponse) -> httpx.Response:
         payload: Final = result.model_dump() if hasattr(result, "model_dump") else result
-        raw_response: Final = httpx.Response(status_code=200, json=payload)
-        return MockResponsesAPIStreamingIterator(
-            response=raw_response,
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        return httpx.Response(status_code=200, json=payload)
 
     async def _execute_chat_completion_agentic_plan(
         self,
@@ -7338,6 +7320,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Handles image generation requests.
@@ -7360,6 +7343,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
                 api_key=api_key,
+                max_retries=max_retries,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -7406,26 +7390,24 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
+        try:
+            response: Final = retried(send, max_retries)()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -7462,6 +7444,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -7514,26 +7497,24 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        async def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
+        try:
+            response: Final = await async_retried(send, max_retries)()
         except Exception as e:
             raise self._handle_error(
                 e=e,
