@@ -53,9 +53,9 @@ rustls.workspace = true
 litellm-http.workspace = true
 litellm-inference-messages.workspace = true
 litellm-license.workspace = true
-litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-model-catalog.workspace = true
+litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false, features = ["tiktoken"] }
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true

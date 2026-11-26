@@ -81,7 +81,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   const [testInputText, setTestInputText] = useState("");
   const [isTestLoading, setIsTestLoading] = useState(false);
   const [testResults, setTestResults] = useState<GuardrailTestResult[] | null>(null);
-  const [testOverallAction, setTestOverallAction] = useState<string | null>(null);
   const [collapsedResults, setCollapsedResults] = useState<Set<string>>(new Set());
   // Enrichment state for competitor templates
   const [enrichedDefs, setEnrichedDefs] = useState<Record<string, any[]>>({});
@@ -124,7 +123,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setTestInputText("");
     setIsTestLoading(false);
     setTestResults(null);
-    setTestOverallAction(null);
     setCollapsedResults(new Set());
     setEnrichedDefs({});
     setEnrichedCompetitors({});
@@ -180,7 +178,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setShowTestPanel(false);
     setTestInputText("");
     setTestResults(null);
-    setTestOverallAction(null);
     setCollapsedResults(new Set());
   };
 
@@ -368,16 +365,13 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
 
     setIsTestLoading(true);
     setTestResults(null);
-    setTestOverallAction(null);
     setCollapsedResults(new Set());
 
     try {
       const result = await testPolicyTemplate(accessToken, allDefs, testInputText);
       setTestResults(result.results || []);
-      setTestOverallAction(result.overall_action || "passed");
     } catch {
       setTestResults([]);
-      setTestOverallAction("error");
     } finally {
       setIsTestLoading(false);
     }
@@ -537,7 +531,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               onClick={() => {
                 setShowTestPanel(false);
                 setTestResults(null);
-                setTestOverallAction(null);
               }}
               className="text-muted-foreground hover:text-foreground"
             >

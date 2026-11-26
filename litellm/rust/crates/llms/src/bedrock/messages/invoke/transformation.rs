@@ -1,5 +1,6 @@
 use litellm_host::interceptors::RetriedRequest;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::context::{
@@ -332,7 +333,7 @@ impl MessagesDialect for BedrockInvokeMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn clamp_requested_effort(

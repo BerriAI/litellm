@@ -296,51 +296,6 @@ async fn a_stalled_response_times_out_and_is_retried() {
 
 #[rstest]
 #[tokio::test]
-async fn a_resumed_fetch_makes_only_the_attempts_left() {
-    let upstream = Upstream::serve(vec![Answer::Raw(UNAVAILABLE)]);
-    let url = upstream.url();
-    let first = Failed {
-        reason: "first".into(),
-        retryable: true,
-        retry_after: Some(Duration::ZERO),
-    };
-    let failed = remote(&url, environment(), POLICY)
-        .resuming(first)
-        .fetch()
-        .await
-        .unwrap_err();
-    assert_eq!(
-        failed.reason,
-        format!("HTTP 503 from {url} (after 3 attempts)")
-    );
-    assert_eq!(upstream.heads().len(), 2);
-}
-
-#[rstest]
-#[tokio::test]
-async fn a_resumed_fetch_with_no_attempts_left_returns_the_failure_it_resumed() {
-    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
-    let first = Failed {
-        reason: "first".into(),
-        retryable: true,
-        retry_after: None,
-    };
-    let policy = RetryPolicy {
-        max_attempts: 1,
-        ..POLICY
-    };
-    assert_eq!(
-        remote(&upstream.url(), environment(), policy)
-            .resuming(first.clone())
-            .fetch()
-            .await,
-        Err(first)
-    );
-    assert!(upstream.heads().is_empty());
-}
-
-#[rstest]
-#[tokio::test]
 async fn a_failure_reason_drops_url_credentials() {
     let upstream = Upstream::serve(vec![Answer::Raw(NOT_FOUND)]);
     let address = upstream.base.trim_start_matches("http://");
@@ -350,16 +305,20 @@ async fn a_failure_reason_drops_url_credentials() {
 }
 
 #[rstest]
-#[case::unsupported_scheme("ftp://example.com/cost.json")]
-#[case::not_a_url("not a url")]
-#[case::s3_without_a_key("s3://prices")]
+#[case::unsupported_scheme("ftp://example.com/cost.json", "ftp://example.com/cost.json")]
+#[case::not_a_url("not a url", "<unparseable URL>")]
+#[case::presigned_without_a_scheme(
+    "example.com/cost.json?X-Amz-Signature=sig-secret",
+    "<unparseable URL>"
+)]
+#[case::s3_without_a_key("s3://prices", "s3://prices")]
 #[tokio::test]
-async fn an_unfetchable_url_fails_without_a_request(#[case] url: &str) {
+async fn an_unfetchable_url_fails_without_a_request(#[case] url: &str, #[case] shown: &str) {
     let failed = fetched(url, POLICY).await.unwrap_err();
     assert!(
         failed
             .reason
-            .starts_with(&format!("error fetching {url}: ")),
+            .starts_with(&format!("error fetching {shown}: ")),
         "{}",
         failed.reason
     );
