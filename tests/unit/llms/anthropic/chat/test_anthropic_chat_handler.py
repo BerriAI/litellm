@@ -3929,6 +3929,15 @@ def _sent_tool_use_ids(request: httpx.Request) -> tuple[str, str]:
     )
 
 
+_KIMI_FUNCTION_RESULT_ROUND: Final = [
+    *_KIMI_TOOL_ROUND[:2],
+    {"role": "function", "name": "Bash", "tool_call_id": "functions.Bash:0", "content": "README.md"},
+]
+
+
+@pytest.mark.parametrize(
+    "messages", [_KIMI_TOOL_ROUND, _KIMI_FUNCTION_RESULT_ROUND], ids=["tool-result", "function-result"]
+)
 @pytest.mark.parametrize(
     ("api_base", "sent_id"),
     [
@@ -3937,14 +3946,18 @@ def _sent_tool_use_ids(request: httpx.Request) -> tuple[str, str]:
     ],
 )
 def test_anthropic_chat_renames_tool_call_ids_only_for_an_upstream_that_enforces_anthropics_pattern(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, api_base: str | None, sent_id: str
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str | None,
+    sent_id: str,
+    messages: list[dict[str, object]],
 ) -> None:
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     route: Final = respx_mock.post(url__regex=r"/v1/messages").mock(return_value=httpx.Response(200, json=_DONE_MESSAGE))
 
     litellm.completion(
-        model="anthropic/kimi-k2", messages=_KIMI_TOOL_ROUND, tools=[_BASH_TOOL], api_base=api_base, api_key="sk-test"
+        model="anthropic/kimi-k2", messages=messages, tools=[_BASH_TOOL], api_base=api_base, api_key="sk-test"
     )
 
     assert _sent_tool_use_ids(route.calls.last.request) == (sent_id, sent_id)
