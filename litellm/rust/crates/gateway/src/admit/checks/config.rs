@@ -136,6 +136,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         spend_log_queue_max_bytes: _,
         spend_log_write_batch_max_bytes: _,
         spend_log_write_batch_max_rows: _,
+        anthropic_messages_detached_stream_drain_timeout_seconds: _,
+        anthropic_messages_max_detached_stream_drains: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,
