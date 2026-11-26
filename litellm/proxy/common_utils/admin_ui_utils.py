@@ -8,6 +8,18 @@ def is_admin_ui_disabled() -> bool:
     return bool(str_to_bool(value=os.getenv("DISABLE_ADMIN_UI")))
 
 
+def require_admin_ui_enabled():
+    """Return the "Admin UI is Disabled" response when the switch is on, else ``None``.
+
+    One policy helper so every UI authentication handler refuses identically, and refuses
+    BEFORE it processes credentials or mints a session. ``encode_ui_session_jwt`` enforces the
+    same policy at the session-issuance choke point as a backstop for any path added later.
+    """
+    if is_admin_ui_disabled():
+        return admin_ui_disabled()
+    return None
+
+
 def show_missing_vars_in_env():
     from fastapi.responses import HTMLResponse
 

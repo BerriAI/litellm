@@ -20172,11 +20172,12 @@ async def fallback_login(request: Request):
     Example:
     """
     from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-    from litellm.proxy.common_utils.admin_ui_utils import admin_ui_disabled, is_admin_ui_disabled
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import SSO_FALLBACK_COOKIE
 
-    if is_admin_ui_disabled():
-        return admin_ui_disabled()
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     login_page: Final = RedirectResponse(
         url=get_custom_url(str(request.base_url)).rstrip("/") + "/ui/login", status_code=303
@@ -20196,11 +20197,12 @@ async def fallback_login(request: Request):
 async def login(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
-    from litellm.proxy.common_utils.admin_ui_utils import admin_ui_disabled, is_admin_ui_disabled
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.utils import get_custom_url
 
-    if is_admin_ui_disabled():
-        return admin_ui_disabled()
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     form: Final = await request.form()
     username: Final = str(form.get("username"))
@@ -20321,8 +20323,13 @@ async def login_resume(request: Request) -> RedirectResponse:
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
     from litellm.proxy.utils import get_custom_url
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     try:
         body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
@@ -20388,7 +20395,12 @@ async def login_v2(request: Request):
 async def login_v3(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.utils import get_custom_url
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     try:
         if not general_settings.get("control_plane_url"):
@@ -20460,7 +20472,12 @@ async def login_v3(request: Request):
 
 @router.post("/v3/login/exchange", include_in_schema=False)  # exchange single-use opaque code for JWT
 async def login_v3_exchange(request: Request):
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     try:
         if not general_settings.get("control_plane_url"):

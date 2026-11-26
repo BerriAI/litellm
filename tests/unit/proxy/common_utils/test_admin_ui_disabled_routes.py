@@ -1,9 +1,11 @@
-"""DISABLE_ADMIN_UI must be enforced on the routes that serve and authenticate the admin UI.
+"""DISABLE_ADMIN_UI must stop an Admin UI SESSION being minted, by any route.
 
 The flag already gates the SSO paths in ``litellm/proxy/management_endpoints/ui_sso.py``.
-These tests cover the two routes in ``proxy_server`` that reach the same UI session:
-``POST /login``, which mints the UI JWT, and ``GET /fallback/login``, which redirects into
-the login page and sets the SSO fallback cookie.
+The security property is that no Admin UI session can be created while the switch is on, not
+merely that the usual login page is unreachable, so the authoritative check lives in
+``encode_ui_session_jwt`` — the choke point its own docstring says every UI login path uses
+(``/login``, ``/v2/login``, ``/v3/login``, ``/v3/login/exchange`` and the SSO callback).
+The two route-level guards remain for the friendlier HTML response on the paths a human hits.
 """
 
 import os
@@ -58,3 +60,26 @@ def test_disabled_page_is_the_flag_helper_s_own_page():
         assert is_admin_ui_disabled() is True
     with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}):
         assert is_admin_ui_disabled() is False
+
+
+def test_session_jwt_refused_when_admin_ui_disabled():
+    """The choke point: no route may mint a UI session while the flag is set."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}):
+        with pytest.raises(HTTPException) as excinfo:
+            encode_ui_session_jwt({"user_id": "u", "key": "sk-x"}, "master")
+
+    assert excinfo.value.status_code == 401
+
+
+def test_session_jwt_minted_when_admin_ui_enabled():
+    """Control: with the flag off the choke point still mints a token."""
+    from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}):
+        token = encode_ui_session_jwt({"user_id": "u", "key": "sk-x"}, "master")
+
+    assert isinstance(token, str) and token.count(".") == 2
