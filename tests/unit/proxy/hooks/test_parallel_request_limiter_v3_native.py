@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from fractions import Fraction
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
 import pytest
@@ -1161,6 +1161,71 @@ async def test_a_realtime_turn_charges_its_usage_to_key_and_team_io_counters(
     )
 
     assert _io_tokens(side)[built : built + 2] == [18, 9]
+
+
+def _io_tokens_by_counter(side: Side) -> Mapping[str, int | None]:
+    return dict(zip((key for key, _ in _KEY_AND_TEAM_IO_SCOPES), _io_tokens(side), strict=True))
+
+
+_KEY_AND_LOWER_TEAM_IO_LIMITS: Final = MappingProxyType(
+    {
+        "team_id": "t1",
+        "metadata": {"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}},
+        "team_metadata": {"model_itpm_limit": {"gpt-4o": 20}, "model_otpm_limit": {"gpt-4o": 50}},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_frame_is_held_only_to_the_key_io_limits_when_key_and_team_both_limit_the_model(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    auth: Final = _auth(**_KEY_AND_LOWER_TEAM_IO_LIMITS)
+
+    refund: Final = await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    with pytest.raises(HTTPException) as refused:
+        await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    after_refusal: Final = _io_tokens_by_counter(side)
+    assert refund is not None
+    await refund()
+
+    assert "model_per_key_otpm" in str(refused.value.detail)
+    assert after_refusal == {
+        "model_per_key_itpm": 30,
+        "model_per_key_otpm": 60,
+        "model_per_team_itpm": None,
+        "model_per_team_otpm": None,
+    }
+    assert _io_tokens_by_counter(side) == {
+        "model_per_key_itpm": 0,
+        "model_per_key_otpm": 0,
+        "model_per_team_itpm": None,
+        "model_per_team_otpm": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_charges_only_the_key_io_counters_when_key_and_team_both_limit_the_model(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+
+    await run_scoped(
+        side.limiter,
+        _auth(**_KEY_AND_LOWER_TEAM_IO_LIMITS),
+        {"model": "gpt-4o"},
+        {"kind": "project_io"},
+        {"kind": "settle_io", "input_tokens": 18, "output_tokens": 9},
+        batched=False,
+    )
+
+    assert _io_tokens_by_counter(side) == {
+        "model_per_key_itpm": 18,
+        "model_per_key_otpm": 9,
+        "model_per_team_itpm": None,
+        "model_per_team_otpm": None,
+    }
 
 
 async def _guarded(call: Coroutine[object, object, object]) -> object:

@@ -1047,6 +1047,64 @@ async def test_a_team_output_limit_the_key_overrides_does_not_shrink_the_output_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [151, "151", 151.9], ids=["integer", "numeric text", "fractional number"])
+async def test_a_key_output_limit_is_read_like_python_int_when_sizing_a_batch_row_output(
+    alias_routed_batch: respx.MockRouter, configured: object
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            metadata={"model_otpm_limit": {_BATCH_ALIAS: configured}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    assert await _counter(
+        internal_usage_cache, rate_limiter, "model_per_key_otpm", f"{hash_token('sk-batch')}:{_BATCH_ALIAS}", "tokens"
+    ) == no_max_tokens_output_floor(151)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limited", "refusing"),
+    [("metadata", "model_per_key_itpm"), ("team_metadata", "model_per_team_itpm")],
+    ids=["key", "team"],
+)
+async def test_a_key_or_team_input_limit_on_a_row_model_alone_gets_the_batch_file_read_and_refused(
+    alias_routed_batch: respx.MockRouter, limited: str, refusing: str
+):
+    file_route: Final = alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                team_id="team-1",
+                **{limited: {"model_itpm_limit": {_DEPLOYMENT_MODEL: 1}}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert file_route.call_count == 1
+    assert refused.value.status_code == 429
+    assert refusing in str(refused.value.detail)
+    assert _DEPLOYMENT_MODEL in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token_limit_covers(
     alias_routed_batch: respx.MockRouter,
 ):
