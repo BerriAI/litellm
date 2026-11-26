@@ -3782,6 +3782,35 @@ async def test_tokens_of_a_rerouted_latest_alias_request_count_against_the_tpm_o
         await _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
 
 
+@pytest.mark.asyncio
+async def test_a_latest_alias_whose_deployments_are_all_blocked_is_refused_instead_of_rerouted() -> None:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    alias, target = next(iter(get_model_latest_aliases()["openai"].items()))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "latest",
+                "litellm_params": {"model": f"openai/{alias}", "api_key": "test-api-key"},
+                "model_info": {"id": "latest-id", "blocked": True},
+            },
+            {
+                "model_name": "pinned",
+                "litellm_params": {"model": f"openai/{target}", "api_key": "test-api-key"},
+                "model_info": {"id": "pinned-id"},
+            },
+        ]
+    )
+    data: Final = {"model": "latest", "metadata": {}}
+
+    with pytest.raises(litellm.PermissionDeniedError) as refusal:
+        await _serve_latest_alias_from_versioned_model_group(data, router)
+
+    assert refusal.value.status_code == 403
+    assert data == {"model": "latest", "metadata": {}}
+
+
 def _io_token_limited_latest_alias_router(itpm: int) -> litellm.Router:
     router, _ = _latest_alias_router_with_limits({"itpm": itpm}, optional_pre_call_checks=["enforce_model_rate_limits"])
     return router

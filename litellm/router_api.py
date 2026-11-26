@@ -43,6 +43,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, overload
 
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+
 from litellm.router_config import detached
 
 if TYPE_CHECKING:
@@ -2002,3 +2004,53 @@ __all__ = [
     "RoutingObservers",
     "deployment_id",
 ]
+
+
+_REQUEST_METADATA_CHANNELS: Final = ("metadata", "litellm_metadata")
+
+
+def _is_request_metadata(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON object  # mutable-ok: pre-call checks stash reservations on it
+    return isinstance(value, dict)
+
+
+async def admit_on_model_group(
+    router: "Router",
+    model_group: str,
+    request: dict[str, object],  # mutable-ok: the request body the pre-call checks read and stash reservations on
+) -> Mapping[str, object] | None:
+    """Admit ``request`` on a deployment of ``model_group`` that will not serve it, so that deployment's limits
+    still refuse and count the request. Returns the deployment's ``id`` and ``model`` with any input and output
+    token reservation taken on it, or ``None`` when the group has no deployment to count against."""
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
+    from litellm.litellm_core_utils.model_latest_aliases import LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY
+    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+        set_io_token_rate_limit_request_kwargs,
+        take_io_token_reservation,
+        without_io_token_limits,
+    )
+
+    deployment: Final = as_str_mapping(await router.select(model_group, {}))
+    if deployment is None:
+        return None
+    info, params = as_str_mapping(deployment.get("model_info")), as_str_mapping(deployment.get("litellm_params"))
+    deployment_id: Final = None if info is None else info.get("id")
+    model: Final = None if params is None else params.get("model")
+    if not isinstance(deployment_id, str) or not isinstance(model, str):
+        return None
+    admitted: Final = {"id": deployment_id, "model": model}
+    channel: Final = next((key for key in _REQUEST_METADATA_CHANNELS if _is_request_metadata(request.get(key))), None)
+    metadata: Final = None if channel is None else request.get(channel)
+    if channel is None or not _is_request_metadata(metadata):
+        await router.async_routing_strategy_pre_call_checks(
+            deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
+        )
+        return admitted
+    set_io_token_rate_limit_request_kwargs(request, metadata_channel=channel)
+    try:
+        await router.async_routing_strategy_pre_call_checks(deployment=dict(deployment), parent_otel_span=None)
+    finally:
+        reservation: Final = take_io_token_reservation(metadata)
+        set_io_token_rate_limit_request_kwargs(None, store_in_context=False, metadata_channel=channel)
+    return admitted if reservation is None else {**admitted, LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY: dict(reservation)}

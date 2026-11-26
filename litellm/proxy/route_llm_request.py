@@ -25,10 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.model_latest_aliases import (
-    LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY,
-    LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY,
-)
+from litellm.litellm_core_utils.model_latest_aliases import LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -42,14 +39,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
-from litellm.router_api import router_init_args
+from litellm.router_api import admit_on_model_group, router_init_args
 from litellm.router_attempt import metadata_field
 from litellm.router_config import build_router_config
-from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
-    set_io_token_rate_limit_request_kwargs,
-    take_io_token_reservation,
-    without_io_token_limits,
-)
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -911,41 +903,6 @@ def _is_request_metadata(
     return isinstance(value, dict)
 
 
-async def _admit_on_latest_alias_deployment(
-    llm_router: LitellmRouter,
-    requested: str,
-    data: dict[str, object],  # mutable-ok: request body is the proxy-wide mutable dict shared with route_request
-) -> Mapping[str, object] | None:
-    try:
-        deployment: Final = as_str_mapping(await llm_router.select(requested, {}))
-    except litellm.RateLimitError:
-        raise
-    except Exception:  # noqa: BLE001  # the versioned deployment serves the call, so only a spent limit refuses it
-        return None
-    if deployment is None:
-        return None
-    info, params = as_str_mapping(deployment.get("model_info")), as_str_mapping(deployment.get("litellm_params"))
-    deployment_id: Final = None if info is None else info.get("id")
-    model: Final = None if params is None else params.get("model")
-    if not isinstance(deployment_id, str) or not isinstance(model, str):
-        return None
-    admitted: Final = {"id": deployment_id, "model": model}
-    channel: Final = next((key for key in _METADATA_CHANNELS if _is_request_metadata(data.get(key))), None)
-    metadata: Final = None if channel is None else data.get(channel)
-    if channel is None or not _is_request_metadata(metadata):
-        await llm_router.async_routing_strategy_pre_call_checks(
-            deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
-        )
-        return admitted
-    set_io_token_rate_limit_request_kwargs(data, metadata_channel=channel)
-    try:
-        await llm_router.async_routing_strategy_pre_call_checks(deployment=dict(deployment), parent_otel_span=None)
-    finally:
-        reservation: Final = take_io_token_reservation(metadata)
-        set_io_token_rate_limit_request_kwargs(None, store_in_context=False, metadata_channel=channel)
-    return admitted if reservation is None else {**admitted, LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY: dict(reservation)}
-
-
 async def _serve_latest_alias_from_versioned_model_group(
     data: dict[str, object],  # mutable-ok: request body is the proxy-wide mutable dict shared with route_request
     llm_router: LitellmRouter | None,
@@ -960,7 +917,8 @@ async def _serve_latest_alias_from_versioned_model_group(
     target: Final = latest_alias_versioned_model_group(requested, llm_router)
     if target is None:
         return
-    admitted: Final = await _admit_on_latest_alias_deployment(llm_router, requested, data)
+    _raise_if_model_fully_blocked(llm_router, requested, get_team_id_from_data(data))
+    admitted: Final = await admit_on_model_group(llm_router, requested, data)
     for value in metadata:
         value[LATEST_ALIAS_REQUESTED_MODEL_GROUP_METADATA_KEY] = requested
         if admitted is not None:
