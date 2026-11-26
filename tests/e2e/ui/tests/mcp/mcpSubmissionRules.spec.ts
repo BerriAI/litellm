@@ -25,7 +25,6 @@ async function readSetting(request: APIRequestContext, headers: AdminHeaders, fi
 }
 
 async function waitForSetting(request: APIRequestContext, headers: AdminHeaders, expected: Setting) {
-  // One fresh connection can hit the writer before the other workers catch up.
   let matching = 0;
   await expect
     .poll(async () => {
