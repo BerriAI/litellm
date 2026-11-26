@@ -22291,7 +22291,10 @@ async def test_a_deployment_region_its_drop_list_names_is_the_region_called(
 ) -> None:
     vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
     router: Final = _vertex_claude_router(
-        vertex_service_account, vertex_location="eu", additional_drop_params=["store", "vertex_location"]
+        vertex_service_account,
+        vertex_location="eu",
+        bucket_name="region-bucket",
+        additional_drop_params=["store", "vertex_location", "bucket_name"],
     )
 
     await _call_vertex_claude_route(
@@ -22300,6 +22303,7 @@ async def test_a_deployment_region_its_drop_list_names_is_the_region_called(
 
     assert _vertex_locations_called(vertex_route) == ("eu",)
     assert vertex_route.calls.last.request.url.host == "aiplatform.eu.rep.googleapis.com"
+    assert "bucket_name" not in json.loads(vertex_route.calls.last.request.content)
 
 
 @pytest.mark.asyncio
@@ -22409,16 +22413,24 @@ async def test_a_client_timeout_still_applies_when_the_drop_list_names_a_timeout
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "provider_params",
-    [{"model": "openai/gpt-5.4-nano"}, {"model": "nano-alias", "custom_llm_provider": "openai"}],
-    ids=["provider-in-model", "declared-provider"],
+    ("provider_params", "chat_completions_url"),
+    [
+        ({"model": "openai/gpt-5.4-nano"}, "https://api.openai.com/v1/chat/completions"),
+        ({"model": "nano-alias", "custom_llm_provider": "openai"}, "https://api.openai.com/v1/chat/completions"),
+        (
+            {"model": "meta-llama/Meta-Llama-3.1-8B-Instruct", "api_base": "https://api.deepinfra.com/v1/openai"},
+            "https://api.deepinfra.com/v1/openai/chat/completions",
+        ),
+    ],
+    ids=["provider-in-model", "declared-provider", "provider-from-api-base"],
 )
 async def test_an_openai_deployment_setting_its_drop_list_names_stays_out_of_the_request_body(
-    respx_mock: respx.MockRouter, _router_httpx_transport: None, provider_params: Mapping[str, str]
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+    provider_params: Mapping[str, str],
+    chat_completions_url: str,
 ) -> None:
-    openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
-        json=dict(_CHAT_COMPLETION_REPLY)
-    )
+    openai_route: Final = respx_mock.post(chat_completions_url).respond(json=dict(_CHAT_COMPLETION_REPLY))
     router: Final = Router(
         model_list=[
             {
@@ -22437,6 +22449,37 @@ async def test_an_openai_deployment_setting_its_drop_list_names_stays_out_of_the
     await router.acompletion(model="openai-nano", messages=[{"role": "user", "content": "Say hi"}])
 
     assert "bucket_name" not in json.loads(openai_route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_a_region_an_openai_deployment_sets_and_drop_lists_stays_out_of_the_client_extra_body(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json=dict(_CHAT_COMPLETION_REPLY)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai-nano",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "sk-deployment",
+                    "vertex_location": "eu",
+                    "additional_drop_params": ["vertex_location"],
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model="openai-nano",
+        messages=[{"role": "user", "content": "Say hi"}],
+        extra_body={"vertex_location": "us-east5"},
+    )
+
+    assert "vertex_location" not in json.loads(openai_route.calls.last.request.content)
 
 
 @pytest.mark.asyncio
@@ -22502,17 +22545,19 @@ async def test_a_drop_listed_deployment_region_is_the_region_the_messages_route_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["chat", "responses"])
+@pytest.mark.parametrize("drop_list", [["vertex_location"], ("vertex_location",)], ids=["list", "tuple"])
 async def test_a_region_a_router_wide_drop_list_names_is_the_deployment_region_called(
     respx_mock: respx.MockRouter,
     _router_httpx_transport: None,
     vertex_service_account: str,
     monkeypatch: pytest.MonkeyPatch,
     route: str,
+    drop_list: Sequence[str],
 ) -> None:
     monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
     vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
     router: Final = _vertex_claude_router(
-        vertex_service_account, router_defaults={"additional_drop_params": ["vertex_location"]}, vertex_location="eu"
+        vertex_service_account, router_defaults={"additional_drop_params": drop_list}, vertex_location="eu"
     )
 
     await _call_vertex_claude_route(router, route, {})
@@ -22544,7 +22589,8 @@ async def test_a_bedrock_region_its_drop_list_names_is_the_region_called(
                     "aws_access_key_id": "AKIAREGIONTEST",
                     "aws_secret_access_key": "region-secret",
                     "aws_region_name": "eu-west-1",
-                    "additional_drop_params": ["aws_region_name"],
+                    "bucket_name": "region-bucket",
+                    "additional_drop_params": ["aws_region_name", "bucket_name"],
                 },
             }
         ],
@@ -22554,3 +22600,4 @@ async def test_a_bedrock_region_its_drop_list_names_is_the_region_called(
     await router.acompletion(model="claude-bedrock-eu", messages=[{"role": "user", "content": "Say hi"}])
 
     assert bedrock_route.calls.last.request.url.host == "bedrock-runtime.eu-west-1.amazonaws.com"
+    assert b"bucket_name" not in bedrock_route.calls.last.request.content

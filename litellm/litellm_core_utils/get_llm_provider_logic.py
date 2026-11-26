@@ -177,16 +177,6 @@ def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str
     return resolved_model, resolved_provider
 
 
-def calls_through_openai_sdk(custom_llm_provider: str) -> bool:
-    return custom_llm_provider in (
-        "openai",
-        "azure",
-        "text-completion-openai",
-        "bigmodel",
-        *litellm.openai_compatible_providers,
-    ) or JSONProviderRegistry.exists(custom_llm_provider)
-
-
 def inferred_provider(model: str | None) -> str | None:
     if not model:
         return None
