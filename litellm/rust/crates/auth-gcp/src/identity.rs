@@ -426,7 +426,6 @@ impl CredentialSource {
     }
 }
 
-/// The SHA-256 digest of credentials text.
 fn sha256(text: &str) -> [u8; SHA256_OUTPUT_LEN] {
     let mut out = [0; SHA256_OUTPUT_LEN];
     out.copy_from_slice(digest(&SHA256, text.as_bytes()).as_ref());
