@@ -59,7 +59,14 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
+from litellm.litellm_core_utils.litellm_logging import (
+    USAGE_OBSERVATION_KEY,
+    BilledRoundsDispatch,
+    BilledRoundsSpend,
+    UncachedPrice,
+    UsageObservation,
+    unconfirmed_response_usage,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -1177,33 +1184,47 @@ class BaseResponsesAPIStreamingIterator:
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream,
-        the same shape the success handler assembles for a natural end of stream.
-        Its response is the response.created payload (it carries the served
-        service_tier) plus the text and tool arguments relayed so far, with counted
-        usage since the provider never sent any. None when nothing was relayed yet,
-        the stream already reached its terminal event and billed itself, or its failure
-        log already billed the relayed output.
+        preserving the served tier, the relayed output and reported usage when
+        available. OpenAI token estimates are kept for observability, and known
+        charges are recorded even if token estimation fails. None when nothing
+        was relayed or another handler already logged the stream.
         """
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
         if self._replays_stored_stream or created is None or not generated or self._billed_without_disconnect():
             return None
-        usage: Final = _estimate_usage_safely(
-            self.model or "",
-            self.request_data.get("input"),
-            self.request_data,
-            generated,
-            use_default_image_token_count=False,
+        openai: Final = self.custom_llm_provider == "openai"
+        reported: Final = _usage_as_model(created.usage) if openai else None
+        usage: Final = (
+            reported.model_copy()
+            if reported is not None
+            else _estimate_usage_safely(
+                self.model or "",
+                self.request_data.get("input"),
+                self.request_data,
+                generated,
+                use_default_image_token_count=False,
+            )
         )
-        if usage is None:
+        if usage is None and not openai:
             return None
+        source: Final = (
+            (UsageObservation.UNKNOWN if usage is None else UsageObservation.ESTIMATED)
+            if openai and reported is None
+            else None
+        )
+        observation: Final = {USAGE_OBSERVATION_KEY: source.value} if source is not None else {}
+        partial_usage: Final = (
+            usage if usage is not None else ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+        )
         partial: Final = created.model_copy(
             update={
                 "status": "incomplete",
-                "usage": usage,
+                "usage": partial_usage.model_copy(update=observation) if observation else partial_usage,
                 "output": _partial_output_items(self._generated_content),
             }
         )
+        partial.hidden_params = {**created.hidden_params, **observation}
         stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
@@ -1993,7 +2014,7 @@ def _estimate_usage_safely(
             use_default_image_token_count=use_default_image_token_count,
         )
     except Exception as e:
-        verbose_logger.debug("Could not estimate usage from stream text, billing $0: %s", e)
+        verbose_logger.debug("Could not estimate usage from stream text: %s", e)
         return None
 
 
@@ -2014,7 +2035,8 @@ def stamp_responses_usage_cost(
     priced: Final = response_obj.model_copy(
         update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)}
     )
-    priced.hidden_params = {}
+    observation: Final = unconfirmed_response_usage(response_obj)
+    priced.hidden_params = {USAGE_OBSERVATION_KEY: observation.value} if observation is not None else {}
     set_response_cost_in_hidden_params(
         priced, provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
     )
@@ -2027,7 +2049,7 @@ def stamp_responses_usage_cost(
     if (
         bill > 0
         or isinstance(usage_obj.cost, (int, float))
-        or (bill == 0 and logging_obj.is_usage_explicitly_free(priced))
+        or (bill == 0 and (observation is not None or logging_obj.is_usage_explicitly_free(priced)))
     ):
         stamp_litellm_bill_on_usage(response_obj, usage_obj, float(bill))
 

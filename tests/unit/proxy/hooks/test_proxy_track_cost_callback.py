@@ -1277,6 +1277,37 @@ async def test_track_cost_callback_releases_budget_reservation_when_spend_tracki
 
 
 @pytest.mark.asyncio
+async def test_track_cost_callback_preserves_unconfirmed_stream_budget() -> None:
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    logger: Final = ProxyDBLogger()
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    started: Final = datetime(2026, 1, 1)
+    partial: Final = ResponsesAPIResponse(
+        id="resp_local_unconfirmed",
+        created_at=1700000000,
+        model="gpt-4o",
+        object="response",
+        status="incomplete",
+        output=[],
+    )
+    partial.hidden_params = {"usage_observation": "unknown", "response_cost": 0.0}
+    await logger._PROXY_track_cost_callback(
+        kwargs={
+            "model": "gpt-4o",
+            "call_type": "aresponses",
+            "litellm_params": {"metadata": {"user_api_key_budget_reservation": reservation}},
+            "response_cost": 0.0,
+            "stream": True,
+        },
+        completion_response=partial,
+        start_time=started,
+        end_time=started,
+    )
+    assert reservation.get("finalized") is not True
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_releases_budget_reservation_when_response_cost_missing():
     logger = ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}

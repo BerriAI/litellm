@@ -803,10 +803,23 @@ def same_attempt_marker(first: object, second: object) -> bool:
     return first is second or first == second
 
 
+USAGE_OBSERVATION_KEY: Final = "usage_observation"
+
+
 class UsageObservation(Enum):
     KNOWN = "known"
     UNKNOWN = "unknown"
     ESTIMATED = "estimated"
+
+
+def unconfirmed_response_usage(result: object) -> UsageObservation | None:
+    response: Final = result.response if isinstance(result, ResponseIncompleteEvent) else result
+    if not isinstance(response, ResponsesAPIResponse):
+        return None
+    observation: Final = response.hidden_params.get(USAGE_OBSERVATION_KEY)
+    if observation == UsageObservation.ESTIMATED.value:
+        return UsageObservation.ESTIMATED
+    return UsageObservation.UNKNOWN if observation == UsageObservation.UNKNOWN.value else None
 
 
 _CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
@@ -2847,9 +2860,16 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         base_model: Final = get_base_model_from_metadata(model_call_details=self.model_call_details)
 
+        billable_response: Final = (
+            priced_result.model_copy(
+                update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(None)}
+            )
+            if isinstance(priced_result, ResponsesAPIResponse) and unconfirmed_response_usage(priced_result) is not None
+            else priced_result
+        )
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": priced_result,
+                "response_object": billable_response,
                 "model": model_value,
                 "cache_hit": cost_cache_hit,
                 "custom_llm_provider": cost_custom_llm_provider,
@@ -3018,7 +3038,11 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         if response_cost is None and not calculation_failed:
             return
-        if self.model_call_details.get("cache_hit") is True or _served_from_cache_at_no_charge(result):
+        if (
+            unconfirmed_response_usage(result) is not None
+            or self.model_call_details.get("cache_hit") is True
+            or _served_from_cache_at_no_charge(result)
+        ):
             self.model_call_details["zero_cost_diagnostic"] = None
             return
         try:
@@ -3323,10 +3347,11 @@ class Logging(LiteLLMLoggingBaseClass):
             return self.prepared_cost
         recorded_cache_hit: Final[object] = self.model_call_details.get("cache_hit")
         deferred: Final = self.deferred_success_result
+        observed_result: Final = deferred[0] if deferred else response
         observed_response: Final = _LITELLM_PARAMS.validate_python(
-            _extract_response_obj_and_hidden_params(deferred[0] if deferred else response, None)[0]
+            _extract_response_obj_and_hidden_params(observed_result, None)[0]
         )
-        self.model_call_details["_accounting_usage_observed"] = (
+        self.model_call_details["_accounting_usage_observed"] = unconfirmed_response_usage(observed_result) or (
             UsageObservation.KNOWN
             if (
                 self.model_call_details.get("combined_usage_object")
@@ -6527,12 +6552,13 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             ## return unified Usage object
             if isinstance(result.response.usage, ResponseAPIUsage):
-                set_response_cost_in_hidden_params(
-                    result.response,
-                    provider_reported_usage_cost(
-                        result.response.usage, self.model_call_details.get("custom_llm_provider")
-                    ),
-                )
+                if unconfirmed_response_usage(result.response) is None:
+                    set_response_cost_in_hidden_params(
+                        result.response,
+                        provider_reported_usage_cost(
+                            result.response.usage, self.model_call_details.get("custom_llm_provider")
+                        ),
+                    )
                 transformed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
                     result.response.usage
                 )

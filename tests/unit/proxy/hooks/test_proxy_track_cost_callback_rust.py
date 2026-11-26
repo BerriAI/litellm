@@ -166,6 +166,54 @@ async def test_a_success_writes_the_settled_reservation_back(proxy: Proxy) -> No
 
 
 @pytest.mark.asyncio
+async def test_an_unconfirmed_response_keeps_its_budget_reserved(proxy: Proxy) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponseIncompleteEvent, ResponsesAPIResponse
+
+    started: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    metadata: Final = {**_KEYED, "user_api_key_budget_reservation": reservation}
+    logging: Final = Logging(
+        model="gpt-4o",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=started,
+        litellm_call_id="local-unconfirmed-response",
+        function_id="test",
+    )
+    logging.update_environment_variables(
+        litellm_params={"metadata": metadata},
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    logging.dynamic_async_success_callbacks = [proxy.logger]
+    partial: Final = ResponsesAPIResponse(
+        id="resp_local_unconfirmed",
+        created_at=1700000000,
+        model="gpt-4o",
+        object="response",
+        status="incomplete",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=4, total_tokens=14, cost=0.0),
+    )
+    partial.hidden_params = {"usage_observation": "estimated", "response_cost": 0.0}
+    event: Final = ResponseIncompleteEvent(type="response.incomplete", response=partial)
+    await logging.dispatch_success_handlers(
+        result=event,
+        start_time=started,
+        end_time=started,
+        prefer_async_handlers=True,
+    )
+    await proxy.logger.flush_rust()
+
+    rows: Final = await proxy.rows()
+    assert len(rows) == 1
+    assert rows[0]["spend"] == 0.0
+    assert reservation.get("finalized") is not True
+
+
+@pytest.mark.asyncio
 async def test_a_failure_writes_the_released_reservation_back(proxy: Proxy) -> None:
     auth: Final = _auth(budget_reservation={"reserved_cost": 0.5, "entries": []})
 

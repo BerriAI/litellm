@@ -18,6 +18,7 @@ from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.rust import RustHandle, RustLogger, rust_logger
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.litellm_logging import unconfirmed_response_usage
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.litellm_core_utils.secret_redaction import (
     _token_redactor,  # pyright: ignore[reportPrivateUsage]  # the callback shares the process's compiled token redactor
@@ -362,7 +363,12 @@ class _SpendLogRustLogger(RustLogger):
         call: Final = getattr(view, Field.spend_log_input.value, None)
         token: Final = _SPEND_LOG_CALL.set(call if isinstance(call, SpendLogCall) else None)
         try:
-            return await super().run_rust(hook, reads, view, ctx)
+            settlement_reads: Final = (
+                reads - {Field.budget_reservation}
+                if hook is Hook.attempt_ended and unconfirmed_response_usage(_response()) is not None
+                else reads
+            )
+            return await super().run_rust(hook, settlement_reads, view, ctx)
         finally:
             _SPEND_LOG_CALL.reset(token)
 

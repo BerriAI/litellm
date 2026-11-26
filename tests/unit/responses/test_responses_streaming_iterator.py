@@ -11,6 +11,7 @@ import json
 import time
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
+from pathlib import Path
 from typing import Final, cast
 
 import httpx
@@ -610,6 +611,157 @@ def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_ser
         model="gpt-5.4-nano", messages=[{"role": "user", "content": "tell me a story"}]
     )
     assert partial.usage.total_tokens == partial.usage.input_tokens + partial.usage.output_tokens
+
+
+@pytest.fixture
+def openai_logging_with_fixed_rates(monkeypatch: pytest.MonkeyPatch) -> LitellmLogging:
+    model: Final = "gpt-5.4-nano"
+    rates: Final = {
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "cache_read_input_token_cost": 0.0001,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, rates)
+    monkeypatch.setitem(litellm.model_cost, f"openai/{model}", rates)
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="openai")
+    return logging_obj
+
+
+@pytest.mark.parametrize("additional_cost", [0.0, 0.125])
+def test_openai_disconnect_keeps_estimated_usage_but_only_bills_known_charges(
+    openai_logging_with_fixed_rates: LitellmLogging, additional_cost: float
+) -> None:
+    logging_obj: Final = openai_logging_with_fixed_rates
+    logging_obj.model_call_details["additional_response_cost"] = additional_cost
+    iterator: Final = _live_iterator(logging_obj)
+    created: Final = {**_CREATED_RESPONSE_WITH_PRIORITY_TIER, "service_tier": "default"}
+    for event in (
+        {**_CREATED_WITH_PRIORITY_TIER, "response": created},
+        _text_delta("A partial answer.", 1),
+    ):
+        iterator._process_chunk(json.dumps(event))
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None
+    usage: Final = incomplete.response.usage
+    assert usage is not None
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert usage.input_tokens_details is None
+    assert usage.cost == pytest.approx(additional_cost)
+    assert logging_obj.response_cost_calculator(incomplete) == pytest.approx(additional_cost)
+    assert logging_obj.response_cost_calculator(incomplete, ignore_stamped_cost=True) == pytest.approx(additional_cost)
+    assert usage.model_dump()["usage_observation"] == "estimated"
+    assert incomplete.response.hidden_params["usage_observation"] == "estimated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "incomplete", "disconnected"])
+@pytest.mark.parametrize("cached", [0, 9])
+async def test_openai_reported_usage_keeps_its_cache_rate(
+    openai_logging_with_fixed_rates: LitellmLogging, status: str, cached: int
+) -> None:
+    iterator: Final = _live_iterator(openai_logging_with_fixed_rates)
+    response: Final = {
+        **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+        "service_tier": "default",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "total_tokens": 12,
+            "input_tokens_details": {"cached_tokens": cached},
+        },
+    }
+    iterator._process_chunk(json.dumps({**_CREATED_WITH_PRIORITY_TIER, "response": response}))
+    iterator._process_chunk(json.dumps(_text_delta("A partial answer.", 1)))
+    if status != "disconnected":
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": f"response.{status}",
+                    "sequence_number": 2,
+                    "response": {**response, "status": status},
+                }
+            )
+        )
+    event: Final = (
+        iterator.partial_response_on_disconnect() if status == "disconnected" else iterator.completed_response
+    )
+
+    assert event is not None
+    usage: Final = event.response.usage
+    assert usage is not None
+    assert usage.cost == pytest.approx((10 - cached) * 0.001 + cached * 0.0001 + 2 * 0.002)
+    assert "usage_observation" not in usage.model_dump()
+    if status == "disconnected":
+        created: Final = iterator._created_response
+        assert created is not None and created.usage is not None
+        assert created.usage.cost is None
+    await iterator._await_pending_logging()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tokenizer_fails", [False, True], ids=["estimated", "tokenizer-error"])
+async def test_proxy_disconnect_spend_row_keeps_known_cost(
+    openai_logging_with_fixed_rates: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tokenizer_fails: bool,
+) -> None:
+    from litellm.proxy.common_request_processing import _bill_partial_streamed_spend_on_disconnect
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    class SpendRecorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.response: asyncio.Future[
+                tuple[dict[str, object], object, datetime, datetime]
+            ] = (  # mutable-ok: logging callbacks deliver a kwargs dict
+                asyncio.get_running_loop().create_future()
+            )
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],  # mutable-ok: logging callbacks deliver a kwargs dict
+            response_obj: object,
+            start_time: datetime,
+            end_time: datetime,
+        ) -> None:
+            self.response.set_result((kwargs, response_obj, start_time, end_time))
+
+    logging_obj: Final = openai_logging_with_fixed_rates
+    logging_obj.start_time = datetime(2026, 1, 1)
+    expected_spend: Final = 0.125 if tokenizer_fails else 0.0
+    logging_obj.model_call_details["additional_response_cost"] = expected_spend
+
+    recorder: Final = SpendRecorder()
+    logging_obj.dynamic_async_success_callbacks = [recorder]
+    iterator: Final = _live_iterator(logging_obj)
+    if tokenizer_fails:
+        iterator.request_data["input"] = [
+            {"role": "user", "content": [{"type": "input_image", "image_url": "", "detail": "high"}]}
+        ]
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("A partial answer.", 1)):
+        iterator._process_chunk(json.dumps(event))
+
+    assert await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, iterator)
+    assert recorder.response.done()
+    row: Final = get_logging_payload(*recorder.response.result())
+    assert row["spend"] == pytest.approx(expected_spend)
+    assert isinstance(row["total_tokens"], int)
+    if tokenizer_fails:
+        assert row["total_tokens"] == 0
+    else:
+        assert row["total_tokens"] > 0
+    assert isinstance(row["metadata"], str)
+    metadata: Final = json.loads(row["metadata"])
+    assert metadata["additional_usage_values"]["usage_observation"] == ("unknown" if tokenizer_fails else "estimated")
 
 
 def test_disconnecting_from_a_resumed_background_stream_bills_no_partial_answer():

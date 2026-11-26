@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
     UsageObservation,
+    unconfirmed_response_usage,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
@@ -648,7 +649,11 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        if self.spend_event_producer is None or not is_offloadable_success(response_obj, kwargs):
+        if (
+            self.spend_event_producer is None
+            or unconfirmed_response_usage(response_obj) is not None
+            or not is_offloadable_success(response_obj, kwargs)
+        ):
             await self._PROXY_track_cost_callback(dict(kwargs), response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
@@ -1043,7 +1048,11 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
-            budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            budget_reservation: Final = (
+                None
+                if unconfirmed_response_usage(completion_response) is not None
+                else _get_budget_reservation_from_metadata(metadata=metadata)
+            )
             if accounting is not None and (budget_reservation is not None or litellm.apply_search_free_tier):
                 accounting.write_started = True
             if defers_batch_cost(kwargs, completion_response):
