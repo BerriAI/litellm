@@ -4494,6 +4494,50 @@ async def test_a_registered_hosted_mcp_url_offers_only_the_tools_its_allowed_too
     assert [tool["name"] for tool in _item(response.output[0])["tools"]] == ["ask_question"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mirror_allowed_tools", "mirror_offered"),
+    [({"read_only": True}, ("mirror-ask_question",)), (None, ("mirror-ask_question", "mirror-delete_wiki"))],
+    ids=["read_only", "unfiltered"],
+)
+@respx.mock
+async def test_a_registered_url_listing_its_allowed_tools_leaves_another_registered_servers_tools_to_its_own_filter(
+    monkeypatch: pytest.MonkeyPatch, mirror_allowed_tools: object, mirror_offered: tuple[str, ...]
+):
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+
+    _gateway_runs_hosted_mcp(monkeypatch, ())
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    _mirror_registered(monkeypatch)
+    mcp_client.list_tools_result.return_value = ListToolsResult(
+        tools=[_ASK_TOOL.model_copy(update={"annotations": ToolAnnotations(readOnlyHint=True)}), _DELETE_TOOL]
+    )
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_answer_round(_BEDROCK_MODEL),), _BEDROCK_URL)
+    mirror_tool: Final = {
+        "type": "mcp",
+        "server_label": "mirror",
+        "server_url": "https://mirror.example.com/mcp",
+        "require_approval": "never",
+        **({} if mirror_allowed_tools is None else {"allowed_tools": mirror_allowed_tools}),
+    }
+
+    await _gateway_hosted_mcp_request(
+        _BEDROCK_MODEL,
+        _ScriptedMCPServer(),
+        {**_DEEPWIKI_TOOL, "allowed_tools": ["delete_wiki"]},
+        beside=(mirror_tool,),
+        caller=UserAPIKeyAuth(
+            api_key="sk-caller",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=["srv-deepwiki", "srv-mirror"]
+            ),
+        ),
+    )
+
+    assert sorted(_sent_tool_names(_sent_body(provider, 0))) == sorted(("deepwiki-delete_wiki", *mirror_offered))
+
+
 def _virtual_key(**permission: object) -> object:
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
 

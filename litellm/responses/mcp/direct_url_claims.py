@@ -354,7 +354,10 @@ def _gateway_tool(claim: _Claim) -> Mapping[str, object] | None:
             return tool
         case _RegisteredClaim(tool=tool, server=server):
             return MappingProxyType(
-                {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/{gateway_name(server)}"}
+                {
+                    **{key: value for key, value in tool.items() if key != "allowed_tools"},
+                    "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/{gateway_name(server)}",
+                }
             )
         case _DirectClaim():
             return None
