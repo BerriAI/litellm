@@ -545,9 +545,117 @@ def test_serialize_streaming_chunk_simple_payload():
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hi"},
+                "finish_reason": None,
             }
         ],
     }
+
+
+def _stream_chunk(delta: Delta, finish_reason: str | None = None, usage: Usage | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=delta)],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=usage,
+    )
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [
+        pytest.param(Delta(content="hi", role="assistant"), id="text"),
+        pytest.param(
+            Delta(
+                tool_calls=[
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": ""}, "index": 0}
+                ]
+            ),
+            id="tool-call",
+        ),
+        pytest.param(Delta(reasoning_content="plan"), id="reasoning"),
+    ],
+)
+def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_an_in_progress_chunk(delta: Delta) -> None:
+    chunk: Final = _stream_chunk(delta)
+    canonical: Final = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == {
+        **canonical,
+        "choices": [{**canonical["choices"][0], "finish_reason": None}],
+    }
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(None, id="text"),
+        pytest.param(Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5), id="with-usage"),
+    ],
+)
+def test_serialize_streaming_chunk_keeps_the_finish_reason_of_the_final_chunk(usage: Usage | None) -> None:
+    chunk: Final = _stream_chunk(Delta(), finish_reason="stop", usage=usage)
+
+    assert _serialize_streaming_chunk(chunk) == chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["finish_reason"] == "stop"
+
+
+def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_every_choice() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-n",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content="a")),
+            StreamingChoices(index=1, delta=Delta(), finish_reason="stop"),
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    assert [choice["finish_reason"] for choice in json.loads(_serialize_streaming_chunk(chunk))["choices"]] == [
+        None,
+        "stop",
+    ]
+
+
+def _reject_json_constant(constant: str) -> None:
+    raise AssertionError(f"chunk is not strict JSON, it holds {constant}")
+
+
+@pytest.mark.parametrize("content", [pytest.param("hi", id="utf8"), pytest.param("\ud800", id="lone-surrogate")])
+@pytest.mark.parametrize("logprob", [float("-inf"), float("inf"), float("nan")], ids=["-inf", "inf", "nan"])
+def test_serialize_streaming_chunk_sends_a_non_finite_number_as_null(content: str, logprob: float) -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-logprobs",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content),
+                logprobs={"content": [{"token": "hi", "logprob": logprob, "bytes": None, "top_logprobs": []}]},
+            )
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    choice: Final = json.loads(_serialize_streaming_chunk(chunk), parse_constant=_reject_json_constant)["choices"][0]
+
+    assert (choice["logprobs"]["content"][0]["logprob"], choice["finish_reason"]) == (None, None)
+
+
+def test_serialize_streaming_chunk_sends_no_finish_reason_on_a_choiceless_usage_chunk() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-usage",
+        choices=[],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+
+    assert _serialize_streaming_chunk(chunk) == chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
 
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
@@ -684,6 +792,7 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hello"},
+                "finish_reason": None,
             }
         ],
     }
@@ -835,6 +944,7 @@ def test_serialize_streaming_chunk_keeps_lone_surrogates_a_provider_split_across
         delta: Final = json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["delta"]
 
     assert caplog.text == ""
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["finish_reason"] is None
     assert delta["content"] == "Hi \ud83d"
     assert delta["tool_calls"][0]["id"] == "call_1"
     assert delta["tool_calls"][0]["function"] == {"name": "get_weather", "arguments": '{"city": "Par\udc00is"}'}
@@ -860,8 +970,12 @@ def test_serialize_streaming_chunk_drops_only_the_nested_value_json_cannot_encod
 
     payload: Final = json.loads(_serialize_streaming_chunk(chunk))
 
-    assert payload["choices"][0]["delta"] == {"content": "a"}
-    assert payload["choices"][1]["delta"] == {"content": "b", "provider_specific_fields": {"citations": ["ok"]}}
+    assert payload["choices"][0] == {"index": 0, "delta": {"content": "a"}, "finish_reason": None}
+    assert payload["choices"][1] == {
+        "index": 1,
+        "delta": {"content": "b", "provider_specific_fields": {"citations": ["ok"]}},
+        "finish_reason": None,
+    }
     assert payload["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
     assert payload["trace_chunk"] == {"keep": 1}
 

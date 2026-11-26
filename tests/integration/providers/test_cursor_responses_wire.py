@@ -215,7 +215,13 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                     {
                         "object": "chat.completion.chunk",
                         "model": model,
-                        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Patch inspected."}}],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": "Patch inspected."},
+                                "finish_reason": None,
+                            }
+                        ],
                     },
                     {
                         "object": "chat.completion.chunk",
@@ -381,7 +387,13 @@ def test_cursor_messages_body_uses_chat_completions_wire(
                 {
                     "object": "chat.completion.chunk",
                     "model": model,
-                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Patch inspected."}}],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "Patch inspected."},
+                            "finish_reason": None,
+                        }
+                    ],
                 },
                 {
                     "object": "chat.completion.chunk",

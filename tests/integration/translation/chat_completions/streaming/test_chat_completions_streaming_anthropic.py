@@ -104,7 +104,7 @@ CLAUDE_SONNET_5_5_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "object": "chat.completion.chunk",
                 "created": ANY,
                 "model": "anthropic/claude-sonnet-5-5",
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello."}}],
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello."}, "finish_reason": None}],
             }
         ),
         SSEFrame(

@@ -59,7 +59,7 @@ import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic.main import IncEx
-from pydantic_core import PydanticSerializationError, to_jsonable_python
+from pydantic_core import PydanticSerializationError, to_json, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -9708,6 +9708,8 @@ def _restamp_streaming_chunk_model(
 
 _JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 _JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_NULLABLE_CHAT_CHOICE_FIELDS: Final = ("finish_reason",)
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
 
 
 def _json_encodes(value: object) -> bool:
@@ -9749,25 +9751,62 @@ def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset
     return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
 
 
-def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
-    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
-    if exclude:
-        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
-    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
-    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
-
-
 def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    null_choice_fields: Final = tuple(_null_chat_choice_fields(choice) for choice in chunk.choices)
     try:
-        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
-    except PydanticSerializationError:
-        return _serialize_chat_chunk_leniently(chunk)
+        return _serialize_keeping_null_choice_fields(chunk, null_choice_fields)
+    except ValueError:
+        return _json_bytes(_with_null_choice_fields(_dump_encodable_fields(chunk), null_choice_fields))
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
     if isinstance(chunk, ModelResponseStream):
         return _serialize_chat_chunk(chunk)
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
+def _serialize_keeping_null_choice_fields(chunk: BaseModel, null_choice_fields: Sequence[Mapping[str, None]]) -> bytes:
+    if not any(null_choice_fields):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    payload: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    return _json_bytes(_with_null_choice_fields(payload, null_choice_fields))
+
+
+def _with_null_choice_fields(
+    payload: Mapping[str, object], null_choice_fields: Sequence[Mapping[str, None]]
+) -> Mapping[str, object]:
+    choices: Final = _JSON_OBJECTS.validate_python(payload.get("choices", ()))
+    return {
+        **payload,
+        "choices": [{**choice, **nulls} for choice, nulls in zip(choices, null_choice_fields, strict=True)],
+    }
+
+
+def _json_bytes(payload: Mapping[str, object]) -> bytes:
+    try:
+        return to_json(payload, inf_nan_mode="null")
+    except PydanticSerializationError:
+        return json.dumps(
+            to_jsonable_python(payload, inf_nan_mode="null"), ensure_ascii=True, separators=(",", ":")
+        ).encode()
+
+
+def _null_chat_choice_fields(choice: StreamingChoices) -> Mapping[str, None]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType(
+        {
+            field: None
+            for field in _NULLABLE_CHAT_CHOICE_FIELDS
+            if field in choice_extras and choice_extras[field] is None
+        }
+    )
+
+
+def _dump_encodable_fields(chunk: ModelResponseStream) -> Mapping[str, object]:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    return chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
 
 
 def _is_injected_stream_usage_artifact(chunk: object) -> bool:
