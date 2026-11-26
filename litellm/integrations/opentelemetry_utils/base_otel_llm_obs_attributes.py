@@ -1,6 +1,6 @@
 from abc import ABC
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -30,7 +30,7 @@ def cast_as_primitive_value_type(value: object) -> str | bool | int | float:
         return ""
 
 
-def safe_set_attribute(span: "Span", key: str, value: Any):
+def safe_set_attribute(span: "Span", key: str, value: object):
     """
     Sets a span attribute safely with OTEL-compliant primitive typing for Arize/Phoenix.
     """

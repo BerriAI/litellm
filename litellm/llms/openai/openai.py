@@ -1639,7 +1639,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str | None,
         prompt: str,
         timeout: float,
-        optional_params: Mapping[str, Any],
+        optional_params: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,

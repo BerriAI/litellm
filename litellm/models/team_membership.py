@@ -17,13 +17,17 @@ from litellm.models.budget import active_rollover_credit as calculate_rollover_c
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     user_id: str
     team_id: str
     budget_id: str | None = None
     spend: float | None = 0.0
     total_spend: float | None = 0.0
-    rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    rollover_credit: float | None = Field(default=None, exclude_if=_is_none)
     litellm_budget_table: LiteLLM_BudgetTableFull | LiteLLM_BudgetTable | None = None
 
     def active_rollover_credit(self) -> float | None:

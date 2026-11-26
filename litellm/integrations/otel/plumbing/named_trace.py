@@ -25,6 +25,7 @@ import anyio
 import anyio.to_thread
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.trace import Link, Span, SpanKind, Tracer, TracerProvider, get_current_span
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.trace_id import resolve_trace_id
@@ -89,6 +90,7 @@ _MAX_LOOKAHEAD_BYTES: Final = 16 * 1024 * 1024
 _MAX_LOOKAHEAD_BYTES_IN_FLIGHT: Final = 4 * _MAX_LOOKAHEAD_BYTES
 _LOOKAHEAD_DEADLINE_SECONDS: Final = 10.0
 _NO_BODY: Final[Mapping[str, object]] = MappingProxyType({})
+_DECODED_BODY: Final = TypeAdapter(object)
 
 
 class LookaheadBudget:
@@ -347,7 +349,7 @@ def _warn_once(reason: SkipReason) -> None:
 async def _body_named(kind: RequestBodyKind, scope: Scope, headers: Mapping[str, str], body: bytes) -> TraceNaming:
     """The trace a request's body names, parsed the way the proxy parses it and only when the body spells a trace
     key, so a request naming no trace pays one substring scan."""
-    route: Final = str(scope.get("path", ""))
+    route: Final = _route_of(scope)
     if _TRACE_KEY_MARKER not in body:
         return _named(headers, _NO_BODY, route)
     parsed: Final = await _form_object(scope, body) if kind == "form" else _json_object(body)
@@ -367,8 +369,12 @@ def _loads(body: bytes) -> object:
     try:
         import orjson
     except ImportError:
-        return json.loads(body)
-    return orjson.loads(body)
+        return _DECODED_BODY.validate_python(json.loads(body))
+    return _DECODED_BODY.validate_python(orjson.loads(body))
+
+
+def _route_of(scope: Mapping[str, object]) -> str:
+    return str(scope.get("path", ""))
 
 
 async def _form_object(scope: Scope, body: bytes) -> Mapping[str, object]:
@@ -398,6 +404,10 @@ async def _form_object(scope: Scope, body: bytes) -> Mapping[str, object]:
         await form.close()
 
 
+def _more_body_of(message: Mapping[str, object]) -> object:
+    return message.get("more_body", False)
+
+
 class _Lookahead:
     """The body read ahead of the app, held as one buffer, so a body sent in many tiny pieces costs its bytes and
     not a message per piece."""
@@ -419,7 +429,7 @@ class _Lookahead:
                 return
             piece = message.get("body", b"")
             self.held.extend(piece)
-            self.more_body = message.get("more_body", False)
+            self.more_body = _more_body_of(message)
             self.within_budget = self.hold.grow(len(piece))
 
     def taken(self) -> tuple[bytes, Receive]:
@@ -476,7 +486,7 @@ async def _read_named_trace(
     if _continues_a_trace(scope):
         return _NOT_NAMED, receive
     headers: Final = dict(Headers(scope=scope))
-    route: Final = str(scope.get("path", ""))
+    route: Final = _route_of(scope)
     kind: Final = request_body_kind(headers.get("content-type", ""))
     if scope.get("method") != "POST" or kind == "binary":
         return _named(headers, _NO_BODY, route), receive

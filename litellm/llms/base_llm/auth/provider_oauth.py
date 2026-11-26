@@ -78,8 +78,12 @@ def _secure_url(value: str | None) -> bool:
 _TokenResult = _TokenResponse | MalformedTokenResponse | TokenEndpointError | TokenTransportError
 
 
+def _content_encoding(headers: Mapping[str, str]) -> str:
+    return headers.get("content-encoding", "identity")
+
+
 def _parse_token_response(response: httpx.Response) -> _TokenResponse | MalformedTokenResponse:
-    if response.headers.get("content-encoding", "identity").lower() != "identity":
+    if _content_encoding(response.headers).lower() != "identity":
         return MalformedTokenResponse(detail="Expected an uncompressed OAuth token response")
     try:
         with BytesIO() as body:

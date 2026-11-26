@@ -3997,7 +3997,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
-            response_headers: Final = getattr(raw_response, "headers", None)
+            response_headers: Final = raw_response.headers if hasattr(raw_response, "headers") else None
             service_tier: Final = _response_service_tier(
                 _response_header(response_headers, "x-gemini-service-tier") if response_headers else None,
                 traffic_type,

@@ -16,6 +16,7 @@ from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,6 +33,8 @@ from litellm.types.utils import StandardLoggingPayload
 API_EVENT_TYPES = Literal["llm_api_success", "llm_api_failure"]
 LOG_FORMAT_TYPES = Literal["json_array", "ndjson", "single"]
 
+_COMPATIBLE_CALLBACKS: Final = TypeAdapter(dict[str, object])
+
 
 def load_compatible_callbacks() -> dict:
     """
@@ -43,7 +46,7 @@ def load_compatible_callbacks() -> dict:
     try:
         json_path: Final = os.path.join(os.path.dirname(__file__), "generic_api_compatible_callbacks.json")
         with open(json_path, "r") as f:
-            return json.load(f)
+            return _COMPATIBLE_CALLBACKS.validate_python(json.load(f))
     except Exception as e:
         verbose_logger.warning("Error loading generic_api_compatible_callbacks.json: %s", e)
         return {}
