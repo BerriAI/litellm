@@ -318,13 +318,14 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
 		ModelInfo: ModelInfo{
-			ID:          modelID,
-			DBModel:     true,
-			BaseModel:   pricingBaseModel,
-			Tier:        d.Get("tier").(string),
-			Mode:        d.Get("mode").(string),
-			TeamID:      d.Get("team_id").(string),
-			DisplayName: d.Get("display_name").(string),
+			ID:                modelID,
+			DBModel:           true,
+			BaseModel:         pricingBaseModel,
+			Tier:              d.Get("tier").(string),
+			Mode:              d.Get("mode").(string),
+			TeamID:            d.Get("team_id").(string),
+			DisplayName:       d.Get("display_name").(string),
+			ModelCapabilities: modelCapabilitiesFromResource(d),
 		},
 		Additional: make(map[string]interface{}),
 	}
@@ -348,9 +349,13 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
 
-	if isUpdate && d.HasChange("display_name") {
-		if err := patchModelDisplayName(client, modelID, d.Get("display_name").(string)); err != nil {
-			return fmt.Errorf("failed to update model display_name: %w", err)
+	if isUpdate && d.HasChanges(append([]string{"display_name"}, modelCapabilityAttributes...)...) {
+		if err := patchModelInfo(client, ModelInfoPatchFields{
+			ID:                modelID,
+			DisplayName:       d.Get("display_name").(string),
+			ModelCapabilities: modelReq.ModelInfo.ModelCapabilities,
+		}); err != nil {
+			return fmt.Errorf("failed to update model_info: %w", err)
 		}
 	}
 
@@ -361,10 +366,10 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	return retryModelRead(d, m, 5)
 }
 
-// Older proxies drop the model_info sent to /model/update, so display_name also goes through the PATCH endpoint.
-func patchModelDisplayName(client *Client, modelID, displayName string) error {
-	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
-		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
+// Older proxies drop the model_info sent to /model/update, so model_info changes also go through the PATCH endpoint.
+func patchModelInfo(client *Client, fields ModelInfoPatchFields) error {
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(fields.ID)), ModelInfoPatch{
+		ModelInfo: fields,
 	})
 	if err != nil {
 		return err
@@ -372,6 +377,53 @@ func patchModelDisplayName(client *Client, modelID, displayName string) error {
 	defer resp.Body.Close()
 	_, err = handleAPIResponse(resp, nil, client)
 	return err
+}
+
+var modelCapabilityAttributes = []string{
+	"max_input_tokens",
+	"max_output_tokens",
+	"supports_vision",
+	"supports_function_calling",
+	"supports_reasoning",
+}
+
+func modelCapabilitiesFromResource(d *schema.ResourceData) ModelCapabilities {
+	return ModelCapabilities{
+		MaxInputTokens:          configuredValue[int](d, "max_input_tokens"),
+		MaxOutputTokens:         configuredValue[int](d, "max_output_tokens"),
+		SupportsVision:          configuredValue[bool](d, "supports_vision"),
+		SupportsFunctionCalling: configuredValue[bool](d, "supports_function_calling"),
+		SupportsReasoning:       configuredValue[bool](d, "supports_reasoning"),
+	}
+}
+
+func configuredValue[T int | bool](d *schema.ResourceData, key string) *T {
+	v, ok := d.GetOkExists(key)
+	if !ok {
+		return nil
+	}
+	value := v.(T)
+	return &value
+}
+
+// /model/info fills unset capabilities from the cost map, so only attributes Terraform manages are refreshed.
+func readModelCapabilities(d *schema.ResourceData, c ModelCapabilities) {
+	setManagedValue(d, "max_input_tokens", c.MaxInputTokens)
+	setManagedValue(d, "max_output_tokens", c.MaxOutputTokens)
+	setManagedValue(d, "supports_vision", c.SupportsVision)
+	setManagedValue(d, "supports_function_calling", c.SupportsFunctionCalling)
+	setManagedValue(d, "supports_reasoning", c.SupportsReasoning)
+}
+
+func setManagedValue[T int | bool](d *schema.ResourceData, key string, value *T) {
+	if _, managed := d.GetOkExists(key); !managed {
+		return
+	}
+	if value == nil {
+		d.Set(key, nil)
+		return
+	}
+	d.Set(key, *value)
 }
 
 func resourceLiteLLMModelCreate(d *schema.ResourceData, m interface{}) error {
@@ -427,6 +479,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
 	d.Set("display_name", modelResp.ModelInfo.DisplayName)
+	readModelCapabilities(d, modelResp.ModelInfo.ModelCapabilities)
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))
