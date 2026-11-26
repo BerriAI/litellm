@@ -23,7 +23,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
     MCPToolResult,
 )
-from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.request_context import MCPRequestContext, resolve_inference_mcp_auth
 from litellm.responses.mcp.round_billing import (
     billed_for_every_round,
     first_round_billed_on_failure,
@@ -145,7 +145,7 @@ async def acompletion_with_mcp(
     raise_if_mcp_tool_choice_forces_a_gateway_server(kwargs.get("tool_choice"), mcp_tools_with_litellm_proxy, model)
 
     context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
-    user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth
+    user_api_key_auth: Final = await resolve_inference_mcp_auth(context.user_api_key_auth)
     request_tags: Final = list(context.request_tags) if context.request_tags else None
     mcp_auth_header: Final = context.mcp_auth_header
     mcp_server_auth_headers: Final = context.mcp_server_auth_headers
