@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|windows-release|redis-compat|python-310|tests-only>}"
+category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|windows-release|redis-compat|python-310>}"
 
 has_client=false
 has_backend=false
@@ -11,19 +11,8 @@ has_windows_release=false
 has_redis_compat=false
 has_python_310=false
 outside_cost_map_set=false
-has_test=false
-outside_test_set=false
 while IFS= read -r file || [ -n "$file" ]; do
   [ -n "$file" ] || continue
-  case "$file" in
-    *.md | *.mdx) : ;;
-    tests/*)
-      case "${file##*/}" in
-        test_*.py) has_test=true ;;
-        *) outside_test_set=true ;;
-      esac ;;
-    *) outside_test_set=true ;;
-  esac
   case "$file" in
     litellm/_redis.py | litellm/_redis_credential_provider.py | litellm/caching/redis_cache.py | litellm/caching/evicted_client_closer.py | tests/unit/test_redis.py | tests/integration/sdk/test_redis_cluster_iam_auth.py | tests/unit/caching/test_redis_connection_pool.py | tests/unit/caching/test_redis_cluster_cache.py | tests/unit/caching/test_evicted_client_closer.py | .github/workflows/test-unit.yml | .github/actions/detect-changes/* | .github/scripts/detect_changes.sh | .github/scripts/ci/classify_changes.sh | tests/integration/run.py | pyproject.toml | uv.lock)
       has_redis_compat=true ;;
@@ -51,9 +40,6 @@ while IFS= read -r file || [ -n "$file" ]; do
 done
 
 case "$category" in
-  tests-only)
-    { [ "$has_test" = true ] && [ "$outside_test_set" = false ]; } && echo run || echo skip
-    ;;
   cost-map-only)
     { [ "$has_cost_map" = true ] && [ "$outside_cost_map_set" = false ]; } && echo run || echo skip
     ;;

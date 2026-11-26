@@ -14,7 +14,7 @@ description: >-
 
 inputs:
   category:
-    description: "Which classification to apply: backend, client, ui, provider-harness, cost-map-only, windows-release, redis-compat, python-310 or tests-only"
+    description: "Which classification to apply: backend, client, ui, provider-harness, cost-map-only, windows-release, redis-compat or python-310"
     required: false
     default: backend
   github-token:
