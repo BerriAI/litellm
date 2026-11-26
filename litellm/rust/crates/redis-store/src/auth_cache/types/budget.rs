@@ -9,8 +9,9 @@ const SERVER_MANAGED: [&str; 2] = ["budget_reset_at", "created_at"];
 
 record! {
     /// `LiteLLM_BudgetTable.model_dump(mode="json")`, nested under `litellm_budget_table` in
-    /// [`ProjectEntry`](super::ProjectEntry) and [`EndUserEntry`](super::EndUserEntry), and the
-    /// first fields of a [`BudgetFullEntry`].
+    /// [`ProjectEntry`](super::ProjectEntry), [`EndUserEntry`](super::EndUserEntry) and
+    /// [`OrganizationEntry`](super::OrganizationEntry), and the first fields of a
+    /// [`BudgetFullEntry`].
     pub struct BudgetEntry {
         budget_id: Option<String>,
         soft_budget: Option<f64>,
