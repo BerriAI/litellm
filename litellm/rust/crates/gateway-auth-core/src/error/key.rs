@@ -53,6 +53,26 @@ pub enum KeyDenial {
     NoToken,
 }
 
+impl KeyDenial {
+    /// Every key denial refuses the credential or the request before the key authenticates.
+    pub(crate) fn failed_authentication(&self) -> bool {
+        match self {
+            Self::MissingKey
+            | Self::MalformedKey
+            | Self::UserAuthDisabled
+            | Self::Expired { .. }
+            | Self::MasterKeyOnlyRoute { .. }
+            | Self::NoDb
+            | Self::NoDbConfigured
+            | Self::NotVirtualKey { .. }
+            | Self::NotFound { .. }
+            | Self::Blocked
+            | Self::UserDeactivated { .. }
+            | Self::NoToken => true,
+        }
+    }
+}
+
 fn utc(time: Timestamp) -> String {
     let precision = match time.subsec_nanosecond() {
         0 => 0,

@@ -70,7 +70,8 @@ impl From<auth_core::Error> for Error {
                 | KeyDenial::UserDeactivated { .. },
             )
             | auth_core::Error::PremiumRequired(_)
-            | auth_core::Error::BudgetExceeded(_) => Self::Forbidden,
+            | auth_core::Error::BudgetExceeded(_)
+            | auth_core::Error::EndUserBudgetExceeded(_) => Self::Forbidden,
             auth_core::Error::Key(
                 KeyDenial::MissingKey
                 | KeyDenial::MalformedKey

@@ -21,7 +21,8 @@ from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.redact_messages import perform_redaction
 from litellm.llms.gemini.empty_image_response import UnservedImageError
-from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import mark_authentication_failure
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -4710,6 +4711,30 @@ async def test_async_post_call_failure_hook_settles_the_reservation_but_writes_n
     assert release.await_args.kwargs["budget_reservation"] is user_api_key_dict.budget_reservation
     assert len(writer.rows) == rows_written
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("marked", "rows_written"), [(False, 1), (True, 0)], ids=["refused-caller", "failed-authentication"]
+)
+async def test_async_post_call_failure_hook_writes_no_row_for_a_failed_authentication(
+    marked: bool, rows_written: int
+) -> None:
+    writer: Final = _RecordingSpendWriter()
+    refusal: Final = ProxyException(
+        message="Authentication Error, Invalid API key provided.",
+        type=ProxyErrorTypes.auth_error,
+        param=None,
+        code=401,
+    )
+    if marked:
+        mark_authentication_failure(refusal)
+    await ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)).async_post_call_failure_hook(
+        request_data={"metadata": dict[str, object]()},
+        original_exception=refusal,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route="/chat/completions"),
+    )
+    assert len(writer.rows) == rows_written
 
 class _RecordedCharges:
     def __init__(self, outcomes: tuple[bool, ...]) -> None:

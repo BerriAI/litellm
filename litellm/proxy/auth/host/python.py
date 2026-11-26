@@ -60,6 +60,7 @@ from litellm.proxy.auth.auth_checks import (
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
+from litellm.proxy.auth.auth_utils import refusals_fail_authentication
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
     EndUserRow,
@@ -80,6 +81,7 @@ from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
     LookupDegraded,
     ResolvedGrants,
+    UserGone,
     UserLookup,
     raise_public,
     user_models,
@@ -354,6 +356,9 @@ class PythonAuthHost:
             case LookupDegraded(error=error):
                 verbose_proxy_logger.debug("Session token grants not refreshed, keeping minted grants: %s", error)
                 return key
+            case UserGone():
+                with refusals_fail_authentication():
+                    raise_public(outcome)
             case _:
                 raise_public(outcome)
 

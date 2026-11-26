@@ -352,6 +352,36 @@ pub enum TeamDenial {
     NotTeamMember,
 }
 
+impl JwtDenial {
+    /// A token that fails verification, `custom_validate` or its key mapping never authenticated, and
+    /// neither did a user deactivated via SCIM. The rest refuse a caller whose token did.
+    pub(crate) fn failed_authentication(&self) -> bool {
+        match self {
+            Self::Verify(_)
+            | Self::CustomValidate
+            | Self::CustomValidateUnavailable
+            | Self::ManagedIssuerUntrusted
+            | Self::UserDeactivated { .. }
+            | Self::ManagedAgentNeedsDirectJwt
+            | Self::MappingClaimMissing { .. }
+            | Self::NoMapping { .. }
+            | Self::MappingNeedsDb { .. }
+            | Self::NoEligibleKey
+            | Self::MappingRaceVanished { .. } => true,
+            Self::Claim(_)
+            | Self::Rbac(_)
+            | Self::Team(_)
+            | Self::ManagedRouteNotAllowed
+            | Self::AgentIdentity(_)
+            | Self::UnregisteredAgent { .. }
+            | Self::GrantingTeamRouteNotAllowed
+            | Self::EmailDomainNotAllowed { .. }
+            | Self::UserNotFound { .. }
+            | Self::NoObjectId => false,
+        }
+    }
+}
+
 fn or_unset(value: Option<&str>) -> &str {
     value.unwrap_or("unset")
 }

@@ -3,6 +3,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache, lru_cache, partial
 from itertools import accumulate, chain, repeat
@@ -18,6 +19,7 @@ from litellm import Router, constants, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    AUTHENTICATION_FAILURE_MARKER,
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
@@ -91,6 +93,25 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     quiet log path.
     """
     return is_unauthorized_error(exception) and getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
+
+
+def mark_authentication_failure(exception: BaseException) -> None:
+    """Stamp a refusal made before the caller's credential authenticated, so it leaves no spend log row."""
+    setattr(exception, AUTHENTICATION_FAILURE_MARKER, True)
+
+
+def is_authentication_failure(exception: BaseException) -> bool:
+    return getattr(exception, AUTHENTICATION_FAILURE_MARKER, False) is True
+
+
+@contextmanager
+def refusals_fail_authentication() -> Iterator[None]:
+    """Marks whatever the block raises, for code that runs before the caller's credential authenticates."""
+    try:
+        yield
+    except Exception as e:
+        mark_authentication_failure(e)
+        raise
 
 
 def log_model_access_denial(exc: BaseException) -> None:

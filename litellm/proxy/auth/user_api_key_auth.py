@@ -124,8 +124,10 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
     iter_request_fallback_targets,
     log_model_access_denial,
+    mark_authentication_failure,
     normalize_request_route,
     pre_db_read_auth_checks,
+    refusals_fail_authentication,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
     request_fields_for_body_check,
@@ -1892,13 +1894,15 @@ async def _reject_from_headers_before_reading_body(
     parent_otel_span: Final[Span | None] = getattr(request.state, "parent_otel_span", None)
     if cached_key.blocked is True:
         request_data: Final = dict(await _preflight_failure_request_data(request, route, cached_key))
+        blocked: Final = ProxyException(
+            message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+        mark_authentication_failure(blocked)
         await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
-            e=ProxyException(
-                message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
-                type=ProxyErrorTypes.auth_error,
-                param=None,
-                code=status.HTTP_401_UNAUTHORIZED,
-            ),
+            e=blocked,
             request=request,
             request_data=request_data,
             route=route,
@@ -1972,12 +1976,9 @@ def _custom_auth_token_for_this_request(response: object) -> UserAPIKeyAuth:
 async def _custom_auth(
     request: Request,
     api_key: str,
-    request_data: dict[str, object],
-    route: str,
-    parent_otel_span: Span | None,
     user_custom_auth: Callable[..., Awaitable[object]] | None,
 ) -> UserAPIKeyAuth | str | None:
-    """The identity custom auth vouched for, a key it handed back to authenticate with instead, or ``None``
+    """The token custom auth vouched for, a key it handed back to authenticate with instead, or ``None``
     when enterprise custom auth declined and the request keeps its own token."""
     if enterprise_custom_auth is not None:
         with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
@@ -1988,22 +1989,19 @@ async def _custom_auth(
             return response
         if not isinstance(response, UserAPIKeyAuth):
             return None
-        return await _custom_auth_identity(response, request, request_data, route, parent_otel_span)
+        return _custom_auth_token_for_this_request(response)
     if user_custom_auth is None:
         return None
-    return await _custom_auth_identity(
-        await user_custom_auth(request=request, api_key=api_key), request, request_data, route, parent_otel_span
-    )
+    return _custom_auth_token_for_this_request(await user_custom_auth(request=request, api_key=api_key))
 
 
 async def _custom_auth_identity(
-    response: object,
+    token: UserAPIKeyAuth,
     request: Request,
     request_data: dict[str, object],
     route: str,
     parent_otel_span: Span | None,
 ) -> UserAPIKeyAuth:
-    token: Final = _custom_auth_token_for_this_request(response)
     validated: Final = (
         await _run_post_custom_auth_checks(
             valid_token=token,
@@ -2030,11 +2028,12 @@ async def _core_outcome(
 ) -> "RustAuthOutcome":
     match path:
         case RustPlan.Key:
-            key: Final = (
-                api_key
-                if auth_request.from_custom_auth
-                else pass_through_key(request, auth_request.route, pass_through_endpoints, api_key)
-            )
+            with refusals_fail_authentication():
+                key: Final = (
+                    api_key
+                    if auth_request.from_custom_auth
+                    else pass_through_key(request, auth_request.route, pass_through_endpoints, api_key)
+                )
             return await core.drive(RustAuth.authenticate_key(auth_request, key, settings), host)
         case RustPlan.Jwt | RustPlan.JwtWithOperatorCode:
             return await core.drive(RustAuth.authenticate_jwt(auth_request, settings), host)
@@ -2066,48 +2065,49 @@ async def user_api_key_auth_builder(
     denied_key: UserAPIKeyAuth | None = None  # rebind-ok: the key a denied request had resolved, for the failure log
 
     try:
-        with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
-            await pre_db_read_auth_checks(
-                request_data=request_data,
-                request=request,
+        with refusals_fail_authentication():
+            with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
+                await pre_db_read_auth_checks(
+                    request_data=request_data,
+                    request=request,
+                    route=route,
+                    defer_team_checks=defer_team_checks,
+                )
+            pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
+            ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
+            api_key, passed_in_key = get_api_key(
+                custom_litellm_key_header=custom_litellm_key_header,
+                api_key=api_key,
+                azure_api_key_header=azure_api_key_header,
+                anthropic_api_key_header=anthropic_api_key_header,
+                google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+                azure_apim_header=azure_apim_header,
+                pass_through_endpoints=pass_through_endpoints,
                 route=route,
-                defer_team_checks=defer_team_checks,
-            )
-        pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
-        ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        api_key, passed_in_key = get_api_key(
-            custom_litellm_key_header=custom_litellm_key_header,
-            api_key=api_key,
-            azure_api_key_header=azure_api_key_header,
-            anthropic_api_key_header=anthropic_api_key_header,
-            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
-            azure_apim_header=azure_apim_header,
-            pass_through_endpoints=pass_through_endpoints,
-            route=route,
-            request=request,
-        )
-        custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
-        if custom_litellm_key_header_name is not None and custom_litellm_key_header_name in request.headers:
-            api_key = get_api_key_from_custom_header(
                 request=request,
-                custom_litellm_key_header_name=custom_litellm_key_header_name,
             )
+            custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
+            if custom_litellm_key_header_name is not None and custom_litellm_key_header_name in request.headers:
+                api_key = get_api_key_from_custom_header(
+                    request=request,
+                    custom_litellm_key_header_name=custom_litellm_key_header_name,
+                )
 
-        if open_telemetry_logger is not None:
-            # Reuse the span created by user_api_key_auth (before body parse)
-            # so it survives _read_request_body failures. For callers that
-            # bypass user_api_key_auth (e.g. MCP), create it lazily.
-            _ensure_parent_otel_span_on_request_state(request)
-            parent_otel_span = getattr(request.state, "parent_otel_span", None)
+            if open_telemetry_logger is not None:
+                # Reuse the span created by user_api_key_auth (before body parse)
+                # so it survives _read_request_body failures. For callers that
+                # bypass user_api_key_auth (e.g. MCP), create it lazily.
+                _ensure_parent_otel_span_on_request_state(request)
+                parent_otel_span = getattr(request.state, "parent_otel_span", None)
 
-        settings: Final = core.proxy_settings()
-        custom: Final = (
-            await _custom_auth(request, api_key, request_data, route, parent_otel_span, user_custom_auth)
-            if enterprise_custom_auth is not None or user_custom_auth is not None
-            else None
-        )
+            settings: Final = core.proxy_settings()
+            custom: Final = (
+                await _custom_auth(request, api_key, user_custom_auth)
+                if enterprise_custom_auth is not None or user_custom_auth is not None
+                else None
+            )
         if isinstance(custom, UserAPIKeyAuth):
-            return custom
+            return await _custom_auth_identity(custom, request, request_data, route, parent_otel_span)
         handed_key: Final = isinstance(custom, str)
         if isinstance(custom, str):
             api_key = custom  # rebind-ok: custom auth handed back the key to authenticate with
@@ -2122,13 +2122,16 @@ async def user_api_key_auth_builder(
         )
         match RustAuth.plan(auth_request, settings):
             case RustDenial() as denial:
-                raise auth_denial.denial_error(denial)
+                with refusals_fail_authentication():
+                    raise auth_denial.denial_error(denial)
             case RustPlan.Public:
                 return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
             case RustPlan.OAuth2Introspection:
-                return await Oauth2Handler.check_oauth2_token(token=api_key)
+                with refusals_fail_authentication():
+                    return await Oauth2Handler.check_oauth2_token(token=api_key)
             case RustPlan.OAuth2Proxy:
-                return await handle_oauth2_proxy_request(request=request)
+                with refusals_fail_authentication():
+                    return await handle_oauth2_proxy_request(request=request)
             case RustPlan.PassThroughOpen:
                 return UserAPIKeyAuth()
             case plan:
@@ -3911,12 +3914,14 @@ async def _run_post_custom_auth_checks(
         if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
             expiry_time = expiry_time.replace(tzinfo=timezone.utc)
         if expiry_time < current_time:
-            raise ProxyException(
+            expired: Final = ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                 type=ProxyErrorTypes.expired_key,
                 code=status.HTTP_401_UNAUTHORIZED,
                 param=(abbreviate_api_key(api_key=valid_token.token) if valid_token.token else ""),
             )
+            mark_authentication_failure(expired)
+            raise expired
 
     if general_settings.get("custom_auth_run_common_checks", False):
         await normalize_model_for_auth(request_data, valid_token, request, route)

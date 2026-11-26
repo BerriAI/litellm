@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import litellm
+from litellm.proxy.auth.auth_utils import mark_authentication_failure
 from litellm.proxy.auth.host.answer import answer
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.rust_bridge._native import (
@@ -23,6 +24,29 @@ if TYPE_CHECKING:
     from litellm.proxy.auth.host.python import PythonAuthHost
 
 TEAM_HEADER: Final = "x-litellm-team-id"
+
+PRE_AUTHENTICATION_STEPS: Final = (
+    RustAuthStep.CachedKey,
+    RustAuthStep.DbKey,
+    RustAuthStep.EvictKey,
+    RustAuthStep.ValidatedEndUserId,
+    RustAuthStep.PrefetchIdentity,
+    RustAuthStep.EndUser,
+    RustAuthStep.FetchJson,
+    RustAuthStep.FetchUserinfo,
+    RustAuthStep.CachedDocument,
+    RustAuthStep.CacheDocument,
+    RustAuthStep.CustomValidate,
+    RustAuthStep.KeyMappingHash,
+    RustAuthStep.CachedKeyMapping,
+    RustAuthStep.CacheKeyMapping,
+    RustAuthStep.ForgetKeyMapping,
+    RustAuthStep.KeyByHash,
+    RustAuthStep.ReusableKeyHash,
+    RustAuthStep.CreateKeyMapping,
+)
+"""The host steps that run before the caller's credential authenticates: reading the key, the end user read
+before it, the JWT's signing keys and `custom_validate`, and the key a JWT maps to."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +150,8 @@ async def drive(call: RustAuth, host: PythonAuthHost) -> RustAuthOutcome:
             await answer(call, step, host)
         except Exception as error:
             failure = error
+            if isinstance(step, PRE_AUTHENTICATION_STEPS):
+                mark_authentication_failure(error)
             call.fail()
         try:
             step = call.resume()

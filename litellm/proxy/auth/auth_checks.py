@@ -200,6 +200,7 @@ from .auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    mark_authentication_failure,
     request_dispatched_to_pass_through_endpoint,
     request_fallback_model_names,
 )
@@ -4395,7 +4396,11 @@ class ExperimentalUIJWTToken:
         try:
             return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
         except Exception as e:
-            raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
+            undecodable: Final = Exception(
+                f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}"
+            )
+            mark_authentication_failure(undecodable)
+            raise undecodable
 
 
 async def load_key_object(

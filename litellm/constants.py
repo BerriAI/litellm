@@ -1809,6 +1809,7 @@ INVALID_API_KEY_ERROR_MESSAGE: Final = "Authentication Error, Invalid API key pr
 # provenance. Message text is caller-influenceable on other 401s, so it must not
 # be used to classify.
 INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
+AUTHENTICATION_FAILURE_MARKER: Final = "_litellm_authentication_failure"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
