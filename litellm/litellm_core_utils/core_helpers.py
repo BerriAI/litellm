@@ -388,6 +388,11 @@ def require_get(value: object) -> SupportsGet:
     return require_attributes(value, SupportsGet, "get")
 
 
+def str_param(params: SupportsGet, key: str) -> str | None:
+    value: Final = params.get(key)
+    return value if isinstance(value, str) else None
+
+
 def iter_items(value: object) -> Iterable[object]:
     listed: Final = as_object_list(value)
     if listed is not None:
