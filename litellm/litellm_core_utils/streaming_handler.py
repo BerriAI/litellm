@@ -1047,7 +1047,7 @@ class CustomStreamWrapper:
                     logprobs = None
 
             usage = getattr(str_line, "usage", None)
-            choice_index: Final = _upstream_choice_index(str_line)
+            choice_index: Final = _upstream_choice_index(cast(object, str_line))  # cast-ok: widens the untyped chunk
 
             return {
                 "text": text,
