@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream::BoxStream};
+use litellm_cost::adjust::Margin;
 use litellm_cost::candidates::{AdjustFacts, CallIdentity, Named, PricingTable, TokenCall, priced};
 use litellm_cost::query::TokenUsage;
 use litellm_cost::receipt::Receipt;
@@ -100,6 +101,12 @@ pub fn price_call<T: PricingTable + ?Sized>(
     priced(table, call.token_call(at), None::<fn(&str) -> T::Row>)
 }
 
+/// The quantities a call is priced on. A `free` call costs nothing at all, the operator's fixed margin included
+struct Billed {
+    metered: Metered,
+    free: bool,
+}
+
 /// The refusal categories Anthropic bills before any output
 /// (<https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed>)
 const REFUSALS_BILLED_BEFORE_OUTPUT: [&str; 3] = ["bio", "frontier_llm", "reasoning_extraction"];
@@ -158,7 +165,8 @@ impl CallPricing {
         }
     }
 
-    fn priced(&self, metered: Metered, response_model: Option<String>) -> Option<PricedCost> {
+    fn priced(&self, billed: Billed, response_model: Option<String>) -> Option<PricedCost> {
+        let Billed { metered, free } = billed;
         let service_tier = billable_tier(
             self.requested_tier.as_deref(),
             metered.served_tier.as_deref(),
@@ -171,6 +179,15 @@ impl CallPricing {
             usage: metered.usage,
             service_tier: service_tier.clone(),
         })?;
+        let receipt = if free {
+            Receipt {
+                margin: Margin::default(),
+                total: 0.0,
+                ..receipt
+            }
+        } else {
+            receipt
+        };
         Some(PricedCost {
             receipt,
             service_tier,
@@ -179,15 +196,21 @@ impl CallPricing {
     }
 
     /// The billed quantities of `usage` on an answer that stopped as `stop` says
-    fn billed(&self, usage: &MessagesUsage, stop: &Stop, context: UsageContext) -> Option<Metered> {
+    fn billed(&self, usage: &MessagesUsage, stop: &Stop, context: UsageContext) -> Option<Billed> {
         let metered = metered(usage, context)?;
         if self.provider == "anthropic" && stop.is_unbilled_refusal(usage) {
-            return Some(Metered {
-                usage: TokenUsage::default(),
-                ..metered
+            return Some(Billed {
+                metered: Metered {
+                    usage: TokenUsage::default(),
+                    ..metered
+                },
+                free: true,
             });
         }
-        Some(metered)
+        Some(Billed {
+            metered,
+            free: false,
+        })
     }
 
     /// The cost of a message body
@@ -397,11 +420,14 @@ impl StreamWatch {
                 self.pricing
                     .billed(&usage, &self.stop, self.pricing.context(self.thinking))
             })
-            .and_then(|metered| {
+            .and_then(|billed| {
                 self.pricing.priced(
-                    Metered {
-                        served_tier: None,
-                        ..metered
+                    Billed {
+                        metered: Metered {
+                            served_tier: None,
+                            ..billed.metered
+                        },
+                        ..billed
                     },
                     self.response_model.clone(),
                 )
@@ -760,6 +786,48 @@ mod tests {
             panic!("a refusal with usage is priced, got {cost:?}");
         };
         assert_eq!(priced.receipt.total > 0.0, billed);
+    }
+
+    /// Prices as [`Recording`] does, plus the fixed fee an operator's `fixed_amount` margin adds to every call
+    struct FixedFee;
+
+    impl Pricing for FixedFee {
+        fn price(&self, call: &PricedCall) -> Option<Receipt> {
+            let priced = Receipt::of_total(total(&call.usage));
+            Some(Receipt {
+                margin: Margin {
+                    percent: 0.0,
+                    fixed: 0.5,
+                    total: 0.5,
+                },
+                total: priced.total + 0.5,
+                ..priced
+            })
+        }
+    }
+
+    #[rstest]
+    #[case::unbilled(refusal_details(Some("cyber")), 0.0)]
+    #[case::billed(refusal_details(Some("bio")), 0.5)]
+    fn an_unbilled_refusal_carries_no_fixed_margin(
+        #[case] stop_details: Value,
+        #[case] margin: f64,
+    ) {
+        let pricing = CallPricing::new(
+            Arc::new(FixedFee),
+            PricingIdentity::default(),
+            "anthropic".into(),
+            "requested-model".into(),
+            RequestedPricing::default(),
+        );
+
+        let cost = pricing.message(&refusal_body(&stop_details, 0));
+
+        let Cost::Priced(priced) = cost else {
+            panic!("a refusal with usage is priced, got {cost:?}");
+        };
+        assert_eq!(priced.receipt.margin.total, margin);
+        assert_eq!(priced.receipt.total > 0.0, margin > 0.0);
     }
 
     fn refusal_stream(category: &str) -> String {

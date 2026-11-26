@@ -13724,6 +13724,10 @@ def _refused_chat_completion(stop_fields: Mapping[str, object], output_tokens: i
     )
 
 
+def _refused_chat_completion_dict(stop_fields: Mapping[str, object], output_tokens: int) -> dict[str, object]:
+    return _refused_chat_completion(stop_fields, output_tokens).model_dump()
+
+
 def _refused_messages_body(stop_fields: Mapping[str, object], output_tokens: int) -> dict[str, object]:
     return {
         "id": "msg_01",
@@ -13757,12 +13761,15 @@ def _refused_messages_body(stop_fields: Mapping[str, object], output_tokens: int
         pytest.param(_refusal_stop_fields("cyber"), 7, "anthropic", True, id="after-partial-output"),
         pytest.param({}, 0, "anthropic", True, id="not-a-refusal"),
         pytest.param(_refusal_stop_fields("cyber"), 0, "bedrock", True, id="another-platform"),
+        pytest.param(_refusal_stop_fields("cyber"), 0, None, False, id="provider-read-from-the-model"),
+        pytest.param(_refusal_stop_fields("bio"), 0, None, True, id="bio-with-provider-read-from-the-model"),
     ],
 )
 @pytest.mark.parametrize(
     ("build_response", "call_type"),
     [
         pytest.param(_refused_chat_completion, "acompletion", id="chat-completion"),
+        pytest.param(_refused_chat_completion_dict, "acompletion", id="chat-completion-as-a-dict"),
         pytest.param(_refused_messages_body, "anthropic_messages", id="messages-body"),
     ],
 )
@@ -13772,7 +13779,7 @@ def test_completion_cost_charges_an_anthropic_refusal_only_where_anthropic_bills
     call_type: Literal["acompletion", "anthropic_messages"],
     stop_fields: Mapping[str, object],
     output_tokens: int,
-    provider: str,
+    provider: str | None,
     billed: bool,
 ) -> None:
     cost: Final = completion_cost(

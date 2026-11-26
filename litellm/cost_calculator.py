@@ -2006,20 +2006,46 @@ def _image_response_cost(
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+class _DumpedChatMessage(TypedDict, total=False):
+    provider_specific_fields: ReadOnly[Mapping[str, object] | None]
+
+
+class _DumpedChatChoice(TypedDict, total=False):
+    message: ReadOnly[_DumpedChatMessage]
+
+
+_DUMPED_CHAT_CHOICES: Final[TypeAdapter[Sequence[_DumpedChatChoice]]] = TypeAdapter(Sequence[_DumpedChatChoice])
+
+
 def _stop_fields_of(completion_response: object) -> Mapping[str, object]:
     """The Anthropic ``stop_reason`` and ``stop_details`` of a response: a Messages body carries them itself, a chat
     completion on its first choice's ``provider_specific_fields``."""
     if isinstance(completion_response, ModelResponse):
         message: Final = next((choice.message for choice in completion_response.choices), None)
         return as_str_mapping(attribute_or_none(message, "provider_specific_fields")) or _NO_HIDDEN_PARAMS
-    return as_str_mapping(completion_response) or _NO_HIDDEN_PARAMS
+    body: Final = as_str_mapping(completion_response) or _NO_HIDDEN_PARAMS
+    if "choices" not in body:
+        return body
+    try:
+        choices: Final = _DUMPED_CHAT_CHOICES.validate_python(body["choices"])
+    except ValidationError:
+        return _NO_HIDDEN_PARAMS
+    return next((choice.get("message", {}).get("provider_specific_fields") for choice in choices), None) or (
+        _NO_HIDDEN_PARAMS
+    )
 
 
 def _is_unbilled_anthropic_refusal(
-    completion_response: object, custom_llm_provider: object, usage: Usage | None
+    completion_response: object, model: str | None, custom_llm_provider: str | None, usage: Usage | None
 ) -> bool:
-    provider: Final = custom_llm_provider or _hidden_params_of(completion_response).get("custom_llm_provider")
-    if provider != "anthropic" or usage is None:
+    if usage is None:
+        return False
+    hidden_provider: Final = _hidden_params_of(completion_response).get("custom_llm_provider")
+    provider: Final = _get_provider_for_cost_calc(
+        model=model,
+        custom_llm_provider=custom_llm_provider or (hidden_provider if isinstance(hidden_provider, str) else None),
+    )
+    if provider != "anthropic":
         return False
     return is_unbilled_anthropic_refusal(_stop_fields_of(completion_response), usage.completion_tokens or 0)
 
@@ -2272,7 +2298,7 @@ def completion_cost(
             _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
-        if _is_unbilled_anthropic_refusal(completion_response, custom_llm_provider, provider_usage_object):
+        if _is_unbilled_anthropic_refusal(completion_response, model, custom_llm_provider, provider_usage_object):
             return 0.0
 
         explicit_tier: Final = _normalize_service_tier(service_tier)
@@ -3770,7 +3796,7 @@ def batch_cost_calculator(
                     **{key: value for key, value in deployment_info.items() if value is not None},
                 }
         except Exception:
-            return 0.0
+            pass
 
     if not model_info:
         return 0.0, 0.0
