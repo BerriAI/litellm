@@ -1,5 +1,6 @@
 import { Edit, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
 import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
@@ -21,6 +22,7 @@ import {
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 import { getDefaultTeamSettings, updateDefaultTeamSettings, Organization } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
@@ -29,6 +31,8 @@ import { toast } from "@/lib/toast";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
+import { emptyTeamDefaultSettings, teamDefaultSettingsToFields } from "./team_sso_settings_form/mapper";
+import { teamDefaultSettingsSchema, type TeamDefaultSettingsFields } from "./team_sso_settings_form/schema";
 
 interface TeamSSOSettingsProps {
   accessToken: string | null;
@@ -96,35 +100,22 @@ const getOrganizationLabel = (organizationId: string, organizations: Organizatio
   return organization?.organization_alias ? `${organization.organization_alias} (${organizationId})` : organizationId;
 };
 
-interface SettingsValues {
-  max_budget: number | null;
-  budget_duration: string | null;
-  tpm_limit: number | null;
-  rpm_limit: number | null;
-  models: string[];
-  team_member_permissions: string[];
-  organization_id: string | null;
-  access_group_ids: string[];
-}
-
-const DEFAULT_VALUES: SettingsValues = {
-  max_budget: null,
-  budget_duration: null,
-  tpm_limit: null,
-  rpm_limit: null,
-  models: [],
-  team_member_permissions: [],
-  organization_id: null,
-  access_group_ids: [],
-};
-
 const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const [loading, setLoading] = useState<boolean>(true);
-  const [values, setValues] = useState<SettingsValues>(DEFAULT_VALUES);
+  const [values, setValues] = useState<TeamDefaultSettingsFields>(emptyTeamDefaultSettings);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [editedValues, setEditedValues] = useState<SettingsValues>(DEFAULT_VALUES);
+  const form = useZodForm(teamDefaultSettingsSchema, { defaultValues: emptyTeamDefaultSettings });
+  const { control } = form;
+  const { field: maxBudget } = useController({ control, name: "max_budget" });
+  const { field: budgetDuration } = useController({ control, name: "budget_duration" });
+  const { field: tpmLimit } = useController({ control, name: "tpm_limit" });
+  const { field: rpmLimit } = useController({ control, name: "rpm_limit" });
+  const { field: organizationId } = useController({ control, name: "organization_id" });
+  const { field: accessGroupIds } = useController({ control, name: "access_group_ids" });
+  const { field: models } = useController({ control, name: "models" });
+  const { field: teamMemberPermissions } = useController({ control, name: "team_member_permissions" });
   const [saving, setSaving] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<boolean>(false);
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
@@ -141,9 +132,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
 
       try {
         const data = await getDefaultTeamSettings(accessToken);
-        const fetched = { ...DEFAULT_VALUES, ...(data.values || {}) };
+        const fetched = teamDefaultSettingsToFields(data.values);
         setValues(fetched);
-        setEditedValues(fetched);
+        form.reset(fetched);
       } catch (error) {
         console.error("Error fetching team SSO settings:", error);
         setFetchError(true);
@@ -154,17 +145,17 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
     };
 
     fetchSettings();
-  }, [accessToken, t]);
+  }, [accessToken, t, form]);
 
   const handleSave = async () => {
     if (!accessToken) return;
 
     setSaving(true);
     try {
-      const updatedSettings = await updateDefaultTeamSettings(accessToken, editedValues);
-      const newValues = { ...DEFAULT_VALUES, ...(updatedSettings.settings || {}) };
+      const updatedSettings = await updateDefaultTeamSettings(accessToken, form.getValues());
+      const newValues = teamDefaultSettingsToFields(updatedSettings.settings);
       setValues(newValues);
-      setEditedValues(newValues);
+      form.reset(newValues);
       setIsEditing(false);
       toast.success(t("teams.ssoSettings.toasts.updated"));
     } catch (error) {
@@ -177,11 +168,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
 
   const handleCancel = () => {
     setIsEditing(false);
-    setEditedValues(values);
-  };
-
-  const update = <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => {
-    setEditedValues((prev) => ({ ...prev, [key]: value }));
+    form.reset(values);
   };
 
   if (loading) {
@@ -255,9 +242,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                     type="number"
                     step="any"
                     min={0}
-                    value={editedValues.max_budget ?? ""}
+                    value={maxBudget.value ?? ""}
                     onChange={(event) =>
-                      update("max_budget", event.target.value === "" ? null : Number(event.target.value))
+                      maxBudget.onChange(event.target.value === "" ? null : Number(event.target.value))
                     }
                     placeholder={t("teams.ssoSettings.notSet")}
                     aria-label={t("teams.ssoSettings.fields.maxBudget.label")}
@@ -275,8 +262,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               }
               editContent={
                 <BudgetDurationDropdown
-                  value={editedValues.budget_duration || null}
-                  onChange={(v) => update("budget_duration", v ?? null)}
+                  value={budgetDuration.value || null}
+                  onChange={(v) => budgetDuration.onChange(v ?? null)}
                   className="max-w-80"
                 />
               }
@@ -292,10 +279,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                   className="max-w-80"
                   type="number"
                   step={1}
-                  value={editedValues.tpm_limit ?? ""}
-                  onChange={(event) =>
-                    update("tpm_limit", event.target.value === "" ? null : Number(event.target.value))
-                  }
+                  value={tpmLimit.value ?? ""}
+                  onChange={(event) => tpmLimit.onChange(event.target.value === "" ? null : Number(event.target.value))}
                   placeholder={t("teams.ssoSettings.notSet")}
                   min={0}
                   aria-label={t("teams.ssoSettings.fields.tpmLimit.label")}
@@ -313,10 +298,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                   className="max-w-80"
                   type="number"
                   step={1}
-                  value={editedValues.rpm_limit ?? ""}
-                  onChange={(event) =>
-                    update("rpm_limit", event.target.value === "" ? null : Number(event.target.value))
-                  }
+                  value={rpmLimit.value ?? ""}
+                  onChange={(event) => rpmLimit.onChange(event.target.value === "" ? null : Number(event.target.value))}
                   placeholder={t("teams.ssoSettings.notSet")}
                   min={0}
                   aria-label={t("teams.ssoSettings.fields.rpmLimit.label")}
@@ -347,8 +330,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                   <OrganizationDropdown
                     organizations={organizations}
                     loading={isOrganizationsLoading}
-                    value={editedValues.organization_id ?? undefined}
-                    onChange={(organizationId) => update("organization_id", organizationId || null)}
+                    value={organizationId.value ?? undefined}
+                    onChange={(id) => organizationId.onChange(id || null)}
                     placeholder={t("teams.ssoSettings.fields.organization.placeholder")}
                   />
                 </div>
@@ -363,8 +346,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               editContent={
                 <div className="*:w-full">
                   <AccessGroupSelector
-                    value={editedValues.access_group_ids || []}
-                    onChange={(v) => update("access_group_ids", v)}
+                    value={accessGroupIds.value || []}
+                    onChange={accessGroupIds.onChange}
                     placeholder={t("teams.ssoSettings.fields.accessGroups.placeholder")}
                   />
                 </div>
@@ -379,8 +362,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               editContent={
                 <div className="*:w-full">
                   <ModelSelect
-                    value={editedValues.models || []}
-                    onChange={(v) => update("models", v)}
+                    value={models.value || []}
+                    onChange={models.onChange}
                     context="global"
                     options={{ includeSpecialOptions: true }}
                   />
@@ -397,8 +380,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                 <Combobox
                   multiple
                   items={PERMISSION_OPTIONS}
-                  value={editedValues.team_member_permissions || []}
-                  onValueChange={(permissions: string[]) => update("team_member_permissions", permissions)}
+                  value={teamMemberPermissions.value || []}
+                  onValueChange={(permissions: string[]) => teamMemberPermissions.onChange(permissions)}
                 >
                   <ComboboxChips render={<div ref={anchor} />}>
                     <ComboboxValue>
