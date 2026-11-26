@@ -189,7 +189,7 @@ class SkillsInjectionHook(CustomLogger):
         cache: DualCache,
         data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Process skills from container.skills before the LLM call.
 

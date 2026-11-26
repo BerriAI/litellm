@@ -154,7 +154,7 @@ class AimGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
         # /embeddings carries ``input`` — documents being indexed, not a prompt — which
         # the flatten lifts into synthetic chat messages. A verdict on that text then

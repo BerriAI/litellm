@@ -59,7 +59,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -93,7 +93,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         query: str | list[str],
         optional_params: dict,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform Search request to Firecrawl API format.
 

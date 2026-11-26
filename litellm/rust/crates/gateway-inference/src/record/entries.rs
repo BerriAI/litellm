@@ -1,11 +1,12 @@
 //! What the gateway knows of one call so far, as typed entries. How a callback reads and writes
 //! them by contract field is the callbacks' own view (`gateway/src/callbacks/fields.rs`).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
-use crate::{CallType, ServedCall};
+use super::{AttemptRecord, ServedDeployment};
+use crate::{CallType, ServedCall, headers::Routing};
 
 const MODEL: &str = "model";
 const STREAM: &str = "stream";
@@ -42,6 +43,35 @@ impl Request {
     }
 }
 
+/// A header added to a response whose head was already written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the response's head was already written")]
+pub struct HeadSent;
+
+/// The headers callbacks and Rust code add to the response, in the order they were added, until
+/// its head is written. After that the bag is closed and an add is refused.
+#[derive(Default)]
+struct ResponseHeaders {
+    added: Map<String, Value>,
+    /// Headers the response carries only when nothing else set one of the same name, such as the
+    /// model group's remaining usage.
+    defaults: Map<String, Value>,
+    sent: bool,
+}
+
+/// What the response to a call that ended on an error tells of how it ended.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ErrorResponse {
+    /// The error was raised inside the route's handler, past the checks the proxy makes before
+    /// it, so its response carries the proxy's error headers.
+    pub in_handler: bool,
+    /// The timeout of the provider attempt the call ended on, `None` when no provider attempt
+    /// raised the error.
+    pub timeout: Option<Duration>,
+    /// The provider's response headers on the error the call ended on.
+    pub provider_headers: Vec<(String, String)>,
+}
+
 /// How a call ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ended {
@@ -60,21 +90,45 @@ pub struct Charged {
 
 /// One call as it stands.
 pub struct CallState {
-    call_type: Option<CallType>,
-    call_id: Option<String>,
-    charged: Charged,
+    /// The route the call came in on, which the route names once it runs.
+    pub call_type: Option<CallType>,
+    /// The request's `x-litellm-call-id`, which the route names once it runs.
+    pub call_id: Option<String>,
+    /// Python's `litellm_trace_id`, which groups the call's spend log row as its session.
+    pub trace_id: String,
+    /// Who the call is charged to, which the callbacks name once they begin.
+    pub charged: Charged,
     start: SystemTime,
     /// When the pre-call hook handed the body back for routing, Python's `api_call_start_time`.
-    api_call_start: Option<SystemTime>,
+    pub api_call_start: Option<SystemTime>,
     end: Option<SystemTime>,
-    /// When the served stream's first event arrived, as a stream held before it was answered
-    /// read it.
-    first_event: Option<SystemTime>,
+    /// When the served stream's first event arrived, when the stream was held before it was
+    /// responded to.
+    pub first_event: Option<SystemTime>,
+    started: Instant,
     request: Request,
-    rate_limit_statuses: Option<Value>,
-    response_headers: Map<String, Value>,
+    pub rate_limit_statuses: Option<Value>,
+    response_headers: ResponseHeaders,
     served: Option<ServedCall>,
     ended: Option<Ended>,
+    routing: Option<Routing>,
+    /// The deployment that served the call, which `CallState::routed` writes.
+    pub served_deployment: Option<ServedDeployment>,
+    /// What the attempt that served the call recorded, which `CallState::routed` writes.
+    pub attempt: Option<AttemptRecord>,
+    /// What each attempt that failed recorded, in the order they failed. A call that ended on an
+    /// error has every attempt here.
+    pub failed_attempts: Vec<AttemptRecord>,
+    /// How the call ended, for a call that ended on an error, whose response names only what
+    /// [`CallState::respond_with_error`] was told.
+    error_response: Option<ErrorResponse>,
+    /// Whether the call's attempts run under a deployment's stream timeout, by the route's own
+    /// rule.
+    pub stream_timeout: bool,
+    /// The served response is a stream, whose head goes out before its body.
+    pub stream_response: bool,
+    /// The time the callbacks spent on the call's hooks so far.
+    pub callback_time: Duration,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -84,61 +138,74 @@ pub fn unix(at: SystemTime) -> f64 {
 }
 
 impl CallState {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new(trace_id: String) -> Self {
         Self {
             call_type: None,
             call_id: None,
+            trace_id,
             charged: Charged::default(),
             start: SystemTime::now(),
             api_call_start: None,
             end: None,
             first_event: None,
+            started: Instant::now(),
             request: Request::Named {
                 model: None,
                 stream: false,
             },
             rate_limit_statuses: None,
-            response_headers: Map::new(),
+            response_headers: ResponseHeaders::default(),
             served: None,
             ended: None,
+            routing: None,
+            served_deployment: None,
+            attempt: None,
+            failed_attempts: Vec::new(),
+            error_response: None,
+            stream_timeout: false,
+            stream_response: false,
+            callback_time: Duration::ZERO,
         }
     }
 
-    /// The route the call came in on, which the route names once it runs.
-    pub fn serve_as(&mut self, call_type: CallType) {
-        self.call_type = Some(call_type);
+    /// What the router did for the call once it served it, the deployment that served it and
+    /// what the served attempt recorded. An attempt that failed is in [`Self::failed_attempts`]
+    /// instead, a held stream that failed before it sent content among them.
+    pub fn routed(
+        &mut self,
+        routing: Routing,
+        deployment: Option<ServedDeployment>,
+        attempt: AttemptRecord,
+    ) {
+        self.routing = Some(routing);
+        self.served_deployment = deployment;
+        self.attempt = Some(attempt);
     }
 
-    pub fn call_type(&self) -> Option<CallType> {
-        self.call_type
+    /// The call ended on an error, whose response carries `routing`, what the router did for the
+    /// attempt it ended on, in place of what it did for the call before.
+    pub(crate) fn respond_with_error(&mut self, routing: Option<Routing>, error: ErrorResponse) {
+        self.routing = routing;
+        self.error_response = Some(error);
     }
 
-    /// The request's `x-litellm-call-id`, which the route names once it runs.
-    pub fn name_call(&mut self, call_id: String) {
-        self.call_id = Some(call_id);
+    /// How the call ended, for a call whose response is an error.
+    pub fn error_response(&self) -> Option<&ErrorResponse> {
+        self.error_response.as_ref()
     }
 
-    pub fn call_id(&self) -> Option<&str> {
-        self.call_id.as_deref()
+    /// When the record was made, as the request came in on its route.
+    pub fn started(&self) -> Instant {
+        self.started
     }
 
-    /// Who the call is charged to, which the callbacks name once they begin.
-    pub fn charge_to(&mut self, charged: Charged) {
-        self.charged = charged;
-    }
-
-    pub fn charged(&self) -> &Charged {
-        &self.charged
+    pub fn routing(&self) -> Option<&Routing> {
+        self.routing.as_ref()
     }
 
     /// When the call began.
     pub fn start(&self) -> SystemTime {
         self.start
-    }
-
-    /// When the route took the body back to call the provider with it.
-    pub fn api_call_start(&self) -> Option<SystemTime> {
-        self.api_call_start
     }
 
     /// When the call was served or failed.
@@ -159,22 +226,6 @@ impl CallState {
             Request::Held(body) => body,
             Request::Named { .. } => Map::new(),
         }
-    }
-
-    /// The pre-call hook let the call on to the provider.
-    pub fn call_provider(&mut self) {
-        self.api_call_start = Some(SystemTime::now());
-    }
-
-    /// A held stream's first event arrived `at`.
-    pub fn see_first_event(&mut self, at: SystemTime) {
-        self.first_event = Some(at);
-    }
-
-    /// When the served stream's first event arrived, when the stream was held before it was
-    /// answered.
-    pub fn first_event(&self) -> Option<SystemTime> {
-        self.first_event
     }
 
     /// The request body while it is held, `None` once the route has it back.
@@ -200,21 +251,48 @@ impl CallState {
         self.request.stream()
     }
 
-    pub fn rate_limit_statuses(&self) -> Option<&Value> {
-        self.rate_limit_statuses.as_ref()
-    }
-
-    pub fn set_rate_limit_statuses(&mut self, statuses: Value) {
-        self.rate_limit_statuses = Some(statuses);
-    }
-
     pub fn response_headers(&self) -> &Map<String, Value> {
-        &self.response_headers
+        &self.response_headers.added
     }
 
-    /// Adds a header to the answer.
-    pub fn add_header(&mut self, name: String, value: Value) {
-        self.response_headers.insert(name, value);
+    /// Adds a header to the response. Refused once the response's head was written.
+    pub fn add_header(&mut self, name: String, value: Value) -> Result<(), HeadSent> {
+        if self.response_headers.sent {
+            return Err(HeadSent);
+        }
+        self.response_headers.added.insert(name, value);
+        Ok(())
+    }
+
+    /// Adds a header the response carries only when nothing else set one of the same name.
+    /// Refused once the response's head was written.
+    pub(crate) fn add_default_header(
+        &mut self,
+        name: String,
+        value: Value,
+    ) -> Result<(), HeadSent> {
+        if self.response_headers.sent {
+            return Err(HeadSent);
+        }
+        self.response_headers.defaults.insert(name, value);
+        Ok(())
+    }
+
+    /// Closes the header bag as the response's head is written, and hands back what was added
+    /// and the defaults. `headers::render_response_headers` is its one caller.
+    pub(crate) fn send_head(&mut self) -> (&Map<String, Value>, &Map<String, Value>) {
+        self.response_headers.sent = true;
+        (
+            &self.response_headers.added,
+            &self.response_headers.defaults,
+        )
+    }
+
+    /// Closes the header bag as [`Self::send_head`] does, for another crate's tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn close_head(&mut self) {
+        self.send_head();
     }
 
     pub fn serve(&mut self, served: ServedCall) {
@@ -255,7 +333,7 @@ mod tests {
     #[case::held(false)]
     #[case::released(true)]
     fn the_model_and_the_stream_flag_outlast_the_body(#[case] released: bool) {
-        let mut entries = CallState::new();
+        let mut entries = CallState::new("trace-1".to_owned());
         entries.hold(body(true));
         entries
             .body_mut()
@@ -267,6 +345,22 @@ mod tests {
         assert_eq!(
             (entries.model(), entries.stream(), entries.body().is_some()),
             (Some("claude-fallback"), true, !released)
+        );
+    }
+
+    #[rstest]
+    fn a_header_added_after_the_head_was_written_is_refused() {
+        let mut entries = CallState::new("trace-1".to_owned());
+        entries
+            .add_header("x-early".to_owned(), json!("yes"))
+            .unwrap();
+        entries.send_head();
+        assert_eq!(
+            (
+                entries.add_header("x-late".to_owned(), json!("yes")),
+                json!(entries.response_headers())
+            ),
+            (Err(HeadSent), json!({"x-early": "yes"}))
         );
     }
 }

@@ -335,7 +335,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         # Trust proxy call_type, not caller-controlled request shape.
         is_mcp: Final = self._is_mcp_call_type(call_type)
 

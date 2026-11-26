@@ -46,7 +46,9 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     is_non_empty_text_block,
     keep_original_fields,
     scannable_tool_result_request,
+    tool_result_text_part,
 )
+from litellm.llms.anthropic.messages.deferred_tools import client_tool_search_name
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
 from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
@@ -58,6 +60,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    anthropic_mcp_server_name,
     anthropic_tool_name,
     anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
@@ -69,6 +72,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
+    tool_calls_in_guardrail_scope,
     unappliable_request_rewrite,
 )
 from litellm.types.llms.anthropic import (
@@ -394,9 +398,9 @@ def _web_search_rewrites_by_block(
     )
 
 
-def _is_client_tool_use(block: Mapping[str, object]) -> bool:
+def _is_scannable_tool_use(block: Mapping[str, object]) -> bool:
     return (
-        block.get("type") == "tool_use"
+        block.get("type") in _TOOL_CALL_BLOCK_TYPES
         and isinstance(block.get("id"), str)
         and isinstance(block.get("name"), str)
         and isinstance(block.get("input"), dict)
@@ -488,17 +492,22 @@ def _is_deferred_tool(tool: object) -> bool:
     return fields is not None and fields.get("defer_loading") is True
 
 
-def _loaded_up_front(tools: Sequence[object]) -> Sequence[object]:
+def _without_deferral(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return tool
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _loaded_up_front(tools: Sequence[object], removed_tool_search: bool) -> Sequence[object]:
     """
-    Anthropic rejects a request whose tools are all deferred, so when a guardrail removed the
-    tools that were not, the ones it kept are sent without `defer_loading`.
+    Deferred tools load only through the tool search tool, and Anthropic rejects a request whose tools
+    are all deferred, so when a guardrail removed the search tool or every tool that was not deferred,
+    the ones it kept are sent without `defer_loading`.
     """
-    if not tools or not all(map(_is_deferred_tool, tools)):
+    if not tools or not (removed_tool_search or all(map(_is_deferred_tool, tools))):
         return tools
-    return tuple(
-        {key: value for key, value in fields.items() if key != "defer_loading"}
-        for fields in filter(None, map(as_str_mapping, tools))
-    )
+    return tuple(map(_without_deferral, tools))
 
 
 def _as_sent_by_fingerprint(
@@ -551,7 +560,11 @@ def _tools_after_guardrail(
         if tool is not None
     )
     all_as_sent: Final = _NOT_AS_SENT not in matched
-    return [*never_shown, *(_loaded_up_front(kept) if all_as_sent and len(returned) < len(shown) else kept)]
+    removed_tool_search: Final = client_tool_search_name(shown) is not None and client_tool_search_name(kept) is None
+    return [
+        *never_shown,
+        *(_loaded_up_front(kept, removed_tool_search) if all_as_sent and len(returned) < len(shown) else kept),
+    ]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -583,6 +596,31 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
             assert_never(target)
 
 
+def _mcp_tool_result_texts(block: Mapping[str, object]) -> tuple[tuple[int | None, str], ...]:
+    content: Final = block.get("content")
+    if isinstance(content, str):
+        return ((None, content),) if content else ()
+    return tuple(
+        (nested_idx, text)
+        for nested_idx, text in enumerate(map(tool_result_text_part, list_field(block, "content")))
+        if text
+    )
+
+
+def _write_back_mcp_tool_result_text(block: _WritableMessage, nested_idx: int | None, response: str) -> None:
+    content: Final = block.get("content")
+    if nested_idx is None:
+        if isinstance(content, str):
+            block["content"] = response  # rebind-ok: the mcp_tool_result block is the client-visible object rewritten
+        return
+    nested: Final = list_field(block, "content")
+    text_block: Final = nested[nested_idx] if nested_idx < len(nested) else None
+    if isinstance(text_block, dict):
+        text_block["text"] = response
+
+
+_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result"})
+_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "mcp_tool_use"})
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REBUILT_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use"})
 _RELEASED_TOOL_USE_STOP: Final = (
@@ -1132,6 +1170,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                include_tool_calls=tool_calls_in_guardrail_scope(guardrail_to_apply),
             )
             for msg_idx, message in enumerate(messages)
         )
@@ -1479,9 +1518,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
-        """Extract every tool name in an Anthropic messages request: tools[].name, plus
-        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
+        """Extract every tool name in an Anthropic messages request: tools[].name,
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim, and
+        mcp_servers[].name, which the Responses bridge sends as the MCP tool's server_label."""
+        tool_names: Final = chain.from_iterable(map(anthropic_tool_names, list_field(data, "tools")))
+        server_names: Final = (name for name in map(anthropic_mcp_server_name, list_field(data, "mcp_servers")) if name)
+        return [*tool_names, *server_names]
 
     @classmethod
     def _extract_input_text_and_images(
@@ -1491,6 +1533,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        include_tool_calls: bool = True,
     ) -> ExtractedInput:
         """Extract text content and images from a message.
 
@@ -1526,11 +1569,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         tool_use_blocks: Final = (
             ()
-            if scan_only_tool_results
+            if not include_tool_calls
             else tuple(
                 (content_idx, content_item)
                 for content_idx, content_item in enumerate(content)
-                if isinstance(content_item, dict) and _is_client_tool_use(content_item)
+                if isinstance(content_item, dict) and _is_scannable_tool_use(content_item)
             )
         )
         return ExtractedInput(
@@ -1554,7 +1597,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_tool_message: bool,
         scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
-        if content_item.get("type") == "tool_result":
+        if content_item.get("type") in _TOOL_RESULT_BLOCK_TYPES:
             if skip_tool_message:
                 return EMPTY_EXTRACTED_INPUT
             return cls._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
@@ -1979,7 +2022,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         tool_use_blocks: Final = tuple(
             (block, fields[1].get("id"))
             for block in response_content
-            if (fields := cls._output_block_fields(block)) is not None and fields[0] == "tool_use"
+            if (fields := cls._output_block_fields(block)) is not None and fields[0] in _TOOL_CALL_BLOCK_TYPES
         )
         if len(tool_use_blocks) != len(pre_guardrail_tool_calls):
             return None
@@ -2026,7 +2069,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 continue
             block_type, block_dict = fields
 
-            if block_type in ["text", "tool_use"]:
+            if block_type in ("text", "tool_use", "mcp_tool_use", "mcp_tool_result"):
                 self._extract_output_text_and_images(
                     content_block=block_dict,
                     content_idx=content_idx,
@@ -2565,8 +2608,13 @@ class AnthropicMessagesHandler(BaseTranslation):
                 texts_to_check.append(content_text)
                 task_mappings.append((content_idx, None))
 
+        elif content_type == "mcp_tool_result":
+            nested_texts: Final = _mcp_tool_result_texts(content_block)
+            texts_to_check.extend(text for _, text in nested_texts)
+            task_mappings.extend((content_idx, nested_idx) for nested_idx, _ in nested_texts)
+
         # Extract tool calls
-        elif content_type == "tool_use" and isinstance(content_block, dict):
+        elif content_type in _TOOL_CALL_BLOCK_TYPES and isinstance(content_block, dict):
             tool_call: Final = AnthropicConfig.convert_tool_use_to_openai_format(
                 anthropic_tool_content=content_block,
                 index=content_idx,
@@ -2615,6 +2663,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 block = _as_writable(content_block)
                 if block.get("type") == "text":
                     block["text"] = guardrail_response
+                elif block.get("type") == "mcp_tool_result":
+                    _write_back_mcp_tool_result_text(block, mapping[1], guardrail_response)
             elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
                 if isinstance(content_block, _TextAttrBlock):

@@ -1,17 +1,27 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Code, Descriptor, Engine, LimiterState, ParallelRequestLimiter, PostCallFailureFacts,
-    PreCallFacts, PriorResponse, Settings, SocketClose, SuccessFacts, TargetFacts,
+    Candidate, Code, Ctx, Descriptor, Engine, FailureFacts, LimiterState, LoggedCall, ModelFacts,
+    ParallelRequestLimiter, Policy, PostCallFailureFacts, PreCallFacts, PriorResponse,
+    RateLimitedModel, Resolved, Settings, SocketClose, SuccessFacts, TargetFacts,
+    TokenRateLimitType,
+};
+use litellm_redis_client::{
+    Credentials, Namespace, RedisClient, RedisConfig, RedisUrl, Script, Target, Timeouts, commands,
 };
 use litellm_redis_store::{
-    Number,
-    rate_limits::{Counter, Entry, Kind, Local, RateLimits, Scope},
+    Number, Remote,
+    rate_limits::{Counter, Entry, Increment, Kind, Local, RateLimits, Scope},
 };
+use litellm_redis_testing::RedisServer;
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 use serde_json::json;
 
@@ -28,8 +38,27 @@ impl Clock {
 }
 
 fn limiter(reservation: bool) -> (ParallelRequestLimiter, Arc<RateLimits>, Arc<Clock>) {
-    let store = Arc::new(RateLimits::new(None, None));
+    limiter_over(reservation, |_| RateLimits::new(None, None))
+}
+
+fn limiter_whose_memory_shares_its_clock(
+    reservation: bool,
+) -> (ParallelRequestLimiter, Arc<RateLimits>, Arc<Clock>) {
+    limiter_over(reservation, |clock| {
+        RateLimits::with_clock(
+            None,
+            None,
+            Arc::new(move || Duration::from_secs_f64(clock.now())),
+        )
+    })
+}
+
+fn limiter_over(
+    reservation: bool,
+    store: impl FnOnce(Arc<Clock>) -> RateLimits,
+) -> (ParallelRequestLimiter, Arc<RateLimits>, Arc<Clock>) {
     let clock = Clock::at(1_700_000_000.5);
+    let store = Arc::new(store(Arc::clone(&clock)));
     let now = Arc::clone(&clock);
     let engine = Engine::new(
         Arc::clone(&store),
@@ -208,6 +237,514 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
     );
 }
 
+fn key_usage(tokens: i64) -> SuccessFacts {
+    SuccessFacts {
+        call_id: Some("call".into()),
+        total_tokens: tokens,
+        targets: TargetFacts {
+            user_api_key_hash: Some("k".into()),
+            ..TargetFacts::default()
+        },
+        ..SuccessFacts::default()
+    }
+}
+
+#[rstest]
+#[case::outage_then_refusal_reserved(true, false, 0)]
+#[case::refusal_then_refusal_reserved(true, true, 777)]
+#[case::outage_then_refusal_unreserved(false, false, 0)]
+#[case::refusal_then_refusal_unreserved(false, true, 777)]
+#[tokio::test]
+async fn every_billed_refusal_of_a_fallback_chain_counts_toward_key_tpm(
+    #[case] reservation: bool,
+    #[case] first_hop_billed: bool,
+    #[case] first_hop_charged: i64,
+) {
+    let (limiter, store, _) = limiter(reservation);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 10_000}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
+        None
+    );
+    let counted_at_admission = i64::from(!reservation);
+
+    if first_hop_billed {
+        limiter
+            .settle_billed_failure(&state, key_usage(777), None)
+            .await;
+    } else {
+        limiter
+            .settle_failure(
+                &state,
+                FailureFacts {
+                    call_id: Some("call".into()),
+                    ..FailureFacts::default()
+                },
+                None,
+            )
+            .await;
+    }
+    limiter
+        .settle_billed_failure(&state, key_usage(900), None)
+        .await;
+    limiter.settle_success(&state, key_usage(1000), None).await;
+
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(
+            counted_at_admission + first_hop_charged + 900 + 1000
+        )))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_refused_fallback_hop_counts_toward_its_own_model_limit_on_the_key() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_key", "value": "k:gpt", "rate_limit": {"tokens_per_unit": 10_000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "gpt".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(300))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("hop".into());
+    limiter
+        .settle_failure(
+            &state,
+            FailureFacts {
+                call_id: Some("call".into()),
+                ..FailureFacts::default()
+            },
+            None,
+        )
+        .await;
+    limiter
+        .settle_billed_failure(
+            &state,
+            SuccessFacts {
+                served_model: Some(RateLimitedModel {
+                    requested: "hop".into(),
+                    group: "hop".into(),
+                }),
+                models: [(
+                    "hop".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "hop".into(),
+                            key_owns: false,
+                            counts_cached_tokens: false,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..key_usage(900)
+            },
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        count(&store, "model_per_key", "k:hop", Kind::Tokens),
+        Some(Local::Number(Number::Int(900)))
+    );
+    assert_eq!(
+        count(&store, "model_per_key", "k:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(0)))
+    );
+}
+
+fn billed_refusal(prompt_tokens: i64) -> LoggedCall {
+    serde_json::from_value(json!({
+        "call_id": "call",
+        "provider_billed": true,
+        "combined": {"kind": "usage", "usage": {"kind": "chat", "members": {
+            "prompt_tokens": prompt_tokens, "completion_tokens": 0, "total_tokens": prompt_tokens,
+        }}},
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::reserved(true)]
+#[case::unreserved(false)]
+#[tokio::test]
+async fn every_billed_refusal_of_a_fallback_chain_counts_toward_project_itpm_under_an_output_limit(
+    #[case] reservation: bool,
+) {
+    let (limiter, store, _) = limiter(reservation);
+    let admitted: PreCallFacts = serde_json::from_value(json!({
+        "call_id": "call",
+        "requested_model": "gpt",
+        "descriptors": [{"key": "model_per_project_itpm", "value": "p:gpt",
+                         "rate_limit": {"tokens_per_unit": 10_000}}],
+        "io_estimate": {"input_tokens": 300, "output_tokens": 50},
+    }))
+    .unwrap();
+    let state = LimiterState::default();
+    assert_eq!(limiter.pre_call(&state, admitted, None).await, None);
+
+    let resolved = Resolved::default();
+    let refuse = |prompt_tokens| {
+        limiter.log_failure(
+            Some(&state),
+            false,
+            billed_refusal(prompt_tokens),
+            &resolved,
+            TokenRateLimitType::Output,
+            None,
+        )
+    };
+
+    refuse(777).await;
+    assert_eq!(
+        count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Float(777.0)))
+    );
+
+    refuse(900).await;
+    assert_eq!(
+        count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Float(777.0 + 900.0)))
+    );
+}
+
+#[rstest]
+#[case::no_window_open(None, 1092)]
+#[case::window_open(Some(600), 500)]
+#[tokio::test]
+async fn an_unreserved_charge_counts_toward_the_next_reservation(
+    #[case] admitted_first: Option<i64>,
+    #[case] charged: i64,
+) {
+    let (limiter, _, _) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    if let Some(reserved) = admitted_first {
+        assert_eq!(
+            limiter
+                .pre_call(
+                    &LimiterState::default(),
+                    facts(tpm.clone(), Some(reserved)),
+                    None
+                )
+                .await,
+            None
+        );
+    }
+    limiter
+        .settle_turn(
+            &LimiterState::default(),
+            SuccessFacts {
+                total_tokens: charged,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.status, 429);
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_refund_into_no_window_cannot_offset_a_later_charge() {
+    let (limiter, _, _) = limiter(true);
+    limiter
+        .engine()
+        .refund_reserved(
+            &[("api_key".into(), "k".into())],
+            50,
+            &[],
+            Ctx {
+                policy: Policy::default(),
+                request: None,
+            },
+        )
+        .await;
+    limiter
+        .settle_turn(
+            &LimiterState::default(),
+            SuccessFacts {
+                total_tokens: 1092,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1080}}]),
+    );
+    assert!(
+        limiter
+            .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+            .await
+            .is_some()
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failure_settled_after_its_window_expired_counts_toward_the_next_reservation() {
+    let (limiter, _, clock) = limiter_whose_memory_shares_its_clock(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let failed = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&failed, facts(tpm.clone(), Some(10)), None)
+            .await,
+        None
+    );
+    clock
+        .0
+        .store((1_700_000_090.5_f64).to_bits(), Ordering::SeqCst);
+    limiter
+        .post_call_failure(
+            &failed,
+            PostCallFailureFacts {
+                tpm_actual: 1092,
+                ..PostCallFailureFacts::default()
+            },
+        )
+        .await;
+
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_charge_stays_counted_while_a_hundred_other_keys_are_charged_in_its_window() {
+    let (limiter, _, clock) = limiter_whose_memory_shares_its_clock(true);
+    let charge = |key: String| SuccessFacts {
+        total_tokens: 1092,
+        targets: TargetFacts {
+            user_api_key_hash: Some(key),
+            ..TargetFacts::default()
+        },
+        ..SuccessFacts::default()
+    };
+    limiter
+        .settle_turn(&LimiterState::default(), charge("k".into()), None)
+        .await;
+    clock
+        .0
+        .store((1_700_000_001.5_f64).to_bits(), Ordering::SeqCst);
+    for other in 0..100 {
+        limiter
+            .settle_turn(
+                &LimiterState::default(),
+                charge(format!("other-{other}")),
+                None,
+            )
+            .await;
+    }
+
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_window_opened_over_a_leftover_counter_holds_the_charge_for_the_whole_window() {
+    let (limiter, store, clock) = limiter_whose_memory_shares_its_clock(true);
+    store
+        .set_local(
+            &Entry::Counter(Counter {
+                scope: Scope {
+                    descriptor: "api_key".into(),
+                    value: "k".into(),
+                },
+                kind: Kind::Tokens,
+            }),
+            Local::Number(Number::Int(5)),
+            Some(Duration::from_secs(60)),
+        )
+        .unwrap();
+    clock
+        .0
+        .store((1_700_000_030.5_f64).to_bits(), Ordering::SeqCst);
+    limiter
+        .settle_turn(
+            &LimiterState::default(),
+            SuccessFacts {
+                total_tokens: 1092,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    clock
+        .0
+        .store((1_700_000_065.5_f64).to_bits(), Ordering::SeqCst);
+
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
+#[rstest]
+#[case::cached_tokens_left_out(false, 120)]
+#[case::cached_tokens_counted(true, 920)]
+#[tokio::test]
+async fn a_team_model_limit_counts_cached_tokens_only_when_the_team_asks(
+    #[case] counts_cached_tokens: bool,
+    #[case] team_model_tokens: i64,
+) {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "team", "value": "t", "rate_limit": {"tokens_per_unit": 5000}},
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
+        None
+    );
+    let model = RateLimitedModel {
+        requested: "gpt".into(),
+        group: "gpt".into(),
+    };
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(model),
+                models: [(
+                    "gpt".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "team", "t", Kind::Tokens),
+        Some(Local::Number(Number::Int(120)))
+    );
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(team_model_tokens)))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_sharing_the_reserved_team_model_scope_settles_cached_tokens_once() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "alias".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(1000))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("target".into());
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(RateLimitedModel {
+                    requested: "target".into(),
+                    group: "gpt".into(),
+                }),
+                models: [(
+                    "target".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens: true,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(920)))
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_tpm_refusal_releases_the_slot_and_names_tokens() {
@@ -377,4 +914,94 @@ async fn a_socket_refund_after_its_window_rolled_over_leaves_the_next_window_alo
         .close_socket(&socket, SocketClose::RelayFailed)
         .await;
     assert_eq!(key_tokens(&store), before);
+}
+
+fn client_of(server: &RedisServer) -> RedisClient {
+    RedisClient::new(RedisConfig {
+        target: Target::Url(RedisUrl {
+            url: SecretValue::new(server.url().to_owned()),
+            tls: None,
+            db: None,
+            username: None,
+            password: None,
+        }),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_millis(500), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap()
+}
+
+fn tokens_of(descriptor: &str, value: &str, amount: i64) -> Increment {
+    Increment {
+        counter: Counter {
+            scope: Scope {
+                descriptor: descriptor.into(),
+                value: value.into(),
+            },
+            kind: Kind::Tokens,
+        },
+        amount: Number::Int(amount),
+        ttl: Some(Duration::from_secs(60)),
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_slot_group_whose_script_fails_does_not_charge_the_groups_before_it_again() {
+    let server = RedisServer::start().await.unwrap();
+    let client = client_of(&server);
+    let sixty = Duration::from_secs(60);
+    client
+        .send(commands::set("{user:poisoned}:window", "1", sixty))
+        .await
+        .unwrap();
+    client
+        .send(commands::eval::<i64>(
+            &Script::new("return redis.call('RPUSH', KEYS[1], 'not a number')"),
+            &["{user:poisoned}:tokens"],
+            Vec::<String>::new(),
+        ))
+        .await
+        .unwrap();
+    let remote = Remote {
+        client: client.clone(),
+        default_ttl: sixty,
+    };
+    let (limiter, store, _) = limiter_over(true, |_| RateLimits::new(Some(remote), None));
+    let charges = [
+        tokens_of("api_key", "charged", 100),
+        tokens_of("user", "poisoned", 100),
+    ];
+    let scopes: Vec<Scope> = charges
+        .iter()
+        .map(|charge| charge.counter.scope.clone())
+        .collect();
+    assert_eq!(store.slot_groups(&scopes, true).len(), 2);
+
+    limiter
+        .engine()
+        .increment_with_ttl_preservation(
+            &charges,
+            Ctx {
+                policy: Policy {
+                    force_grouping: true,
+                    ..Policy::default()
+                },
+                request: None,
+            },
+        )
+        .await;
+
+    assert_eq!(
+        client
+            .send(commands::get::<String>("{api_key:charged}:tokens"))
+            .await
+            .unwrap(),
+        Some("100".to_owned())
+    );
 }

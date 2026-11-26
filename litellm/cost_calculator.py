@@ -23,6 +23,7 @@ from litellm.constants import (
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
@@ -57,6 +58,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
+    TokenTypeCostBreakdown,
     calculate_cache_writing_cost,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -1893,6 +1895,88 @@ def _adjusted_stored_cost(
     return adjusted.cost
 
 
+class _ImageCostItemization:
+    def __init__(self) -> None:
+        self.input_cost = 0.0
+        self.output_cost: float | None = None
+        self.token_breakdown: TokenTypeCostBreakdown | None = None
+
+    def record_token_cost(
+        self, input_cost: float, output_cost: float, breakdown: TokenTypeCostBreakdown | None
+    ) -> None:
+        self.input_cost += input_cost
+        self.output_cost = (self.output_cost or 0.0) + output_cost
+        if breakdown is not None:
+            self.token_breakdown = breakdown
+
+    def store(
+        self,
+        logging_obj: LitellmLoggingObject | None,
+        total_cost: float,
+        service_tier: str | None,
+        vertex_location: str | None,
+        has_svg_authoring: bool,
+    ) -> None:
+        output_cost: Final = self.output_cost
+        token_breakdown: Final = self.token_breakdown
+        remainder: Final = 0.0 if output_cost is None else total_cost - (self.input_cost + output_cost)
+        _store_cost_breakdown_in_logging_obj(
+            litellm_logging_obj=logging_obj,
+            prompt_tokens_cost_usd_dollar=self.input_cost,
+            completion_tokens_cost_usd_dollar=(
+                total_cost
+                if output_cost is None
+                else total_cost - self.input_cost
+                if has_svg_authoring
+                else output_cost
+            ),
+            cost_for_built_in_tools_cost_usd_dollar=(
+                None if has_svg_authoring or math.isclose(remainder, 0.0, abs_tol=1e-15) else remainder
+            ),
+            total_cost_usd_dollar=total_cost,
+            cache_read_cost=None if token_breakdown is None else token_breakdown.cache_read_cost,
+            cache_creation_cost=None if token_breakdown is None else token_breakdown.cache_creation_cost,
+            reasoning_cost=None if token_breakdown is None else token_breakdown.reasoning_cost,
+            service_tier=service_tier,
+            vertex_location=vertex_location,
+            billed_token_rates=None if token_breakdown is None else token_breakdown.rates,
+        )
+
+
+def _image_response_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    completion_response: ImageResponse,
+    quality: str | None,
+    n: int | None,
+    size: str | None,
+    optional_params: Mapping[str, object] | None,
+    call_type: str,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+    service_tier: str | None,
+    logging_obj: LitellmLoggingObject | None,
+) -> float:
+    itemization: Final = _ImageCostItemization() if logging_obj is not None else None
+    total: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        completion_response=completion_response,
+        quality=quality,
+        n=n,
+        size=size,
+        optional_params=optional_params,
+        call_type=call_type,
+        model_info=model_info,
+        vertex_location=vertex_location,
+        service_tier=service_tier,
+        report_token_cost=None if itemization is None else itemization.record_token_cost,
+    )
+    if itemization is not None:
+        itemization.store(logging_obj, total, service_tier, vertex_location, completion_response.svg_usage is not None)
+    return total
+
+
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -2365,8 +2449,7 @@ def completion_cost(
                 if CostCalculatorUtils.call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
                 ):
-                    ### IMAGE GENERATION COST CALCULATION ###
-                    return CostCalculatorUtils.route_image_generation_cost_calculator(
+                    return _image_response_cost(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         completion_response=completion_response,
@@ -2378,6 +2461,7 @@ def completion_cost(
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
                         service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
+                        logging_obj=litellm_logging_obj,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -4190,6 +4274,20 @@ def _first_live_model_rate(
     )
 
 
+_ADDON_PRICING_MODELS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _transcription_addon_pricing_models(litellm_logging_obj: LitellmLoggingObject | None) -> tuple[str, ...]:
+    if litellm_logging_obj is None:
+        return ()
+    try:
+        return _ADDON_PRICING_MODELS.validate_python(
+            litellm_logging_obj.model_call_details.get(REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY, ())
+        )
+    except ValidationError:
+        return ()
+
+
 def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
     if litellm_logging_obj is None:
         return None
@@ -4345,6 +4443,7 @@ def handle_realtime_stream_cost_calculation(
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
             custom_pricing_model=custom_pricing_model,
+            addon_pricing_models=_transcription_addon_pricing_models(litellm_logging_obj),
         )
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
@@ -4499,6 +4598,7 @@ def handle_realtime_transcription_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
     custom_pricing_model: str | None = None,
+    addon_pricing_models: Sequence[str] = (),
 ) -> float:
     """
     Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
@@ -4526,10 +4626,19 @@ def handle_realtime_transcription_cost_calculation(
     override_info: Final = (
         _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
-    return sum(
+    base_cost: Final = sum(
         (_transcription_usage_cost(dict(usage), model_infos[model], override_info) for usage, model in clip_models),
         0.0,
     )
+    addon_cost: Final = sum(
+        (_clips_cost(clips, _cost_map_model_info(addon, custom_llm_provider)) for addon in addon_pricing_models),
+        0.0,
+    )
+    return base_cost + addon_cost
+
+
+def _clips_cost(clips: Sequence[tuple[Mapping[str, object], str | None]], model_info: ModelInfo | None) -> float:
+    return sum((_transcription_usage_cost(dict(usage), model_info) for usage, _ in clips), 0.0)
 
 
 _TRANSCRIPTION_SESSION_EVENT_TYPES: Final = frozenset(

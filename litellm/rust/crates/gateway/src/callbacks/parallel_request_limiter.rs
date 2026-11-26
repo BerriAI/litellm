@@ -16,6 +16,7 @@ use std::{
 };
 
 use futures_util::future::BoxFuture;
+use litellm_call_scope::spawn_in_call;
 use litellm_callbacks::{
     Abort, Activation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Outcome,
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
@@ -353,6 +354,11 @@ impl KeyLimiter {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn window_size(&self) -> i64 {
+        self.limiter.engine().settings().window_size
+    }
+
     /// The limiter as the stage registers it, with each request's admission made from its caller.
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
         let limiter = self.clone();
@@ -588,13 +594,13 @@ pub struct Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         let holds = matches!(*self.phase.lock(), Phase::Admitted | Phase::Succeeded);
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        if tokio::runtime::Handle::try_current().is_err() {
             return;
-        };
+        }
         if holds {
             let limiter = self.limiter.clone();
             let state = std::mem::take(&mut self.state);
-            runtime.spawn(async move { limiter.limiter.release_on_disconnect(&state).await });
+            spawn_in_call(async move { limiter.limiter.release_on_disconnect(&state).await });
         }
     }
 }

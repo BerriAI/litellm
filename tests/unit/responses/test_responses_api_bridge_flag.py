@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from importlib import import_module
 from pathlib import Path
 from typing import Final, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import openai
@@ -1450,21 +1450,47 @@ async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_tur
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = _openai_chat_upstream(respx_mock, stream=False)
+    earlier_turn: Final = {
+        "request_id": "chatcmpl-earlier-turn",
+        "call_type": "aresponses",
+        "session_id": "earlier-session",
+        "proxy_server_request": {"input": "Hi", "model": "gpt-5.6"},
+        "response": {
+            "id": "chatcmpl-earlier-turn",
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Hi there.", "annotations": []}],
+                }
+            ],
+        },
+    }
 
-    await _bridged_responses_call(
-        True,
-        False,
-        model="openai/gpt-5.6",
-        use_chat_completions_api=True,
-        previous_response_id="chatcmpl-earlier-turn",
-        tools=[_CLIENT_TOOL_SEARCH],
-        text={"verbosity": verbosity},
-    )
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(db=MagicMock(query_raw=AsyncMock(return_value=[earlier_turn]))),
+    ):
+        await _bridged_responses_call(
+            True,
+            False,
+            model="openai/gpt-5.6",
+            use_chat_completions_api=True,
+            previous_response_id="chatcmpl-earlier-turn",
+            tools=[_CLIENT_TOOL_SEARCH],
+            text={"verbosity": verbosity},
+        )
 
     assert upstream.call_count == 1
     assert json.loads(upstream.calls[0].request.read()) == {
         "model": "gpt-5.6",
-        "messages": [{"role": "user", "content": "Hello"}],
+        "messages": [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi there."}]},
+            {"role": "user", "content": "Hello"},
+        ],
         "tools": [
             {
                 "type": "function",

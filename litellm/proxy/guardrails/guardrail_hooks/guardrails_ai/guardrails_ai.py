@@ -186,7 +186,7 @@ class GuardrailsAI(CustomGuardrail):
             "mcp_call",
         ],
     ) -> (
-        Exception | str | dict | None
+        Exception | str | dict[str, object] | None
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         return await self.process_input(data=data, call_type=call_type)
 

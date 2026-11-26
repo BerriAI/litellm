@@ -1471,6 +1471,8 @@ def convert_key_logging_metadata_to_callback(
             continue
         if var.startswith("signoz_") and data.callback_name != "signoz":
             continue
+        if var.startswith("mixpanel_") and data.callback_name != "mixpanel":
+            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)
@@ -4444,7 +4446,7 @@ def _extract_credential_from_entry(entry: object, provider: str | None = None) -
 
 
 def _get_enforced_params(general_settings: dict | None, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-    enforced_params: list | None = None
+    enforced_params: list[object] | None = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
         if (

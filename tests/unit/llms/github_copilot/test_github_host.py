@@ -5,7 +5,10 @@ import pytest
 from litellm.llms.github_copilot.github_host import (
     github_host_endpoints,
     normalized_github_host,
+    shared_login_github_host,
 )
+
+GHE_API_KEY_URL: Final = "https://api.octo.ghe.com/copilot_internal/v2/token"
 
 
 @pytest.mark.parametrize(
@@ -55,3 +58,31 @@ def test_ghe_endpoints_ignore_github_com_url_overrides(monkeypatch: pytest.Monke
     assert endpoints.user_url == "https://api.octo.ghe.com/user"
     assert endpoints.default_copilot_api_base == "https://copilot-api.octo.ghe.com"
     assert endpoints.client_id == "custom-client"
+
+
+@pytest.mark.parametrize(
+    ("access_token_url", "api_key_url", "expected"),
+    [
+        (None, None, "github.com"),
+        ("https://Octo.ghe.com/login/oauth/access_token", None, "octo.ghe.com"),
+        (None, GHE_API_KEY_URL, "octo.ghe.com"),
+        (None, "https://octo.ghe.com/api/v3/copilot_internal/v2/token", "octo.ghe.com"),
+        ("https://github.com/login/oauth/access_token", GHE_API_KEY_URL, "github.com"),
+        ("http://127.0.0.1:8080/login/oauth/access_token", GHE_API_KEY_URL, "octo.ghe.com"),
+        ("https://ghes.example.com/login/oauth/access_token", None, "github.com"),
+        ("https://[octo.ghe.com/login/oauth/access_token", None, "github.com"),
+    ],
+)
+def test_shared_login_github_host_reads_the_tenant_from_the_login_urls(
+    monkeypatch: pytest.MonkeyPatch, access_token_url: str | None, api_key_url: str | None, expected: str
+) -> None:
+    for name, value in (
+        ("GITHUB_COPILOT_ACCESS_TOKEN_URL", access_token_url),
+        ("GITHUB_COPILOT_API_KEY_URL", api_key_url),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    assert shared_login_github_host() == expected

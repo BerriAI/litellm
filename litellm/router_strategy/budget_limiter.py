@@ -46,13 +46,14 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
     get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import LiteLLM_Params, RouterErrors
-from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
+from litellm.types.utils import BudgetConfig, FailureLoggedCost, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
@@ -62,6 +63,19 @@ _JOB_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
 
 class _SupportsGet(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
+    payload: Final = kwargs.get("standard_logging_object")
+    cost: Final = _CALLBACK_FIELDS.validate_python(payload).get("response_cost") if isinstance(payload, dict) else None
+    return float(cost) if isinstance(cost, int | float) else 0.0
+
+
+def cost_left_after_failed_attempts(kwargs: Mapping[str, object], response_cost: float) -> float:
+    already_counted: Final = kwargs.get("failure_logged_cost_billed_on_success")
+    if not isinstance(already_counted, FailureLoggedCost):
+        return response_cost
+    return max(response_cost - already_counted.cost, 0.0)
 
 
 def _model_info_id(deployment: Mapping[str, object]) -> object:
@@ -574,9 +588,10 @@ class RouterBudgetLimiting(CustomLogger):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        polled_response, response_cost = _JOB_CHARGE_VALUES.validate_python(
+        polled_response, billed_cost = _JOB_CHARGE_VALUES.validate_python(
             (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
         )
+        response_cost: Final = cost_left_after_failed_attempts(callback_fields, billed_cost)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
@@ -629,6 +644,15 @@ class RouterBudgetLimiting(CustomLogger):
                         response_cost=response_cost,
                         job=job,
                     )
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if _billed_failure_cost(kwargs) > 0:
+            await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     async def _increment_spend_for_key(
         self,

@@ -4149,7 +4149,7 @@ def get_all_tool_calls(messages: Sequence[Mapping[str, object]]) -> list:
 
     Done to handle openai no longer returning tool call 'name' in tool results.
     """
-    tool_calls: Final[list] = []
+    tool_calls: Final[list[object]] = []
     for m in messages:
         if m.get("tool_calls", None) is not None:
             if isinstance(m["tool_calls"], list):
@@ -4215,7 +4215,7 @@ def cohere_messages_pt_v2(
     - message must be at least 1 token long or tool results must be specified.
     - cannot specify tool_results if the last entry in chat history contains a user message
     """
-    tool_calls: Final[list] = get_all_tool_calls(messages=messages)
+    tool_calls: Final[list[object]] = get_all_tool_calls(messages=messages)
 
     ## GET MOST RECENT MESSAGE
     most_recent_message: Final = messages.pop(-1)
@@ -4317,7 +4317,7 @@ def cohere_messages_pt_v2(
 
 
 def cohere_message_pt(messages: list):
-    tool_calls: Final[list] = get_all_tool_calls(messages=messages)
+    tool_calls: Final[list[object]] = get_all_tool_calls(messages=messages)
     prompt = ""
     tool_results: Final = []
     for message in messages:
@@ -4501,7 +4501,7 @@ def azure_text_pt(messages: Sequence[Mapping[str, object]]):
 
 
 ###### AZURE AI #######
-def stringify_json_tool_call_content(messages: list[AllMessageValues]) -> list:
+def stringify_json_tool_call_content(messages: list[AllMessageValues]) -> list[AllMessageValues]:
     """
 
     - Check 'content' in tool role -> convert to dict (if not) -> stringify

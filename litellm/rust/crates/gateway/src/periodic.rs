@@ -32,7 +32,7 @@ impl PeriodicJob {
     {
         let pass: Pass = Arc::new(move || Box::pin(pass()));
         let (stop, mut stopped) = watch::channel(false);
-        let job = tokio::spawn({
+        let job = litellm_call_scope::spawn_detached({
             let pass = pass.clone();
             async move {
                 loop {

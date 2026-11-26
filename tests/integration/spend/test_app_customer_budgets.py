@@ -3,12 +3,16 @@ import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import datetime
+from itertools import product
 from math import isclose
+from pathlib import Path
 from typing import Final
 
 import httpx
 import psycopg
 import pytest
+import yaml
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.types.proxy.management_endpoints.app_groups import AppGroup
@@ -26,7 +30,7 @@ from tests.integration._support.client import (
     eventually,
     string_value,
 )
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import CONFIGURATION, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
 _APPS: Final = "/management/v1/apps"
@@ -47,7 +51,15 @@ def app_gateway(
     resource_type: Final = TypeAdapter(AppResourceType).validate_python(
         request.param  # pyright: ignore[reportAny]  # pytest parameters are untyped and validated at this boundary
     )
-    with owned_proxy(session_gateway, directory, {}, workers=2) as candidate:
+    config: Final = directory / "config.yaml"
+    base: Final = CONFIGURATION.validate_python(
+        yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
+    )
+    general: Final = CONFIGURATION.validate_python(base["general_settings"])
+    _ = config.write_text(
+        yaml.safe_dump({**base, "general_settings": {**general, "customer_budget_response_headers": True}})
+    )
+    with owned_proxy(session_gateway, directory, {}, config=config, workers=2) as candidate:
         unset: Final = candidate.request("GET", f"{_APPS}/definition")
         assert AppDefinition.model_validate_json(unset.content).resource_type is None
         configured: Final = candidate.request("PUT", f"{_APPS}/definition", {"resource_type": resource_type.value})
@@ -383,6 +395,109 @@ def test_app_and_global_customer_budgets_enforce_independently_and_account_once(
         for key in (chat_key, search_key):
             _blocked_on_every_worker(app_gateway, key, model, customer)
         assert not tuple(request for request in wire.drain() if request.method == "POST")
+
+
+def _streamed(request: Request) -> Reply:
+    if b'"stream"' not in request.body:
+        return _reply(request)
+    chunk: Final = {"id": "chatcmpl-stream", "object": "chat.completion.chunk", "created": 1700000000, "model": "s"}
+    events: Final = (
+        {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}]},
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk, "choices": [], "usage": {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40}},
+    )
+    return Reply(
+        content_type="text/event-stream",
+        chunks=(*(f"data: {json.dumps(event)}\n\n".encode() for event in events), b"data: [DONE]\n\n"),
+    )
+
+
+def _budget_headers(response: httpx.Response, level: str) -> dict[str, str]:
+    prefix: Final = f"x-litellm-app-customer-{level}-"
+    return {name.removeprefix(prefix): value for name, value in response.headers.items() if name.startswith(prefix)}
+
+
+def test_responses_report_each_app_customer_budget_window_before_and_at_the_cap(app_gateway: Gateway) -> None:
+    with wire_server(_streamed) as wire, app_gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        customer: Final = _customer(scenario)
+        app_id, key = _app(scenario, model, "headers")
+        configured: Final = app_gateway.request(
+            "PUT",
+            f"{_APPS}/{app_id}/customer_organizations/{customer.organization}",
+            {
+                "budget_override": {
+                    "budget_limits": [
+                        {"budget_duration": "1d", "max_budget": 0.1},
+                        {"budget_duration": "30d", "max_budget": 5},
+                    ]
+                },
+                "customer_member_budget": {"max_budget": 10},
+            },
+        )
+        assert configured.status_code == 200, configured.text
+
+        def spent(minimum: float) -> None:
+            eventually(
+                lambda: app_gateway.rows(
+                    'SELECT spend FROM "LiteLLM_AppCustomerOrgTable" WHERE app_id=%s AND customer_org_id=%s',
+                    (app_id, customer.organization),
+                ),
+                lambda rows: len(rows) == 1 and _spend(rows[0]) >= minimum,
+                seconds=70,
+            )
+
+        def windows(response: httpx.Response) -> dict[str, float]:
+            organization: Final = _budget_headers(response, "org")
+            assert {
+                f"{field}-{duration}"
+                for field, duration in product(
+                    ("spend", "max-budget", "remaining-budget", "budget-reset-at"), ("1d", "30d")
+                )
+            } == set(organization), response.headers
+            return {name: float(value) for name, value in organization.items() if "reset-at" not in name}
+
+        def expected(spend: float) -> dict[str, float]:
+            return {
+                "spend-1d": spend,
+                "max-budget-1d": 0.1,
+                "remaining-budget-1d": max(0.1 - spend, 0.0),
+                "spend-30d": spend,
+                "max-budget-30d": 5.0,
+                "remaining-budget-30d": 5.0 - spend,
+            }
+
+        first: Final = _chat(app_gateway, key, model, customer)
+        assert first.status_code == 200, first.text
+        assert windows(first) == expected(0.0)
+        assert _budget_headers(first, "member") == {"spend": "0.0", "max-budget": "10.0", "remaining-budget": "10.0"}
+        spent(_COST)
+
+        streamed: Final = app_gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "stream"}], "stream": True},
+            key=key,
+            headers={
+                "x-litellm-customer-org-alias": customer.alias,
+                "x-litellm-customer-member-id": customer.member,
+            },
+        )
+        assert streamed.status_code == 200 and "text/event-stream" in streamed.headers["content-type"], streamed.text
+        assert windows(streamed) == pytest.approx(expected(_COST))
+        spent(2 * _COST)
+
+        refused: Final = _chat(app_gateway, key, model, customer)
+        _blocked(refused)
+        assert windows(refused) == pytest.approx(expected(2 * _COST))
+        assert float(_budget_headers(refused, "member")["spend"]) == pytest.approx(2 * _COST)
+        assert datetime.fromisoformat(_budget_headers(refused, "org")["budget-reset-at-1d"]) < datetime.fromisoformat(
+            _budget_headers(refused, "org")["budget-reset-at-30d"]
+        )
 
 
 def test_member_override_blocks_only_that_member_within_its_app(

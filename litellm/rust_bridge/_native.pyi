@@ -3402,7 +3402,7 @@ class RouterCoreHandle:
     def routing_context(self, model: str, routing_strategy: str | None = None) -> tuple[str, str, str | None]: ...
     def retire(self) -> None: ...
     # A stream that failed before content: what may still take over it, and the retry budget for
-    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback": bool,
+    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback", "context_window_fallback": bool,
     # "retry_budget": int | None, "policy_applies": bool}.
     def stream_policy(
         self, request: _Document, origin: _Document, kind: str | None = None
@@ -3549,9 +3549,14 @@ class NativeParallelRequestLimiter:
         /,
         request: NativeRequestRedis | None = None,
         turn: bool = False,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def log_post_call_failure(
-        self, state: NativeParallelRequestLimiterState, request_data: Mapping[str, object], rate_limit_type: str
+        self,
+        state: NativeParallelRequestLimiterState,
+        request_data: Mapping[str, object],
+        rate_limit_type: str,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def reservation_aware(
         self,
