@@ -32,7 +32,7 @@ use tokio::task::futures::TaskLocalFuture;
 
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
-    entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
+    entries::{AttemptOn, CallState, Charged, Ended, ErrorResponse, FailureFacts, HeadSent, unix},
 };
 
 tokio::task_local! {

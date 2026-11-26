@@ -126,19 +126,30 @@ pub fn app_with_callbacks(
     api_base: &str,
     callbacks: Vec<Arc<dyn ErasedCallback>>,
 ) -> Router {
+    app_over_with_callbacks(vec![test_params(model, api_base)], json!({}), callbacks)
+}
+
+/// The app whose `public/model` group is one deployment for each of `litellm_params`, with its
+/// router built from `router_settings` and `callbacks` run around each call.
+pub fn app_over_with_callbacks(
+    litellm_params: Vec<Map<String, Value>>,
+    router_settings: Value,
+    callbacks: Vec<Arc<dyn ErasedCallback>>,
+) -> Router {
     mounted(Arc::new(hosted_gateway(
-        public_model(test_params(model, api_base)),
+        litellm_params.into_iter().flat_map(public_model).collect(),
         MessagesSettings::default(),
         None,
         NativeHost::new(
             Arc::new(Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap()),
             Arc::default(),
         ),
-        &RouterSettings::default(),
+        &serde_json::from_value(router_settings).unwrap(),
     )))
 }
 
-fn test_params(model: &str, api_base: &str) -> Map<String, Value> {
+/// The params of a deployment of `model` at `api_base`.
+pub fn test_params(model: &str, api_base: &str) -> Map<String, Value> {
     json!({"model": model, "api_base": api_base, "api_key": "test-key", "timeout": 5})
         .as_object()
         .cloned()

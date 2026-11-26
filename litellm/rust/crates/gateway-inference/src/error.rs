@@ -8,12 +8,13 @@ use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
-use litellm_router_core::FailureKind;
+use litellm_router_core::{AttemptError, FailureKind};
 use serde_json::{Map, Value, json};
 
 use crate::{
     headers::Routing,
     hooks::{HookError, Refusal},
+    record::FailureFacts,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -161,6 +162,28 @@ impl Ended {
     }
 }
 
+impl Ended {
+    /// What the failure log reads of the error, `provider` being the provider the latest attempt
+    /// called.
+    pub(crate) fn failure(&self, provider: Option<&str>) -> FailureFacts {
+        self.error.failure(provider)
+    }
+}
+
+/// What the failure log reads of a stream that broke or carried the provider's error, which
+/// `provider` raised.
+pub(crate) fn stream_failure(error: &AttemptError, provider: Option<&str>) -> FailureFacts {
+    FailureFacts {
+        error_code: error
+            .status
+            .map(|status| status.to_string())
+            .unwrap_or_default(),
+        error_class: error.kind.to_string(),
+        llm_provider: provider.map(str::to_owned),
+        error_message: error.detail.as_deref().unwrap_or_default().to_owned(),
+    }
+}
+
 impl From<HookError> for Error {
     fn from(ended: HookError) -> Self {
         match ended {
@@ -224,6 +247,44 @@ impl Error {
                 })
                 .collect(),
             _ => Vec::new(),
+        }
+    }
+
+    /// What the failure log reads of the error: its status, and the class of the exception
+    /// Python raises for it. An error with no class of its own is the one litellm maps its status
+    /// to. Only an error an attempt raised names the provider it called.
+    fn failure(&self, provider: Option<&str>) -> FailureFacts {
+        let status = self.status();
+        let by_status = || FailureKind::from_status(status.as_u16()).to_string();
+        let (error_class, raised_by_provider) = match self {
+            Self::Route(error) if error.upstream_response().is_none() && !error.is_request() => (
+                match error.is_missing_credential() {
+                    true => FailureKind::Authentication.to_string(),
+                    false => FailureKind::ApiConnection.to_string(),
+                },
+                true,
+            ),
+            Self::Route(_) | Self::Ocr(_) => (by_status(), true),
+            Self::Routing(error) => match error.attempt() {
+                Some(failure) => (failure.kind.to_string(), true),
+                None => (by_status(), false),
+            },
+            Self::NoDeployments(_) => ("RouterRateLimitError".to_owned(), false),
+            Self::UnknownModel { .. } => ("ProxyModelNotFoundError".to_owned(), false),
+            Self::Refused(_) => ("HTTPException".to_owned(), false),
+            Self::ModelAccess(_)
+            | Self::InvalidBody(_)
+            | Self::Callback(_)
+            | Self::BodyTooLarge
+            | Self::BodyRejected(_)
+            | Self::Credentials(_)
+            | Self::Internal => (by_status(), false),
+        };
+        FailureFacts {
+            error_code: status.as_u16().to_string(),
+            error_class,
+            llm_provider: provider.filter(|_| raised_by_provider).map(str::to_owned),
+            error_message: self.message(),
         }
     }
 
@@ -591,6 +652,36 @@ mod tests {
     )]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
         assert_eq!(error.status(), status);
+    }
+
+    #[rstest]
+    #[case::a_provider_error(upstream(500, "down"), ("500", "InternalServerError", Some("anthropic")))]
+    #[case::a_provider_rate_limit(upstream(429, ""), ("429", "RateLimitError", Some("anthropic")))]
+    #[case::a_lost_connection(
+        Error::Route(
+            litellm_http::Error::from(tokio_tungstenite::tungstenite::Error::ConnectionClosed)
+                .into()
+        ),
+        ("500", "APIConnectionError", Some("anthropic"))
+    )]
+    #[case::a_refusal(
+        Error::Refused(Refusal::new(StatusCode::TOO_MANY_REQUESTS, "slow down")),
+        ("429", "HTTPException", None)
+    )]
+    #[case::an_unknown_model(unknown_model(), ("400", "ProxyModelNotFoundError", None))]
+    fn the_failure_log_reads_the_status_and_pythons_class_of_an_error(
+        #[case] error: Error,
+        #[case] expected: (&str, &str, Option<&str>),
+    ) {
+        let failure = error.failure(Some("anthropic"));
+        assert_eq!(
+            (
+                failure.error_code.as_str(),
+                failure.error_class.as_str(),
+                failure.llm_provider.as_deref()
+            ),
+            expected
+        );
     }
 
     #[test]

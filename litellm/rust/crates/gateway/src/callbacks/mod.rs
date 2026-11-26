@@ -23,7 +23,7 @@ use litellm_error::{Report, Source};
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_inference::{
     CallHooks, HookError, Refusal, ServedCall,
-    record::{self, CallState, Charged},
+    record::{self, CallState, Charged, FailureFacts},
 };
 use serde_json::{Map, Value};
 use strum::VariantArray;
@@ -331,8 +331,8 @@ impl CallHooks for Call {
         let _ = self.run(Point::AttemptEnded).await;
     }
 
-    async fn failed(&self) {
-        record::write(CallState::fail);
+    async fn failed(&self, failure: FailureFacts) {
+        record::write(|entries| entries.fail(failure));
         let _ = self.run(Point::PostCallFailure).await;
         let _ = self.run(Point::AttemptEnded).await;
     }
@@ -586,7 +586,7 @@ mod tests {
         ])
         .await;
 
-        in_call(call.failed()).await;
+        in_call(call.failed(FailureFacts::default())).await;
 
         assert_eq!(
             log.lock().clone(),
@@ -611,8 +611,8 @@ mod tests {
             .unwrap(),
         );
         let caller = crate::test_support::master();
-        in_call(callbacks.begin(&caller).failed()).await;
-        in_call(callbacks.begin(&caller).failed()).await;
+        in_call(callbacks.begin(&caller).failed(FailureFacts::default())).await;
+        in_call(callbacks.begin(&caller).failed(FailureFacts::default())).await;
 
         assert_eq!(
             log.lock().clone(),
@@ -636,7 +636,7 @@ mod tests {
         let caller = crate::test_support::master();
         let started_at = 7;
 
-        in_call(callbacks.begin(&caller).failed()).await;
+        in_call(callbacks.begin(&caller).failed(FailureFacts::default())).await;
 
         assert_eq!(
             log.lock().clone(),

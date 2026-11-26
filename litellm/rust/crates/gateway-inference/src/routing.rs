@@ -120,8 +120,9 @@ pub enum Prompt<'a> {
     Messages(&'a Map<String, Value>),
 }
 
-/// One attempt of `route` as router-core hears it. A complete outcome is served with the tokens
-/// it used. A stream is served deferred, and reports how it went once that is known.
+/// One attempt of `route` as router-core hears it, named on the call's record as its latest. A
+/// complete outcome is served with the tokens it used. A stream is served deferred, and reports
+/// how it went once that is known.
 #[expect(
     clippy::result_large_err,
     reason = "the type router-core's RouterHost::attempt returns"
@@ -131,6 +132,12 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
     route: &A,
     attempt: &Attempt,
 ) -> Result<Served<Attempted<A::Output>>, AttemptFailure<Error>> {
+    record::write(|state| {
+        state.attempt_on(record::AttemptOn {
+            model_group: attempt.model_group.clone(),
+            deployment: attempt.deployment.clone(),
+        });
+    });
     let (output, recorded) = record::attempt(route.run(attempt)).await;
     let mut output = output.map_err(|error| attempt_failure(attempt, error))?;
     let Some((chunks, read)) = A::held(&mut output) else {
