@@ -15,7 +15,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 # Import the adapter for fallback to completion format
 from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import adapter_untranslated_generation_config
-from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of, optional_str
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
@@ -70,9 +70,6 @@ def _custom_generate_content_handler(provider: str) -> CustomLLM | None:
     if provider in _BUILT_IN_PROVIDERS:
         return None
     return ProviderConfigManager.get_custom_llm_handler(provider)
-
-
-_OPTIONAL_STR: Final = TypeAdapter[str | None](str | None)
 
 
 def _mark_async_entrypoint(raw_logging_obj: object, marker: str, is_async: object) -> None:
@@ -146,7 +143,7 @@ class GenerateContentHelper:
         """
         raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
         litellm_logging_obj: Final = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
-        litellm_call_id: Final = _OPTIONAL_STR.validate_python(kwargs.get("litellm_call_id", None))
+        litellm_call_id: Final = optional_str(kwargs.get("litellm_call_id", None))
         sent_config: Final = config or kwargs.get("generationConfig") or kwargs.get("generation_config")
         request_config: Final = (
             sent_config.model_dump(mode="json", exclude_none=True)

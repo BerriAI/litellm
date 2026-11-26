@@ -1578,3 +1578,25 @@ async def test_router_responses_deployment_pricing_keeps_inherited_cache_rates(
         uncached_input * rates["input_cost_per_token"] + response.usage.output_tokens * rates["output_cost_per_token"]
     )
     assert floor < _response_cost(response) < full_price
+
+
+def test_responses_with_a_call_id_that_is_not_a_string_still_sends_the_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_wrong_typed_call_id", "gpt-4o"))
+    )
+
+    response: Final = litellm.responses(model="openai/gpt-4o", input="hi", api_key="sk-test", litellm_call_id=123)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert json.loads(route.calls.last.request.content) == {"model": "gpt-4o", "input": "hi"}
+
+
+def test_responses_with_litellm_metadata_that_is_not_a_mapping_raises_the_same_attribute_error(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_wrong_typed_metadata", "gpt-4o"))
+    )
+
+    with pytest.raises(AttributeError, match="'str' object has no attribute 'get'"):
+        litellm.responses(model="openai/gpt-4o", input="hi", api_key="sk-test", litellm_metadata="not-a-mapping")
