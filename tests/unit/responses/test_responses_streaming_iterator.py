@@ -381,7 +381,7 @@ async def test_a_stream_cut_before_any_output_bills_the_usage_the_provider_repor
     await iterator._await_pending_logging()
     await _await_tasks_spawned_since(existing_tasks)
 
-    assert drained == "success"
+    assert drained is True
     assert upstream.closed is True
     (success_payload,) = recorder.success_payloads
     assert recorder.failure_payloads == ()
@@ -442,7 +442,7 @@ async def test_a_stream_cut_after_its_terminal_event_was_logged_reports_that_the
     await iterator._await_pending_logging()
     await _await_tasks_spawned_since(existing_tasks)
 
-    assert billed_by_the_success_event == "success", "None has the proxy release the parallel-request slot a second time"
+    assert billed_by_the_success_event is True, "False has the proxy release the parallel-request slot a second time"
     assert len(recorder.success_payloads) == 1
     assert upstream.closed is True
 
@@ -461,7 +461,7 @@ async def test_a_cut_stream_that_is_not_drained_closes_the_provider_connection_a
     assert upstream.closed is not outlives_its_consumer
     drained: Final = await iterator.settle_after_consumer_left(drain=outlives_its_consumer is False)
 
-    assert drained is None
+    assert drained is False
     assert upstream.closed is True
     assert recorder.success_payloads == ()
 
@@ -495,7 +495,7 @@ async def test_a_provider_failure_while_draining_a_cut_stream_is_logged_as_a_fai
     drained: Final = await iterator.settle_after_consumer_left(drain=True)
     await iterator._await_pending_logging()
 
-    assert drained == "failure", "the failure callback released the slot, so the proxy must not release it again"
+    assert drained is False
     assert upstream.closed is True
     assert recorder.success_payloads == ()
     assert len(recorder.failure_payloads) == 1
