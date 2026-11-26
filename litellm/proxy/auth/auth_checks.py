@@ -5047,10 +5047,13 @@ def check_model_access_helper(
     ## check if model in allowed model names
     from collections import defaultdict
 
+    routed_model: Final = (
+        _live_team_alias_target(model, team_model_aliases, team_id, llm_router) if team_model_aliases else model
+    )
     access_groups: dict[str, list[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.registry().access_groups(model_name=model, team_id=team_id)
+        access_groups = llm_router.registry().access_groups(model_name=routed_model, team_id=team_id)
 
     models = _resolve_all_team_model_sentinel_for_auth_check(
         models=models,
@@ -5066,10 +5069,7 @@ def check_model_access_helper(
     # Filter out models that are access_groups
     filtered_models: Final = [m for m in models if m not in access_groups]
 
-    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
-        return True
-
-    if model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
+    if model_matches_any_wildcard_pattern_in_list(model=routed_model, allowed_model_list=filtered_models):
         return True
 
     all_model_access: bool = False
@@ -5080,7 +5080,7 @@ def check_model_access_helper(
     if SpecialModelNames.all_proxy_models.value in filtered_models:
         all_model_access = True
 
-    if model is not None and model not in filtered_models and all_model_access is False:
+    if routed_model is not None and routed_model not in filtered_models and all_model_access is False:
         return False
     return True
 
@@ -5148,17 +5148,19 @@ def _can_object_call_model(
 
     from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
 
-    compaction_parent: Final = native_compaction_parent(model)
+    after_team_alias: Final = (
+        _live_team_alias_target(model, team_model_aliases, team_id, llm_router) if team_model_aliases else model
+    )
+    compaction_parent: Final = native_compaction_parent(after_team_alias)
     global_or_router_alias_target: Final = (
-        litellm.model_alias_map[model]
-        if model in litellm.model_alias_map
+        litellm.model_alias_map[after_team_alias]
+        if after_team_alias in litellm.model_alias_map
         else (
-            llm_router.registry().resolve(model, kind="alias")
-            if llm_router is not None and model in llm_router.registry().aliases()
+            llm_router.registry().resolve(after_team_alias, kind="alias")
+            if llm_router is not None and after_team_alias in llm_router.registry().aliases()
             else None
         )
     )
-    after_team_alias: Final = team_model_aliases.get(model, model) if team_model_aliases else model
     after_key_alias: Final = (
         key_model_aliases.get(after_team_alias, after_team_alias) if key_model_aliases else after_team_alias
     )
@@ -5171,7 +5173,8 @@ def _can_object_call_model(
         (dispatched_model,)
         if key_alias_applied
         else (
-            *((model, compaction_parent) if compaction_parent is not None else (model,)),
+            *((model,) if after_team_alias != model else ()),
+            *((after_team_alias, compaction_parent) if compaction_parent is not None else (after_team_alias,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
         )
     )
@@ -5179,7 +5182,7 @@ def _can_object_call_model(
         ()
         if key_alias_applied
         else _owning_team_names_for_team_deployment(
-            model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
+            model=after_team_alias, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
         )
     )
 
@@ -5189,7 +5192,6 @@ def _can_object_call_model(
             model=m,
             llm_router=llm_router,
             models=models,
-            team_model_aliases=team_model_aliases,
             team_id=team_id,
         ):
             return True
@@ -5396,24 +5398,6 @@ async def _check_agent_caller_model_access(
         user_object=caller_user,
         key_model_aliases=caller_key_model_aliases,
     )
-
-
-def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None = None) -> bool:
-    """
-    Returns True if `model` being accessed is an alias of a team model
-
-    - `model=gpt-4o`
-    - `team_model_aliases={"gpt-4o": "gpt-4o-team-1"}`
-        - returns True
-
-    - `model=gp-4o`
-    - `team_model_aliases={"o-3": "o3-preview"}`
-        - returns False
-    """
-    if team_model_aliases:
-        if model in team_model_aliases:
-            return True
-    return False
 
 
 def key_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> Mapping[str, str] | None:
