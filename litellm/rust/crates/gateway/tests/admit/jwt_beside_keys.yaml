@@ -32,3 +32,10 @@ requests:
     headers: {authorization: Bearer sk-claude}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: rust
+
+  - name: a virtual key choosing a team by header
+    headers: {authorization: Bearer sk-claude, x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: x-litellm-team-id

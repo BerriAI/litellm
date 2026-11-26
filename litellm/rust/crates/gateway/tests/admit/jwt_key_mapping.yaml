@@ -34,6 +34,14 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: rust
 
+  - name: a mapped JWT choosing a team by header
+    jwt: {claims: {client_id: svc-claude}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: x-litellm-team-id
+
   - name: a mapped JWT, for a model off its key's list
     jwt: {claims: {client_id: svc-claude}}
     body: {model: claude-down, max_tokens: 16, messages: []}
