@@ -7221,6 +7221,35 @@ async def test_transport_read_error_after_finish_reason_ends_stream_gracefully(
 
 
 @pytest.mark.asyncio
+async def test_transport_read_error_after_finish_reason_warns_operators(
+    logging_obj: Logging,
+    caplog: pytest.LogCaptureFixture,
+):
+    import httpx
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=TransportErrorAfterChunksIterator(
+            model_responses=[_reset_test_chunk(content="Hello"), _reset_test_chunk(finish_reason="stop")],
+            exception=httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
+        ),
+        model="hosted_vllm/stub-model",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        _ = [chunk async for chunk in response]
+
+    warnings: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert any(
+        "hosted_vllm" in message
+        and "finish_reason=stop" in message
+        and "RemoteProtocolError: peer closed connection without sending complete message body" in message
+        for message in warnings
+    )
+
+
+@pytest.mark.asyncio
 async def test_transport_read_error_before_finish_reason_raises(logging_obj: Logging):
     """A connection reset before any finish chunk must surface, never end as a clean stop.
 
