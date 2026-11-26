@@ -16,7 +16,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Generic, Protocol, TypeVar
 
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy.mcp_server.outbound_credentials.types import CredError
@@ -228,7 +228,10 @@ class CachedOAuthTokenStore:
         return outcome
 
 
-class RefreshCoordinator(Protocol):
+OutcomeT = TypeVar("OutcomeT")
+
+
+class RefreshCoordinator(Protocol[OutcomeT]):
     """Ensures one refresh runs per ``(user_id, server_id)`` at a time. Concurrent callers either
     share the winner's result (the default ``InProcessRefreshCoordinator``) or, in a cross-replica
     coordinator, wait for the holder and ``reread`` the token it persisted - so the IdP sees one
@@ -239,12 +242,12 @@ class RefreshCoordinator(Protocol):
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
-        reread: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
-    ) -> Result[OAuthToken, CredError]: ...
+        refresh: Callable[[], Awaitable[OutcomeT]],
+        reread: Callable[[], Awaitable[OutcomeT]],
+    ) -> OutcomeT: ...
 
 
-class InProcessRefreshCoordinator:
+class InProcessRefreshCoordinator(Generic[OutcomeT]):
     """Single-flight within one event loop (the default): the first caller per key refreshes while
     concurrent callers await the same in-flight task and share its result. ``reread`` is unused here -
     the shared task already yields the new token - and exists for the cross-replica coordinator, where
@@ -254,15 +257,15 @@ class InProcessRefreshCoordinator:
     def __init__(self) -> None:
         # In-flight refreshes, one task per (user, server); each entry is removed by the task's
         # done-callback, so the map is bounded by concurrent refreshes, not by distinct keys seen.
-        self._inflight: dict[tuple[str, str], asyncio.Future[Result[OAuthToken, CredError]]] = {}
+        self._inflight: dict[tuple[str, str], asyncio.Future[OutcomeT]] = {}
 
     async def run(
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
-        reread: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
-    ) -> Result[OAuthToken, CredError]:
+        refresh: Callable[[], Awaitable[OutcomeT]],
+        reread: Callable[[], Awaitable[OutcomeT]],
+    ) -> OutcomeT:
         key: Final = (user_id, server_id)
         task = self._inflight.get(key)
         if task is None:
@@ -293,14 +296,14 @@ class RefreshingTokenStore:
         refresher: TokenRefresher,
         *,
         expiry_skew_seconds: float = 60.0,
-        coordinator: RefreshCoordinator | None = None,
+        coordinator: RefreshCoordinator[Result[OAuthToken, CredError]] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._inner = inner
         self._refresher = refresher
         self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock
-        self._coordinator: RefreshCoordinator = coordinator or InProcessRefreshCoordinator()
+        self._coordinator: RefreshCoordinator[Result[OAuthToken, CredError]] = coordinator or InProcessRefreshCoordinator()
 
     def _is_expired(self, token: OAuthToken) -> bool:
         return token.expires_at is not None and self._clock() >= token.expires_at - self._expiry_skew_seconds

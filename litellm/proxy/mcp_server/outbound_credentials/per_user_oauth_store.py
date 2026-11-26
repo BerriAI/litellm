@@ -160,7 +160,13 @@ def _redis_cache_is_available() -> bool:
     return redis_usage_cache is not None
 
 
-def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
+def _runtime_result_coordinator() -> RefreshCoordinator[Result[OAuthToken, CredError]] | None:
+    return runtime_refresh_coordinator()
+
+
+def _runtime_backend_and_coordinator() -> tuple[
+    TokenCacheBackend | None, RefreshCoordinator[Result[OAuthToken, CredError]] | None, bool
+]:
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
@@ -172,7 +178,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
         redis_usage_cache,  # noqa: PLC0415  # runtime global is wired after module import
     )
 
-    coordinator: Final = runtime_refresh_coordinator()
+    coordinator: Final = _runtime_result_coordinator()
     if coordinator is None or redis_usage_cache is None:
         return None, None, False
     codec: Final = OAuthTokenCacheCodec(

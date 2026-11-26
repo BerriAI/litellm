@@ -12,7 +12,7 @@ would be a bug waiting to differ.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, TypeVar
 
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     RefreshCoordinator,
@@ -25,7 +25,10 @@ from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator imp
 )
 
 
-def runtime_refresh_coordinator() -> RefreshCoordinator | None:
+CoordinatorOutcomeT = TypeVar("CoordinatorOutcomeT")
+
+
+def runtime_refresh_coordinator() -> RefreshCoordinator[CoordinatorOutcomeT] | None:
     from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # runtime global
 
     redis_cache: Final = redis_usage_cache

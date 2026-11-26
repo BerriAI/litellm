@@ -118,7 +118,11 @@ class AssertionWrite(Protocol):
 class CoordinatorFactory(Protocol):
     """Builds the cross-replica coordinator, or ``None`` when there is no shared lock to build on."""
 
-    def __call__(self) -> RefreshCoordinator | None: ...
+    def __call__(self) -> RefreshCoordinator[None] | None: ...
+
+
+def _runtime_none_coordinator() -> RefreshCoordinator[None] | None:
+    return runtime_refresh_coordinator()
 
 
 class FormPost(Protocol):
@@ -433,7 +437,7 @@ class RefreshingSSOAssertionStore:
         refresher: SSOAssertionRefresher,
         *,
         fresh_read: AssertionRead,
-        coordinator_factory: CoordinatorFactory = runtime_refresh_coordinator,
+        coordinator_factory: CoordinatorFactory = _runtime_none_coordinator,
         expiry_skew_seconds: float = _DEFAULT_EXPIRY_SKEW_SECONDS,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
@@ -441,8 +445,8 @@ class RefreshingSSOAssertionStore:
         self._refresher = refresher
         self._fresh_read = fresh_read
         self._coordinator_factory = coordinator_factory
-        self._in_process_coordinator = InProcessRefreshCoordinator()
-        self._distributed_coordinator: RefreshCoordinator | None = None
+        self._in_process_coordinator: InProcessRefreshCoordinator[None] = InProcessRefreshCoordinator()
+        self._distributed_coordinator: RefreshCoordinator[None] | None = None
         self._skew = timedelta(seconds=expiry_skew_seconds)
         self._clock = clock
 
@@ -464,7 +468,7 @@ class RefreshingSSOAssertionStore:
     def _expiring(self, assertion: SSOIdentityAssertion | None) -> bool:
         return assertion is not None and assertion_expired(assertion, self._clock() + self._skew)
 
-    def _coordinator(self) -> RefreshCoordinator:
+    def _coordinator(self) -> RefreshCoordinator[None]:
         """The cross-replica coordinator once Redis is reachable, else the in-process one.
 
         Built on first use and kept, because the proxy's Redis client is not wired at import time;
