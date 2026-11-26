@@ -1,4 +1,3 @@
-import asyncio
 import time
 from unittest.mock import patch
 
@@ -153,3 +152,31 @@ async def test_aresponses_empty_mock_response(stream: bool):
     else:
         assert isinstance(response, ResponsesAPIResponse)
         assert response.output[0].content[0].text == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("as_dict", [False, True])
+async def test_aresponses_assigns_a_synthetic_id_to_structured_mocks(stream: bool, as_dict: bool) -> None:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    supplied = ResponsesAPIResponse(id="resp_fixture", created_at=1741476542, output=[])
+    response = await litellm.aresponses(
+        model="openai/gpt-4.1",
+        input="hi",
+        mock_response=supplied.model_dump() if as_dict else supplied,
+        stream=stream,
+        api_key="mock-key",
+    )
+
+    if stream:
+        assert isinstance(response, MockResponsesAPIStreamingIterator)
+        response_ids = {event.response.id async for event in response if event.type == "response.completed"}
+        assert len(response_ids) == 1
+        response_id = response_ids.pop()
+    else:
+        assert isinstance(response, ResponsesAPIResponse)
+        response_id = response.id
+    decoded = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    assert decoded["response_id"].startswith("resp_mock_")
+    assert supplied.id == "resp_fixture"

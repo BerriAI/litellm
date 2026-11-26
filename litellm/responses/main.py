@@ -1864,6 +1864,10 @@ def responses(
             else:
                 mock_resp = mock_responses_api_response(mock_response=str(mock_response_val), model=model)
 
+            from litellm._uuid import uuid
+
+            mock_resp = mock_resp.model_copy(update={"id": f"resp_mock_{uuid.uuid4().hex}"})
+
             if stream is True:
                 from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
 
