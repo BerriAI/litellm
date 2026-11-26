@@ -330,7 +330,7 @@ def proxy_sub_call_forwarded_headers(parent_kwargs: Mapping[str, object]) -> Map
     admin-configured model reaches that upstream under the same caller identity. Only the headers
     ``forward_client_headers_to_llm_api`` resolved for the parent are carried, never the rest of the
     request's headers."""
-    headers: Final = _object_mapping(parent_kwargs.get("headers"))
+    headers: Final = object_mapping(parent_kwargs.get("headers"))
     if headers is None:
         return None
     forwarded: Final = {name: value for name, value in headers.items() if isinstance(value, str)}
