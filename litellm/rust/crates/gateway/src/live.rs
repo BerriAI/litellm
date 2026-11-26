@@ -13,7 +13,7 @@ use arc_swap::ArcSwap;
 use axum::{extract::Request, response::Response};
 use tower::{Service, ServiceExt, util::BoxCloneSyncService};
 
-use crate::{Admit, AppState, Refused};
+use crate::{Admit, AppState, Reason, Refusal, Refused};
 
 type Native = BoxCloneSyncService<Request, Response, Infallible>;
 
@@ -47,16 +47,27 @@ impl Served {
         }
     }
 
-    async fn admit(self: Arc<Self>, request: Request) -> Result<Request, (Box<Request>, Refused)> {
+    /// A request refused as denied carries this [`Served`] too, since the native app that
+    /// refuses it has to be the one `admit` judged it for.
+    async fn admit(self: Arc<Self>, request: Request) -> Result<Request, (Box<Request>, Reason)> {
         let Some(admit) = self.admit.clone() else {
-            return Err((Box::new(request), Refused::Configuration));
+            return Err((
+                Box::new(request),
+                Reason::new(Refused::Configuration, "configuration"),
+            ));
         };
-        let mut admitted = admit
-            .admit(request)
-            .await
-            .map_err(|(request, reason)| (request, reason.why))?;
-        admitted.extensions_mut().insert(AdmittedBy(self));
-        Ok(admitted)
+        match admit.admit(request).await {
+            Ok(mut admitted) => {
+                admitted.extensions_mut().insert(AdmittedBy(self));
+                Ok(admitted)
+            }
+            Err((mut refused, reason)) => {
+                if reason.refusal == Refusal::Denied {
+                    refused.extensions_mut().insert(AdmittedBy(self));
+                }
+                Err((refused, reason))
+            }
+        }
     }
 }
 
@@ -103,7 +114,7 @@ impl Live {
     pub async fn admitted(
         self: Arc<Self>,
         request: Request,
-    ) -> Result<Request, (Box<Request>, Refused)> {
+    ) -> Result<Request, (Box<Request>, Reason)> {
         self.current().admit(request).await
     }
 
@@ -237,7 +248,10 @@ mod tests {
         swapped_to(&live, served("after", "sonnet", &released).await).await;
         let admitted = live.clone().admitted(asking_for(model)).await;
 
-        assert_eq!(admitted.as_ref().err().map(|(_, why)| *why), refused);
+        assert_eq!(
+            admitted.as_ref().err().map(|(_, reason)| reason.why),
+            refused
+        );
     }
 
     #[rstest]

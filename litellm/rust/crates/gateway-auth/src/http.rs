@@ -74,8 +74,9 @@ fn blank(parts: &Parts, name: impl AsHeaderName) -> bool {
 
 fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
     single(parts, AUTHORIZATION)
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(token)
+        .and_then(|value| value.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .and_then(|(_, credential)| token(credential))
         .ok_or(Error::InvalidToken)
 }
 
@@ -93,10 +94,11 @@ fn token(value: &str) -> Option<SecretValue> {
         .map(SecretValue::new)
 }
 
-/// A caller the server already authenticated for this request with the same [`Auth`] the route
-/// layer holds, which [`authenticate`] takes instead of reading the credential again. Only server
-/// code can put it on a request, since clients never set extensions.
-pub struct Preauthenticated<R: Rows>(pub Authenticated<R>);
+/// What the server already decided about this request's credential with the same [`Auth`] the
+/// route layer holds, the caller or the refusal. [`authenticate`] takes it instead of reading the
+/// credential again, so a request is authenticated once and a refusal stays one. Only server code
+/// can put it on a request, since clients never set extensions.
+pub struct Preauthenticated<R: Rows>(pub Result<Authenticated<R>, Arc<Error>>);
 
 impl<R: Rows> Clone for Preauthenticated<R> {
     fn clone(&self) -> Self {
@@ -111,7 +113,8 @@ pub async fn authenticate<R: Rows>(
 ) -> Result<Response, Error> {
     let (mut parts, body) = request.into_parts();
     let caller = match parts.extensions.remove::<Preauthenticated<R>>() {
-        Some(Preauthenticated(caller)) => caller,
+        Some(Preauthenticated(Ok(caller))) => caller,
+        Some(Preauthenticated(Err(refusal))) => return Ok(refusal.response()),
         None => auth.authenticate_parts(&parts).await?,
     };
     parts.extensions.insert(caller);
@@ -206,6 +209,7 @@ mod tests {
     #[case::empty_api_key_falls_back(&[("api-key", ""), ("x-api-key", "key")], Some("key"))]
     #[case::api_key_is_taken_as_sent(&[("api-key", "Bearer key")], None)]
     #[case::bearer(&[("authorization", "Bearer key")], Some("key"))]
+    #[case::bearer_in_lower_case(&[("authorization", "bearer key")], Some("key"))]
     #[case::bearer_wins(&[("authorization", "Bearer bearer"), ("x-api-key", "x")], Some("bearer"))]
     #[case::bearer_wins_over_both(&[("authorization", "Bearer bearer"), ("api-key", "api"), ("x-api-key", "x")], Some("bearer"))]
     #[case::bearer_extra_space(&[("authorization", "Bearer  key")], None)]

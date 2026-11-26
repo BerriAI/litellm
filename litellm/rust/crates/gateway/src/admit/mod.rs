@@ -26,7 +26,7 @@ use crate::{
     host::{self, NativeHost, NativeRows},
 };
 use checks::Fields;
-pub use checks::Reason;
+pub use checks::{Reason, Refusal};
 
 /// Why the gateway does not serve a request the way the Python proxy would.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr)]
@@ -175,7 +175,8 @@ impl Admit {
 
     /// A caller whose model lists do not reach the model it asks for goes to Python, which
     /// answers the refusal itself. The native route asks the same question of the same router,
-    /// and the auth core answers both.
+    /// and the auth core answers both, but only after its pre-call hooks have counted the
+    /// request, so this is not a denial the native app may answer.
     fn model_access(&self, caller: &Authenticated<NativeRows>, fields: &Fields) -> Option<Reason> {
         let model = fields.get("model")?.as_str()?;
         let allowed = match &self.inference {
@@ -187,7 +188,8 @@ impl Admit {
 
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
-    /// keeps the bytes the client sent and carries nothing more.
+    /// keeps the bytes the client sent. Either carries the authentication `admit` ran, so the
+    /// native app never authenticates the request again and a key `admit` refused stays refused.
     pub async fn admit(
         self: Arc<Self>,
         request: Request,
@@ -201,6 +203,11 @@ impl Admit {
             .iter()
             .find_map(|check| check(&self, &authenticated))
         {
+            if let Err(error) = authenticated {
+                parts
+                    .extensions
+                    .insert(Preauthenticated::<NativeRows>(Err(Arc::new(error))));
+            }
             return Err(refused(parts, body, reason));
         }
         let (body, whole) = body::read(&parts, body).await;
@@ -225,7 +232,7 @@ impl Admit {
         }
         parts.extensions.insert(JsonObject(fields));
         if let Ok(caller) = authenticated {
-            parts.extensions.insert(Preauthenticated(caller));
+            parts.extensions.insert(Preauthenticated(Ok(caller)));
         }
         Ok(Request::from_parts(parts, body))
     }
@@ -335,15 +342,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::over_its_caller("Bearer sk-someone-else", "claude", Refused::Credential)]
-    #[case::over_its_body("Bearer gateway-key", "claude\",\"user\":\"end-user", Refused::Body)]
-    #[case::over_a_body_that_is_not_json("Bearer gateway-key", "claude\"}}", Refused::Body)]
-    #[case::over_its_model("Bearer gateway-key", "gpt", Refused::Model)]
+    #[case::over_its_caller("Bearer sk-someone-else", "claude", Refused::Credential, true)]
+    #[case::over_its_body(
+        "Bearer gateway-key",
+        "claude\",\"user\":\"end-user",
+        Refused::Body,
+        false
+    )]
+    #[case::over_a_body_that_is_not_json("Bearer gateway-key", "claude\"}}", Refused::Body, false)]
+    #[case::over_its_model("Bearer gateway-key", "gpt", Refused::Model, false)]
     #[tokio::test]
-    async fn a_refused_request_comes_back_as_the_client_sent_it(
+    async fn a_refused_request_comes_back_as_the_client_sent_it_with_the_key_refusal_admit_made(
         #[case] authorization: &str,
         #[case] model: &str,
         #[case] why: Refused,
+        #[case] key_refused: bool,
     ) {
         let sent = format!(r#"{{"model":"{model}","max_tokens":8,"messages":[]}}"#);
         let request = Request::post("/v1/messages?beta=true")
@@ -362,8 +375,20 @@ mod tests {
                 returned.headers().len(),
                 returned.headers()["x-litellm-call-id"].to_str().unwrap(),
                 returned.extensions().len(),
+                matches!(
+                    returned.extensions().get::<Preauthenticated<NativeRows>>(),
+                    Some(Preauthenticated(Err(_)))
+                ),
             ),
-            (why, &Method::POST, "/v1/messages?beta=true", 2, "abc", 0)
+            (
+                why,
+                &Method::POST,
+                "/v1/messages?beta=true",
+                2,
+                "abc",
+                usize::from(key_refused),
+                key_refused
+            )
         );
         let body = axum::body::to_bytes(returned.into_body(), usize::MAX)
             .await
