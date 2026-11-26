@@ -5,6 +5,18 @@ import { masterKey } from "../../helpers/traffic";
 test("switching callback providers drops the previous credentials and a rejected save keeps the current draft", async ({
   page,
 }) => {
+  const failure = "Callback could not be saved";
+  const writes: unknown[] = [];
+  await page.route("**/config/update", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    writes.push(route.request().postDataJSON());
+    expect.soft(writes, "Only one callback write is expected").toHaveLength(1);
+    await route.fulfill({ status: 500, json: { detail: failure } });
+  });
+
   await page.goto("/ui/login");
   await page.getByPlaceholder("Enter your username").fill("admin");
   await page.getByPlaceholder("Enter your password").fill(masterKey());
@@ -41,41 +53,36 @@ test("switching callback providers drops the previous credentials and a rejected
   const endpoint = dialog.getByLabel("Endpoint URL", { exact: true });
   const draftUrl = "https://example.invalid/telemetry";
   await endpoint.fill(draftUrl);
-  await dialog
-    .getByRole("combobox", { name: "Export Protocol", exact: true })
-    .click();
+  const protocol = dialog.getByRole("combobox", {
+    name: "Export Protocol",
+    exact: true,
+  });
+  await protocol.click();
   await page.getByRole("option", { name: "http/json", exact: true }).click();
-  await dialog
-    .getByRole("switch", { name: "Emit Background Service Spans", exact: true })
-    .click();
+  const backgroundSpans = dialog.getByRole("switch", {
+    name: "Emit Background Service Spans",
+    exact: true,
+  });
+  await backgroundSpans.click();
 
-  const failure = "Callback could not be saved";
-  await page.route(
-    "**/config/update",
-    (route) => route.fulfill({ status: 500, json: { detail: failure } }),
-    {
-      times: 1,
-    },
-  );
-  const write = page.waitForRequest(
-    (request) =>
-      request.method() === "POST" &&
-      new URL(request.url()).pathname === "/config/update",
-  );
   await dialog
     .getByRole("button", { name: "Add Callback", exact: true })
     .click();
-  expect((await write).postDataJSON()).toEqual({
-    environment_variables: {
-      callback: "otel",
-      otel_endpoint: draftUrl,
-      otel_traces_endpoint: "",
-      otel_headers: "",
-      otel_exporter_otlp_protocol: "http/json",
-      LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS: "false",
-    },
-    litellm_settings: { success_callback: ["otel"] },
-  });
   await expect(page.getByText(failure, { exact: true })).toBeVisible();
   await expect(endpoint).toHaveValue(draftUrl);
+  await expect(protocol.getByText("http/json", { exact: true })).toBeVisible();
+  await expect(backgroundSpans).toHaveAttribute("aria-checked", "false");
+  expect(writes).toEqual([
+    {
+      environment_variables: {
+        callback: "otel",
+        otel_endpoint: draftUrl,
+        otel_traces_endpoint: "",
+        otel_headers: "",
+        otel_exporter_otlp_protocol: "http/json",
+        LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS: "false",
+      },
+      litellm_settings: { success_callback: ["otel"] },
+    },
+  ]);
 });

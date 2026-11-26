@@ -1,6 +1,6 @@
 import type { components } from "@/lib/http/schema";
 
-import type { CallbackFormValues, SlackFormValues } from "./schema";
+import type { AlertType, CallbackFormValues, SlackFormValues } from "./schema";
 
 type ConfigPayload = components["schemas"]["ConfigYAML"];
 
@@ -34,9 +34,12 @@ type SlackPayload = {
   general_settings: Pick<NonNullable<ConfigPayload["general_settings"]>, "alert_to_webhook_url" | "alert_types">;
 };
 
-export const slackToPayload = ({ activeAlerts, ...webhookUrls }: SlackFormValues): SlackPayload => ({
+export const slackToPayload = (
+  { activeAlerts, ...webhookUrls }: SlackFormValues,
+  alertTypes: AlertType[],
+): SlackPayload => ({
   general_settings: {
-    alert_to_webhook_url: webhookUrls,
+    alert_to_webhook_url: Object.fromEntries(alertTypes.map((key) => [key, webhookUrls[key] ?? ""])),
     alert_types: activeAlerts,
   },
 });

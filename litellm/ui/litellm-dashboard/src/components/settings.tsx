@@ -43,7 +43,11 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { callbackToForm, callbackToPayload, slackToPayload } from "./Settings/LoggingAndAlerts/LoggingCallbacks/mapper";
 import { callbackSchema, slackSchema } from "./Settings/LoggingAndAlerts/LoggingCallbacks/schema";
-import type { AlertType, CallbackFormValues } from "./Settings/LoggingAndAlerts/LoggingCallbacks/schema";
+import type {
+  AlertType,
+  CallbackFormValues,
+  SlackFormValues,
+} from "./Settings/LoggingAndAlerts/LoggingCallbacks/schema";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
 
@@ -554,20 +558,29 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     editForm.reset();
   };
 
-  const handleSaveAlerts = async () => {
+  const bindSlackWebhook = (key: AlertType) => {
+    const syncValue = (input: HTMLInputElement) => {
+      if (slackForm.getValues(key) !== input.value) {
+        setSlackValue(key, input.value);
+      }
+    };
+    const handleInput = (event: React.FormEvent<HTMLInputElement>) => syncValue(event.currentTarget);
+    return {
+      name: key,
+      onInput: handleInput,
+      onChange: handleInput,
+      ref(input: HTMLInputElement | null) {
+        if (input) syncValue(input);
+      },
+    };
+  };
+
+  const handleSaveAlerts = async (values: SlackFormValues) => {
     if (!accessToken) {
       return;
     }
 
-    const webhookUrls = Object.fromEntries(
-      slackAlertTypes.map((key) => [
-        key,
-        document.querySelector<HTMLInputElement>(`input[name="${key}"]`)?.value || "",
-      ]),
-    );
-    const payload = slackToPayload(
-      slackSchema.parse({ ...webhookUrls, activeAlerts: slackForm.getValues("activeAlerts") }),
-    );
+    const payload = slackToPayload(values, slackAlertTypes);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -711,20 +724,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                       </TableCell>
                       <TableCell>
                         <Input
-                          {...slackForm.register(key)}
+                          {...bindSlackWebhook(key)}
                           type="password"
-                          defaultValue={
-                            alertToWebhooks && alertToWebhooks[key]
-                              ? alertToWebhooks[key]
-                              : (catchAllWebhookURL as string)
-                          }
+                          defaultValue={alertToWebhooks?.[key] || catchAllWebhookURL}
                         />
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-              <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+              <Button size="xs" className="mt-2" onClick={slackForm.handleSubmit(handleSaveAlerts)}>
                 {t("loggingAndAlerts.alertTypes.saveChanges")}
               </Button>
 
