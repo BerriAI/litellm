@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 import json
+import time
 from collections.abc import Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -118,6 +119,7 @@ else:
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.litellm_params import (
     PROMPT_TEMPLATE_APPLIED,
     params_the_prompt_hook_changed,
@@ -159,6 +161,7 @@ from .retrieve_stream_query import (
 )
 from .streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
@@ -244,6 +247,68 @@ def mock_responses_api_response(
             "metadata": {},
         }
     )
+
+
+def _mock_responses_api_result(
+    *,
+    mock_response: str,
+    stream: bool | None,
+    model: str,
+    custom_llm_provider: str | None,
+    litellm_logging_obj: LiteLLMLoggingObj,
+    litellm_metadata: Mapping[str, object] | None,
+) -> ResponsesAPIResponse | MockResponsesAPIStreamingIterator:
+    response: Final = mock_responses_api_response(mock_response=mock_response)
+    if not stream:
+        return response
+    return MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200, content=response.model_dump_json()),
+        model=model,
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=litellm_logging_obj,
+        litellm_metadata=dict(litellm_metadata) if litellm_metadata is not None else None,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+
+async def _return_after_mock_delay(
+    result: ResponsesAPIResponse | MockResponsesAPIStreamingIterator, mock_delay: float
+) -> ResponsesAPIResponse | MockResponsesAPIStreamingIterator:
+    await asyncio.sleep(mock_delay)
+    return result
+
+
+def _mock_responses_api_dispatch(
+    *,
+    mock_response: str,
+    stream: bool | None,
+    model: str,
+    custom_llm_provider: str | None,
+    litellm_logging_obj: LiteLLMLoggingObj,
+    request_kwargs: Mapping[str, object],
+    is_async: bool,
+) -> (
+    ResponsesAPIResponse
+    | MockResponsesAPIStreamingIterator
+    | Coroutine[object, object, ResponsesAPIResponse | MockResponsesAPIStreamingIterator]
+):
+    metadata: Final = request_kwargs.get("litellm_metadata")
+    delay: Final = request_kwargs.get("mock_delay")
+    mock_delay: Final = delay if isinstance(delay, (int, float)) else None
+    mock_result: Final = _mock_responses_api_result(
+        mock_response=mock_response,
+        stream=stream,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        litellm_logging_obj=litellm_logging_obj,
+        litellm_metadata=_STR_MAPPING.validate_python(metadata) if metadata is not None else None,
+    )
+    if not mock_delay:
+        return mock_result
+    if is_async:
+        return _return_after_mock_delay(mock_result, mock_delay)
+    time.sleep(mock_delay)
+    return mock_result
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -1809,7 +1874,15 @@ def responses(
         # MOCK RESPONSE LOGIC
         #########################################################
         if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
-            return mock_responses_api_response(mock_response=litellm_params.mock_response)
+            return _mock_responses_api_dispatch(
+                mock_response=litellm_params.mock_response,
+                stream=stream,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                litellm_logging_obj=litellm_logging_obj,
+                request_kwargs=request_kwargs,
+                is_async=_is_async,
+            )
 
         model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
