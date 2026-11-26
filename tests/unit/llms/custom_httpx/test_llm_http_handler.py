@@ -5130,7 +5130,7 @@ def _streamed_text(chunks):
     return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
 
 
-async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_request_hook_only_when_sync():
+async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_request_hook():
     config = _IteratorRecordingConfig()
     sync_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_sse_echoing_transformed_by)))
     async_client = AsyncHTTPHandler()
@@ -5142,7 +5142,7 @@ async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_reque
     assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
     assert config.iterator_requests == [
         {"sync_stream": True, "json_mode": True},
-        {"sync_stream": False, "json_mode": False},
+        {"sync_stream": False, "json_mode": True},
     ]
 
 
