@@ -595,8 +595,8 @@ def _ascii_image_edit_stream_body(data: object, files: object) -> str | None:
 
 
 def _image_edit_stream_headers(
-    headers: Mapping[str, str], body: str
-) -> dict[str, str]:  # mutable-ok: HTTPHandler.post and AsyncHTTPHandler.post require dict headers
+    headers: Mapping[str, object], body: str
+) -> dict[str, object]:  # mutable-ok: HTTPHandler.post and AsyncHTTPHandler.post require dict headers
     return {
         **{key: value for key, value in headers.items() if key.lower() not in ("content-length", "transfer-encoding")},
         "Content-Length": str(len(body)),

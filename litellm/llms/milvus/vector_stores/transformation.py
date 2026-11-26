@@ -58,8 +58,8 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         super().__init__()
 
     def validate_environment(
-        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, str]:
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         api_key: str | None = None
         if litellm_params is not None:
             api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")

@@ -23,5 +23,7 @@ class AzureOpenAIVectorStoreConfig(OpenAIVectorStoreConfig):
         url: Final = f"{path}/{encoded_vector_store_id}"
         return f"{url}?{query}" if query else url
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict[str, str]:
+    def validate_environment(
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
