@@ -23,11 +23,13 @@ from litellm.litellm_core_utils.health_check_helpers import (
     native_health_check_mode,
     wildcard_health_check_models,
 )
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
+    AdminApiKeySecretReference,
     TextChoices,
     TextCompletionResponse,
     Usage,
@@ -141,6 +143,88 @@ async def test_ahealth_check_image_edit_still_fails_on_non_moderation_errors():
         )
 
     assert "error" in result
+
+
+def _gemini_no_image_answer() -> httpx.Response:
+    return httpx.Response(422, request=httpx.Request("POST", "https://generativelanguage.googleapis.com"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_error", "healthy"),
+    (
+        pytest.param(
+            ImageRefusalError(
+                message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_gemini_no_image_answer(),
+                provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+                billed_answer=None,
+            ),
+            True,
+            id="refused",
+        ),
+        pytest.param(
+            litellm.ContentPolicyViolationError(
+                message="content_policy_violation",
+                model="dall-e-3",
+                llm_provider="openai",
+            ),
+            False,
+            id="provider-content-policy-error",
+        ),
+        pytest.param(
+            UnservedImageError(
+                message="Gemini returned no image, finishReason=STOP",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_gemini_no_image_answer(),
+                billed_answer=litellm.ImageResponse(),
+            ),
+            True,
+            id="answered-without-an-image",
+        ),
+        pytest.param(
+            litellm.UnprocessableEntityError(
+                message="request body failed validation",
+                model="gemini-3.1-flash-image",
+                llm_provider="gemini",
+                response=_gemini_no_image_answer(),
+            ),
+            False,
+            id="rejected-request",
+        ),
+    ),
+)
+async def test_ahealth_check_image_generation_counts_a_model_answer_without_an_image_as_healthy(
+    probe_error: Exception, healthy: bool
+) -> None:
+    with patch(  # test-quality-ok: the public health-check path has no dependency injection seam
+        "litellm.aimage_generation", new_callable=AsyncMock, side_effect=probe_error
+    ):
+        result = await ahealth_check(
+            {"model": "gemini/gemini-3.1-flash-image", "api_key": "test-key"},
+            mode="image_generation",
+            prompt="test from litellm",
+        )
+
+    assert ("error" not in result) is healthy
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_image_edit_keeps_a_content_policy_block_healthy() -> None:
+    blocked: Final = litellm.ContentPolicyViolationError(
+        message="moderation_blocked",
+        model="gpt-image-1",
+        llm_provider="openai",
+    )
+    with patch(  # test-quality-ok: the public health-check path has no dependency injection seam
+        "litellm.aimage_edit", new_callable=AsyncMock, side_effect=blocked
+    ):
+        result = await ahealth_check({"model": "gpt-image-1", "api_key": "sk-test"}, mode="image_edit")
+
+    assert "error" not in result
 
 
 @pytest.mark.asyncio
@@ -808,6 +892,36 @@ def test_native_health_check_mode_routes_mantle_claude_to_messages_and_soniox_re
     model: str, custom_llm_provider: str | None, expected: str | None
 ) -> None:
     assert native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider) == expected
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "model", "expected"),
+    (
+        ("elevenlabs/scribe_v2_realtime", "scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v2_realtime", "elevenlabs/scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v9_realtime", "scribe_v9_realtime", "realtime"),
+        ("elevenlabs/scribe_v2", "scribe_v2", "audio_transcription"),
+        ("elevenlabs/eleven_v3", "eleven_v3", "audio_speech"),
+    ),
+)
+def test_elevenlabs_health_checks_use_the_websocket_for_models_the_cost_map_lists_as_realtime(
+    requested_model: str, model: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v9_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v2": {"mode": "audio_transcription", "supported_endpoints": ["/v1/audio/transcriptions"]},
+            "elevenlabs/eleven_v3": {"mode": "audio_speech"},
+        },
+    )
+
+    assert (
+        default_health_check_mode(requested_model=requested_model, model=model, custom_llm_provider="elevenlabs")
+        == expected
+    )
 
 
 def test_default_health_check_mode_prefers_the_native_surface_over_the_cost_map(
@@ -1887,6 +2001,60 @@ async def test_ahealth_check_probes_extraction_models_through_the_extraction_api
     sent: Final = json.loads(upstream.calls[0].request.content)
     assert sent["state"] == "health check"
     assert sent["fields"]["reachable"]["type"] == "text"
+
+
+
+@pytest.mark.parametrize(
+    ("mode", "model", "upstream_url", "answer"),
+    (
+        (
+            "decisions",
+            "perplexity/pplx-decider-v1-27b",
+            "https://api.perplexity.ai/v1/decisions",
+            {
+                "model": "perplexity/pplx-decider-v1-27b",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+        (
+            "extraction",
+            "cloudflare/clairic",
+            "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clairic",
+            {
+                "result": {
+                    "model": "clairic",
+                    "answers": {"reachable": {"type": "text", "value": "health"}},
+                    "truncated": False,
+                    "usage": {"input_tokens": 20, "output_tokens": 0},
+                },
+                "success": True,
+                "errors": [],
+                "messages": [],
+            },
+        ),
+    ),
+)
+async def test_ahealth_check_sends_the_secret_an_admin_oidc_reference_points_to(
+    mode: str,
+    model: str,
+    upstream_url: str,
+    answer: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setenv("QA_HEALTH_OIDC_KEY", "resolved-health-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(json=answer)
+    reference: Final = AdminApiKeySecretReference("oidc/env/QA_HEALTH_OIDC_KEY", frozenset())
+
+    result: Final = await ahealth_check({"model": model, "api_key": reference}, mode=mode)
+
+    assert "error" not in result, result
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer resolved-health-key"
 
 
 VERTEX_AUTHORIZED_USER: Final = json.dumps(

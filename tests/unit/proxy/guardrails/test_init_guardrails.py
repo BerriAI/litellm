@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -6,8 +7,14 @@ import pytest
 
 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
-from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.guardrail_registry import (
+    CustomGuardrailPathError,
+    InMemoryGuardrailHandler,
+    _guardrail_path_error,
+)
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import Mode, SupportedGuardrailIntegrations
 
 
@@ -295,6 +302,167 @@ async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(
     assert (response.choices[0].message.content != llm_answer) is expect_output_scanned
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, filter_scope, expect_client_response_masked, expect_logged_request_masked",
+    [
+        ("logging_only", None, False, True),
+        (["logging_only"], None, False, True),
+        ({"tags": {"team:audit": "logging_only"}, "default": "logging_only"}, None, False, True),
+        ("logging_only", "output", False, False),
+        (["logging_only", "pre_call"], None, True, True),
+    ],
+)
+async def test_initialize_presidio_logging_only_masks_the_log_and_not_the_client_response(
+    mode: str | list[str] | dict[str, object],
+    filter_scope: Literal["input", "output", "both"] | None,
+    expect_client_response_masked: bool,
+    expect_logged_request_masked: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer: Final = "Call me at 415-555-2671"
+    masked_answer: Final = "Call me at <PHONE_NUMBER>"
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode=mode,
+            default_on=True,
+            presidio_filter_scope=filter_scope,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+
+    def _answer() -> ModelResponse:
+        return ModelResponse(
+            choices=[Choices(message=Message(role="assistant", content=llm_answer), index=0, finish_reason="stop")]
+        )
+
+    client_response: Final = _answer()
+    data: Final[dict[str, object]] = {"metadata": {}}
+    for callback in callbacks:
+        if callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call):
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), client_response
+            )
+
+    logged_request: Final[dict[str, object]] = {"messages": [{"role": "user", "content": llm_answer}], "metadata": {}}
+    logged_responses: Final = [
+        (await callback.async_logging_hook(kwargs=logged_request, result=_answer(), call_type="acompletion"))[1]
+        for callback in callbacks
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only)
+    ]
+
+    case: Final = f"mode={mode!r} filter_scope={filter_scope!r}"
+    assert client_response.choices[0].message.content == (
+        masked_answer if expect_client_response_masked else llm_answer
+    ), f"client response for {case}"
+    assert [response.choices[0].message.content for response in logged_responses] == [masked_answer], (
+        f"logged response for {case}"
+    )
+    assert logged_request["messages"] == [
+        {"role": "user", "content": masked_answer if expect_logged_request_masked else llm_answer}
+    ], f"logged request for {case}"
+
+
+@pytest.mark.asyncio
+async def test_initialize_presidio_logging_only_masks_the_logged_responses_api_answer_and_not_the_client_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer: Final = "Call me at 415-555-2671"
+    masked_answer: Final = "Call me at <PHONE_NUMBER>"
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode="logging_only",
+            default_on=True,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+    client_response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": llm_answer, "annotations": []}],
+            }
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+    logged: Final = [
+        (await callback.async_logging_hook(kwargs={"metadata": {}}, result=client_response, call_type="aresponses"))[1]
+        for callback in callbacks
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only)
+    ]
+
+    assert [response.output[0].content[0].text for response in logged] == [masked_answer]
+    assert client_response.output[0].content[0].text == llm_answer
+
+
+@pytest.mark.asyncio
+async def test_initialize_presidio_logging_only_masks_the_logged_messages_api_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer: Final = "Call me at 415-555-2671"
+    masked_answer: Final = "Call me at <PHONE_NUMBER>"
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode="logging_only",
+            default_on=True,
+            presidio_analyzer_api_base="https://example.invalid/analyze",
+            presidio_anonymizer_api_base="https://example.invalid/anonymize",
+            mock_redacted_text={"text": masked_answer, "items": []},
+        ),
+        {"guardrail_name": "logging_only_scope"},
+    )
+    logged_answer: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content=llm_answer))])
+
+    logged: Final = [
+        (
+            await callback.async_logging_hook(
+                kwargs={"metadata": {}}, result=logged_answer, call_type="anthropic_messages"
+            )
+        )[1]
+        for callback in callbacks
+        if callback.should_run_guardrail(data={"metadata": {}}, event_type=GuardrailEventHooks.logging_only)
+    ]
+
+    assert [response.choices[0].message.content for response in logged] == [masked_answer]
+
+
 @pytest.mark.parametrize(
     "config_value, expected",
     [(True, True), (False, False), (None, False)],
@@ -428,6 +596,154 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_com
 
     with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
         init_guardrails_v2(all_guardrails=all_guardrails)
+
+
+@pytest.mark.parametrize(
+    ("module_source", "class_path"),
+    [
+        (
+            "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+            "class MyGuardrail(CustomGuardrail):\n"
+            "    pass\n\n\n"
+            "proxy_handler_instance = MyGuardrail()\n",
+            "custom_callbacks.MyGuardrail",
+        ),
+        (
+            "from litellm.integrations.custom_guardrail import CustomGuardrail as Handler\n\n"
+            "proxy_handler_instance = Handler()\n",
+            "litellm.integrations.custom_guardrail.CustomGuardrail",
+        ),
+    ],
+    ids=["class_defined_in_module", "class_imported_under_alias"],
+)
+def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_instance(
+    tmp_path: Path, module_source: str, class_path: str
+) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(module_source)
+    config_file_path: Final = str(tmp_path / "config.yaml")
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.proxy_handler_instance", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(CustomGuardrailPathError) as exc_info:
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=config_file_path)
+
+    message: Final = str(exc_info.value)
+    assert "'my-guard'" in message
+    assert "custom_callbacks.proxy_handler_instance" in message
+    assert f"guardrail: {class_path}`" in message
+    assert "constructor arguments under litellm_params" in message
+    assert "**kwargs" not in message
+    assert issubclass(get_instance_fn(class_path, config_file_path=config_file_path), CustomGuardrail)
+
+
+def test_init_guardrails_v2_tells_an_instance_with_a_no_argument_init_to_accept_kwargs(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(
+        "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+        "class Blocker(CustomGuardrail):\n"
+        "    def __init__(self):\n"
+        "        super().__init__(guardrail_name='my-guard', event_hook='pre_call', default_on=True)\n\n\n"
+        "proxy_handler_instance = Blocker()\n"
+    )
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.proxy_handler_instance", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(CustomGuardrailPathError) as exc_info:
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+
+    message: Final = str(exc_info.value)
+    assert "`guardrail: custom_callbacks.Blocker`" in message
+    assert "Blocker.__init__ does not accept them, so give it **kwargs" in message
+
+
+def test_custom_guardrail_path_error_hints_the_class_in_the_same_remote_module() -> None:
+    class RemoteGuardrail(CustomGuardrail):
+        __module__ = "guardrails/custom_callbacks"
+
+    error: Final = _guardrail_path_error(
+        "my-guard", "s3://my-bucket/guardrails/custom_callbacks.proxy_handler_instance", RemoteGuardrail()
+    )
+
+    assert "`guardrail: s3://my-bucket/guardrails/custom_callbacks.RemoteGuardrail`" in str(error)
+
+
+def test_init_guardrails_v2_points_a_custom_logger_instance_at_litellm_settings_callbacks(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(
+        "from litellm.integrations.custom_logger import CustomLogger\n\n\n"
+        "class MyCustomHandler(CustomLogger):\n"
+        "    pass\n\n\n"
+        "proxy_handler_instance = MyCustomHandler()\n"
+    )
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.proxy_handler_instance", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(CustomGuardrailPathError) as exc_info:
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+
+    message: Final = str(exc_info.value)
+    assert "'my-guard'" in message
+    assert "list `custom_callbacks.proxy_handler_instance` under litellm_settings.callbacks" in message
+    assert "subclass CustomGuardrail" in message
+    assert "custom_callbacks.MyCustomHandler" not in message
+
+
+def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_a_non_callable_value(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text("guardrail_settings = {'mode': 'pre_call'}\n")
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.guardrail_settings", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(
+        CustomGuardrailPathError,
+        match=r"^Guardrail 'my-guard' sets guardrail: custom_callbacks\.guardrail_settings, which is a dict value",
+    ):
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+
+
+@pytest.mark.parametrize(
+    "factory_source",
+    [
+        "def make_guardrail(**kwargs):\n    return MyGuardrail(**kwargs)\n",
+        "class GuardrailFactory:\n"
+        "    def __call__(self, **kwargs):\n"
+        "        return MyGuardrail(**kwargs)\n\n\n"
+        "make_guardrail = GuardrailFactory()\n",
+    ],
+    ids=["function", "callable_instance"],
+)
+def test_initialize_guardrail_builds_a_custom_guardrail_from_a_factory(tmp_path: Path, factory_source: str) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(
+        "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+        "class MyGuardrail(CustomGuardrail):\n"
+        "    pass\n\n\n" + factory_source
+    )
+    handler: Final = InMemoryGuardrailHandler()
+
+    handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.make_guardrail", "mode": "pre_call"},
+        },
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    (built,) = handler.guardrail_id_to_custom_guardrail.values()
+    assert type(built).__name__ == "MyGuardrail"
+    assert built.guardrail_name == "my-guard"
 
 
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():

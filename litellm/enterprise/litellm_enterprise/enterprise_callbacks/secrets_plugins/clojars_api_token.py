@@ -15,7 +15,7 @@ class ClojarsApiTokenDetector(RegexBasedDetector):
         return "Clojars API token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Clojars API token
             re.compile(r"(?i)(CLOJARS_)[a-z0-9]{60}"),

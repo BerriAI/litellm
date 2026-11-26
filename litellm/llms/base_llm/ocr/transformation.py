@@ -89,7 +89,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation

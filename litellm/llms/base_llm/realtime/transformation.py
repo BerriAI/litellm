@@ -65,10 +65,10 @@ class BaseRealtimeConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         pass
 
     @abstractmethod
@@ -101,10 +101,10 @@ class BaseRealtimeConfig(ABC):
     async def pace_backend_send(self, message: bytes) -> None:
         return None
 
-    def is_setup_message(self, msg_obj: dict) -> bool:
+    def is_setup_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
-    def is_content_message(self, msg_obj: dict) -> bool:
+    def is_content_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
     def requires_session_configuration(
@@ -132,8 +132,14 @@ class BaseRealtimeConfig(ABC):
     def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
         return None
 
+    def transcription_addon_pricing_models(self) -> tuple[str, ...]:
+        return ()
+
     def session_refusal(self) -> Exception | None:
         return None
+
+    def client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        return client_event.get("type") == "response.create"
 
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None

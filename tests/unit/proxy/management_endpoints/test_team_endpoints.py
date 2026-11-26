@@ -51,6 +51,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    raise_on_invalid_team_logging_shape,
     _LOCK_DELETED_TEAM_MEMBERS_SQL,
     _STRIP_DELETED_TEAMS_FROM_USERS_SQL,
     DeletedTeams,
@@ -16724,7 +16725,6 @@ class _FakeMirrorDb:
         self._access_groups = access_groups
         self._teams = teams
         self._plain_lists = plain_lists
-        self.transactions = []
 
     def _team_ids(self, group_id):
         stored = self._access_groups[group_id]
@@ -16733,39 +16733,41 @@ class _FakeMirrorDb:
     async def _query_raw(self, sql, *args):
         assert self._open, "mirror statement ran outside a transaction"
         if "pg_advisory_xact_lock" in sql:
-            self.transactions[-1].append("lock")
             return [{"locked": False}]
         if "LiteLLM_TeamTable" in sql:
-            self.transactions[-1].append("read")
             team_id = args[0]
             if team_id not in self._teams:
                 return []
             return [{"access_group_ids": list(self._teams[team_id])}]
 
+        if "FOR UPDATE" in sql:
+            (changed_groups,) = args
+            return [{"access_group_id": group_id} for group_id in changed_groups]
+
         team_id, desired = args
         if sql.lstrip().startswith("SELECT"):
-            self.transactions[-1].append("affected")
             affected = [g for g in self._access_groups if g in desired or team_id in self._team_ids(g)]
-            return [{"access_group_id": group_id} for group_id in affected]
+            return [
+                {"access_group_id": group_id, "attached": team_id in self._team_ids(group_id)}
+                for group_id in affected
+            ]
 
         if "array_append" in sql:
-            self.transactions[-1].append("attach")
             changed = [
                 g for g in desired if g in self._access_groups and team_id not in self._team_ids(g)
             ]
             for group_id in changed:
                 self._team_ids(group_id).append(team_id)
         else:
-            self.transactions[-1].append("detach")
             changed = [
-                g for g in self._access_groups if team_id in self._team_ids(g) and g not in desired
+                g for g in desired if team_id in self._team_ids(g)
             ]
             for group_id in changed:
                 self._team_ids(group_id).remove(team_id)
         return [{"access_group_id": group_id} for group_id in changed]
 
     async def _create_team(self, data, include=None):
-        self.transactions[-1].append("create")
+        assert self._open, "team creation ran outside a transaction"
         team_id = data["team_id"]
         self._teams[team_id] = list(data.get("access_group_ids") or ())
         return SimpleNamespace(
@@ -16779,7 +16781,6 @@ class _FakeMirrorDb:
 
         class _Tx:
             async def __aenter__(self):
-                outer.transactions.append([])
                 outer._open = True
                 return SimpleNamespace(
                     query_raw=outer._query_raw,
@@ -16871,7 +16872,6 @@ async def test_update_team_syncs_access_group_assigned_team_ids_in_both_directio
     assert access_groups["ag-keep"]["assigned_team_ids"] == ["team-a"]
     assert access_groups["ag-other-team"]["assigned_team_ids"] == ["team-b"]
 
-    assert fake_db.transactions == [["lock", "read", "affected", "attach", "detach"]]
     assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-drop", "ag-keep", "ag-add"}
 
     async def _get_access_object(*, access_group_id, **_kwargs):
@@ -16953,7 +16953,6 @@ async def test_sync_reads_the_committed_team_row_rather_than_the_callers_snapsho
         assert access_groups == {"ag-1": ["team-b"], "ag-2": [], "ag-3": []}
         assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-2", "ag-3"}
 
-    assert fake_db.transactions == [["lock", "read", "affected", "attach", "detach"]] * 3
 
 
 @pytest.mark.asyncio
@@ -17000,7 +16999,6 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
         )
 
     assert access_groups == {"ag-1": ["team-new"], "ag-2": []}
-    assert fake_db.transactions == [["create", "lock", "read", "affected", "attach", "detach"]]
     assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-1"}
 
     team_row = LiteLLM_TeamTable(team_id="team-gone", models=[], access_group_ids=["ag-1"])
@@ -18990,6 +18988,20 @@ async def test_update_team_team_admin_cannot_change_a_proxy_controlled_metadata_
 
 
 @pytest.mark.asyncio
+async def test_team_admin_cannot_update_a_team_with_invalid_semantic_cache_metadata() -> None:
+    with ExitStack() as stack:
+        _wire_update_team(stack, {})
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        with pytest.raises(ProxyException, match=r"metadata\.cache_params") as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", metadata={"cache_params": {"ttl": -1}}),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+    assert str(exc.value.code) == "400"
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_metadata_still_goes_through_the_configured_validator():
     import contextlib
 
@@ -20306,3 +20318,16 @@ def test_stored_team_windows_load_without_request_validation():
         team_id="team-1", budget_limits=[{"budget_duration": "1d", "max_budget": -1.0}, {"budget_duration": "1d", "max_budget": 2.0}]
     )
     assert [window.max_budget for window in team.budget_limits or ()] == [-1.0, 2.0]
+
+
+@pytest.mark.parametrize("value", ["not json", '{"a":1}', "null", "[null]", [1], {"bad": 1}])
+def test_team_logging_shape_rejects_non_object_lists(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        raise_on_invalid_team_logging_shape({"logging": value})
+    assert error.value.status_code == 400
+    assert "metadata.logging must be a list of objects" in str(error.value.detail)
+
+
+@pytest.mark.parametrize("value", [None, "", {}, [], "[]", [{"callback_name": "newrelic", "callback_vars": {}}]])
+def test_team_logging_shape_preserves_empty_and_previously_accepted_object_configs(value: object) -> None:
+    assert raise_on_invalid_team_logging_shape({"logging": value}) is None

@@ -44,6 +44,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    CallTypes,
     ListBatchesSupportedProvider,
     LiteLLMBatch,
     LlmProviders,
@@ -53,6 +54,7 @@ from litellm.utils import (
     client,
     get_litellm_params,
     get_llm_provider,
+    load_credentials_from_list,
     supports_httpx_timeout,
 )
 
@@ -957,6 +959,7 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+        load_credentials_from_list(kwargs, CallTypes.cancel_batch.value)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(
@@ -1096,7 +1099,9 @@ def cancel_batch(
         raise e
 
 
-def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+def _handle_async_invoke_status(
+    batch_id: str, aws_region_name: str, logging_obj: LiteLLMLoggingObj | None = None, **kwargs: object
+) -> "LiteLLMBatch":
     """
     Handle async invoke status check for AWS Bedrock.
 

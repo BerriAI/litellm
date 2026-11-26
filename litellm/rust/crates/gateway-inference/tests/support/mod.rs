@@ -77,6 +77,25 @@ pub fn app_with_shaping(
     )
 }
 
+/// The app whose router is built from `router_settings`.
+pub fn app_with_router_settings(
+    model: &str,
+    api_base: &str,
+    litellm_params: Value,
+    router_settings: Value,
+) -> Router {
+    hosted_app(
+        test_params(model, api_base)
+            .into_iter()
+            .chain(litellm_params.as_object().cloned().unwrap_or_default())
+            .collect(),
+        Value::Object(Map::new()),
+        None,
+        NativeHost::default(),
+        &serde_json::from_value(router_settings).unwrap(),
+    )
+}
+
 /// The app with `callbacks` run around each call, in the order given.
 pub fn app_with_callbacks(
     model: &str,
@@ -87,9 +106,11 @@ pub fn app_with_callbacks(
         test_params(model, api_base),
         Value::Object(Map::new()),
         None,
-        NativeHost::new(Arc::new(
-            Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap(),
-        )),
+        NativeHost::new(
+            Arc::new(Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap()),
+            Arc::default(),
+        ),
+        &RouterSettings::default(),
     )
 }
 
@@ -117,7 +138,13 @@ fn deployment_app(
     shaping: Value,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 ) -> Router {
-    hosted_app(litellm_params, shaping, cache, NativeHost::default())
+    hosted_app(
+        litellm_params,
+        shaping,
+        cache,
+        NativeHost::default(),
+        &RouterSettings::default(),
+    )
 }
 
 fn hosted_app(
@@ -125,19 +152,17 @@ fn hosted_app(
     shaping: Value,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     host: NativeHost,
+    router_settings: &RouterSettings,
 ) -> Router {
-    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-    let http = Resolution::from(&HttpSettings::default()).config;
-    let secrets = Arc::new(NoSecrets);
-    let resources = CoreResources::new(pool);
-    let (config, dynamic) = RouterConfig::from_settings(&RouterSettings::default()).unwrap();
+    let model_list = vec![DeploymentSpec {
+        model_name: "public/model".into(),
+        litellm_params,
+        ..DeploymentSpec::default()
+    }];
+    let (config, dynamic) = RouterConfig::from_settings(router_settings).unwrap();
     let models = litellm_router_core::Router::new(
         RouterConfig {
-            model_list: vec![DeploymentSpec {
-                model_name: "public/model".into(),
-                litellm_params,
-                ..DeploymentSpec::default()
-            }],
+            model_list,
             ..config
         },
         dynamic,
@@ -146,12 +171,43 @@ fn hosted_app(
     let id = models.registry().group("public/model").unwrap()[0]
         .id
         .clone();
+    let shaping = HashMap::from([(id, serde_json::from_value(shaping).unwrap())]);
+    served_app(models, shaping, cache, host)
+}
+
+/// The app whose router serves `model_list`, each entry as a config spells it, under
+/// `router_settings`.
+pub fn app_with_models(model_list: Value, router_settings: Value) -> Router {
+    let (config, dynamic) =
+        RouterConfig::from_settings(&serde_json::from_value(router_settings).unwrap()).unwrap();
+    let model_list = serde_json::from_value(model_list).unwrap();
+    let models = litellm_router_core::Router::new(
+        RouterConfig {
+            model_list,
+            ..config
+        },
+        dynamic,
+    )
+    .unwrap();
+    served_app(models, HashMap::new(), None, NativeHost::default())
+}
+
+fn served_app(
+    models: litellm_router_core::Router,
+    shaping: HashMap<String, litellm_inference_messages::MessagesShaping>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    host: NativeHost,
+) -> Router {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let secrets = Arc::new(NoSecrets);
+    let resources = CoreResources::new(pool);
     let gateway = Gateway::new(
         resources,
         http,
         secrets,
         models,
-        HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        shaping,
         RoutingCache::new(None, RouterTiers::default()),
         host,
     )
