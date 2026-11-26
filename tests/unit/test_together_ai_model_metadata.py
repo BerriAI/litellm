@@ -182,6 +182,22 @@ def test_together_retired_serverless_rows_keep_a_deprecation_date(model: str, co
     assert isinstance(value, str) and datetime.date.fromisoformat(value) <= datetime.date(2026, 7, 29)
 
 
+# Absent from https://docs.together.ai/docs/serverless/models, and serverless calls got a non-serverless 400 on 2026-11-23
+@pytest.mark.parametrize(
+    "model",
+    (
+        "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+        "together_ai/arcee-ai/trinity-mini",
+        "together_ai/meta-llama/Llama-3.1-405B-Instruct",
+        "together_ai/meta-llama/Meta-Llama-3.1-8B",
+        "together_ai/moonshotai/Kimi-K2.5-fp4",
+    ),
+)
+def test_together_dedicated_only_models_leave_the_wildcard_and_keep_their_price(model: str) -> None:
+    assert model not in litellm.together_ai_models
+    assert litellm.get_model_info(model)["input_cost_per_token"] > 0
+
+
 def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap):
     rows: Final = _together_rows(cost_map, "image_generation")
     assert rows
