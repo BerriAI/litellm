@@ -27,6 +27,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.redis.stores.connection import RedisStores
 from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -501,7 +502,10 @@ async def test_a_deployments_raw_retrieval_query_never_reaches_a_routed_vector_s
             deployment(
                 "g",
                 "d1",
-                **{retrieval_query_param: from_deployment, "extra_body": {retrieval_query_param: from_deployment, "kept": 1}},
+                **{
+                    retrieval_query_param: from_deployment,
+                    "extra_body": {retrieval_query_param: from_deployment, "kept": 1},
+                },
             )
         ]
     )
@@ -630,6 +634,84 @@ async def test_llm_passthrough_rewrites_the_group_name_in_the_endpoint_to_the_pr
         "/model/us.anthropic.claude/invoke",
         "bedrock",
     )
+
+
+@pytest.mark.parametrize(
+    "model, endpoint, expected",
+    [
+        (
+            "bedrock/invoke/us.anthropic.claude-sonnet-5-5",
+            "/model/g/invoke-with-response-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/invoke-with-response-stream",
+        ),
+        (
+            "bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            "/model/g/converse-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/converse-stream",
+        ),
+        ("hosted_vllm/openai/gpt-oss-20b", "/v1/models/g", "/v1/models/openai/gpt-oss-20b"),
+    ],
+)
+async def test_llm_passthrough_sends_the_provider_model_id_without_a_bedrock_route_marker(
+    make_core: MakeCore, host: EndpointHost, model: str, endpoint: str, expected: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model)])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint=endpoint)
+    assert host.calls[0].kwargs["endpoint"] == expected
+
+
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/", "bedrock/converse/"])
+async def test_llm_passthrough_drops_the_region_path_from_a_bedrock_model(
+    make_core: MakeCore, host: EndpointHost, route: str
+):
+    core: Final = make_core(
+        model_list=[deployment("g", "d1", model=f"{route}us-west-2/us.anthropic.claude-sonnet-5-5")]
+    )
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == "/model/us.anthropic.claude-sonnet-5-5/invoke"
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        (
+            "bedrock/llama/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123def456",
+            "/model/arn:aws:bedrock:us-east-1:123456789012:imported-model%2Fabc123def456/invoke",
+        ),
+        (
+            "bedrock/invoke/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123def456",
+            "/model/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment%2Fabc123def456/invoke",
+        ),
+        (
+            "bedrock/us-west-2/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+            "/model/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile%2Fabc123/invoke",
+        ),
+    ],
+)
+async def test_llm_passthrough_sends_a_bedrock_arn_model_as_one_path_segment_without_its_spec_marker(
+    make_core: MakeCore, host: EndpointHost, model: str, expected: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model)])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == expected
+
+
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/", "bedrock/converse/"])
+async def test_llm_passthrough_sends_the_cost_map_target_of_a_bedrock_latest_alias(
+    make_core: MakeCore, host: EndpointHost, route: str
+):
+    target: Final = get_model_latest_aliases()["bedrock"]["claude-haiku-latest"]
+    core: Final = make_core(model_list=[deployment("g", "d1", model=f"{route}claude-haiku-latest")])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == f"/model/{target}/invoke"
+
+
+async def test_llm_passthrough_sends_a_callback_routed_model_with_no_provider_as_written(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model="arize/my-prompt")])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == "/model/arize/my-prompt/invoke"
 
 
 async def test_llm_passthrough_forwards_the_request_client(make_core: MakeCore, host: EndpointHost):

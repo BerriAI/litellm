@@ -6,8 +6,8 @@ wildcard stream counts under.
 """
 
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -31,6 +31,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     plain_error,
     previous_response_rejected,
     rate_limited,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import Call, deployment, server_error, timeout
 from tests.unit.test_router.core.streaming_helpers import chat_stream, collect_texts, request_logging
@@ -100,26 +101,6 @@ def host() -> SharedLoggingHost:
 
 def minute() -> str:
     return datetime.now(timezone.utc).strftime("%H-%M")
-
-
-def _total(values: Sequence[int | None]) -> int | None:
-    counted: Final = [value for value in values if value is not None]
-    return sum(counted) if counted else None
-
-
-async def usage_since(
-    core: RouterCore, monkeypatch: pytest.MonkeyPatch, group: str, started: datetime
-) -> tuple[int | None, int | None]:
-    """The group's (tpm, rpm) summed over every minute from ``started`` to now. Usage is counted under
-    the minute a call ran in, so a read after the minute changed has to look back at that minute."""
-    first: Final = started.replace(second=0, microsecond=0)
-    minutes: Final = int((datetime.now(timezone.utc) - first).total_seconds() // 60) + 1
-    readings: Final[list[tuple[int | None, int | None]]] = []  # mutable-ok: collected in the loop below
-    for offset in range(minutes):
-        at = first + timedelta(minutes=offset)
-        monkeypatch.setattr("litellm.router_rust.surface.model_info.get_utc_datetime", lambda at=at: at)
-        readings.append(await core.health().usage(group))
-    return _total([tpm for tpm, _ in readings]), _total([rpm for _, rpm in readings])
 
 
 def chain(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok: router arguments

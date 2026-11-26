@@ -35,6 +35,8 @@ from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     json_contains,
     require_attributes,
+    require_get,
+    subscript,
     without,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -546,7 +548,7 @@ class RealTimeStreaming:
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
-        self.messages: list[OpenAIRealtimeEvents] = []
+        self.messages: list[object] = []
         self._backend_sent_frames: bool = False
         self._backend_sent_non_error_frames: bool = False
         self._backend_error_before_session: object = None
@@ -691,30 +693,36 @@ class RealTimeStreaming:
 
     def _should_store_message(
         self,
-        message_obj: Mapping[str, object],
+        message_obj: object,
     ) -> bool:
-        _msg_type: Final = message_obj["type"] if "type" in message_obj else None
+        _msg_type: Final = subscript(message_obj, "type") if json_contains(message_obj, "type") else None
         if self.logged_real_time_event_types == "*":
             return True
         if isinstance(_msg_type, str) and _msg_type in self.logged_real_time_event_types:
             return True
         return False
 
+    @classmethod
+    def _logged_event_record_type(cls, event_type: object) -> Callable[..., Mapping[str, object]]:
+        if event_type in cls._SESSION_EVENT_TYPES:
+            return OpenAIRealtimeStreamSessionEvents
+        return OpenAIRealtimeStreamResponseBaseObject
+
     def store_message(self, message: str | bytes | dict[str, object] | OpenAIRealtimeEvents):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
-        message_obj: Final = cast(dict[str, Any], message if isinstance(message, dict) else json.loads(message))
-        self._collect_tool_calls_from_response_done(message_obj)
+        message_obj: Final = _DECODED_JSON.validate_python(
+            message if isinstance(message, dict) else json.loads(message)
+        )
+        message_fields: Final = as_str_mapping(message_obj)
+        if message_fields is not None:
+            self._collect_tool_calls_from_response_done(message_fields)
         if not self._should_store_message(message_obj):
             return
         try:
-            event_type: Final = decoded_json_object(message_obj).get("type", "")
-            if event_type in self._SESSION_EVENT_TYPES:
-                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)
-            else:
-                # Catch-all base object so unknown/new event names never raise.
-                typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)
+            fields: Final = decoded_json_object(message_obj)
+            typed_obj: Final = self._logged_event_record_type(fields.get("type", ""))(**fields)
         except Exception as e:
             verbose_logger.debug("Error parsing message for logging: %s", e)
             self.messages.append(message_obj)
@@ -804,13 +812,10 @@ class RealTimeStreaming:
             if self._should_store_message(event_obj):
                 return
             self.messages.append(
-                cast(
-                    OpenAIRealtimeEvents,
-                    {
-                        "type": "conversation.item.input_audio_transcription.completed",
-                        "usage": usage,
-                    },
-                )
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": usage,
+                }
             )
         except (AttributeError, TypeError):
             pass
@@ -1005,11 +1010,11 @@ class RealTimeStreaming:
         if self._translation_usage_finalized:
             return
         for event in self.messages:
-            if event.get("type") != "session.closed":
+            if require_get(event).get("type") != "session.closed":
                 continue
-            if (event_usage := as_str_mapping(event.get("usage"))) is not None and normalized_audio_duration_seconds(
-                event_usage.get("output_seconds")
-            ) is not None:
+            if (
+                event_usage := as_str_mapping(require_get(event).get("usage"))
+            ) is not None and normalized_audio_duration_seconds(event_usage.get("output_seconds")) is not None:
                 self._translation_usage_finalized = True
                 return
         if self._listens_only and self._is_translation_session:

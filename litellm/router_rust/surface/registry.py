@@ -64,7 +64,7 @@ from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.cost_calculator import base_model_for_pricing, bedrock_profile_pricing, cost_map_key_declared_prices
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_item, subscript, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
@@ -1375,7 +1375,7 @@ class HostRegistry(HostModelInfo):
                 deployment.model_info["supported_environments"],
             )
             return None
-        for pattern in deployment.litellm_params.get("tag_regex") or []:
+        for pattern in deployment.litellm_params.tag_regex or []:
             try:
                 re.compile(pattern)
             except re.error as exc:
@@ -1539,7 +1539,7 @@ class HostRegistry(HostModelInfo):
                 self._live_info.pop(model_id, None)
         data_sources: Final = deployment.litellm_params.get("dataSources", []) or []
         for source, key, value in data_source_values:
-            data_sources[source]["parameters"][key] = value
+            set_item(subscript(subscript(data_sources, source), "parameters"), key, value)
         if custom_llm_provider is not None:
             self._initialize_deployment_for_pass_through(deployment, custom_llm_provider)
         if self.strategies is not None:

@@ -4,6 +4,7 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+import itertools
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from decimal import Decimal
@@ -17,7 +18,11 @@ from typing_extensions import Self
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_get, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.llms.base_llm.embedding.transformation import extra_body_fields
+from litellm.llms.base_llm.embedding.transformation import (
+    extra_body_fields,
+    over_extra_body_items,
+    split_request_extra_body,
+)
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import (
@@ -585,6 +590,35 @@ def _filter_embed_params(optional_params: Mapping[str, object]) -> dict:
     }
 
 
+def _embed_content_request(
+    element: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+    *,
+    model: str,
+    input_params: Mapping[str, object],
+    resolved_files: Mapping[str, Mapping[str, str]] | None,
+    drop_params: bool,
+) -> Mapping[str, object]:
+    audio_track_extraction: Final = audio_track_extraction_enabled(input_params)
+    if isinstance(element, list) and not element:
+        raise ValueError("Nested input list must not be empty")
+    elements: Final[Sequence[GeminiEmbeddingElement]] = element if isinstance(element, list) else [element]
+    parts: Final = [
+        _build_part_for_input(
+            sub,
+            resolved_files=resolved_files,
+            drop_params=drop_params,
+            audio_track_extraction=audio_track_extraction,
+        )
+        for sub in elements
+    ]
+    request: Final = EmbedContentRequest(
+        model=model,
+        content=ContentType(parts=parts),
+        **_filter_embed_params(input_params),
+    )
+    return _STRING_KEYED_FIELDS.validate_python(request)
+
+
 def transform_openai_input_gemini_content(
     input: GeminiEmbeddingInput,
     model: str,
@@ -609,47 +643,33 @@ def transform_openai_input_gemini_content(
     """
     gemini_model_name: Final = f"models/{model}"
 
-    gemini_params: Final = _filter_embed_params(optional_params)
-    extra_body: Final = extra_body_fields(optional_params)
+    extra_requests, extra_body = split_request_extra_body(extra_body_fields(optional_params), "requests")
 
     input_list: Final = _top_level_elements(input)
-    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
-    requests: Final[list[EmbedContentRequest]] = []
-
-    for element in input_list:
-        if isinstance(element, list):
-            if not element:
-                raise ValueError("Nested input list must not be empty")
-            parts = [
-                _build_part_for_input(
-                    sub,
-                    resolved_files=resolved_files,
-                    drop_params=drop_params,
-                    audio_track_extraction=audio_track_extraction,
-                )
-                for sub in element
-            ]
-        else:
-            parts = [
-                _build_part_for_input(
-                    element,
-                    resolved_files=resolved_files,
-                    drop_params=drop_params,
-                    audio_track_extraction=audio_track_extraction,
-                )
-            ]
-        request = EmbedContentRequest(
+    input_extra_bodies: Final = over_extra_body_items(
+        [extra_body] * len(input_list),
+        [
+            _STRING_KEYED_FIELDS.validate_python(item) if isinstance(item, Mapping) else {}
+            for _, item in zip(input_list, itertools.chain(extra_requests, itertools.repeat(None)))
+        ],
+    )
+    requests: Final = [
+        _embed_content_request(
+            element,
             model=gemini_model_name,
-            content=ContentType(parts=parts),
-            **gemini_params,
+            input_params={**optional_params, "extra_body": input_extra_body},
+            resolved_files=resolved_files,
+            drop_params=drop_params,
         )
-        requests.append(
-            cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
-                EmbedContentRequest, {**extra_body, **request}
-            )
-        )
+        for element, input_extra_body in zip(input_list, input_extra_bodies)
+    ]
 
-    return VertexAIBatchEmbeddingsRequestBody(requests=requests)
+    return VertexAIBatchEmbeddingsRequestBody(
+        requests=cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
+            list[EmbedContentRequest],
+            over_extra_body_items(input_extra_bodies, requests),
+        )
+    )
 
 
 def transform_openai_input_gemini_embed_content(

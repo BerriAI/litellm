@@ -16,6 +16,7 @@ use std::{
 };
 
 use futures_util::future::BoxFuture;
+use litellm_call_scope::spawn_in_call;
 use litellm_callbacks::{
     Abort, Activation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Outcome,
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
@@ -228,16 +229,16 @@ impl Caller {
     /// A key is named by the hash its row is stored under, as Python's `api_key` is, and the
     /// master key by Python's alias for it. The master key holds no limit.
     pub(crate) fn of(identity: &Authenticated<NativeRows>) -> Self {
-        match &**identity {
-            auth_core::Caller::MasterKey => Self {
+        match &identity.credential {
+            auth_core::Credential::MasterKey => Self {
                 api_key: Some(MASTER_KEY_ALIAS.to_owned()),
                 user_id: Some(PROXY_ADMIN_NAME),
                 limits: KeyLimits::default(),
             },
-            auth_core::Caller::Key(key) => Self {
+            auth_core::Credential::Key { key } => Self {
                 api_key: identity.hash().map(ToString::to_string),
                 user_id: None,
-                limits: key.key.limits().clone(),
+                limits: key.limits().clone(),
             },
         }
     }
@@ -593,13 +594,13 @@ pub struct Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         let holds = matches!(*self.phase.lock(), Phase::Admitted | Phase::Succeeded);
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        if tokio::runtime::Handle::try_current().is_err() {
             return;
-        };
+        }
         if holds {
             let limiter = self.limiter.clone();
             let state = std::mem::take(&mut self.state);
-            runtime.spawn(async move { limiter.limiter.release_on_disconnect(&state).await });
+            spawn_in_call(async move { limiter.limiter.release_on_disconnect(&state).await });
         }
     }
 }
