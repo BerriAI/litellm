@@ -448,14 +448,14 @@ def test_a_refused_turn_s_failure_row_leaves_the_socket_s_parallel_slot_held_unt
                 second, second_close_code = await opened_once()
                 _assert_refused(second)
                 assert "max_parallel_requests" in string_value(object_value(second[0]["error"])["message"]), second
-                assert second_close_code == 1008, second
+                assert second_close_code == 1013, second
 
         def reopened_once_the_slot_frees() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
             try:
                 received, close_code = asyncio.run(opened_once())
             except websockets.exceptions.InvalidStatus as refused:
                 raise AssertionError(refused) from refused
-            assert close_code != 1008, received
+            assert "max_parallel_requests" not in str(received), received
             return received, close_code
 
         asyncio.run(second_socket_while_the_first_is_open())
@@ -802,7 +802,7 @@ def test_a_socket_opened_after_websocket_turns_spent_the_budget_is_refused_and_s
         received, close_code = asyncio.run(spend_then_reopen())
 
         _assert_refused(received)
-        assert close_code == 1011, close_code
+        assert close_code == 1013, close_code
         assert peer.paths.qsize() == 1
         assert deployment.forwarded_turns() == 1
         http: Final = limited.request(
@@ -1218,7 +1218,7 @@ def test_managed_socket_turns_count_toward_the_sockets_tag_tpm_like_the_key_tpm(
         limited.post("/tag/delete", {"name": tag})
 
 
-def test_a_socket_opened_after_turns_used_up_the_key_tpm_gets_the_turn_refusal_frame_and_closes_1008(
+def test_a_socket_opened_after_turns_used_up_the_key_tpm_gets_the_turn_refusal_frame_and_closes_1013(
     limited: Gateway, cert: tuple[Path, Path]
 ) -> None:
     with responses_peer(cert, _heavy_turn) as peer, limited.scenario() as scenario:
@@ -1238,7 +1238,7 @@ def test_a_socket_opened_after_turns_used_up_the_key_tpm_gets_the_turn_refusal_f
         received, close_code = asyncio.run(spend_then_reopen())
 
         _assert_refused(received)
-        assert close_code == 1008, close_code
+        assert close_code == 1013, close_code
         assert deployment.forwarded_turns() == 2
 
 
