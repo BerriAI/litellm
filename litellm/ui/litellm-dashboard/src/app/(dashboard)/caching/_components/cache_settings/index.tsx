@@ -1,25 +1,19 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ChevronRight } from "lucide-react";
-import { FormProvider, useForm } from "react-hook-form";
+import { FormProvider } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import RedisTypeSelector from "./RedisTypeSelector";
 import CacheFieldSection from "./CacheFieldSection";
 import { EmbeddingModelOption } from "./CacheFormField";
-import { CACHE_FIELDS, REDIS_TYPES, REDIS_TYPE_DESCRIPTIONS, RedisType } from "./cacheSettingsFields";
-import {
-  buildCachePayload,
-  buildInitialValues,
-  CacheFormValues,
-  configuredSecretFields,
-  isFieldVisible,
-} from "./cacheSettingsUtils";
-
-const ADVANCED_SECTIONS = ["ssl", "cacheManagement", "gcp"] as const;
+import { REDIS_TYPES, REDIS_TYPE_DESCRIPTIONS, RedisType } from "./cacheSettingsFields";
+import { buildCachePayload, buildInitialValues, configuredSecretFields } from "./mapper";
+import { createCacheSettingsSchema } from "./schema";
 
 interface CacheSettingsProps {
   accessToken: string | null;
@@ -32,9 +26,10 @@ const toRedisType = (value: unknown): RedisType =>
 
 const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const { t } = useTranslation();
-  const form = useForm<CacheFormValues>({ defaultValues: buildInitialValues({}) });
   const [redisType, setRedisType] = useState<RedisType>("node");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const schema = createCacheSettingsSchema(redisType, advancedOpen, t);
+  const form = useZodForm(schema, { defaultValues: buildInitialValues({}) });
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -75,20 +70,17 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       .catch((error) => console.error("Error fetching embedding models:", error));
   }, [accessToken]);
 
-  const validate = (): CacheFormValues | null => {
+  const validate = () => {
     const values = form.getValues();
-    const failures = CACHE_FIELDS.filter(
-      (field) =>
-        isFieldVisible(field, redisType) &&
-        (advancedOpen || !ADVANCED_SECTIONS.some((section) => section === field.section)),
-    ).flatMap((field) => {
-      const message = field.rules?.map((rule) => rule(values[field.name])).find((result) => result !== null);
-      return message === undefined || message === null ? [] : [[field.name, message] as const];
-    });
-
+    const result = schema.safeParse(values);
     form.clearErrors();
-    failures.forEach(([name, message]) => form.setError(name, { message: t(message) }));
-    return failures.length > 0 ? null : values;
+    if (result.success) return values;
+
+    for (const issue of result.error.issues) {
+      const [name] = issue.path;
+      if (typeof name === "string") form.setError(name, { message: issue.message });
+    }
+    return null;
   };
 
   const handleTestConnection = async () => {
