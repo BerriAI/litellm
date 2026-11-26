@@ -174,13 +174,28 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     ) -> tuple[dict[str, object], RequestFiles | None]:
         # Prepare reference images in the correct Imagen format
         if image is None:
-            raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
-        reference_images: Final = self._prepare_reference_images(image, image_edit_optional_request_params)
+            raise litellm.BadRequestError(
+                message="Vertex AI Imagen image edit requires at least one reference image.",
+                model=model,
+                llm_provider="vertex_ai",
+            )
+        try:
+            reference_images: Final = self._prepare_reference_images(image, image_edit_optional_request_params)
+        except ValueError as exc:
+            raise litellm.BadRequestError(message=str(exc), model=model, llm_provider="vertex_ai") from exc
         if not reference_images:
-            raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
+            raise litellm.BadRequestError(
+                message="Vertex AI Imagen image edit requires at least one reference image.",
+                model=model,
+                llm_provider="vertex_ai",
+            )
 
         if prompt is None:
-            raise ValueError("Vertex AI Imagen image edit requires a prompt.")
+            raise litellm.BadRequestError(
+                message="Vertex AI Imagen image edit requires a prompt.",
+                model=model,
+                llm_provider="vertex_ai",
+            )
 
         # Correct Imagen instances format
         instances: Final = [{"prompt": prompt, "referenceImages": reference_images}]
