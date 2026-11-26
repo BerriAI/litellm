@@ -1,9 +1,7 @@
 import ast
-import contextlib
 import contextvars
 import functools
 import inspect
-import io
 import itertools
 import logging
 import os
@@ -969,7 +967,6 @@ def _is_python_last_resort(last_resort: logging.Handler | None) -> bool:
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter: Formatter):
     error_handler: Final = _json_stream_handler(formatter, correlate=True)
-    host_excepthook: Final = sys.excepthook
     python_unraisablehook: Final = sys.__unraisablehook__
     is_finalizing: Final = sys.is_finalizing
 
@@ -978,10 +975,6 @@ def _setup_json_exception_handlers(formatter: Formatter):
         exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None
     ) -> None:
         error_handler.handle(_exception_record(str(exc_value), (exc_type, exc_value, exc_traceback)))
-        if host_excepthook is sys.__excepthook__:
-            return
-        with contextlib.redirect_stderr(io.StringIO()):
-            host_excepthook(exc_type, exc_value, exc_traceback)
 
     def json_unraisablehook(unraisable: "sys.UnraisableHookArgs") -> None:
         if is_finalizing():

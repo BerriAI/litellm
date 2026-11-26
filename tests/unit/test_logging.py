@@ -2403,13 +2403,12 @@ class _RecordingHandler(logging.Handler):
         self.received.append(f"no handler: {record.getMessage()}")
 
 
-def test_json_logs_keep_hooks_a_host_app_installed_first_running(
+def test_json_logs_take_over_the_uncaught_exception_hook_and_keep_other_hooks_an_app_set_first(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    """A tracer or error tracker, such as ddtrace-run in the proxy image, may install its own hooks before
-    litellm loads, and its uncaught exception hook then hands off to Python's, which prints a plain traceback.
-    Turning JSON logs on still reports an uncaught exception as one JSON record and still runs that tool's
-    hook, without its plain traceback. The other hooks stay the app's own."""
+    """A tracer such as ddtrace-run in the proxy image sets sys.excepthook before litellm loads, and its hook
+    hands off to Python's, which prints a plain traceback. JSON logs still report an uncaught exception as one
+    JSON record, as they always did. The thread, destructor and unhandled record hooks stay the app's own."""
     received: Final[list[str]] = []
 
     def host_excepthook(exc_type: type[BaseException], value: BaseException, tb: TracebackType | None) -> None:
@@ -2430,7 +2429,6 @@ def test_json_logs_keep_hooks_a_host_app_installed_first_running(
     logging.Logger("unconfigured_library").warning("Unclosed client session")
 
     assert received == [
-        "uncaught: startup step failed",
         "unraisable: resource cleanup failed",
         "thread: background job failed",
         "no handler: Unclosed client session",
