@@ -17,6 +17,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 from litellm.responses.mcp.mcp_streaming_iterator import (
     MCPEnhancedStreamingIterator,
+    create_mcp_list_tools_events,
 )
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
@@ -351,6 +352,26 @@ async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
     assert "boom from provider" in error_events[0].error.message
 
 
+def _closed_port_api_base() -> str:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{probe.getsockname()[1]}/v1"
+
+
+def _logged_stacktraces(capfd: pytest.CaptureFixture[str], message_prefix: str) -> list[str]:
+    records: Final = [json.loads(line) for line in capfd.readouterr().err.splitlines() if line.strip()]
+    return [str(record.get("stacktrace", "")) for record in records if str(record["message"]).startswith(message_prefix)]
+
+
+def _starts_a_traceback(stacktrace: str) -> bool:
+    return stacktrace.startswith("Traceback (most recent call last)")
+
+
+class _UnreadableLabel:
+    def __str__(self) -> str:
+        raise RuntimeError("server label cannot be read")
+
+
 @pytest.mark.asyncio
 async def test_follow_up_call_failure_logs_one_json_record_with_its_traceback(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
@@ -359,20 +380,85 @@ async def test_follow_up_call_failure_logs_one_json_record_with_its_traceback(
     multi-line traceback on stderr that a log shipper would split into one error per line."""
     turn_on_json()
     _mock_mcp_environment(monkeypatch)
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        closed_port: Final = probe.getsockname()[1]
     iterator: Final = _make_iterator(
         [_output_item_added_chunk(), _completed_chunk([_function_call("call_1", "read_wiki_contents")])],
-        api_base=f"http://127.0.0.1:{closed_port}/v1",
+        api_base=_closed_port_api_base(),
     )
     capfd.readouterr()
 
     _ = [chunk async for chunk in iterator]
 
-    records: Final = [json.loads(line) for line in capfd.readouterr().err.splitlines() if line.strip()]
-    failures: Final = [record for record in records if str(record["message"]).startswith("Error creating follow-up")]
-    assert [str(record["stacktrace"]).startswith("Traceback (most recent call last)") for record in failures] == [True]
+    assert [_starts_a_traceback(trace) for trace in _logged_stacktraces(capfd, "Error creating follow-up")] == [True]
+
+
+@pytest.mark.asyncio
+async def test_initial_call_failure_logs_one_json_record_with_its_traceback(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    turn_on_json()
+    _mock_mcp_environment(monkeypatch)
+    iterator: Final = _make_iterator([_output_item_added_chunk()], api_base=_closed_port_api_base())
+    capfd.readouterr()
+
+    await iterator._create_initial_response_iterator()
+
+    assert [_starts_a_traceback(trace) for trace in _logged_stacktraces(capfd, "Error creating initial")] == [True]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_failure_logs_one_json_record_with_its_traceback(capfd: pytest.CaptureFixture[str]) -> None:
+    turn_on_json()
+    capfd.readouterr()
+
+    events: Final = await create_mcp_list_tools_events(
+        mcp_tools_with_litellm_proxy=[{"server_label": _UnreadableLabel()}],
+        user_api_key_auth=None,
+        base_item_id="mcp_1",
+        pre_processed_mcp_tools=[],
+    )
+
+    assert ResponsesAPIStreamEvents.MCP_LIST_TOOLS_FAILED in [event.type for event in events]
+    assert [_starts_a_traceback(trace) for trace in _logged_stacktraces(capfd, "Error creating MCP list")] == [True]
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_failure_logs_one_json_record_with_its_traceback(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    turn_on_json()
+    _mock_mcp_environment(monkeypatch)
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(return_value=_text_only_stream("done")))
+    tool_use_with_object_input: Final = {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "read_wiki_contents",
+        "input": {"repo": "berriai/litellm"},
+    }
+    iterator: Final = _make_iterator([_completed_chunk([tool_use_with_object_input])])
+    capfd.readouterr()
+
+    _ = [chunk async for chunk in iterator]
+
+    assert [_starts_a_traceback(trace) for trace in _logged_stacktraces(capfd, "Error in tool execution")] == [True]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_block_logs_one_json_record_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    turn_on_json()
+    call_tool: Final = _mock_mcp_environment(monkeypatch)
+    callback: Final = CustomGuardrail(guardrail_name="blocked")
+    callback.mcp_block_behavior = "raise"
+    error: Final = HTTPException(status_code=400, detail={"error": "guardrail denied", "guardrail_name": "blocked"})
+    enrich_http_exception_with_guardrail_context(error, callback)
+    call_tool.side_effect = error
+    iterator: Final = _make_iterator([_completed_chunk([_function_call("call_1", "read_wiki_contents")])])
+    capfd.readouterr()
+
+    _ = [chunk async for chunk in iterator]
+
+    assert _logged_stacktraces(capfd, "Error in tool execution") == [""]
 
 
 @pytest.mark.asyncio
