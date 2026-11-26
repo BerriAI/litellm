@@ -159,7 +159,11 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
-from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+from litellm.responses.streaming_iterator import (
+    OutlivesItsConsumer,
+    partial_responses_incomplete_event_on_disconnect,
+    settle_responses_stream_after_consumer_left,
+)
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -3048,6 +3052,8 @@ class ProxyBaseLLMRequestProcessing:
             await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
+        if general_settings.get("cancel_on_disconnect") is not True and isinstance(responses[1], OutlivesItsConsumer):
+            responses[1].outlive_consumer_until_settled()
 
         _exception_raised = False
         try:
@@ -4435,6 +4441,9 @@ class ProxyBaseLLMRequestProcessing:
                     request_data,
                     client_disconnected,
                 )
+            drained_to_provider_usage: Final = await settle_responses_stream_after_consumer_left(
+                response, drain=recorded_client_disconnect
+            )
             if recorded_client_disconnect:
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging.fire_deferred_stream_logging(request_data)
@@ -4445,8 +4454,8 @@ class ProxyBaseLLMRequestProcessing:
                 # no such event fires, so exactly one release happens; two
                 # concurrent releases would race and double-decrement under the
                 # limiter's in-memory fallback.
-                success_event_owns_slot_release = deferred_stream_logging_armed
-                if not deferred_stream_logging_armed:
+                success_event_owns_slot_release = deferred_stream_logging_armed or drained_to_provider_usage
+                if not success_event_owns_slot_release:
                     success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
                         request_data, response
                     )

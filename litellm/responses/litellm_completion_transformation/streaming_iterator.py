@@ -224,6 +224,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_call_ids = self._tool_search_call_ids | {call_id}
         return True
 
+    def outlive_consumer_until_settled(self) -> None:
+        """A bridged stream has no provider Responses stream to read on; its cut is billed from what already arrived."""
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        return False
+
     def _next_output_item_added(self, output_index: int, item: BaseLiteLLMOpenAIResponseObject) -> OutputItemAddedEvent:
         return OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
