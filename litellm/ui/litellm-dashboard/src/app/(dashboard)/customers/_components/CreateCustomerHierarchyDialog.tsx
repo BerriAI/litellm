@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { CustomerBudgetDialog, CustomerBudgetForm } from "./CustomerBudgetDialog";
 import { createCustomerHierarchyEntity } from "./createCustomerHierarchyEntity";
 import CustomerLimitsFields from "./CustomerLimitsFields";
-import { hierarchyCreateDefaults } from "./customer-hierarchy-create/mapper";
+import { hierarchyCreateDefaults, toHierarchyCreate } from "./customer-hierarchy-create/mapper";
 import { hierarchyCreateSchema } from "./customer-hierarchy-create/schema";
 import {
   CUSTOMER_HIERARCHY_FORM_ERRORS,
@@ -34,7 +34,9 @@ function CreateForm(props: Props) {
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (pending) return;
-    const result = schema.parse(getValues());
+    const fields = getValues();
+    const parsed = schema.safeParse(fields);
+    const result = parsed.success ? parsed.data : toHierarchyCreate(props, fields);
     if (!result.ok) return setError(t(CUSTOMER_HIERARCHY_FORM_ERRORS[result.error]));
     await run(async () => {
       try {

@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { Team, Member } from "./customerHierarchyForms";
+import { toMemberMoveBody } from "./customer-member-move/mapper";
 import { memberMoveSchema } from "./customer-member-move/schema";
 
 async function teamChoices(organizationId: string, signal: AbortSignal, page = 1): Promise<Team[]> {
@@ -128,7 +129,9 @@ function MoveForm({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!teams.length || !dirty) return;
-    const body = memberMoveSchema.parse(getValues());
+    const fields = getValues();
+    const parsed = memberMoveSchema.safeParse(fields);
+    const body = parsed.success ? parsed.data : toMemberMoveBody(fields);
     setPending(true);
     setError(null);
     try {

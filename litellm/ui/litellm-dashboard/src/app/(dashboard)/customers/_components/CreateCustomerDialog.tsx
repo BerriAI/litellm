@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorState } from "@/components/shared/ErrorState";
 import type { CustomerOrganizationFormError } from "./customerOrganizationForm";
-import { customerCreateDefaults } from "./customer-create/mapper";
+import { customerCreateDefaults, toCustomerCreateBody } from "./customer-create/mapper";
 import { customerCreateSchema } from "./customer-create/schema";
 import CustomerLimitsFields from "./CustomerLimitsFields";
 import CustomerBudgetGroupsEditor from "./CustomerBudgetGroupsEditor";
@@ -52,7 +52,9 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (create.isPending || groups.isPending) return;
-    const result = customerCreateSchema.parse(getValues());
+    const fields = getValues();
+    const parsed = customerCreateSchema.safeParse(fields);
+    const result = parsed.success ? parsed.data : toCustomerCreateBody(fields);
     if (!result.ok) {
       setError(result.error);
       return;

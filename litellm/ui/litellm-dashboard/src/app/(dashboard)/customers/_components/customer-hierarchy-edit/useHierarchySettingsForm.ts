@@ -10,7 +10,7 @@ import {
   type CustomerHierarchyFields,
   type Organization,
 } from "../customerHierarchyForms";
-import { hierarchyEditDefaults } from "./mapper";
+import { hierarchyEditDefaults, toHierarchyPatch } from "./mapper";
 import { hierarchyEditSchema } from "./schema";
 
 export function useHierarchySettingsForm(
@@ -36,7 +36,9 @@ export function useHierarchySettingsForm(
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (pending) return;
-    const result = schema.parse(getValues());
+    const fields = getValues();
+    const parsed = schema.safeParse(fields);
+    const result = parsed.success ? parsed.data : toHierarchyPatch(entity, organization, fields);
     if (!result.ok) return setError(t(CUSTOMER_HIERARCHY_FORM_ERRORS[result.error]));
     await run(() => write(result.patch, () => setError(t("customerPortal.hierarchy.error"))));
   };
