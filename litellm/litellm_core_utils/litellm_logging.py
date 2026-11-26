@@ -14,13 +14,14 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeVar, cast
 
 from httpx import Response
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import AllowInfNan, BaseModel, JsonValue, NonNegativeFloat, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -51,6 +52,7 @@ from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    billed_flat_cost,
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
@@ -578,6 +580,14 @@ def _resolve_mantle_region_for_cost(
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _CALLBACK_ENTRIES: Final = TypeAdapter(list[object])
+_AGENT_PRICE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[NonNegativeFloat, AllowInfNan(False)])
+
+
+@dataclass(frozen=True, slots=True)
+class A2AAgentBilling:
+    agent_id: str | None
+    cost_per_query: object
+    price_entry: ModelInfo | None
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -624,6 +634,10 @@ class Logging(LiteLLMLoggingBaseClass):
         prometheusLogger, \
         slack_app
     custom_pricing: bool = False
+    a2a_agent_billing: A2AAgentBilling | None = None
+    a2a_agent_cost_per_query: object = None
+    a2a_agent_price_entry: ModelInfo | None = None
+    a2a_agent_id: str | None = None
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
     stream_options = None
@@ -1926,6 +1940,31 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
         return (end_seconds - start_seconds) * 1000
 
+    def bill_as_a2a_agent(self, agent_id: str | None, cost_per_query: object, price_entry: ModelInfo | None) -> None:
+        self.a2a_agent_billing = A2AAgentBilling(
+            agent_id=agent_id, cost_per_query=cost_per_query, price_entry=price_entry
+        )
+        self.resume_billing_as_a2a_agent()
+
+    def resume_billing_as_a2a_agent(self) -> None:
+        billing: Final = self.a2a_agent_billing
+        if billing is None:
+            return
+        self.a2a_agent_cost_per_query = billing.cost_per_query
+        self.a2a_agent_price_entry = billing.price_entry
+        self.a2a_agent_id = billing.agent_id
+        if billing.agent_id is not None:
+            self.model_call_details["agent_id"] = billing.agent_id
+
+    def stop_billing_as_a2a_agent(self) -> None:
+        if self.a2a_agent_id is not None:
+            self.model_call_details.pop("agent_id", None)
+        self.a2a_agent_cost_per_query = None
+        self.a2a_agent_price_entry = None
+
+    def stop_attributing_to_a2a_agent(self) -> None:
+        self.a2a_agent_id = None
+
     @contextmanager
     def pricing_left_unrecorded(self) -> Generator[None]:
         previous_cost_breakdown: Final = self.cost_breakdown
@@ -1944,8 +1983,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_cost_breakdown(
         self,
-        input_cost: float,
-        output_cost: float,
+        input_cost: float | None,
+        output_cost: float | None,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
         additional_costs: dict | None = None,
@@ -1986,14 +2025,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.billed_token_rates = billed_token_rates
         self.cost_breakdown = CostBreakdown(
-            input_cost=input_cost,
-            output_cost=output_cost,
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
             service_tier=service_tier,
             data_residency=data_residency,
             vertex_location=vertex_location,
         )
+        if input_cost is not None:
+            self.cost_breakdown["input_cost"] = input_cost
+        if output_cost is not None:
+            self.cost_breakdown["output_cost"] = output_cost
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
         if cache_creation_cost is not None and cache_creation_cost > 0:
@@ -2056,6 +2097,9 @@ class Logging(LiteLLMLoggingBaseClass):
             else response_result
         )
 
+        if self.a2a_agent_cost_per_query is not None:
+            return self._a2a_agent_response_cost(self.a2a_agent_cost_per_query)
+
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
             priced_result, "_hidden_params"
@@ -2081,7 +2125,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = self.custom_pricing_for(priced_result)
+        custom_pricing: Final = self.a2a_agent_price_entry is not None or self.custom_pricing_for(priced_result)
 
         prompt: Final = self._prompt_for_cost_calculation()
 
@@ -2108,6 +2152,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "call_type": self.call_type,
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
+                "requested_model_info_override": self.a2a_agent_price_entry,
                 "custom_cost_per_token": self.custom_cost_per_token if custom_pricing else None,
                 "custom_cost_per_second": self.custom_cost_per_second if custom_pricing else None,
                 "prompt": prompt,
@@ -2189,6 +2234,40 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _a2a_agent_response_cost(self, cost_per_query: object) -> float | None:
+        try:
+            base_cost: Final = _AGENT_PRICE.validate_python(cost_per_query)
+        except ValidationError as e:
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=_get_traceback_str_for_error(str(e)),
+                    model=self.model,
+                )
+            )
+            return None
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        billed_cost: Final = billed_flat_cost(
+            base_cost=base_cost,
+            custom_llm_provider=provider if isinstance(provider, str) else None,
+            model=self.model,
+            litellm_logging_obj=self,
+        )
+        additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+        total_cost: Final = (
+            billed_cost + additional_response_cost
+            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
+            else billed_cost
+        )
+        if math.isfinite(total_cost):
+            return total_cost
+        verbose_logger.warning(
+            "Recording a non-finite response_cost as 0 for litellm_call_id=%s",
+            self.litellm_call_id.replace("\r", "").replace("\n", ""),
+        )
+        self.cost_breakdown = None
+        return 0.0
 
     def _record_zero_cost_diagnostic(
         self,
@@ -6592,6 +6671,7 @@ class StandardLoggingPayloadSetup:
         init_response_obj: object,
         api_base: str | None = None,
         router_model_id: str | None = None,
+        custom_model_info: ModelInfo | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
@@ -6610,6 +6690,8 @@ class StandardLoggingPayloadSetup:
             if router_model_id is not None
             else model_cost_name
         )
+        if model_cost_name is not None and custom_model_info is not None:
+            return StandardLoggingModelInformation(model_map_key=model_cost_name, model_map_value=custom_model_info)
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
@@ -7296,6 +7378,7 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
             router_model_id=logging_obj.get_router_model_id(),
+            custom_model_info=logging_obj.a2a_agent_price_entry,
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(

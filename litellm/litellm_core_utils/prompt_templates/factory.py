@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
@@ -1893,6 +1893,10 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
 
 
+def _callers_tool_use_id(tool_use_id: str) -> str:
+    return tool_use_id or _TOOL_USE_ID_FALLBACK
+
+
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     """
     Bedrock Converse requires toolUseId to match [a-zA-Z0-9_.:-]+ and be at most 64 chars.
@@ -1923,6 +1927,7 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
 def convert_to_anthropic_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     force_base64: bool = False,
+    rename_tool_use_id: Callable[[str], str] = _sanitize_anthropic_tool_use_id,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -2038,8 +2043,7 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "tool":
         tool_message: Final[ChatCompletionToolMessage] = message
         tool_call_id: str = tool_message["tool_call_id"]
-        # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = rename_tool_use_id(tool_call_id)
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
@@ -2052,8 +2056,7 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
-        # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = rename_tool_use_id(tool_call_id)
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result",
             tool_use_id=sanitized_tool_use_id,
@@ -2183,6 +2186,7 @@ def convert_to_anthropic_tool_invoke(
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    rename_tool_use_id: Callable[[str], str] = _sanitize_anthropic_tool_use_id,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2261,7 +2265,7 @@ def convert_to_anthropic_tool_invoke(
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
         else:
-            sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
+            sanitized_tool_id = rename_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
                 id=sanitized_tool_id,
@@ -2857,6 +2861,7 @@ def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
+    rewrites_tool_use_ids: bool = True,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -2885,6 +2890,7 @@ def anthropic_messages_pt(
     messages = [_sanitize_empty_text_content(m) for m in messages]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
+    rename_tool_use_id: Final = _sanitize_anthropic_tool_use_id if rewrites_tool_use_ids else _callers_tool_use_id
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -3016,7 +3022,9 @@ def anthropic_messages_pt(
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block, force_base64=force_base64, rename_tool_use_id=rename_tool_use_id
+                    )
                 )
 
             msg_i += 1
@@ -3084,6 +3092,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
                     answered_tool_ids=client_answered_tool_ids,
+                    rename_tool_use_id=rename_tool_use_id,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -3263,6 +3272,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
                     answered_tool_ids=client_answered_tool_ids,
+                    rename_tool_use_id=rename_tool_use_id,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

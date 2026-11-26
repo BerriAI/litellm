@@ -318,6 +318,17 @@ def test_close_releases_the_attached_http_response():
     assert response.is_closed
 
 
+@pytest.mark.parametrize("choices", ["abort", 1, [None], [{"finish_reason": "stop"}, "abort"]])
+def test_chunk_with_unreadable_choices_reaches_the_provider_parser(choices: object) -> None:
+    line: Final = "data: " + json.dumps({"choices": choices})
+
+    chunks: Final = list(BaseModelResponseIterator(streaming_response=iter((line,)), sync_stream=True))
+
+    assert chunks == [
+        GenericStreamingChunk(text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
+    ]
+
+
 _USAGE_STREAM_HEADER: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m"}
 _USAGE_STREAM_EVENTS: Final = (
     {**_USAGE_STREAM_HEADER, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},

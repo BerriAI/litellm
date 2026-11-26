@@ -806,6 +806,60 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fallback_also_failed", [False, True], ids=["agent-failed", "agent-and-fallback-failed"])
+    async def test_failed_agent_call_spend_row_names_the_agent_it_was_billed_to(
+        self, monkeypatch: pytest.MonkeyPatch, fallback_also_failed: bool
+    ):
+        from types import SimpleNamespace
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        logging_obj: Final = Logging(
+            model="a2a/my-agent",
+            messages=[{"role": "user", "content": "ping"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=real_datetime.datetime.now(),
+            litellm_call_id="failed-agent-call",
+            function_id="a2a-chat",
+        )
+        logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_per_query=0.05, price_entry=None)
+        if fallback_also_failed:
+            logging_obj.stop_billing_as_a2a_agent()
+        agent_down: Final = InternalServerError(
+            message="agent endpoint returned 500", model="a2a/my-agent", llm_provider="databricks"
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data={
+                        "model": "a2a/my-agent",
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "stream": True,
+                        "litellm_logging_obj": logging_obj,
+                    },
+                    original_exception=agent_down,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/chat/completions"),
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["agent_id"] == "my-agent-id"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("request_data", "route", "endpoint_call_type", "dispatched_call_type"),
         [

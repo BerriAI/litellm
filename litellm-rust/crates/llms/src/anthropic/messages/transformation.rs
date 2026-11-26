@@ -12,7 +12,10 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
+use super::{
+    handler::{shape_anthropic_messages_request_keeping_tool_use_ids, with_sanitized_tool_use_ids},
+    thinking::translate_thinking,
+};
 use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
@@ -20,7 +23,8 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url,
         drop_unpaired_advisor_blocks, get_auth_header, has_advisor_tool, has_anthropic_credential,
-        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
+        is_anthropic_tool_use_id_pattern_error, is_tool_search_used, merge_beta_headers,
+        messages_with_renamed_tool_use_ids, optionally_handle_anthropic_oauth,
         requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
         strip_unsigned_thinking_blocks,
     },
@@ -56,7 +60,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         request: MessagesRequest,
         reasoning_auto_summary: bool,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request_keeping_tool_use_ids(request, reasoning_auto_summary)
     }
 
     fn get_complete_url(
@@ -151,10 +155,29 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
-        if !serves_anthropic_api_versions(url) {
-            return Ok(request);
+        if serves_anthropic_api_versions(url) {
+            return drop_sampling_params_removed_by_requested_version(
+                with_sanitized_tool_use_ids(request),
+                headers,
+                drop_params,
+            );
         }
-        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+        Ok(request)
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+    ) -> Option<Value> {
+        if status != 400 || !is_anthropic_tool_use_id_pattern_error(error_text) {
+            return None;
+        }
+        let messages = messages_with_renamed_tool_use_ids(request_body)?;
+        let mut fields = request_body.as_object()?.clone();
+        fields.insert("messages".to_owned(), Value::Array(messages));
+        Some(Value::Object(fields))
     }
 }
 
@@ -1668,5 +1691,40 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    #[rstest]
+    #[case::rejected_id(
+        400,
+        "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        Some("functions_Bash_0")
+    )]
+    #[case::server_error(
+        500,
+        "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'",
+        None
+    )]
+    #[case::other_rejection(400, "messages.0.content: Field required", None)]
+    fn a_rejected_tool_use_id_is_retried_with_renamed_ids(
+        #[case] status: u16,
+        #[case] error_text: &str,
+        #[case] retried_id: Option<&str>,
+    ) {
+        let request_body = body(json!({"stream": true, "messages": [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]}
+        ]}));
+
+        let retried =
+            ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, &request_body);
+
+        assert_eq!(
+            retried,
+            retried_id.map(|id| merged(
+                request_body.clone(),
+                json!({"messages": [
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]}
+                ]})
+            ))
+        );
     }
 }
