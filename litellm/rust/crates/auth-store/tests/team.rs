@@ -1,7 +1,9 @@
 //! A team's database read against a Prisma-migrated Postgres. Each row literal is what the
-//! repository hands the Python proxy, and each entry literal is what
-//! `LiteLLM_TeamTableCachedObj(**row).model_dump(mode="json")` gave for that row on 2026-11-23,
+//! repository hands the Python proxy, and each entry literal is what Python caches for that row,
 //! less `last_refreshed_at`, which the host that caches the team stamps.
+//! `tests/unit/redis/stores/test_auth_cache_team.py` checks both against Python's own model and
+//! team reader and writer, and `redis-store/tests/auth_cache_team.rs` round-trips the entries
+//! through Redis. Change all three together.
 
 mod support;
 
