@@ -13,12 +13,13 @@ import contextvars
 import os
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.llms.azure.fine_tuning.handler import AzureOpenAIFineTuningAPI
 from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
 from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
@@ -33,6 +34,10 @@ openai_fine_tuning_apis_instance: Final = OpenAIFineTuningAPI()
 azure_fine_tuning_apis_instance: Final = AzureOpenAIFineTuningAPI()
 vertex_fine_tuning_apis_instance: Final = VertexFineTuningAPI()
 #################################################
+
+
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
 
 
 def _prepare_azure_extra_body(
@@ -256,12 +261,14 @@ def create_fine_tuning_job(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
 
             # Prepare Azure-specific parameters for extra_body
-            azure_extra_body: Final = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
+            azure_extra_body: Final = _prepare_azure_extra_body(
+                as_str_mapping(stored_extra_body), kwargs, azure_specific_hyperparams
+            )
 
             create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
                 provider_model,
@@ -454,9 +461,9 @@ def cancel_fine_tuning_job(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
 
             response = azure_fine_tuning_apis_instance.cancel_fine_tuning_job(
                 api_base=api_base,
@@ -611,9 +618,9 @@ def list_fine_tuning_jobs(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
 
             response = azure_fine_tuning_apis_instance.list_fine_tuning_jobs(
                 api_base=api_base,
@@ -751,9 +758,9 @@ def retrieve_fine_tuning_job(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
 
             response = azure_fine_tuning_apis_instance.retrieve_fine_tuning_job(
                 api_base=api_base,

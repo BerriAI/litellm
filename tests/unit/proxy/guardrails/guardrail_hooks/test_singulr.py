@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -12,7 +13,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse
 
 
 @pytest.fixture
@@ -1292,3 +1293,25 @@ class TestSingulrInitializer:
         cb = initialize_guardrail(litellm_params, guardrail)
 
         assert cb.timeout == 12.5
+
+
+@pytest.mark.parametrize(
+    "tool_call",
+    (
+        ChatCompletionMessageToolCall(id="call_1", type="function", function=Function(name="f", arguments='{"a": 1}')),
+        {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": '{"a": 1}'}, "index": 0},
+    ),
+)
+def test_singulr_tool_call_reads_models_and_dicts_alike(tool_call: object) -> None:
+    built: Final = SingulrGuardrail._build_tool_call(tool_call)
+    assert built is not None
+    assert (built.id, built.type, built.function.name, built.function.arguments) == (
+        "call_1",
+        "function",
+        "f",
+        '{"a": 1}',
+    )
+
+
+def test_singulr_tool_call_without_id_is_skipped() -> None:
+    assert SingulrGuardrail._build_tool_call({"id": None, "type": "function", "function": {}, "index": 0}) is None

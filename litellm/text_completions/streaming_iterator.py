@@ -66,7 +66,7 @@ class TextCompletionStreamWrapper:
             response["choices"] = [_text_choice(chat_choice) for chat_choice in chunk.choices]
 
             if self.include_usage:
-                response.usage = chunk.get("usage", None)
+                response["usage"] = chunk.get("usage", None)
             else:
                 response.usage = None
 
