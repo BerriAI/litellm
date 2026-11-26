@@ -189,7 +189,7 @@ pub(crate) fn retry_step(state: RetryState<'_>) -> RetryStep {
 }
 
 /// `ContentPolicyViolationError`'s classes, most specific first.
-pub(crate) fn content_policy_classes() -> Vec<std::sync::Arc<str>> {
+pub(crate) fn content_policy_classes() -> Box<[std::sync::Arc<str>]> {
     [
         "ContentPolicyViolationError",
         "BadRequestError",

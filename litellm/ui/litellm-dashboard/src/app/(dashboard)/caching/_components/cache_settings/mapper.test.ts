@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCachePayload, buildInitialValues, configuredSecretFields, fieldsForSection } from "./cacheSettingsUtils";
+import { buildCachePayload, buildInitialValues, configuredSecretFields, fieldsForSection } from "./mapper";
 import { REDACTED_VALUE } from "./cacheSettingsFields";
 
 describe("fieldsForSection", () => {

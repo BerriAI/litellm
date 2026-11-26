@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
@@ -42,6 +43,9 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
@@ -520,10 +524,19 @@ class Rig:
         return f"{self.alias}-add"
 
     def send(
-        self, key: str, tools: Sequence[Mapping[str, object]], prompt: str | None = None, **extra: object
+        self,
+        key: str,
+        tools: Sequence[Mapping[str, object]],
+        prompt: str | None = None,
+        upstream_bearer: str | None = None,
+        **extra: object,
     ) -> httpx.Response:
         text: Final = prompt or f"add {self.alias}"
-        headers: Final = {"Authorization": f"Bearer {key}"}
+        headers: Final = (
+            {"Authorization": f"Bearer {key}"}
+            if upstream_bearer is None
+            else {"x-litellm-api-key": key, "Authorization": f"Bearer {upstream_bearer}"}
+        )
         if self.surface == "chat":
             body: Final = {"model": self.model, "messages": [{"role": "user", "content": text}], "tools": list(tools)}
             return self.gateway.client.post("/v1/chat/completions", headers=headers, json={**body, **extra}, timeout=90)
@@ -606,6 +619,7 @@ def _rig(
     prices: Mapping[str, JsonValue] | None = None,
     parallel: int = 1,
     slow_tool_seconds: float | None = None,
+    server: Mapping[str, object] | None = None,
 ) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
     plan: Final = (
@@ -616,7 +630,7 @@ def _rig(
         wire_server(_model_double(plan, billing, parallel)) as wire,
         gateway.scenario() as scenario,
     ):
-        server_id: Final = register_mcp(scenario, peer, alias)
+        server_id: Final = register_mcp(scenario, peer, alias, **(server or {}))
         model: Final = scenario.model(
             model=_upstream_model(upstream or surface), api_base=wire.url + "/v1", **(prices or {})
         )
@@ -634,6 +648,188 @@ def _peer_add_calls(peer: McpPeer) -> tuple[dict[str, object], ...]:
         for call in tool_calls(peer.drain())
         if isinstance(call["body"], dict) and isinstance(call["body"].get("params"), dict)
     )
+
+
+def _viewer_session(
+    scenario: Scenario, *team_ids: str, models: Sequence[str] = (), user_role: str = "internal_user_viewer"
+) -> str:
+    user_id: Final = scenario.user(user_role=user_role, teams=list(team_ids), models=list(models))
+    with pytest.MonkeyPatch.context() as environment:
+        environment.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
+        return ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=user_id, user_role=user_role, models=list(models))
+        )
+
+
+@pytest.mark.parametrize(
+    ("surface", "stream", "user"),
+    [("responses", True, None), ("responses", False, None), ("chat", False, None), ("chat", False, "mcp-customer")],
+)
+def test_dashboard_viewer_runs_a_team_granted_tool(
+    gateway: Gateway, surface: Surface, stream: bool, user: str | None
+) -> None:
+    with _rig(gateway, surface) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        extra: Final = {"user": user} if user is not None else {}
+        response: Final = rig.send(
+            session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream, **extra
+        )
+
+        assert response.status_code == 200, response.text
+        reply: Final = response.text if stream else rig.final_text(response.json())
+        assert ANSWER in reply, reply
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+@pytest.mark.parametrize(
+    ("user_role", "stream"),
+    [("internal_user_viewer", False), ("internal_user_viewer", True), ("proxy_admin_viewer", True)],
+)
+def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(
+    gateway: Gateway, user_role: str, stream: bool
+) -> None:
+    with _rig(gateway, "responses") as rig:
+        model_team: Final = rig.scenario.team(
+            models=[rig.model],
+            object_permission={"mcp_tool_permissions": {rig.server_id: ["subtract"]}},
+        )
+        tool_team: Final = rig.scenario.team(
+            models=["no-default-models"], object_permission={"mcp_servers": [rig.server_id]}
+        )
+        session: Final = _viewer_session(
+            rig.scenario, tool_team, model_team, models=("no-default-models",), user_role=user_role
+        )
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
+
+        assert response.status_code == 200, response.text
+        if stream:
+            assert ANSWER in response.text, response.text
+        else:
+            assert rig.final_text(response.json()) == ANSWER, response.text
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+def test_dashboard_viewer_without_a_grant_cannot_run_a_tool(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        session: Final = _viewer_session(rig.scenario, rig.scenario.team())
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}])
+
+        assert response.status_code == 403 and rig.alias in response.text, response.text
+        assert rig.upstream_tools() == ()
+        assert _peer_add_calls(rig.peer) == ()
+
+
+def test_dashboard_viewer_cannot_exceed_the_end_users_mcp_server_scope(gateway: Gateway) -> None:
+    with _rig(gateway, "chat") as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        other_server: Final = register_mcp(rig.scenario, rig.peer, "other" + uuid.uuid4().hex[:8])
+        customer: Final = "mcp-customer-" + uuid.uuid4().hex
+        gateway.post("/customer/new", {"user_id": customer, "object_permission": {"mcp_servers": [other_server]}})
+        rig.scenario.cleanups.callback(gateway.post, "/customer/delete", {"user_ids": [customer]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], user=customer)
+
+        assert response.status_code == 403 and rig.alias in response.text, response.text
+        assert rig.upstream_tools() == ()
+        assert _peer_add_calls(rig.peer) == ()
+
+
+def test_dashboard_viewer_stream_uses_the_granting_teams_mcp_rate_limit(gateway: Gateway) -> None:
+    with _rig(gateway, "responses", parallel=2) as rig:
+        team_id: Final = rig.scenario.team(
+            mcp_rpm_limit={rig.alias: 2},
+            object_permission={"mcp_servers": [rig.server_id]},
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=True)
+
+        assert response.status_code == 200, response.text
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD], response.text
+        assert f"Rate limit exceeded for mcp_per_team: {team_id}:{rig.alias}" in response.text, response.text
+
+
+def test_dashboard_viewer_only_offers_tools_in_the_requested_toolset(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        other_server: Final = register_mcp(rig.scenario, rig.peer, "other" + uuid.uuid4().hex[:8])
+        toolset_name: Final = "ts" + uuid.uuid4().hex[:8]
+        toolset_id: Final = create_toolset(rig.scenario, ((rig.server_id, "add"),), toolset_name=toolset_name)
+        team_id: Final = rig.scenario.team(
+            object_permission={"mcp_servers": [rig.server_id, other_server], "mcp_toolsets": [toolset_id]}
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{toolset_name}"}])
+
+        assert response.status_code == 200, response.text
+        assert rig.upstream_tools() == ((rig.tool,), (rig.tool,))
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+def test_dashboard_viewer_toolsets_sharing_a_server_spend_one_rate_limit_slot_on_discovery(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        names: Final = tuple("ts" + uuid.uuid4().hex[:8] for _ in range(2))
+        toolset_ids: Final = [
+            create_toolset(rig.scenario, ((rig.server_id, tool),), toolset_name=name)
+            for name, tool in zip(names, ("add", "multiply"), strict=True)
+        ]
+        team_id: Final = rig.scenario.team(
+            mcp_rpm_limit={rig.alias: 2},
+            object_permission={"mcp_servers": [rig.server_id], "mcp_toolsets": toolset_ids},
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{name}"} for name in names])
+
+        assert response.status_code == 200, response.text
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD], response.text
+        assert "Rate limit exceeded" not in response.text, response.text
+
+
+PASSTHROUGH_SERVER: Final[Mapping[str, object]] = {
+    "auth_type": "none",
+    "oauth_passthrough": True,
+    "extra_headers": ["Authorization"],
+}
+
+
+def _authorizations_seen_by(peer: McpPeer) -> frozenset[bytes | None]:
+    return frozenset(
+        TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]).get(b"authorization")
+        for request in peer.drain()
+    )
+
+
+@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
+def test_dashboard_viewer_login_token_never_reaches_a_passthrough_server(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    with _rig(gateway, surface, server=PASSTHROUGH_SERVER) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
+
+        assert response.status_code == 200, response.text
+        assert ANSWER in response.text, response.text
+        assert _authorizations_seen_by(rig.peer) == frozenset({None})
+
+
+@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
+def test_dashboard_viewer_upstream_bearer_reaches_a_passthrough_server(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    with _rig(gateway, surface, server=PASSTHROUGH_SERVER) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        upstream_bearer: Final = "upstream-" + uuid.uuid4().hex
+        response: Final = rig.send(
+            session,
+            [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}],
+            upstream_bearer=upstream_bearer,
+            stream=stream,
+        )
+
+        assert response.status_code == 200, response.text
+        assert ANSWER in response.text, response.text
+        assert _authorizations_seen_by(rig.peer) == frozenset({f"Bearer {upstream_bearer}".encode()})
 
 
 @pytest.mark.parametrize("surface", SURFACES)
@@ -2194,3 +2390,31 @@ def test_messages_bridge_hook_sees_the_definition_the_request_served(hooked: Hoo
         assert _echoed(JSON_VALUE.validate_json(blocked.content)) == _served(LOOKUP), blocked.text
         assert rig.peer_calls() == (("lookup", {"query": marker}),)
         assert rig.hook_messages(marker) == (f"Tool: lookup\nArguments: {dict(query=marker)}",)
+
+
+DELEGATE_SERVER: Final[Mapping[str, object]] = {"auth_type": "oauth_delegate", "extra_headers": ["Authorization"]}
+
+
+def test_dashboard_viewer_upstream_bearer_is_withheld_when_toolsets_span_two_delegate_servers(
+    gateway: Gateway,
+) -> None:
+    with _rig(gateway, "responses", server=DELEGATE_SERVER) as rig, mcp_peer() as other_peer:
+        other_id: Final = register_mcp(rig.scenario, other_peer, "llm" + uuid.uuid4().hex[:8], **DELEGATE_SERVER)
+        names: Final = tuple("ts" + uuid.uuid4().hex[:8] for _ in range(2))
+        toolset_ids: Final = [
+            create_toolset(rig.scenario, ((server_id, "add"),), toolset_name=name)
+            for name, server_id in zip(names, (rig.server_id, other_id), strict=True)
+        ]
+        team_id: Final = rig.scenario.team(
+            object_permission={"mcp_servers": [rig.server_id, other_id], "mcp_toolsets": toolset_ids}
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        other_peer.drain()
+        response: Final = rig.send(
+            session,
+            [{**AUTO, "server_url": f"litellm_proxy/mcp/{name}"} for name in names],
+            upstream_bearer="upstream-" + uuid.uuid4().hex,
+        )
+
+        assert response.status_code == 200, response.text
+        assert _authorizations_seen_by(other_peer) == frozenset({None}), response.text

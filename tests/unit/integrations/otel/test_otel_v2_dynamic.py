@@ -650,9 +650,9 @@ def test_requires_headers_spec_skipped_without_headers():
     )
     provider = build_tracer_provider(cfg)
     processors = provider._active_span_processor._span_processors
-    # Only the baggage processor: the keyless spec must not export (New Relic
+    # Only the span-marking processors: the keyless spec must not export (New Relic
     # rejects unauthenticated posts with a 4xx per span batch).
-    assert [type(p).__name__ for p in processors] == ["LiteLLMBaggageSpanProcessor"]
+    assert [type(p).__name__ for p in processors] == ["LiteLLMBaggageSpanProcessor", "NamedTraceSpanProcessor"]
 
     keyed = OpenTelemetryV2Config(
         exporters=[
@@ -662,7 +662,7 @@ def test_requires_headers_spec_skipped_without_headers():
         ]
     )
     keyed_provider = build_tracer_provider(keyed)
-    assert len(keyed_provider._active_span_processor._span_processors) == 2
+    assert len(keyed_provider._active_span_processor._span_processors) == 3
 
 
 def test_newrelic_key_only_team_routes_to_us_not_operator_region(monkeypatch):
@@ -744,6 +744,49 @@ def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reach
     owned = next(e for e in routed.exporters if e.owner == "signoz")
     assert owned.endpoint == "https://ingest.us.signoz.cloud:443"
     assert owned.headers == "signoz-ingestion-key=OPERATOR"
+
+
+def test_mixpanel_dynamic_headers_and_endpoint_routing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    expected_auth: Final = "Basic " + base64.b64encode(b"team-token:").decode()
+    assert dynamic_otlp_headers("mixpanel", {"mixpanel_project_token": "team-token"}) == {
+        "Authorization": expected_auth
+    }
+    assert dynamic_otlp_headers("mixpanel", {}) is None
+    assert dynamic_otlp_endpoint("mixpanel", {"langsmith_project": "another-callback"}) is None
+    assert dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "   ", "mixpanel_region": "eu"}) is None
+
+    monkeypatch.setenv("MIXPANEL_REGION", "eu")
+    assert (
+        dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token"})
+        == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    )
+    assert (
+        dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "eu"})
+        == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
+    )
+    assert (
+        dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "IN"})
+        == "https://ingestion-in.mixpanel.com/v1/ai/otel/traces"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        for no_region in ("", "   ", "None"):
+            assert (
+                dynamic_otlp_endpoint(
+                    "mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": no_region}
+                )
+                == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+            )
+    assert "unknown mixpanel_region" not in caplog.text
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        fallback: Final = dynamic_otlp_endpoint(
+            "mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "ap-south"}
+        )
+    assert fallback == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    assert "unknown mixpanel_region" in caplog.text
 
 
 def test_an_exporter_routed_to_a_tenants_credentials_drops_the_operators_resource_attributes() -> None:

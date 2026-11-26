@@ -8,6 +8,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 )
 
 IGNORE_FUNCTIONS = [
+    "_with_original_numbers",  # DEFAULT_MAX_RECURSE_DEPTH bound, deeper values keep the guardrail's decoded JSON.
     "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
     "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
@@ -58,6 +59,7 @@ IGNORE_FUNCTIONS = [
     "_decrypted_param",  # max depth set.
     "contains_encrypted_marker",  # max depth set.
     "_rotate_guardrail_row",  # bounded by attempts_left.
+    "_responses_dropping_refused_fields",  # bounded by _REFUSED_FIELDS, each retry drops a field it sent.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "_filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.

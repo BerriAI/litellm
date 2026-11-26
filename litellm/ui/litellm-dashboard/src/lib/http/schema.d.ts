@@ -33088,6 +33088,11 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
+             * Customer Budget Response Headers
+             * @description If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.
+             */
+            customer_budget_response_headers?: boolean | null;
+            /**
              * Customer Member Id Header
              * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
              */

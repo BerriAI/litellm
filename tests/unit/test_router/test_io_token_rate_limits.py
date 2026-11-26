@@ -1181,13 +1181,14 @@ class TestModelRateLimitingCheckIOTokens:
         assert usage.get_local(otpm_key) == 2
 
     @pytest.mark.asyncio
-    async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog):
+    async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog, monkeypatch):
         import logging
 
-        from litellm.utils import get_utc_datetime
-
+        monkeypatch.setattr(
+            "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: _TURN_AT
+        )
         usage = _memory_usage()
-        check = ModelRateLimitingCheck(usage=usage)
+        check = ModelRateLimitingCheck(usage=usage, clock=lambda: _TURN_AT)
         model_id = "io-mixed-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
         deployment = {
@@ -1200,7 +1201,7 @@ class TestModelRateLimitingCheckIOTokens:
             "model_name": "opus",
         }
 
-        minute = get_utc_datetime().strftime("%H-%M")
+        minute = _TURN_AT.strftime("%H-%M")
         rpm = UsageCounter.for_deployment(model_id, deployment_name, "rpm", minute)
         itpm_key = _io(model_id, deployment_name, "itpm", minute)
         usage.increment_local(CounterIncrement(rpm, 5, 60))
