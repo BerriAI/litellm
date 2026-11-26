@@ -5,6 +5,7 @@
 //! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
 //! yet is never told.
 
+pub mod budget_check;
 pub(crate) mod budgets;
 mod fields;
 pub mod hosted;
@@ -205,11 +206,14 @@ pub struct Call {
 }
 
 /// The exception Python raises for `abort`: its `ProxyRateLimitError` for a limiter's refusal,
-/// with the headers in the order the limiter lists them, and the abort's own status and words
-/// for any other.
+/// with the headers in the order the limiter lists them, its budget error for an over-budget
+/// caller, and the abort's own status and words for any other.
 fn refusal(abort: Abort) -> Refusal {
     if let Some(limited) = parallel_request_limiter::rate_limited(&abort) {
         return limited.into();
+    }
+    if let Some(over_budget) = budget_check::refusal(&abort) {
+        return over_budget;
     }
     Refusal {
         headers: abort.headers.into_iter().collect(),

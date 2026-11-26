@@ -201,6 +201,11 @@ impl Sent {
 #[case::pre_call_checks("pre_call_checks")]
 #[case::claude_only_providers("claude_only_providers")]
 #[case::cloud_providers("cloud_providers")]
+#[case::budget_features("budget_features")]
+#[case::proxy_budget("proxy_budget")]
+#[case::budget_alerting("budget_alerting")]
+#[case::budget_throttle("budget_throttle")]
+#[case::budget_status_code("budget_status_code")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

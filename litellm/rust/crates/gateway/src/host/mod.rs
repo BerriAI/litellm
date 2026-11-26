@@ -6,6 +6,7 @@
 pub mod auth;
 mod boot;
 mod capacity;
+mod free;
 mod model_info;
 mod precall;
 mod router;
@@ -16,6 +17,7 @@ pub(crate) use auth::Key;
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
+pub use free::FreeModels;
 pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
 pub use spend_log::{Rows, RustSpendLogHost};

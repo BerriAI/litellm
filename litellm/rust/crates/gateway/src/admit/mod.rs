@@ -169,6 +169,18 @@ impl Admit {
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
+    /// A key whose model list names a model access group goes to Python, which checks the
+    /// budget the proxy's database may hold for that group (`_model_access_group_max_budget_check`).
+    /// The gateway reads no group budget, so every group the router knows is taken as budgeted,
+    /// even one that does not serve the model asked for.
+    fn access_group_budget(&self, caller: &Authenticated<NativeRows>) -> Option<Reason> {
+        let groups = self.router.registry().access_groups();
+        host::auth::allowed_models(caller)
+            .iter()
+            .any(|name| groups.contains_key(name))
+            .then(|| Reason::new(Refused::Credential, "model_access_group_budget"))
+    }
+
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
     /// keeps the bytes the client sent and carries nothing more. A request the proxy's allowlists
@@ -214,6 +226,7 @@ impl Admit {
         }
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
+                .or_else(|| self.access_group_budget(caller))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {
