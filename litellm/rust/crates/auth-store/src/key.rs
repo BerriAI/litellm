@@ -10,9 +10,8 @@ use litellm_repositories::{KeyRepository, KeyView, ObjectPermissionRepository, S
 use crate::{
     Error,
     column::{column, nullable, time},
-    error::within,
     member::team_member_column,
-    object_permission::object_permission_entry,
+    object_permission::ObjectPermissions,
 };
 
 /// The key as the database holds it, in the shape the auth cache holds it: the `combined_view`
@@ -21,7 +20,7 @@ use crate::{
 /// a policy of its own wraps exactly these.
 pub struct KeyDatabase {
     keys: Arc<KeyRepository>,
-    object_permissions: Arc<ObjectPermissionRepository>,
+    object_permissions: ObjectPermissions,
 }
 
 impl KeyDatabase {
@@ -31,7 +30,7 @@ impl KeyDatabase {
     ) -> Self {
         Self {
             keys,
-            object_permissions,
+            object_permissions: ObjectPermissions::new(object_permissions),
         }
     }
 
@@ -46,51 +45,20 @@ impl KeyDatabase {
     }
 
     /// [`Self::key`] with the object permission it points at, for a host with no bound of its
-    /// own to put between the two reads.
-    ///
-    /// A permission row that cannot be read, or that the model would refuse, leaves a replica
-    /// read without it, as `get_key_object` did, and fails a writer read. One that is gone leaves
-    /// `object_permission` empty on either side, for the caller to refuse.
+    /// own to put between the two reads. A permission row that is gone leaves `object_permission`
+    /// empty on either side, for the caller to refuse.
     pub async fn read(&self, hash: &KeyHash, side: Side) -> Result<Option<KeyEntry>, Error> {
         let Some(key) = self.key(hash, side).await? else {
             return Ok(None);
         };
-        let id = key
-            .object_permission_id
-            .as_deref()
-            .filter(|id| !id.is_empty());
-        let object_permission = match (id, side) {
-            (None, _) => None,
-            (Some(id), Side::Writer) => self.object_permission(id, side).await?,
-            (Some(id), Side::Read) => {
-                self.object_permission(id, side)
-                    .await
-                    .unwrap_or_else(|error| {
-                        tracing::debug!(
-                            error = %litellm_error::Report::new(&error),
-                            "a key's object permission was not loaded"
-                        );
-                        None
-                    })
-            }
-        };
+        let object_permission = self
+            .object_permissions
+            .nested(key.object_permission_id.as_deref(), side)
+            .await?;
         Ok(Some(KeyEntry {
             object_permission,
             ..key
         }))
-    }
-
-    async fn object_permission(
-        &self,
-        id: &str,
-        side: Side,
-    ) -> Result<Option<ObjectPermissionEntry>, Error> {
-        self.object_permissions
-            .find_by_object_permission_id(id, side)
-            .await?
-            .map(object_permission_entry)
-            .transpose()
-            .map_err(within("object_permission"))
     }
 }
 
