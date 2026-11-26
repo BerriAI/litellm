@@ -8,7 +8,10 @@ for and when it leaves Python."""
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -121,6 +124,7 @@ JWKS_FETCH_ATTEMPTS: Final = 3
 JWKS_FETCH_RETRY_BACKOFF_SECONDS: Final = 0.25
 OIDC_DISCOVERY_PATH: Final = ".well-known/openid-configuration"
 _DECODED_JSON: Final = TypeAdapter(object)
+_CUSTOM_VALIDATE_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-jwt-custom-validate")
 
 
 class AgentLookup(Protocol):
@@ -851,7 +855,14 @@ class PythonAuthHost:
         validate: Final = self.litellm_jwtauth.custom_validate
         if validate is None:
             raise RuntimeError("rust auth ran custom_validate on a proxy that configures none")
-        return bool(validate(dict(claims)))
+        verdict: Final = (
+            validate(dict(claims))
+            if inspect.iscoroutinefunction(validate)
+            else await asyncio.get_running_loop().run_in_executor(
+                _CUSTOM_VALIDATE_POOL, contextvars.copy_context().run, lambda: validate(dict(claims))
+            )
+        )
+        return bool(await verdict if inspect.isawaitable(verdict) else verdict)
 
 
 def proxy_host(

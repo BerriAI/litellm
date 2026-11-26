@@ -1,10 +1,12 @@
 import asyncio
+import contextvars
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, NoReturn
 from unittest.mock import MagicMock
 
 import httpx
@@ -222,20 +224,24 @@ async def _authorize(
     jwks: _Jwks,
     shared_fetches: SharedFetches | None = None,
     jwks_cache: DualCache | None = None,
+    jwt_auth: LiteLLM_JWTAuth = JWT_AUTH,
 ):
     settings: Final = RustAuthSettings(
         {"enable_jwt_auth": True},
-        JWT_AUTH,
+        jwt_auth,
         core.HostFacts(master_key=None, premium=True, has_db=False),
     )
-    host: Final = _host(
-        route=route,
-        cache=cache,
-        jwks_cache=jwks_cache,
-        http_handler=jwks,  # pyright: ignore[reportArgumentType]  # serves only the GET the host makes
-        shared_fetches=shared_fetches,
-        api_key=token,
-        with_request=False,
+    host: Final = replace(
+        _host(
+            route=route,
+            cache=cache,
+            jwks_cache=jwks_cache,
+            http_handler=jwks,  # pyright: ignore[reportArgumentType]  # serves only the GET the host makes
+            shared_fetches=shared_fetches,
+            api_key=token,
+            with_request=False,
+        ),
+        litellm_jwtauth=jwt_auth,
     )
     return await core.drive(
         RustAuth.authorize_jwt(core.request(token, route, "POST"), settings, provisioning=True), host
@@ -405,6 +411,100 @@ async def test_a_refused_jwt_is_raised_as_the_error_class_its_failure_row_record
     error: Final = auth_denial.denial_error(outcome.denial)
     assert type(error) is error_class
     assert message in str(error)
+
+
+_Validate = Callable[[dict[str, object]], object]
+_CALLER: Final = contextvars.ContextVar("caller", default="")
+
+
+class _ValidatorFailed(Exception):
+    pass
+
+
+def _validating(validate: _Validate) -> LiteLLM_JWTAuth:
+    return JWT_AUTH.model_copy(update={"custom_validate": validate})
+
+
+def _validating_host(validate: _Validate) -> PythonAuthHost:
+    return replace(_host(), litellm_jwtauth=_validating(validate))
+
+
+def _sync(verdict: bool) -> _Validate:
+    return lambda claims: verdict
+
+
+def _async(verdict: bool) -> _Validate:
+    async def validate(claims: dict[str, object]) -> bool:
+        return verdict
+
+    return validate
+
+
+def _sync_returning_a_coroutine(verdict: bool) -> _Validate:
+    return lambda claims: _async(verdict)(claims)
+
+
+def _sync_raising(claims: dict[str, object]) -> NoReturn:
+    raise _ValidatorFailed
+
+
+async def _async_raising(claims: dict[str, object]) -> NoReturn:
+    raise _ValidatorFailed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", [True, False])
+@pytest.mark.parametrize("validator", [_sync, _async, _sync_returning_a_coroutine])
+async def test_custom_validate_answers_with_the_verdict_the_validator_reaches(
+    validator: Callable[[bool], _Validate], verdict: bool
+) -> None:
+    assert await _validating_host(validator(verdict)).custom_validate({"sub": "u1"}) is verdict
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("validate", [_sync_raising, _async_raising])
+async def test_an_error_custom_validate_raises_reaches_the_caller(validate: _Validate) -> None:
+    with pytest.raises(_ValidatorFailed):
+        await _validating_host(validate).custom_validate({})
+
+
+@pytest.mark.asyncio
+async def test_a_sync_custom_validate_that_blocks_leaves_the_event_loop_running() -> None:
+    loop_ran: Final = threading.Event()
+
+    async def run_on_the_loop() -> None:
+        loop_ran.set()
+
+    host: Final = _validating_host(lambda claims: loop_ran.wait(timeout=10))
+
+    accepted, _ = await asyncio.gather(host.custom_validate({}), run_on_the_loop())
+
+    assert accepted
+
+
+@pytest.mark.asyncio
+async def test_a_sync_custom_validate_reads_the_callers_context_variables() -> None:
+    _CALLER.set("request-1")
+
+    assert await _validating_host(lambda claims: _CALLER.get() == "request-1").custom_validate({})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("validator", [_sync, _async, _sync_returning_a_coroutine])
+async def test_a_jwt_custom_validate_refuses_is_denied_as_an_invalid_token(
+    validator: Callable[[bool], _Validate],
+) -> None:
+    outcome: Final = await _authorize(
+        _token({"sub": "admin-1", "scope": "litellm_proxy_admin"}),
+        "/key/generate",
+        UserApiKeyCache(),
+        _Jwks(),
+        jwt_auth=_validating(validator(False)),
+    )
+
+    assert outcome.denied
+    with pytest.raises(Exception, match="Invalid JWT token"):
+        auth_denial.raise_denial(outcome)
 
 
 class _ScriptedHttp:

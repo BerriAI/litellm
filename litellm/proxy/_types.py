@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -5261,7 +5261,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         stays usable while the identity provider is unreachable. Set to 0 to fail closed instead.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
-    - custom_validate: A custom function to validates the JWT token.
+    - custom_validate: A custom function that validates the JWT token's claims, annotated `-> Literal[True]`. It can be
+        `async def`, which is awaited. A sync function runs in a worker thread, so it must be thread safe.
     - oidc_userinfo_endpoint: OIDC UserInfo endpoint URL. When set along with oidc_userinfo_enabled, LiteLLM will call this endpoint with the access token to retrieve user identity information.
     - oidc_userinfo_enabled: Enable fetching user info from OIDC UserInfo endpoint instead of just decoding JWT token. Default: False.
     - oidc_userinfo_cache_ttl: TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).
@@ -5367,7 +5368,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     scope_mappings: list[ScopeMapping] | None = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
-    custom_validate: Callable[..., Literal[True]] | None = None
+    custom_validate: Callable[..., Literal[True] | Awaitable[Literal[True]]] | None = None
     #########################################################
     # Fields for syncing user team membership and roles with IDP provider
     jwt_litellm_role_map: list[JWTLiteLLMRoleMap] | None = None
