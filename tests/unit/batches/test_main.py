@@ -177,6 +177,21 @@ def test_create__vertex_ai_forwards_custom_endpoint(seams):
     assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is True
 
 
+@pytest.mark.parametrize(("sent", "forwarded"), [("yes", True), (1, True), ("", False), (0, False)])
+def test_create__vertex_ai_forwards_a_non_bool_custom_endpoint_as_its_truthiness(
+    seams: Seams, sent: object, forwarded: bool
+) -> None:
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai", custom_endpoint=sent)
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is forwarded
+
+
+def test_create__vertex_ai_forwards_an_absent_custom_endpoint_as_false(seams: Seams) -> None:
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai")
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is False
+
+
 def test_create__provider_config_routes_to_base_http_handler(seams):
     """model + a provider batches config (bedrock-style) routes to the generic
     base_llm_http_handler, NOT the per-provider instance."""

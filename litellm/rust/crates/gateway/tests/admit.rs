@@ -4,9 +4,13 @@
 
 mod keys;
 
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc};
 
-use axum::{body::Body, extract::Request, http::Method};
+use axum::{
+    body::Body,
+    extract::{ConnectInfo, Request},
+    http::Method,
+};
 use litellm_config::{Config, Environment};
 use litellm_gateway::{StoredConfig, host::auth::AuthStore};
 use litellm_repositories::StoredObjects;
@@ -121,6 +125,8 @@ struct Sent {
     expect: Who,
     reason: Option<String>,
     over: Option<String>,
+    /// The client's TCP peer, which the IP allowlist reads.
+    peer: Option<SocketAddr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -149,9 +155,12 @@ impl Sent {
         self.headers
             .iter()
             .fold(
-                Request::builder()
-                    .method(self.method.as_str())
-                    .uri(&self.path),
+                self.peer.into_iter().fold(
+                    Request::builder()
+                        .method(self.method.as_str())
+                        .uri(&self.path),
+                    |request, peer| request.extension(ConnectInfo(peer)),
+                ),
                 |request, (name, value)| request.header(name, value),
             )
             .body(body)
@@ -162,6 +171,9 @@ impl Sent {
 #[rstest]
 #[case::mixed_groups("mixed_groups")]
 #[case::honored_settings("honored_settings")]
+#[case::allowed_routes("allowed_routes")]
+#[case::allowed_routes_unwritten("allowed_routes_unwritten")]
+#[case::allowed_ips("allowed_ips")]
 #[case::setting_for_every_request("setting_for_every_request")]
 #[case::setting_for_messages_only("setting_for_messages_only")]
 #[case::fallback_shapes("fallback_shapes")]

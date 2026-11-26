@@ -1,4 +1,4 @@
-use litellm_gateway_auth_core::Caller;
+use litellm_gateway_auth_core::Credential;
 
 use super::{Admit, Authentication, Reason, Refused};
 
@@ -7,8 +7,8 @@ use super::{Admit, Authentication, Reason, Refused};
 /// core did not authenticate is over the error's name.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
     match authentication {
-        Ok(caller) => match &**caller {
-            Caller::MasterKey | Caller::Key(_) => None,
+        Ok(caller) => match &caller.credential {
+            Credential::MasterKey | Credential::Key { .. } => None,
         },
         Err(error) => Some(Reason::new(
             Refused::Credential,

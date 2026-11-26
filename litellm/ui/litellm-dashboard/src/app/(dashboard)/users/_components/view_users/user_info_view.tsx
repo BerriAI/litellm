@@ -126,7 +126,6 @@ export default function UserInfoView({
   const { field: teamIdField } = useController({ control: addTeamForm.control, name: "team_id" });
   const { field: roleField } = useController({ control: addTeamForm.control, name: "role" });
   const selectedTeamId = teamIdField.value;
-  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const { data: allMcpServers = [] } = useMCPServers();
   const { data: allMcpToolsets = [] } = useMCPToolsets();
 
@@ -182,7 +181,6 @@ export default function UserInfoView({
 
   const fetchAllTeams = async () => {
     if (!accessToken) return;
-    setIsLoadingTeams(true);
     try {
       const teams = await teamListCall(accessToken, null);
       setAllTeams(
@@ -193,8 +191,6 @@ export default function UserInfoView({
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
-    } finally {
-      setIsLoadingTeams(false);
     }
   };
 

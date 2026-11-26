@@ -84,7 +84,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.litellm_completion_transformation.transformation import (
     with_compaction_items_as_params,
 )
-from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.request_context import MCPRequestContext, resolve_inference_mcp_auth
 from litellm.responses.mcp.round_billing import (
     billed_for_every_round,
     first_round_billed_on_failure,
@@ -364,12 +364,16 @@ async def aresponses_api_with_mcp(
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
-    user_api_key_auth = kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
+    user_api_key_auth: Final = await resolve_inference_mcp_auth(
+        kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
+    )
 
     # Extract MCP auth headers from request (for dynamic auth when fetching tools)
     secret_fields: Final = kwargs.get("secret_fields")
     mcp_auth_header, mcp_server_auth_headers, _, discovery_raw_headers = (
-        ResponsesAPIRequestUtils.extract_mcp_headers_from_request(secret_fields=secret_fields, tools=tools)
+        ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+            secret_fields=secret_fields, tools=tools, mcp_auth=user_api_key_auth
+        )
         if isinstance(secret_fields, dict) and secret_fields
         else (None, None, None, None)
     )
@@ -466,6 +470,7 @@ async def aresponses_api_with_mcp(
             served_tools=original_mcp_tools,
             tool_choice=tool_choice_in_effect,
             gateway=gateway,
+            mcp_execution_auth=user_api_key_auth,
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
@@ -511,8 +516,6 @@ async def aresponses_api_with_mcp(
             )
 
             if tool_calls:
-                user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
-
                 # Extract MCP auth headers from the request to pass to MCP server
                 (
                     mcp_auth_header,
@@ -522,6 +525,7 @@ async def aresponses_api_with_mcp(
                 ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
                     secret_fields=secret_fields,
                     tools=tools,
+                    mcp_auth=user_api_key_auth,
                 )
 
                 tool_trace_id: Final = _request_trace_id(request_kwargs)
