@@ -17,8 +17,10 @@ from openai.types.responses.response_create_params import (
     ResponseCreateParamsNonStreaming,
     ResponseCreateParamsStreaming,
 )
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.secret_redaction import REDACTED
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
@@ -41,22 +43,44 @@ def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> obj
     return None
 
 
+_PARAMS_WITH_CREDENTIAL_ENTRIES: Final = frozenset({"tools", "mcp_servers"})
+_ENTRY_CREDENTIAL_KEYS: Final = frozenset({"authorization", "authorization_token", "headers"})
+
+
+_CREDENTIAL_ENTRY: Final = TypeAdapter[dict[str, object]](dict[str, object])
+_CREDENTIAL_ENTRIES: Final = TypeAdapter[list[object]](list[object])
+
+
+def _redact_entry_credentials(entry: object) -> object:
+    try:
+        fields: Final = _CREDENTIAL_ENTRY.validate_python(entry)
+    except ValidationError:
+        return entry
+    return {key: REDACTED if key in _ENTRY_CREDENTIAL_KEYS else value for key, value in fields.items()}
+
+
+def _without_entry_credentials(value: object) -> object:
+    try:
+        entries: Final = _CREDENTIAL_ENTRIES.validate_python(value)
+    except ValidationError:
+        return value
+    return [_redact_entry_credentials(entry) for entry in entries]
+
+
 class ModelParamHelper:
     # Cached at class level — deterministic set built from static OpenAI type annotations
     relevant_logging_args: ClassVar[frozenset[str]] = frozenset()
 
     @staticmethod
     def get_standard_logging_model_parameters(
-        model_parameters: dict,
-    ) -> dict:
-        """ """
-        standard_logging_model_parameters: Final[dict] = {}
+        model_parameters: Mapping[str, object],
+    ) -> dict[str, object]:
         supported_model_parameters: Final = ModelParamHelper.relevant_logging_args
-
-        for key, value in model_parameters.items():
-            if key in supported_model_parameters:
-                standard_logging_model_parameters[key] = value
-        return standard_logging_model_parameters
+        return {
+            key: _without_entry_credentials(value) if key in _PARAMS_WITH_CREDENTIAL_ENTRIES else value
+            for key, value in model_parameters.items()
+            if key in supported_model_parameters
+        }
 
     @staticmethod
     def get_exclude_params_for_model_parameters() -> set[str]:
