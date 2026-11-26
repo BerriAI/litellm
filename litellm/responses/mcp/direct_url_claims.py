@@ -229,7 +229,7 @@ def _stripped_names(headers: Mapping[str, str]) -> Iterable[tuple[str, str]]:
 
 def _header_names(tool: Mapping[str, object]) -> tuple[str, ...]:
     try:
-        return tuple(name.strip() for name in _HEADERS.validate_python(tool.get("headers") or {}))
+        return tuple(_HEADERS.validate_python(tool.get("headers") or {}))
     except ValidationError:
         return ()
 

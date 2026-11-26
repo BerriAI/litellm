@@ -239,8 +239,12 @@ def test_a_claimed_tool_that_needs_approval_answers_400_or_is_left_for_the_drop(
 
 @pytest.mark.parametrize(
     "credentials",
-    [{"authorization": "caller-token"}, {"headers": {"X-Api-Key": "caller-key"}}],
-    ids=["authorization", "header"],
+    [
+        {"authorization": "caller-token"},
+        {"headers": {"X-Api-Key": "caller-key"}},
+        {"headers": {" x-mcp-deepwiki-x-api-key": "caller-key"}},
+    ],
+    ids=["authorization", "header", "x-mcp-header-the-gateway-cannot-parse"],
 )
 def test_a_registered_url_sent_with_credentials_answers_400_or_runs_without_them_under_drop_params(
     credentials: Mapping[str, object],
