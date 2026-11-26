@@ -3,8 +3,12 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 """
 
 from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final, Literal, overload
 
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -12,13 +16,62 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import resolve_dashscope_openai_api_base
 
+THINKING_OFF_REASONING_EFFORTS: Final = frozenset({"none", "disable"})
+
+
+class DashScopeThinkingBody(TypedDict, total=False):
+    enable_thinking: ReadOnly[bool]
+    thinking_budget: ReadOnly[int]
+
+
+def _dashscope_thinking_body(thinking: Mapping[str, object] | None, reasoning_effort: object) -> DashScopeThinkingBody:
+    if thinking is not None:
+        enabled: Final = thinking.get("type") != "disabled"
+        budget: Final = thinking.get("budget_tokens")
+        if enabled and isinstance(budget, int) and not isinstance(budget, bool):
+            with_budget: Final[DashScopeThinkingBody] = {"enable_thinking": enabled, "thinking_budget": budget}
+            return with_budget
+        toggled: Final[DashScopeThinkingBody] = {"enable_thinking": enabled}
+        return toggled
+    if isinstance(reasoning_effort, str):
+        from_effort: Final[DashScopeThinkingBody] = {
+            "enable_thinking": reasoning_effort not in THINKING_OFF_REASONING_EFFORTS
+        }
+        return from_effort
+    untouched: Final[DashScopeThinkingBody] = {}
+    return untouched
+
 
 class DashScopeChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
         return [
             *super().get_supported_openai_params(model=model),
+            "thinking",
             "reasoning_effort",
         ]
+
+    def _map_openai_params(
+        self,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: dict return contract of OpenAIGPTConfig
+        thinking: Final = as_str_mapping(non_default_params.get("thinking"))
+        consumed: Final = frozenset({"thinking"} if thinking is None else {"thinking", "reasoning_effort"})
+        supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
+        passthrough_params: Final = MappingProxyType(
+            {k: v for k, v in non_default_params.items() if k in supported_openai_params and k not in consumed}
+        )
+        native: Final = _dashscope_thinking_body(thinking, non_default_params.get("reasoning_effort"))
+        if not native:
+            return {**optional_params, **passthrough_params}
+        existing_body: Final = as_str_mapping(optional_params.get("extra_body")) or MappingProxyType({})
+        return {
+            **optional_params,
+            **passthrough_params,
+            "extra_body": {**existing_body, **native},
+        }
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
