@@ -244,11 +244,8 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.tsx": {
-    "max-lines": {
-      "count": 1
-    },
     "no-nested-ternary": {
-      "count": 6
+      "count": 5
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -279,9 +276,6 @@
       "count": 1
     },
     "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "max-lines": {
       "count": 1
     },
     "max-params": {
@@ -882,7 +876,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/policies/_components/policy_info.tsx": {
@@ -1174,11 +1168,6 @@
       "count": 1
     }
   },
-  "src/components/AIHub/forms/MakeAgentPublicForm.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/AIHub/forms/MakeMCPPublicForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1465,11 +1454,6 @@
   },
   "src/components/chat_ui/mode_endpoint_mapping.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/claude_code_plugins/MakeSkillPublicForm.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
