@@ -122,15 +122,16 @@ struct Stop {
 
 impl Stop {
     /// Anthropic bills nothing for a refusal before any output outside the categories it names, whatever tokens the
-    /// usage counts. A refusal after partial output is billed, so any output token keeps the charge
-    fn is_unbilled_refusal(&self, usage: &MessagesUsage) -> bool {
+    /// usage counts. A refusal after partial output is billed, so any output token keeps the charge, an earlier
+    /// iteration's included
+    fn is_unbilled_refusal(&self, output_tokens: u64) -> bool {
         let category = self
             .stop_details
             .as_ref()
             .and_then(|details| details.get("category"))
             .and_then(Value::as_str);
         self.stop_reason.as_deref() == Some("refusal")
-            && usage.output_tokens.unwrap_or(0) == 0
+            && output_tokens == 0
             && !category.is_some_and(|category| REFUSALS_BILLED_BEFORE_OUTPUT.contains(&category))
     }
 }
@@ -198,7 +199,8 @@ impl CallPricing {
     /// The billed quantities of `usage` on an answer that stopped as `stop` says
     fn billed(&self, usage: &MessagesUsage, stop: &Stop, context: UsageContext) -> Option<Billed> {
         let metered = metered(usage, context)?;
-        if self.provider == "anthropic" && stop.is_unbilled_refusal(usage) {
+        let output_tokens = metered.usage.output.text + metered.usage.reasoning;
+        if self.provider == "anthropic" && stop.is_unbilled_refusal(output_tokens) {
             return Some(Billed {
                 metered: Metered {
                     usage: TokenUsage::default(),
@@ -786,6 +788,40 @@ mod tests {
             panic!("a refusal with usage is priced, got {cost:?}");
         };
         assert_eq!(priced.receipt.total > 0.0, billed);
+    }
+
+    #[rstest]
+    fn a_refusal_after_an_iteration_with_output_is_charged(recording: Arc<Recording>) {
+        let pricing = call_pricing(
+            &recording,
+            &refusal_case("anthropic"),
+            RequestedPricing::default(),
+        );
+        let body: MessagesResponse = serde_json::from_value(serde_json::json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-1",
+            "content": [],
+            "stop_reason": "refusal",
+            "stop_sequence": null,
+            "stop_details": refusal_details(Some("cyber")),
+            "usage": {
+                "input_tokens": 13,
+                "output_tokens": 0,
+                "iterations": [
+                    {"type": "message", "input_tokens": 13, "output_tokens": 7},
+                    {"type": "message", "input_tokens": 13, "output_tokens": 0},
+                ],
+            },
+        }))
+        .unwrap();
+
+        let Cost::Priced(priced) = pricing.message(&body) else {
+            panic!("a refusal with usage is priced");
+        };
+
+        assert!(priced.receipt.total > 0.0);
     }
 
     /// Prices as [`Recording`] does, plus the fixed fee an operator's `fixed_amount` margin adds to every call
