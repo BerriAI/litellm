@@ -217,16 +217,20 @@ macro_rules! record {
             }
         }
 
+        impl $name {
+            pub(super) fn into_entries(self) -> Vec<(::litellm_python_compat::Value, ::litellm_python_compat::Value)> {
+                [$((stringify!($field), $crate::auth_cache::types::record::Field::dump(self.$field)),)+]
+                    .into_iter()
+                    .filter_map(|(name, value)| Some((name.to_owned(), value?)))
+                    .chain(self.unread)
+                    .map(|(name, value)| (::litellm_python_compat::Value::Str(name), value))
+                    .collect()
+            }
+        }
+
         impl $crate::IntoValue for $name {
             fn into_value(self) -> ::litellm_python_compat::Value {
-                ::litellm_python_compat::Value::Dict(
-                    [$((stringify!($field), $crate::auth_cache::types::record::Field::dump(self.$field)),)+]
-                        .into_iter()
-                        .filter_map(|(name, value)| Some((name.to_owned(), value?)))
-                        .chain(self.unread)
-                        .map(|(name, value)| (::litellm_python_compat::Value::Str(name), value))
-                        .collect(),
-                )
+                ::litellm_python_compat::Value::Dict(self.into_entries())
             }
         }
 

@@ -56,13 +56,17 @@ fn unset_or<V: FromValue>(name: &'static str, value: Value) -> Result<Option<V>,
 
 /// A timestamp column as Python's driver hands it out: an aware UTC `datetime`, or the column the
 /// model refuses for a year a `datetime` cannot hold.
+pub(crate) fn instant(column: &'static str, at: NaiveDateTime) -> Result<IsoDateTime, Error> {
+    match at.year() {
+        1..=9999 => Ok(IsoDateTime::utc(at.and_utc().timestamp_micros())),
+        _ => Err(Error::row(column)),
+    }
+}
+
+/// [`instant`] for a column that may be NULL.
 pub(crate) fn time(
     column: &'static str,
     at: Option<NaiveDateTime>,
 ) -> Result<Option<IsoDateTime>, Error> {
-    at.map(|at| match at.year() {
-        1..=9999 => Ok(IsoDateTime::utc(at.and_utc().timestamp_micros())),
-        _ => Err(Error::row(column)),
-    })
-    .transpose()
+    at.map(|at| instant(column, at)).transpose()
 }
