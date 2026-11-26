@@ -949,20 +949,21 @@ async def test_route_a2a_bridge_per_query_agent_reports_no_input_or_output_cost(
         ("cost_discount_config", ["databricks_agent"]),
     ],
 )
-async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_still_answers(
+async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_answers_and_bills_its_unadjusted_price(
     httpx_transport: None, monkeypatch: pytest.MonkeyPatch, config_name: str, config: object
 ) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)
     )
+    registry: Final = _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE))
+    unadjusted_cost, _, _ = await _billed_chat_call(registry, "per-query")
     monkeypatch.setattr(litellm, config_name, config)
 
-    cost, response, _ = await _billed_chat_call(
-        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
-    )
+    cost, response, _ = await _billed_chat_call(registry, "per-query")
 
     assert response.choices[0].message.content == "pong"
-    assert cost is None
+    assert unadjusted_cost is not None
+    assert cost == pytest.approx(unadjusted_cost)
 
 
 @respx.mock
@@ -1045,6 +1046,25 @@ async def test_route_a2a_bridge_per_query_agent_streamed_call_bills_the_same_as_
     assert (streamed_row["spend"], streamed_row["agent_id"]) == (pytest.approx(0.05), "per-query-id")
     assert (plain_row["spend"], plain_row["agent_id"]) == (pytest.approx(0.05), "per-query-id")
 
+
+@respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-token", PER_TOKEN_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_per_token_agent_spend_row_records_the_agents_own_prices(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+
+    row, _ = await _logged_spend_row(agent, False, monkeypatch)
+
+    model_map_value: Final = json.loads(row["metadata"])["model_map_information"]["model_map_value"]
+    assert {key: model_map_value[key] for key in PER_TOKEN_PRICE} == PER_TOKEN_PRICE
 
 @respx.mock
 @pytest.mark.parametrize(

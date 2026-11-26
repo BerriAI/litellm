@@ -19,7 +19,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.per_call_pricing import numeric_prices, per_call_model_info
+from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
@@ -242,9 +242,19 @@ def _agent_prices_the_client_left_unset(
 ) -> Mapping[str, object]:
     if any(data.get(key) is not None for key in _PER_SECOND_PRICES):
         return {}
-    return numeric_prices(
+    return _numeric_prices(
         {key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None}
     )
+
+
+def _numeric_prices(prices: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        CustomPricingLiteLLMParams.model_validate(prices)
+    except ValidationError as e:
+        unusable: Final = frozenset(str(error["loc"][0]) for error in e.errors() if error["loc"])
+        verbose_proxy_logger.warning("A2A agent prices %s are not numbers, so they are not billed", sorted(unusable))
+        return {key: value for key, value in prices.items() if key not in unusable}
+    return prices
 
 
 def _call_prices(litellm_params: Mapping[str, object], data: Mapping[str, object]) -> Mapping[str, object]:

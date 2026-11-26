@@ -21,7 +21,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeVar, cast
 
 from httpx import Response
-from pydantic import AllowInfNan, BaseModel, JsonValue, NonNegativeFloat, TypeAdapter
+from pydantic import AllowInfNan, BaseModel, JsonValue, NonNegativeFloat, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -2235,15 +2235,9 @@ class Logging(LiteLLMLoggingBaseClass):
     _response_cost_calculator = response_cost_calculator
 
     def _a2a_agent_response_cost(self, cost_per_query: object) -> float | None:
-        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
         try:
-            billed_cost: Final = billed_flat_cost(
-                base_cost=_AGENT_PRICE.validate_python(cost_per_query),
-                custom_llm_provider=provider if isinstance(provider, str) else None,
-                model=self.model,
-                litellm_logging_obj=self,
-            )
-        except Exception as e:  # noqa: BLE001  # any pricing error leaves the cost unset instead of failing logging
+            base_cost: Final = _AGENT_PRICE.validate_python(cost_per_query)
+        except ValidationError as e:
             self.model_call_details["response_cost_failure_debug_information"] = (
                 StandardLoggingModelCostFailureDebugInformation(
                     error_str=str(e),
@@ -2252,6 +2246,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             )
             return None
+        billed_cost: Final = self._a2a_agent_billed_cost(base_cost)
         additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
         total_cost: Final = (
             billed_cost + additional_response_cost
@@ -2266,6 +2261,19 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.cost_breakdown = None
         return 0.0
+
+    def _a2a_agent_billed_cost(self, base_cost: float) -> float:
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        try:
+            return billed_flat_cost(
+                base_cost=base_cost,
+                custom_llm_provider=provider if isinstance(provider, str) else None,
+                model=self.model,
+                litellm_logging_obj=self,
+            )
+        except Exception as e:  # noqa: BLE001  # a malformed discount or margin config bills the unadjusted price
+            verbose_logger.warning("A2A agent %s is billed without its unusable discount or margin: %s", self.model, e)
+            return base_cost
 
     def _record_zero_cost_diagnostic(
         self,
@@ -6669,6 +6677,7 @@ class StandardLoggingPayloadSetup:
         init_response_obj: object,
         api_base: str | None = None,
         router_model_id: str | None = None,
+        custom_model_info: ModelInfo | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
@@ -6687,6 +6696,8 @@ class StandardLoggingPayloadSetup:
             if router_model_id is not None
             else model_cost_name
         )
+        if model_cost_name is not None and custom_model_info is not None:
+            return StandardLoggingModelInformation(model_map_key=model_cost_name, model_map_value=custom_model_info)
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
@@ -7373,6 +7384,7 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
             router_model_id=logging_obj.get_router_model_id(),
+            custom_model_info=logging_obj.a2a_agent_price_entry,
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
