@@ -243,7 +243,10 @@ def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | No
         (location.get("kendraDocumentLocation") or {}).get("uri"),
     )
     document_uri: Final = next((uri for uri in location_uris if uri), None)
-    return (document_uri, _filename_from_uri(document_uri)) if document_uri else None
+    if document_uri is None:
+        return None
+    filename: Final = _filename_from_uri(document_uri)
+    return (document_uri, filename) if filename else None
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
