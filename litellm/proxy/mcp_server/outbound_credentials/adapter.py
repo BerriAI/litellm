@@ -12,7 +12,6 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
-import os
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
@@ -43,6 +42,7 @@ from litellm.proxy.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
+from litellm.proxy.middleware.per_request_root_path_middleware import server_root_path_from_env
 from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPAuthType, MCPTransport
 
 if TYPE_CHECKING:
@@ -355,7 +355,7 @@ def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
     """
     prefix: Final = "" if root_path == "/" else root_path
     name: Final = server.alias or server.server_name or server.name or server.server_id
-    scalar_env: Final = os.getenv("SERVER_ROOT_PATH", "").rstrip("/")
+    scalar_env: Final = server_root_path_from_env()
     if not prefix or (scalar_env and prefix == scalar_env):
         return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
     return f"{prefix}/.well-known/oauth-protected-resource/mcp/{name}"

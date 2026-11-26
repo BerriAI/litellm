@@ -23,7 +23,7 @@ from litellm.proxy.mcp_server.auth.token_endpoint_auth import (
 from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
     GOOGLE_REFRESH_TOKEN_PARAMS,
 )
-from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path
+from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path, server_root_path_from_env
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -278,8 +278,7 @@ def well_known_root_suffix() -> str:
     derive their path from this one function, so the ``resource_metadata`` URL a client is told
     to fetch cannot drift from the route that actually serves it.
     """
-    root: Final = os.getenv("SERVER_ROOT_PATH", "")
-    return "" if root == "/" else root
+    return server_root_path_from_env()
 
 
 def get_route_relative_request_path(scope: Scope) -> str:

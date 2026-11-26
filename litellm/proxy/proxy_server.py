@@ -1006,6 +1006,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
+    StrippedRootPathMiddleware,
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
@@ -23473,13 +23474,17 @@ app.add_middleware(
 )
 app.add_middleware(LiteLLMResponseHeadersMiddleware, include_litellm_headers=_include_litellm_headers)
 
+# Must stay inside PerRequestRootPathMiddleware so a matched SERVER_ROOT_PATHS prefix is never doubled.
+if server_root_path:
+    app.add_middleware(StrippedRootPathMiddleware)
+
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
 # or the router inspects the path. Only added when SERVER_ROOT_PATHS is
 # configured, so the default deployment's middleware stack is unchanged.
 _server_root_paths: Final = get_server_root_paths()
 if _server_root_paths:
-    if server_root_path and server_root_path != "/":
+    if server_root_path:
         verbose_proxy_logger.warning(
             "Both SERVER_ROOT_PATH=%r and SERVER_ROOT_PATHS=%r are set. A request "
             "matching a SERVER_ROOT_PATHS prefix overrides the scalar root_path for "

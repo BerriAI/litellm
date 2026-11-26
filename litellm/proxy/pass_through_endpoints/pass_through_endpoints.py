@@ -4570,8 +4570,7 @@ class InitPassThroughEndpointHelpers:
         ``get_request_route()`` (already stripped); prefixed ``request.url.path``
         values are stripped via ``normalize_route_for_root_path``.
         """
-        normalized_route: Final = normalize_route_for_root_path(route)
-        return normalized_route if normalized_route is not None else route
+        return normalize_route_for_root_path(route)
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -4589,10 +4588,10 @@ class InitPassThroughEndpointHelpers:
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         normalized_route: Final = normalize_route_for_root_path(route)
-        if normalized_route is not None:
-            for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-                if normalized_route.startswith(mapped_route):
-                    return True
+        if any(
+            normalized_route.startswith(mapped_route) for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value
+        ):
+            return True
 
         comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
         if RouteChecks.is_builtin_eu_jev_decision_route(route=comparison_route):

@@ -1,5 +1,8 @@
 import os
 from unittest import mock
+
+import pytest
+
 from litellm.proxy import utils
 
 
@@ -37,6 +40,15 @@ def test_get_server_root_path_empty_string():
         assert (
             root_path == ""
         ), "Should return empty string when explicitly set to empty"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("9000", "/9000"), ("/9000/", "/9000"), (" /9000 ", "/9000"), ("//9000", "/9000"), ("/", ""), (" ", "")],
+)
+def test_get_server_root_path_is_normalized(monkeypatch, raw, expected):
+    monkeypatch.setenv("SERVER_ROOT_PATH", raw)
+    assert utils.get_server_root_path() == expected
 
 
 # Integration test simulation for FastAPI app initialization

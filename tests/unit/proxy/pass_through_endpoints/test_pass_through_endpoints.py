@@ -4692,6 +4692,16 @@ async def test_create_pass_through_route_no_custom_body_falls_back():
         assert call_kwargs["custom_body"] == request_parsed_body
 
 
+def test_is_registered_pass_through_route_mapped_route_under_server_root_path(monkeypatch):
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/9000")
+    mapped_route = f"{LiteLLMRoutes.mapped_pass_through_routes.value[0]}/v1/x"
+    assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(mapped_route) is True
+    assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(f"/9000{mapped_route}") is True
+
+
 def test_is_registered_pass_through_route_with_custom_root():
     """
     Registry stores bare paths; incoming routes may be bare (get_request_route)
@@ -4841,8 +4851,7 @@ def test_mapped_pass_through_routes_with_server_root_path():
         )
         assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/litellm/bedrock/model/invoke") is True
 
-        # bare route without prefix should not match when root is set
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/vertex_ai/v1/projects/foo") is False
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/vertex_ai/v1/projects/foo") is True
 
 
 @pytest.mark.asyncio

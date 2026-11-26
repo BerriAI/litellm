@@ -299,6 +299,24 @@ def test_records_once_on_2xx_llm_with_model_id():
     ]
 
 
+@pytest.mark.parametrize("path", ["/9000/v1/messages", "/v1/messages"])
+def test_records_messages_route_under_server_root_path_with_or_without_prefix(path: str):
+    from litellm.proxy.middleware.per_request_root_path_middleware import StrippedRootPathMiddleware
+
+    async def handler(request: Request) -> Response:
+        return JSONResponse({})
+
+    recorder = FakeRecorder()
+    app = Starlette(routes=[Route("/v1/messages", handler, methods=["POST"])])
+    app.add_middleware(BillableRequestMetricsMiddleware, recorder=recorder)
+    app.add_middleware(StrippedRootPathMiddleware)
+    response = TestClient(app, root_path="/9000").post(path)
+    assert response.status_code == 200
+    assert recorder.calls == [
+        {"category": BillableCategory.LLM, "route": "/v1/messages", "status_code": 200, "model_id": None}
+    ]
+
+
 def test_records_mcp_category():
     recorder = FakeRecorder()
     TestClient(_make_app(recorder)).post("/github/mcp")

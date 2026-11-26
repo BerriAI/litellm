@@ -10546,22 +10546,19 @@ def get_proxy_base_url() -> str | None:
 
 
 def get_server_root_path() -> str:
-    """
-    Get the server root path from the environment variables.
+    """The normalized SERVER_ROOT_PATH ("/prefix"), or "" when unset or "/"."""
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports utils
+        server_root_path_from_env,
+    )
 
-    - If SERVER_ROOT_PATH is set, return it.
-    - Otherwise, default to "/".
-    """
-    return os.getenv("SERVER_ROOT_PATH", "")
+    return server_root_path_from_env()
 
 
-def normalize_route_for_root_path(route: str) -> str | None:
-    """Strip SERVER_ROOT_PATH prefix. Returns de-prefixed route, or None if route is not under root path."""
+def normalize_route_for_root_path(route: str) -> str:
+    """Strip the SERVER_ROOT_PATH prefix from a route. A route not under the prefix is returned unchanged."""
     root_path: Final = get_server_root_path()
-    if root_path and root_path != "/":
-        if route.startswith(root_path + "/"):
-            return route[len(root_path) :]
-        return None
+    if root_path and route.startswith(root_path + "/"):
+        return route[len(root_path) :]
     return route
 
 

@@ -15,6 +15,7 @@ import os
 from collections.abc import Sequence
 from contextvars import ContextVar
 from typing import Final, Literal, Protocol
+from urllib.parse import quote
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -81,6 +82,16 @@ def normalize_root_paths(raw_paths: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(kept, key=len, reverse=True))
 
 
+def normalize_server_root_path(raw: str) -> str:
+    """Canonical ``/segment`` form of a root path, or ``""`` when nothing is left."""
+    stripped: Final = raw.strip().strip("/")
+    return f"/{stripped}" if stripped else ""
+
+
+def server_root_path_from_env() -> str:
+    return normalize_server_root_path(os.getenv("SERVER_ROOT_PATH", ""))
+
+
 def get_server_root_paths() -> tuple[str, ...]:
     """The normalized ``SERVER_ROOT_PATHS`` prefixes, empty when unset."""
     configured: Final = os.getenv(SERVER_ROOT_PATHS_ENV, "")
@@ -91,6 +102,14 @@ def get_server_root_paths() -> tuple[str, ...]:
 
 class _RootPathFields(Protocol):
     def get(self, key: Literal["path", "root_path"], default: str, /) -> str: ...
+
+
+class _RawPathFields(Protocol):
+    def get(self, key: Literal["raw_path"], default: None, /) -> object: ...
+
+
+def _raw_path_fields(scope: _RawPathFields) -> _RawPathFields:
+    return scope
 
 
 def _root_path_fields(scope: _RootPathFields) -> _RootPathFields:
@@ -128,3 +147,28 @@ class PerRequestRootPathMiddleware:
                 _request_root_path_var.reset(token)
             return
         await self.app(scope, receive, send)
+
+
+class StrippedRootPathMiddleware:
+    """Restores the ``root_path`` prefix on requests an upstream proxy already stripped."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        fields: Final = _root_path_fields(scope)
+        root_path: Final = fields.get("root_path", "")
+        path: Final = fields.get("path", "")
+        if not root_path or path == root_path or path.startswith(root_path + "/"):
+            await self.app(scope, receive, send)
+            return
+        raw_path: Final = _raw_path_fields(scope).get("raw_path", None)
+        prefixed: Final[Scope] = {
+            **scope,
+            "path": root_path + path,
+            **({"raw_path": quote(root_path).encode("ascii") + raw_path} if isinstance(raw_path, bytes) else {}),
+        }
+        await self.app(prefixed, receive, send)

@@ -1645,8 +1645,7 @@ def pass_through_key(
     normalized_route: Final = normalize_route_for_root_path(route)
     mapped_header: Final = (
         request.headers.get("litellm_user_api_key")
-        if normalized_route is not None
-        and any(normalized_route.startswith(prefix) for prefix in LiteLLMRoutes.mapped_pass_through_routes.value)
+        if any(normalized_route.startswith(prefix) for prefix in LiteLLMRoutes.mapped_pass_through_routes.value)
         else None
     )
     return reduce(
