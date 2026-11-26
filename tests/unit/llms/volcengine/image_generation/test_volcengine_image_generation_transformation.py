@@ -4,7 +4,6 @@ from typing import Final
 import httpx
 import openai
 import pytest
-import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -200,28 +199,6 @@ def test_generation_resolves_an_api_base_to_the_images_route(api_base: str | Non
     )
 
     assert captured["url"] == expected_url
-
-
-@respx.mock
-def test_a_supplied_openai_client_sends_generation_with_its_own_key_and_base_url(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("ARK_API_KEY", raising=False)
-    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
-    monkeypatch.delenv("ARK_API_BASE", raising=False)
-    monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
-    route: Final = respx.post("https://gateway.example/api/v3/images/generations").mock(
-        return_value=httpx.Response(200, json=ARK_RESPONSE)
-    )
-
-    litellm.image_generation(
-        model=f"volcengine/{SEEDREAM_5_5}",
-        prompt="a cat",
-        client=openai.OpenAI(api_key="client-key", base_url="https://gateway.example/api/v3"),
-    )
-
-    assert route.call_count == 1
-    assert route.calls.last.request.headers["authorization"] == "Bearer client-key"
 
 
 @pytest.mark.parametrize(
@@ -471,6 +448,77 @@ async def test_async_generation_fans_out_on_the_callers_async_client_and_retries
 
     assert len(bodies) == 3
     assert len(response.data) == 2
+
+
+SUPPLIED_CLIENT_BASE: Final = "https://gateway.example/api/v3"
+
+
+def _without_ark_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ARK_API_KEY", "VOLCENGINE_API_KEY", "ARK_API_BASE", "VOLCENGINE_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _sent_with_the_supplied_clients_key_and_base(request: httpx.Request) -> bool:
+    return (
+        str(request.url) == f"{SUPPLIED_CLIENT_BASE}/images/generations"
+        and request.headers.get("authorization") == "Bearer client-key"
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_max_retries", "unanswered"), [(0, 1), (1, 0)], ids=["client-retries-off", "client-retries-once"]
+)
+def test_a_supplied_openai_client_sends_generation_through_its_own_http_client_and_retries(
+    monkeypatch: pytest.MonkeyPatch, client_max_retries: int, unanswered: int
+) -> None:
+    _without_ark_env(monkeypatch)
+    answers: Final = iter([httpx.Response(503, json=ARK_UNAVAILABLE), httpx.Response(200, json=ONE_IMAGE)])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if not _sent_with_the_supplied_clients_key_and_base(request):
+            return httpx.Response(401, json=ARK_UNAVAILABLE)
+        return next(answers)
+
+    client: Final = openai.OpenAI(
+        api_key="client-key",
+        base_url=SUPPLIED_CLIENT_BASE,
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        max_retries=client_max_retries,
+    )
+
+    def generate() -> litellm.ImageResponse:
+        return litellm.image_generation(model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", client=client)
+
+    if unanswered:
+        with pytest.raises(litellm.ServiceUnavailableError):
+            generate()
+    else:
+        assert len(generate().data) == 1
+    assert sum(1 for _ in answers) == unanswered
+
+
+@pytest.mark.asyncio
+async def test_a_supplied_async_openai_client_sends_generation_through_its_own_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _without_ark_env(monkeypatch)
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if not _sent_with_the_supplied_clients_key_and_base(request):
+            return httpx.Response(401, json=ARK_UNAVAILABLE)
+        return httpx.Response(200, json=ONE_IMAGE)
+
+    response: Final = await litellm.aimage_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        client=openai.AsyncOpenAI(
+            api_key="client-key",
+            base_url=SUPPLIED_CLIENT_BASE,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        ),
+    )
+
+    assert len(response.data) == 1
 
 
 def test_generation_surfaces_the_ark_error_message() -> None:

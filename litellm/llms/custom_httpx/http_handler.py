@@ -775,6 +775,7 @@ class AsyncHTTPHandler:
         follow_redirects: bool = True,
         http2: bool = False,
         token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -784,12 +785,16 @@ class AsyncHTTPHandler:
         self.token_exchange_engine = token_exchange_engine
         self.follow_redirects = follow_redirects
         self.http2 = http2
-        self._owns_client = True
-        self._client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        self._owns_client = client is None
+        self._client = (
+            self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
+            if client is None
+            else client
         )
         self.client_alias = client_alias
 

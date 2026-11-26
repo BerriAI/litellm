@@ -91,6 +91,16 @@ def _supplied_openai_client(client: object) -> openai.OpenAI | openai.AsyncOpenA
     return client if isinstance(client, openai.OpenAI | openai.AsyncOpenAI) else None
 
 
+def _image_http_handler(
+    supplied_openai_client: openai.OpenAI | openai.AsyncOpenAI | None, client: object
+) -> HTTPHandler | AsyncHTTPHandler | None:
+    if isinstance(supplied_openai_client, openai.OpenAI):
+        return HTTPHandler(client=supplied_openai_client._client)  # pyright: ignore[reportPrivateUsage]  # the SDK keeps the caller's http_client only here
+    if isinstance(supplied_openai_client, openai.AsyncOpenAI):
+        return AsyncHTTPHandler(client=supplied_openai_client._client)  # pyright: ignore[reportPrivateUsage]  # the SDK keeps the caller's http_client only here
+    return client if isinstance(client, HTTPHandler | AsyncHTTPHandler) else None
+
+
 _STRING_DICT_ADAPTER: Final = TypeAdapter[dict[str, str]](dict[str, str])
 _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
     LlmProviders.DASHSCOPE,
@@ -543,10 +553,13 @@ def image_generation(
                 litellm_params=litellm_params_dict,
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
-                client=client,
+                client=_image_http_handler(supplied_openai_client, call_kwargs.get("client")),
                 _is_async=aimg_generation is True and custom_llm_provider in _ASYNC_IMAGE_HANDLER_PROVIDERS,
                 max_retries=(
-                    _sdk_max_retries(max_retries, is_router_call)
+                    _sdk_max_retries(
+                        max_retries if supplied_openai_client is None else supplied_openai_client.max_retries,
+                        is_router_call,
+                    )
                     if custom_llm_provider == litellm.LlmProviders.VOLCENGINE
                     else 0
                 ),
