@@ -2,7 +2,7 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache, lru_cache, partial
@@ -105,7 +105,7 @@ def is_authentication_failure(exception: BaseException) -> bool:
 
 
 @contextmanager
-def refusals_fail_authentication() -> Iterator[None]:
+def refusals_fail_authentication() -> Generator[None, None, None]:
     """Marks whatever the block raises, for code that runs before the caller's credential authenticates."""
     try:
         yield
