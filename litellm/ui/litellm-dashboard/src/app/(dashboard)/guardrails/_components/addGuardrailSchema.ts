@@ -85,10 +85,6 @@ const validateStepZero = (
     });
   }
 
-  if (shouldRenderLLMJudgeFields(selectedProvider)) {
-    validateLlmJudgeFields(values, t, ctx);
-  }
-
   const usesOwnConfigurationFields = [
     isToolPermissionProvider,
     shouldRenderContentFilterConfigSettings(selectedProvider),
@@ -106,6 +102,11 @@ const validateStepZero = (
 
 const validateStepOne = (values: Record<string, unknown>, options: AddGuardrailSchemaOptions, ctx: z.RefinementCtx) => {
   const { selectedProvider, providerParams, isDecisionModelProvider, isToolPermissionProvider, t } = options;
+  if (shouldRenderLLMJudgeFields(selectedProvider)) {
+    validateLlmJudgeFields(values, t, ctx);
+    return;
+  }
+
   if (isDecisionModelProvider && isBlankGuardrailValue(values.decision_model)) {
     ctx.addIssue({
       code: "custom",

@@ -74,6 +74,7 @@ test.describe("Guardrails and policies forms", () => {
     await expect(wizard).toBeVisible({ timeout: 10_000 });
 
     await wizard.getByRole("button", { name: "Next" }).click();
+    await expect(wizard.getByText("Please enter a guardrail name")).toBeVisible({ timeout: 5_000 });
     expect(postRequests).toEqual([]);
 
     await wizard.getByRole("textbox", { name: "Guardrail Name" }).fill(initialName);
@@ -100,6 +101,9 @@ test.describe("Guardrails and policies forms", () => {
     const createBody = createResponse.request().postDataJSON();
     expect(createBody.guardrail.guardrail_name).toBe(initialName);
     expect(createBody.guardrail.litellm_params.guardrail).toBe("litellm_content_filter");
+    expect(createBody.guardrail.litellm_params.blocked_words).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "e2e-blocked-term" })]),
+    );
     await expect(wizard).toBeHidden({ timeout: 10_000 });
 
     const providerParamsLoaded = page.waitForResponse((res) =>
@@ -121,6 +125,7 @@ test.describe("Guardrails and policies forms", () => {
     const editNameInput = page.getByPlaceholder("Enter guardrail name");
     await editNameInput.fill("");
     await page.getByRole("button", { name: "Save Changes" }).click();
+    await expect(page.getByText("Please input a guardrail name")).toBeVisible({ timeout: 5_000 });
     expect(patchRequests).toEqual([]);
 
     await editNameInput.fill(renamedName);
@@ -224,6 +229,7 @@ test.describe("Guardrails and policies forms", () => {
     await expect(policyNameInput).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole("button", { name: "Save Policy" }).click();
+    await expect(page.getByText("Please enter a policy name")).toBeVisible({ timeout: 5_000 });
     expect(postRequests).toEqual([]);
 
     await policyNameInput.fill(policyName);
