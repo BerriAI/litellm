@@ -85,20 +85,24 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
 
 
 WITHOUT_LOW_TIERS_MODEL: Final = "reasoner-without-low-tiers"
+WITHOUT_MINIMAL_MODEL: Final = "reasoner-without-minimal"
 
 
-def _model_without_low_tiers(model_cost_key: str, provider: str) -> Iterator[str]:
+def _reasoner_refusing(
+    model: str, model_cost_key: str, provider: str, refused_efforts: frozenset[str]
+) -> Iterator[str]:
     litellm.model_cost[model_cost_key] = {
         "litellm_provider": provider,
         "mode": "responses",
         "supports_reasoning": True,
-        "supports_none_reasoning_effort": False,
-        "supports_minimal_reasoning_effort": False,
-        "supports_low_reasoning_effort": False,
+        **{
+            f"supports_{effort}_reasoning_effort": effort not in refused_efforts
+            for effort in ("none", "minimal", "low")
+        },
     }
     litellm.get_model_info.cache_clear()
     try:
-        yield f"{provider}/{WITHOUT_LOW_TIERS_MODEL}"
+        yield f"{provider}/{model}"
     finally:
         litellm.model_cost.pop(model_cost_key, None)
         litellm.get_model_info.cache_clear()
@@ -106,9 +110,20 @@ def _model_without_low_tiers(model_cost_key: str, provider: str) -> Iterator[str
 
 @pytest.fixture
 def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
-    yield from _model_without_low_tiers(WITHOUT_LOW_TIERS_MODEL, "openai")
+    yield from _reasoner_refusing(
+        WITHOUT_LOW_TIERS_MODEL, WITHOUT_LOW_TIERS_MODEL, "openai", frozenset({"none", "minimal", "low"})
+    )
 
 
 @pytest.fixture
 def azure_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
-    yield from _model_without_low_tiers(f"azure/{WITHOUT_LOW_TIERS_MODEL}", "azure")
+    yield from _reasoner_refusing(
+        WITHOUT_LOW_TIERS_MODEL, f"azure/{WITHOUT_LOW_TIERS_MODEL}", "azure", frozenset({"none", "minimal", "low"})
+    )
+
+
+@pytest.fixture
+def azure_model_without_minimal(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_MINIMAL_MODEL, f"azure/{WITHOUT_MINIMAL_MODEL}", "azure", frozenset({"none", "minimal"})
+    )

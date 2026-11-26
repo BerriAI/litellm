@@ -17,7 +17,10 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
@@ -1142,3 +1145,19 @@ def test_an_explicit_effort_the_model_raises_never_outranks_what_the_thinking_bu
         return completion_kwargs.get("reasoning_effort")
 
     assert sent_effort({"output_config": {"effort": "minimal"}}) == sent_effort({})
+
+
+def test_drop_params_rounds_an_explicit_effort_the_model_can_take_instead_of_sending_the_budgets(
+    azure_model_without_minimal: str,
+) -> None:
+    def sent_effort(*, drop_params: bool) -> object:
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=6000,
+            messages=MESSAGES,
+            model=azure_model_without_minimal,
+            thinking={"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+            extra_kwargs={"drop_params": drop_params, "output_config": {"effort": "minimal"}},
+        )
+        return completion_kwargs.get("reasoning_effort")
+
+    assert sent_effort(drop_params=True) == sent_effort(drop_params=False) == "low"
