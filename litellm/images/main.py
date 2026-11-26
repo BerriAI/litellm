@@ -31,7 +31,7 @@ from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_valu
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, handler_for_httpx_client
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params, header_auth_params
 
@@ -94,10 +94,8 @@ def _supplied_openai_client(client: object) -> openai.OpenAI | openai.AsyncOpenA
 def _image_http_handler(
     supplied_openai_client: openai.OpenAI | openai.AsyncOpenAI | None, client: object
 ) -> HTTPHandler | AsyncHTTPHandler | None:
-    if isinstance(supplied_openai_client, openai.OpenAI):
-        return HTTPHandler(client=supplied_openai_client._client)  # pyright: ignore[reportPrivateUsage]  # the SDK keeps the caller's http_client only here
-    if isinstance(supplied_openai_client, openai.AsyncOpenAI):
-        return AsyncHTTPHandler(client=supplied_openai_client._client)  # pyright: ignore[reportPrivateUsage]  # the SDK keeps the caller's http_client only here
+    if supplied_openai_client is not None:
+        return handler_for_httpx_client(supplied_openai_client._client)  # pyright: ignore[reportPrivateUsage]  # the SDK keeps the caller's http_client only here
     return client if isinstance(client, HTTPHandler | AsyncHTTPHandler) else None
 
 

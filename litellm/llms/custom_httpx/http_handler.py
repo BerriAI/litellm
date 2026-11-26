@@ -2162,3 +2162,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
 
 
 _get_httpx_client = get_httpx_client
+
+
+def handler_for_httpx_client(client: httpx.Client | httpx.AsyncClient) -> HTTPHandler | AsyncHTTPHandler:
+    return AsyncHTTPHandler(client=client) if isinstance(client, httpx.AsyncClient) else HTTPHandler(client=client)
