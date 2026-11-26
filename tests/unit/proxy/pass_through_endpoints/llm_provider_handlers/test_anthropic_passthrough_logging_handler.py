@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from typing import Final
@@ -8,13 +9,14 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from fastapi import Request
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -3240,6 +3242,192 @@ def test_streamed_messages_from_other_providers_ignore_a_zero_usage_cost_field()
     assert result["kwargs"].get("response_cost") != 0.0
 
 
+class _LoggedHiddenParams(TypedDict):
+    additional_headers: ReadOnly[dict[str, object]]
+
+
+class _LoggedPayload(TypedDict):
+    hidden_params: ReadOnly[_LoggedHiddenParams]
+
+
+class _SuccessPayloadRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: Final[asyncio.Queue[_LoggedPayload]] = asyncio.Queue()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.payloads.put_nowait(TypeAdapter(_LoggedPayload).validate_python(kwargs["standard_logging_object"]))
+
+
+@pytest.mark.parametrize(
+    ("response_headers", "remaining_tokens", "remaining_requests"),
+    [
+        pytest.param(
+            {"anthropic-ratelimit-tokens-remaining": "11999000", "anthropic-ratelimit-requests-remaining": "12999"},
+            11999000,
+            12999,
+            id="anthropic",
+        ),
+        pytest.param(
+            {"x-ratelimit-remaining-tokens": "49900", "x-ratelimit-remaining-requests": "49"},
+            49900,
+            49,
+            id="azure-ai-foundry",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_streamed_messages_call_logs_the_rate_limit_the_provider_reported(
+    all_chunks: list[str], response_headers: dict[str, str], remaining_tokens: int, remaining_requests: int
+):
+    recorder: Final = _SuccessPayloadRecorder()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="stream-rate-limit",
+        function_id="stream-rate-limit",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5-20250929",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    logging_obj.model_call_details["response_headers"] = {**response_headers, "request-id": "req_stream"}
+
+    handled: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+    await logging_obj.dispatch_success_handlers(
+        result=handled["result"],
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+        **handled["kwargs"],
+    )
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert recorder.payloads.empty()
+    logged_headers: Final = logged["hidden_params"]["additional_headers"]
+    assert logged_headers["x_ratelimit_remaining_tokens"] == remaining_tokens
+    assert logged_headers["x_ratelimit_remaining_requests"] == remaining_requests
+    assert "llm_provider-request-id" not in logged_headers
+
+
+def test_a_streamed_messages_call_keeps_the_reported_cost_beside_the_provider_rate_limit():
+    logging_obj: Final = _go_logging_obj()
+    logging_obj.model_call_details["response_headers"] = {"x-ratelimit-remaining-tokens": "49900"}
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "opencode_go/claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=_go_stream_chunks(),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    headers: Final = result["result"]._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == "49900"
+    assert headers["llm_provider-x-litellm-response-cost"] == 0.00412
+
+
+@pytest.mark.parametrize("response_headers", [None, {"x-ratelimit-remaining-tokens": 49900}], ids=["absent", "non-str"])
+def test_a_streamed_messages_call_without_usable_provider_headers_logs_none(
+    all_chunks: list[str], response_headers: object
+):
+    logging_obj: Final = _go_logging_obj()
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["response_headers"] = response_headers
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    assert isinstance(result["result"], litellm.ModelResponse)
+    assert "x-ratelimit-remaining-tokens" not in (result["result"]._hidden_params.get("additional_headers") or {})
+
+
+@pytest.mark.parametrize(
+    ("rate_limit_headers", "logged_headers"),
+    [
+        pytest.param(
+            {"Anthropic-Ratelimit-Tokens-Remaining": "11999000", "anthropic-ratelimit-requests-remaining": "12999"},
+            {
+                "llm_provider-anthropic-ratelimit-tokens-remaining": "11999000",
+                "llm_provider-anthropic-ratelimit-requests-remaining": "12999",
+                "x-ratelimit-remaining-tokens": "11999000",
+                "x-ratelimit-remaining-requests": "12999",
+            },
+            id="anthropic",
+        ),
+        pytest.param(
+            {"X-RateLimit-Remaining-Tokens": "49900", "x-ratelimit-remaining-requests": "49"},
+            {
+                "llm_provider-x-ratelimit-remaining-tokens": "49900",
+                "llm_provider-x-ratelimit-remaining-requests": "49",
+                "x-ratelimit-remaining-tokens": "49900",
+                "x-ratelimit-remaining-requests": "49",
+            },
+            id="azure-ai-foundry",
+        ),
+    ],
+)
+def test_a_streamed_messages_call_logs_only_the_provider_rate_limit_headers(
+    all_chunks: Sequence[str], rate_limit_headers: Mapping[str, str], logged_headers: Mapping[str, str]
+):
+    logging_obj: Final = _go_logging_obj()
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["response_headers"] = {
+        **rate_limit_headers,
+        "set-cookie": "session=secret",
+        "anthropic-organization-id": "org-1",
+        "anthropic-workspace-id": "wrkspc-1",
+        "request-id": "req_stream",
+        "retry-after": "3",
+    }
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=list(all_chunks),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    additional_headers: Final = result["result"]._hidden_params["additional_headers"]
+    assert "llm_provider-set-cookie" not in additional_headers
+    assert "llm_provider-anthropic-organization-id" not in additional_headers
+    assert additional_headers == logged_headers
+
+
 _BEDROCK_TRACE_PRICING: Final = {
     "bedrock/guardrails": {
         "litellm_provider": "bedrock",
@@ -3389,3 +3577,158 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+    logging_obj.optional_params = {}
+    logging_obj.record_route_cost(0.0421)
+
+    def repriced(*_args: object, **_kwargs: object) -> float:
+        raise AssertionError("a route-priced stream was priced again")
+
+    monkeypatch.setattr(litellm, "completion_cost", repriced)
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
+    assert logging_obj.model_call_details["response_cost"] == 0.0421
+
+
+_MANTLE_MESSAGES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+_BEDROCK_STYLE_REQUEST_MODEL: Final = "anthropic.claude-sonnet-4-5"
+_MANTLE_ROW_PRICING: Final = {"input_cost_per_token": 5e-03, "output_cost_per_token": 9e-03}
+
+
+def _log_generic_route_call(
+    monkeypatch: pytest.MonkeyPatch,
+    url_route: str,
+    stream: bool,
+    all_chunks: list[str],
+    httpx_response: httpx.Response,
+    configured_provider: str | None = None,
+    request_model: str = _BEDROCK_STYLE_REQUEST_MODEL,
+) -> tuple[LiteLLMLoggingObj, PassThroughEndpointLoggingTypedDict]:
+    returned_model: Final = httpx_response.json()["model"]
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            f"bedrock_mantle/{_BEDROCK_STYLE_REQUEST_MODEL}": {
+                "litellm_provider": "bedrock_mantle",
+                **_MANTLE_ROW_PRICING,
+            },
+            returned_model: {"litellm_provider": "anthropic", **_DEPLOYMENT_PRICING},
+        },
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="generic-route",
+        function_id="1",
+    )
+    logging_obj.model_call_details["stream"] = stream
+    if configured_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = configured_provider
+    request_body: Final = {"model": request_model, "stream": stream, "messages": []}
+    if stream:
+        return logging_obj, AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=MagicMock(),
+            start_time=datetime(2025, 1, 1),
+            all_chunks=all_chunks,
+            end_time=datetime(2025, 1, 1),
+        )
+    return logging_obj, AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=httpx_response,
+        response_body=httpx_response.json(),
+        logging_obj=logging_obj,
+        url_route=url_route,
+        result="success",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+        request_body=request_body,
+    )
+
+
+def _price_of(usage: litellm.Usage, pricing: dict[str, float]) -> float:
+    return (
+        usage.prompt_tokens * pricing["input_cost_per_token"]
+        + usage.completion_tokens * pricing["output_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_generic_route_to_a_mantle_host_is_billed_at_the_mantle_row_of_the_requested_model(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch, _MANTLE_MESSAGES_URL, stream, all_chunks, mock_httpx_response
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _MANTLE_ROW_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "bedrock_mantle"
+    assert result["kwargs"]["model"] == _BEDROCK_STYLE_REQUEST_MODEL
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_generic_route_whose_requested_model_is_unpriced_is_billed_at_the_model_the_upstream_returned(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch, "https://gateway.example.com/v1/messages", stream, all_chunks, mock_httpx_response
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _DEPLOYMENT_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+    assert result["kwargs"]["model"] == mock_httpx_response.json()["model"]
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_provider_the_route_configured_is_kept_on_a_mantle_host(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, _ = _log_generic_route_call(
+        monkeypatch, _MANTLE_MESSAGES_URL, stream, all_chunks, mock_httpx_response, configured_provider="anthropic"
+    )
+
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_mantle_host_model_with_no_mantle_row_is_still_billed_at_the_model_the_upstream_returned(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch,
+        _MANTLE_MESSAGES_URL,
+        stream,
+        all_chunks,
+        mock_httpx_response,
+        request_model="anthropic.claude-opus-4-5",
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _DEPLOYMENT_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+    assert result["kwargs"]["model"] == mock_httpx_response.json()["model"]

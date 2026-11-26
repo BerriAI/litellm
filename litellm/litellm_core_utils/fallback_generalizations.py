@@ -183,7 +183,7 @@ class _FallbackGeneralizations:
             None,
         )
 
-    def match_capabilities(self, model: str) -> dict | None:
+    def match_capabilities(self, model: str) -> dict[object, object] | None:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)

@@ -145,6 +145,12 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
+def _message_dict(message: AllMessageValues | BaseModel) -> AllMessageValues:
+    if isinstance(message, BaseModel):
+        return cast(AllMessageValues, message.model_dump())  # cast-ok: SDK messages dump to chat message fields
+    return message
+
+
 _MessageT = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
@@ -830,7 +836,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -839,7 +845,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Apply cache control directives based on specified injection points.
 
@@ -856,6 +862,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
+        message_dicts: Final = [_message_dict(message) for message in messages]
         message_points: Final = tuple(
             cast(CacheControlMessageInjectionPoint, point)
             for point in injection_points
@@ -879,9 +886,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         )
         processed_messages = copy.deepcopy(
-            [without_prompt_cache_breakpoints(message) for message in messages]
+            [without_prompt_cache_breakpoints(message) for message in message_dicts]
             if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
-            else messages
+            else message_dicts
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
@@ -1389,12 +1396,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def apply_to_anthropic_messages_request(
-        messages: list[dict],
+        messages: list[dict[str, object]],
         system: str | list | None,
         injection_points: Sequence[CacheControlInjectionPoint],
         openai_dialect: bool = False,
         external_breakpoints: int = 0,
-    ) -> tuple[list[dict], str | list | None, list[CacheControlInjectionPoint]]:
+    ) -> tuple[list[dict[str, object]], str | list | None, list[CacheControlInjectionPoint]]:
         """Apply cache control injection for the Anthropic-native v1/messages endpoint.
 
         ``external_breakpoints`` is the client's breakpoint count outside ``messages`` and
@@ -1806,9 +1813,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         kwargs: dict[str, object],
         model: str | None = None,
         custom_llm_provider: str | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         api_base: str | None = None,
-    ) -> tuple[list[dict], str | list | None]:
+    ) -> tuple[list[dict[str, object]], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
         Configured points are applied even when the client marked its own
@@ -1929,7 +1936,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -1940,7 +1947,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """Async version - delegates to sync since no async operations needed."""
         return self.get_chat_completion_prompt(
             model=model,

@@ -5,6 +5,8 @@ pub enum Error {
     #[error(transparent)]
     Config(#[from] litellm_config_load::Error),
     #[error(transparent)]
+    Environment(#[from] litellm_config::Error),
+    #[error(transparent)]
     Redis(#[from] litellm_redis_resolve::Error),
     #[error(transparent)]
     RedisConnect(#[from] litellm_redis_connect::Error),
@@ -20,4 +22,6 @@ pub enum Error {
     Router(#[from] litellm_router_core::Error),
     #[error(transparent)]
     Callback(#[from] crate::callbacks::Unregistrable),
+    #[error("MODEL_COST_MAP_MAX_SHRINK_RATIO must be between 0 and 1, got {0}")]
+    ShrinkRatio(f64),
 }

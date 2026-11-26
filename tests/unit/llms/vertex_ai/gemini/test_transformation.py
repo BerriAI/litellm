@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import Mock
 
 import httpx
@@ -20,6 +20,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -1186,6 +1187,45 @@ def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_t
     assert "parameters" in forced_lookup and "parametersJsonSchema" in free_lookup
     assert lookup == (forced_lookup if forced else free_lookup)
     assert weather == forced_weather
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(("choice", "mode"), [("validated", "VALIDATED"), ("required", "ANY")])
+def test_gemini_serializes_schema_constrained_tool_choice(
+    provider: Literal["gemini", "vertex_ai"], drop_params: bool, choice: str, mode: str
+) -> None:
+    model: Final = "gemini-3.8-flash"
+    config: Final = GoogleAIStudioGeminiConfig() if provider == "gemini" else VertexGeminiConfig()
+    params: Final = config.map_openai_params(
+        non_default_params={"tools": [_LOOKUP_TOOL], "tool_choice": choice},
+        optional_params={},
+        model=model,
+        drop_params=drop_params,
+    )
+    body: Final = transformation.transform_request_body(
+        messages=[{"role": "user", "content": "Find the record named Atlas"}],
+        model=model,
+        optional_params=params,
+        custom_llm_provider=provider,
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert body["toolConfig"]["functionCallingConfig"]["mode"] == mode
+    assert "parameters" in body["tools"][0]["function_declarations"][0]
+
+
+def test_gemini_rejects_unknown_tool_choice_even_with_dropping_enabled() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="validatd") as error:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"tool_choice": "validatd"},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=True,
+        )
+
+    assert error.value.status_code == 400
 
 
 def _gemini_request_body(messages: list[openai.AllMessageValues]) -> RequestBody:

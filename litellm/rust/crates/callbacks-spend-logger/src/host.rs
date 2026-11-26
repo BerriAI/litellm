@@ -4,13 +4,14 @@
 //! of having them shipped through Rust.
 //!
 //! Awaited, because the row or the charge needs the answer: the key identity enrichment, the
-//! search free tier counter and the accounting context. The search free tier discount is awaited
+//! search free tier counter, the accounting context and the failure rows' counters, which the
+//! proxy finishes in the background once they outlast their wait. The search free tier discount is awaited
 //! too, so the callbacks after this one log the discounted cost. Fire and forget, because Python only
 //! schedules or records them: the post-write work, the after-charge work, the failed tracking
 //! alert and the batch accounting outcome.
 
 use litellm_callbacks::HostCall;
-use litellm_callbacks_budgets::CustomerWindow;
+use litellm_callbacks_budgets::{CounterStep, CustomerWindow};
 use litellm_callbacks_spend_log::{AccountingSavings, AccountingWindow, SpendLogRow};
 use litellm_redis_store::spend_counters::SpendCounter;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -224,5 +225,19 @@ pub struct LoggedCost {
 
 impl HostCall for LoggedCost {
     const NAME: &'static str = "logged_cost";
+    type Reply = ();
+}
+
+/// `_increment_failure_spend_counters`: the failure rows' counter steps, which the proxy runs in a
+/// task of its own and waits on for `FAILURE_SPEND_COUNTER_WAIT_SECONDS`, so a slow counter store
+/// finishes them after the hook returned instead of holding the error back. A step run in Rust
+/// past the hook could not reach the host its counters still ask.
+#[derive(Debug, Serialize)]
+pub struct ChargeFailureCounters {
+    pub steps: Vec<CounterStep>,
+}
+
+impl HostCall for ChargeFailureCounters {
+    const NAME: &'static str = "charge_failure_counters";
     type Reply = ();
 }

@@ -69,6 +69,15 @@ def app_budget_limits(
     return (*windows, AppDurationLimit(budget_duration=budget.budget_duration, max_budget=budget.max_budget))
 
 
+class CustomerBudgetWindowUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget_duration: str
+    spend: float
+    max_budget: float
+    reset_at: datetime | None = None
+
+
 class CustomerScopeAuth(BaseModel):
     """One level of the customer hierarchy a request runs under, with the limits its budget row grants."""
 
@@ -88,6 +97,11 @@ class CustomerScopeAuth(BaseModel):
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
     cap_policy: CapPolicy | None = None
+    budget_window_usage: tuple[CustomerBudgetWindowUsage, ...] = Field(
+        default=(),
+        exclude=True,
+        description="What the request's budget window check read, one entry per budget_limits window",
+    )
 
     def accounting_limits(self) -> tuple[BudgetLimit | AppDurationLimit, ...]:
         if self.soft_budget_duration is None or any(

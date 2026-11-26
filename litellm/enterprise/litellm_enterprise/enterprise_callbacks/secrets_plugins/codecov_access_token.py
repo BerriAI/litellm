@@ -15,7 +15,7 @@ class CodecovAccessTokenDetector(RegexBasedDetector):
         return "Codecov Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Codecov Access Token
             re.compile(

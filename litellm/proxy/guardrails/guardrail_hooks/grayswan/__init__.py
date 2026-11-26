@@ -45,7 +45,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return grayswan_guardrail
 
 
-def _get_config_value(litellm_params, optional_params, attribute_name):
+def _get_config_value(litellm_params: "LitellmParams", optional_params: object, attribute_name: str):
     if optional_params is not None:
         value: Final = getattr(optional_params, attribute_name, None)
         if value is not None:

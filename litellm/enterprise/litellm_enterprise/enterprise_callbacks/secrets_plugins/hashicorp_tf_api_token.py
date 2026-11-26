@@ -15,7 +15,7 @@ class HashiCorpTFApiTokenDetector(RegexBasedDetector):
         return "HashiCorp Terraform API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # HashiCorp Terraform user/org API token
             re.compile(r"""(?i)[a-z0-9]{14}\.atlasv1\.[a-z0-9\-_=]{60,70}"""),

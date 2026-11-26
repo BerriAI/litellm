@@ -30,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import (
     sanitize_openai_provider_metadata,
     strip_callback_config,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CredentialItem
@@ -151,6 +152,28 @@ def test_process_callback_reports_none_when_absent_everywhere(mock_get_env_vars,
     )
 
     assert result["variables"] == {"LANGFUSE_SECRET_KEY": None}
+
+
+def test_process_otel_callback_returns_saved_background_service_span_toggle(monkeypatch):
+    env_var: Final = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS"
+    monkeypatch.setenv("LITELLM_SALT_KEY", "callback-boolean-test-salt")
+    monkeypatch.setenv(env_var, "true")
+    result = process_callback("otel", "success", {env_var: encrypt_value_helper("false")})
+
+    assert isinstance(result["variables"], dict)
+    assert result["variables"].get(env_var) == "false"
+
+
+def test_process_otel_callback_reports_yaml_background_span_setting_over_env_and_db(monkeypatch):
+    env_var: Final = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS"
+    monkeypatch.setenv("LITELLM_SALT_KEY", "callback-boolean-test-salt")
+    monkeypatch.setenv(env_var, "true")
+    monkeypatch.setattr(litellm, "callback_settings", {"otel": {"emit_background_service_spans": False}})
+
+    result = process_callback("otel", "success", {env_var: encrypt_value_helper("true")})
+
+    assert isinstance(result["variables"], dict)
+    assert result["variables"].get(env_var) == "false"
 
 
 def test_normalize_callback_names_none_returns_empty_list():

@@ -23,6 +23,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - With `requested_model_info_override` the stored breakdown and the web search fee read the catalog row the candidate names, not the override that priced the total (`cost_calculator.py` `completion_cost`, `tool_call_cost_tracking.py` `_resolve_model_info`)
 - Prompt-caching savings leave out the geo and speed uplifts the total carries (`llm_cost_calc/utils.py` `calculate_prompt_caching_savings`)
 - The legacy budget hold reads base rates, the tier a prompt picks, and for a counted Gemini body the `_above_<n>_tokens` prices of the row and its group's `deployment_pricing`. Cache-write rates, uplifts, discount and margin never reach it, and a router group's reasoning and image rates are dropped before it. The adapter (`proxy/spend_tracking/budget_reservation.py` `_bound`) reads which output caps reach the provider and how many outputs it returns per model, so `bound` reads only counts and flags off the request
+- A streamed `/v1/messages` call never bills the service tier its usage reports, because the assembled stream response drops `usage.service_tier`, so only the requested tier prices it (`inference-messages/src/pricing.rs` copies this from `stream_chunk_builder`)
+- The per-event stream cost injection prices each `message_delta`'s own usage alone, without the `message_start` input and cache counts, the request's speed or the stream's thinking (`common_request_processing.py` `_inject_cost_into_usage_dict`, copied in `inference-messages/src/pricing.rs`)
 
 ## Not copied from main
 

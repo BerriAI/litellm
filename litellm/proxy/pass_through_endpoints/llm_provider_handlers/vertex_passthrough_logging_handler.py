@@ -171,7 +171,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: dict | None = None,
+        request_body: dict[str, object] | None = None,
         **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         vertex_location: Final = get_vertex_location_from_url(url_route)
@@ -232,17 +232,8 @@ class VertexPassthroughLoggingHandler:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm: Final = litellm.VertexGeminiConfig()
-            litellm_model_response: Final[ModelResponse] = instance_of_vertex_llm.transform_response(
-                model=model,
-                messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
-                raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
-                logging_obj=logging_obj,
-                optional_params={},
-                litellm_params={},
-                api_key="",
-                request_data={},
-                encoding=getattr(litellm, "encoding", None),
+            litellm_model_response: Final[ModelResponse] = instance_of_vertex_llm.transform_pass_through_response(
+                model=model, raw_response=httpx_response, logging_obj=logging_obj
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -673,6 +664,7 @@ class VertexPassthroughLoggingHandler:
                 streaming_response=None,
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
+                returns_provider_audio=True,
             )
             parsed_chunks = [vertex_iterator.parse_sse_chunk(chunk) for chunk in all_chunks]
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:

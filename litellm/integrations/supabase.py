@@ -6,6 +6,7 @@ import subprocess
 import sys
 import traceback
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 from typing import Final, Protocol
 
 import litellm
@@ -73,7 +74,7 @@ class Supabase:
         messages: object,
         end_user: object,
         response_obj,
-        start_time,
+        start_time: datetime,
         end_time,
         litellm_call_id: object,
         print_verbose: Callable[[str], object],

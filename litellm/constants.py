@@ -22,11 +22,17 @@ PREFIX_BLOCK_HASHES_BLOCK_SIZE: Final = get_env_int_in_range(
 )
 OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
+DROP_UNSUPPORTED_PARAMS_HINT: Final = (
+    "To drop unsupported params, set `litellm.drop_params = True`, "
+    "or `drop_params: true` under `litellm_settings` in the proxy config."
+)
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
 CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
 GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CONTROL_PLANE_FLEET_RECONCILE_SECONDS: Final = 5
+CONTROL_PLANE_FLEET_CONCURRENCY: Final = 4
 CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
@@ -138,6 +144,7 @@ MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 MAX_IMAGE_FAN_OUT_REQUESTS: Final = get_env_int("MAX_IMAGE_FAN_OUT_REQUESTS", 10)
+IMAGE_CALL_TYPES: Final = frozenset({"image_generation", "aimage_generation", "image_edit", "aimage_edit"})
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
@@ -185,7 +192,6 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_M
 MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 
 # Maximum number of base64 characters to keep in logging payloads.
-# Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
@@ -202,13 +208,6 @@ MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG"
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
 
-# Model cost map validation constants
-MODEL_COST_MAP_MIN_MODEL_COUNT: Final = get_env_int(
-    "MODEL_COST_MAP_MIN_MODEL_COUNT", 50
-)  # Minimum number of models a fetched cost map must contain to be considered valid
-MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = get_env_float(
-    "MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5
-)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH: Final = get_env_int("DEFAULT_IMAGE_WIDTH", 300)
 DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
@@ -218,6 +217,7 @@ DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
 MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB: Final = get_env_float("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", 50.0)
 MAX_REQUEST_BODY_DECOMPRESSION_RATIO: Final = get_env_int("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 200)
+BODY_READ_AHEAD_NS: Final = "litellm_body_read_ahead_ns"
 MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB: Final = get_env_float(
     "MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", 200.0
 )
@@ -364,6 +364,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = get_env_int(
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
 PLACEHOLDER_API_KEY: Final = "fake-api-key"
+PLACEHOLDER_API_KEYS: Final = frozenset({PLACEHOLDER_API_KEY, "dummy-key"})
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -439,6 +440,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
 REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
 REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
+REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS: Final = get_env_float("REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS", 30.0)
+REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE: Final = 1013
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -459,6 +462,7 @@ MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
+REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY: Final = "realtime_transcription_addon_models"
 FAILED_PROMPT_TOKEN_ESTIMATE_KEY: Final = "failed_prompt_token_estimate"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
@@ -698,6 +702,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
 SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
 SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
+CALLER_MESSAGE_COUNT_KEY: Final = "_caller_message_count"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
@@ -731,6 +736,9 @@ STREAM_FINISH_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, "provider_spec
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
 PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
 VLLM_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, *STREAM_CHUNK_CHOICE_FIELDS)
+VLLM_STREAM_PROMPT_FIELDS: Final = ("prompt_token_ids", "prompt_text")
+VLLM_PROMPT_DERIVED_FIELDS: Final = (*VLLM_STREAM_PROMPT_FIELDS, "prompt_logprobs")
+VLLM_PROMPT_FIELD_REQUEST_PARAMS: Final = ("prompt_logprobs", "return_prompt_text", "return_token_ids")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -768,6 +776,7 @@ LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 10
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
 LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
+WEBSOCKET_TURN_LOGGING_WAIT_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = get_env_int(
     "LOGGING_WORKER_CLEAR_PERCENTAGE", 50
 )  # Percentage of queue to clear (default: 50%)
@@ -803,6 +812,7 @@ ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
 OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
 OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+TRUNCATED_BASE64_MARKER: Final = "[base64_data truncated: "
 PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
 PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
 OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
@@ -939,6 +949,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
         "chatgpt",
     }
 )
+
+PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS: Final = frozenset({"ollama", "ollama_chat", "lemonade"})
+FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS: Final = 60
 
 SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
@@ -1149,6 +1162,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
+    "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1240,6 +1254,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "streamlake",
     "wally",
+    "huawei_maas",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1278,7 +1293,7 @@ _openai_like_providers: Final[list[str]] = [
     "inferenceapis",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
-replicate_models: Final[set] = set(
+replicate_models: Final[set[str]] = set(
     [
         # llama replicate supported LLMs
         "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
@@ -1295,7 +1310,7 @@ replicate_models: Final[set] = set(
     ]
 )
 
-clarifai_models: Final[set] = set(
+clarifai_models: Final[set[str]] = set(
     [
         "clarifai/openai.chat-completion.gpt-oss-20b",
         "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
@@ -1331,7 +1346,7 @@ clarifai_models: Final[set] = set(
 )
 
 
-huggingface_models: Final[set] = set(
+huggingface_models: Final[set[str]] = set(
     [
         "meta-llama/Llama-2-7b-hf",
         "meta-llama/Llama-2-7b-chat-hf",
@@ -1458,7 +1473,7 @@ nebius_embedding_models: Final[set] = set(
     ]
 )
 
-WANDB_MODELS: Final[set] = set(
+WANDB_MODELS: Final[set[str]] = set(
     [
         # openai models
         "openai/gpt-oss-120b",
@@ -1617,8 +1632,8 @@ BEDROCK_CONVERSE_MODELS: Final = [
 ]
 
 
-open_ai_embedding_models: Final[set] = set(["text-embedding-ada-002"])
-cohere_embedding_models: Final[set] = set(
+open_ai_embedding_models: Final[set[str]] = set(["text-embedding-ada-002"])
+cohere_embedding_models: Final[set[str]] = set(
     [
         "embed-v4.0",
         "embed-english-v3.0",
@@ -1629,7 +1644,7 @@ cohere_embedding_models: Final[set] = set(
         "embed-multilingual-v2.0",
     ]
 )
-bedrock_embedding_models: Final[set] = set(
+bedrock_embedding_models: Final[set[str]] = set(
     [
         "amazon.titan-embed-text-v1",
         "amazon.nova-2-multimodal-embeddings-v1:0",
@@ -1751,6 +1766,7 @@ SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
+SESSION_ID_INHERITED_METADATA_KEY: Final = "litellm_session_id_inherited"
 PREVIOUS_RESPONSE_IDS_METADATA_KEY: Final = "litellm_previous_response_ids"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
@@ -1850,6 +1866,15 @@ TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY: Final = 1
 TRANSCRIBE_MEDIA_FETCH_ATTEMPTS: Final = 3
 TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS: Final = 1.0  # S3 Last-Modified carries whole seconds only
 TRANSCRIBE_MEASURABLE_MEDIA_FORMATS: Final = frozenset({"flac", "mp3", "ogg", "wav"})  # what libsndfile can read
+OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS: Final = 5.0
+OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS: Final = 60.0
+OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS: Final = 3600.0
+OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS: Final = 300.0
+OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS: Final = 60
+OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE: Final = 10_000
+OPENAI_AGENTS_LIST_PAGE_LIMIT: Final = 100
+OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE: Final = 0.75
+OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS: Final = 4
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = get_env_int("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600)  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = get_env_int("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24)  # for 24 hours
@@ -2087,6 +2112,8 @@ LENGTH_OF_LITELLM_GENERATED_KEY: Final = get_env_int("LENGTH_OF_LITELLM_GENERATE
 MINIMUM_CUSTOM_KEY_LENGTH: Final = get_env_int("MINIMUM_CUSTOM_KEY_LENGTH", 16)
 SECRET_MANAGER_REFRESH_INTERVAL: Final = get_env_int("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
 OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
@@ -2284,6 +2311,69 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
         "cookie",
         "proxy-authenticate",
         "proxy-authorization",
+    }
+)
+
+CREDENTIAL_HEADER_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "api-key",
+        "authorization",
+        "cookie",
+        "ocp-apim-subscription-key",
+        "proxy-authorization",
+        "set-cookie",
+        "x-amz-security-token",
+        "x-api-key",
+        "x-goog-api-key",
+        "x-litellm-api-key",
+        "x-mcp-auth",
+    }
+)
+
+PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
+CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
+    "accesskey",
+    "accesstoken",
+    "accountkey",
+    "apikey",
+    "authtoken",
+    "bearer",
+    "clientsecret",
+    "connectionstring",
+    "credential",
+    "encryptionkey",
+    "idtoken",
+    "licensekey",
+    "masterkey",
+    "passphrase",
+    "passwd",
+    "password",
+    "privatekey",
+    "refreshtoken",
+    "secret",
+    "sessiontoken",
+    "sharedkey",
+    "signingkey",
+    "subscriptionkey",
+)
+CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
+)
+QUANTITY_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "count",
+        "expires",
+        "expiry",
+        "length",
+        "limit",
+        "max",
+        "min",
+        "remaining",
+        "total",
+        "ttl",
+        "type",
+        "usage",
+        "used",
     }
 )
 

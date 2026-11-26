@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, TypeVar
 
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_attributes
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
@@ -49,7 +49,7 @@ _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 class ContainerRequestUtils:
     @staticmethod
     def get_requested_container_create_optional_param(
-        passed_params: dict,
+        passed_params: Mapping[str, object],
     ) -> ContainerCreateOptionalRequestParams:
         """Extract only valid container creation parameters from the passed parameters."""
         container_create_optional_params: Final = ContainerCreateOptionalRequestParams()
@@ -71,7 +71,7 @@ class ContainerRequestUtils:
     def get_optional_params_container_create(
         container_provider_config: BaseContainerConfig,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Get the optional parameters for container creation."""
         supported_params: Final = container_provider_config.get_supported_openai_params()
 
@@ -85,7 +85,7 @@ class ContainerRequestUtils:
 
     @staticmethod
     def get_requested_container_list_optional_param(
-        passed_params: dict,
+        passed_params: Mapping[str, object],
     ) -> ContainerListOptionalRequestParams:
         """Extract only valid container list parameters from the passed parameters."""
         container_list_optional_params: Final = ContainerListOptionalRequestParams()
@@ -108,7 +108,7 @@ class ContainerRequestUtils:
     def encode_container_id_in_response(
         response_obj: T,
         custom_llm_provider: str | None,
-        litellm_metadata: Mapping[str, object] | None = None,
+        litellm_metadata: SupportsGet | None = None,
         extra_body: Mapping[str, object] | None = None,
     ) -> T:
         """

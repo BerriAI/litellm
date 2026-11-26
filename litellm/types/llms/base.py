@@ -44,7 +44,7 @@ class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> object:
         return _ATTRIBUTE_VALUE.validate_python(self.__dict__[key])
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None):
         return self.__dict__.get(key, default)
 
     def __contains__(self, key: object) -> bool:
@@ -63,7 +63,7 @@ class HiddenParams(OpenAIObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
@@ -75,7 +75,7 @@ class HiddenParams(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:

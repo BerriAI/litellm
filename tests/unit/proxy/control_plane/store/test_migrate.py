@@ -4,7 +4,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from pydantic import SecretStr
 
-from litellm.proxy.control_plane.store.migrate import database_url, head_revision, migrate, migration_config
+from litellm.proxy.control_plane.store.migrate import database_url, head_revision, migrate
 
 
 def test_migrator_dispatches_upgrade_head_using_packaged_revisions_and_the_dedicated_url() -> None:
@@ -20,7 +20,7 @@ def test_migrator_dispatches_upgrade_head_using_packaged_revisions_and_the_dedic
     assert config.attributes["database_url"] == url
     script: Final = ScriptDirectory.from_config(config)
     assert script.get_current_head() == head_revision()
-    assert tuple(rev.revision for rev in script.walk_revisions()) == (head_revision(),)
+    assert tuple(rev.revision for rev in script.walk_revisions()) == (head_revision(), "0001")
 
 
 def test_plain_postgres_urls_use_psycopg_without_modifying_escaped_credentials() -> None:

@@ -127,6 +127,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "detached_drain_timeout": None,
         "detached_drain_limit": None,
         "connect_retry": False,
+        "pricing": None,
     }
 
 
@@ -236,6 +237,26 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     assert not isinstance(
         messages_host.map_failure(ValueError("plain"), request.resolved, "anthropic"), litellm.BadRequestError
     )
+
+
+@pytest.mark.parametrize("custom_llm_provider", (None, "anthropic"), ids=("provider-in-the-model", "provider-passed"))
+def test_a_rejection_before_the_send_names_the_resolved_provider_and_is_raised_as_python_raises_it(
+    custom_llm_provider: str | None,
+) -> None:
+    rejected: Final = ValueError("messages: no message has content left after dropping empty or non-string text blocks")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_unresolved_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": "anthropic/claude-sonnet-5", "custom_llm_provider": custom_llm_provider, "messages": []},
+        "anthropic",
+    )
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert mapped.status_code == 400
+    assert (mapped.model, mapped.llm_provider) == ("anthropic/claude-sonnet-5", "anthropic")
+    assert mapped.__traceback__ is not None
 
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
@@ -1779,6 +1800,77 @@ async def test_pre_request_hooks_keep_the_callers_provider_over_the_hook(monkeyp
     assert hooked["custom_llm_provider"] == "anthropic"
 
 
+def _tool_round(tool_use_id: str) -> list[dict[str, object]]:
+    return [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "base_env", "sent_id"),
+    [
+        pytest.param("anthropic/kimi-k2", "http://kimi.test", None, "functions.Bash:0", id="other-model-custom-base"),
+        pytest.param("anthropic/sonnet-prod", "http://gateway.test", None, "functions.Bash:0", id="alias-gateway-base"),
+        pytest.param(
+            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions.Bash:0", id="claude-name-custom-base"
+        ),
+        pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_API_BASE", "functions.Bash:0", id="anthropic-api-base-env"),
+        pytest.param("anthropic/kimi-k2", None, None, "functions_Bash_0", id="anthropics-own-api"),
+        pytest.param(
+            "anthropic/my-sonnet",
+            "https://example.services.ai.azure.com/anthropic",
+            None,
+            "functions_Bash_0",
+            id="foundry",
+        ),
+        pytest.param("deepseek/deepseek-chat", None, None, "functions_Bash_0", id="other-native-provider"),
+        pytest.param("kimi-k2", "http://kimi.test", None, "functions_Bash_0", id="unresolved-provider"),
+    ],
+)
+async def test_pre_request_hooks_rewrite_tool_use_ids_only_for_an_upstream_that_enforces_anthropics_pattern(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_base: str | None, base_env: str | None, sent_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_hook({})])
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if base_env is not None:
+        monkeypatch.setenv(base_env, "http://kimi.test")
+
+    hooked: Final = await messages_host.pre_request_hooks(
+        _hook_request(model=model, api_base=api_base, messages=_tool_round("functions.Bash:0"))
+    )
+
+    assert hooked["messages"] == _tool_round(sent_id)
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+@pytest.mark.parametrize(
+    ("model", "sent_id"),
+    [
+        pytest.param("anthropic/kimi-k2", "functions.Bash:0", id="other-model"),
+        pytest.param("anthropic/claude-sonnet-4-5", "functions.Bash:0", id="claude-name"),
+    ],
+)
+def test_body_params_keep_tool_use_ids_for_a_custom_anthropic_base_whatever_the_model_name(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, model: str, sent_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+
+    fields: Final = messages_host.body_params(
+        {
+            "model": model,
+            "api_base": "http://kimi.test",
+            "messages": _tool_round("functions.Bash:0"),
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        },
+        asynchronous=asynchronous,
+    )
+
+    assert fields["messages"] == _tool_round(sent_id)
+
+
 def test_body_params_hand_hooked_messages_on_as_already_sanitized() -> None:
     hooked: Final = [{"role": "user", "content": [{"type": "text", "text": ""}]}]
 
@@ -1885,7 +1977,7 @@ def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.
     call: Final = bound["call"]
     assert isinstance(call, messages_host._AgenticCall)  # pyright: ignore[reportPrivateUsage]  # the partial binds the handler call
     assert call.messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-    assert call.params == {"stream": True, "tools": request["tools"]}
+    assert call.params == {"max_tokens": 16, "stream": True, "tools": request["tools"]}
     assert call.params["tools"] is request["tools"]
     assert call.kwargs["api_key"] == "sk-test"
     assert "tools" not in call.kwargs
@@ -1910,7 +2002,7 @@ def test_agentic_params_take_the_callers_system_not_the_hoisted_wire_system(
 
     params: Final = messages_host._agentic_params(sent, requested, {"model": "azure_ai/claude-sonnet-4-5"})  # pyright: ignore[reportPrivateUsage]  # the follow-up params the handler's hooks read
 
-    assert params == {"stream": False, **expected}
+    assert params == {"stream": False, "max_tokens": 16, **expected}
 
 
 _DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]
@@ -2609,7 +2701,7 @@ def test_an_attributed_unsupported_param_names_the_provider_and_model(
 ) -> None:
     text: Final = (
         "claude-sonnet-4-5 does not support anthropic-version=latest. "
-        "To drop unsupported params, set `litellm.drop_params = True`."
+        "To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )
     rejected: Final = ValueError(text)
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
@@ -4054,3 +4146,124 @@ def test_a_mantle_route_credential_source_outage_stays_the_retryable_credential_
     )
 
     assert type(mapped) is CredentialRetrievalError
+
+
+def _priced_logger(litellm_params: Mapping[str, object]) -> Logging:
+    logger: Final = Logging(
+        model="claude-opus-5-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="priced",
+        function_id="priced",
+    )
+    logger.litellm_params = dict(litellm_params)
+    logger.model_call_details["litellm_params"] = logger.litellm_params
+    return logger
+
+
+_ROUTED: Final = MappingProxyType({"metadata": {"model_info": {"id": "deployment-1", "base_model": "claude-opus-5-5"}}})
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "expected"),
+    [
+        (
+            "anthropic/claude-opus-5-5",
+            _ROUTED,
+            {
+                "deployment_id": "deployment-1",
+                "base_model": "claude-opus-5-5",
+                "region": None,
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        (
+            "vertex_ai/claude-opus-5-5",
+            {"vertex_location": "us-east5", "data_residency": "EU"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": None,
+                "vertex_location": "us-east5",
+                "data_residency": "EU",
+            },
+        ),
+        (
+            _MANTLE_ROUTE,
+            {"aws_region_name": "us-gov-west-1"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": "us-gov-west-1",
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        ("anthropic/claude-opus-5-5", {**_ROUTED, "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, None),
+        (
+            "anthropic/claude-opus-5-5",
+            {"metadata": {"model_info": {"id": "deployment-1", "pricing_provider": "bedrock"}}},
+            None,
+        ),
+    ],
+)
+def test_settings_hand_the_route_the_deployment_facts_its_logging_would_price_with(
+    model: str, litellm_params: Mapping[str, object], expected: Mapping[str, object] | None
+) -> None:
+    logger: Final = _priced_logger(litellm_params)
+
+    settings: Final = messages_host.settings({"litellm_logging_obj": logger}, {**_CALL, "model": model})
+
+    assert settings["pricing"] == expected
+
+
+def test_the_route_prices_at_the_routed_deployments_vertex_location_before_the_logger_holds_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_location", "global")
+    logger: Final = _priced_logger({})
+    request: Final = {**_CALL, "vertex_location": "us-east5", "model": "vertex_ai/claude-opus-5-5"}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == "us-east5"
+
+
+@pytest.mark.parametrize("deployment_location", ["us-east5", None])
+def test_the_route_prices_at_the_vertex_location_its_logging_would_price_at(
+    monkeypatch: pytest.MonkeyPatch, deployment_location: str | None
+) -> None:
+    """The route resolves the location without the call's optional params, which Logging reads, so the two must
+    agree once the resolved call is logged: the optional params Logging then holds are the Messages body fields."""
+    from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
+
+    monkeypatch.setattr(litellm, "vertex_location", "europe-west4")
+    deployment: Final = {} if deployment_location is None else {"vertex_location": deployment_location}
+    logger: Final = _priced_logger(deployment)
+    request: Final = {**_CALL, **deployment, "model": "vertex_ai/claude-opus-5-5", "litellm_logging_obj": logger}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+    messages_host.log_resolved_call(request, "vertex_ai")
+    logged_at: Final = resolve_vertex_location_for_cost(
+        custom_llm_provider="vertex_ai",
+        litellm_params=logger.litellm_params,
+        optional_params=logger.optional_params,
+        model=logger.model,
+    )
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == logged_at == (deployment_location or "europe-west4")
+
+
+def test_settings_leave_pricing_to_python_for_an_invoked_bedrock_model_id() -> None:
+    logger: Final = _priced_logger(_ROUTED)
+
+    settings: Final = messages_host.settings(
+        {"litellm_logging_obj": logger}, {**_CALL, "model": "anthropic/claude-opus-5-5", "model_id": "arn:profile"}
+    )
+
+    assert settings["pricing"] is None
