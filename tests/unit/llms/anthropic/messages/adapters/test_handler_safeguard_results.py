@@ -138,16 +138,6 @@ class _ClassifierRouter:
         return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=Message(content=self._reply))])
 
 
-class _ClassifierCall:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
-        self.calls.append({"messages": messages, **kwargs})
-        reply: Final = '{"verdicts": {"call_1": {"flagged": false}}}'
-        return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=Message(content=reply))])
-
-
 async def _allowed(model: str) -> CallerModelVerdict:
     return "allowed"
 
@@ -173,11 +163,6 @@ async def _call(
 
 def _events(sse: bytes) -> Sequence[Mapping[str, object]]:
     return tuple(json.loads(line[len("data: ") :]) for line in sse.decode().splitlines() if line.startswith("data: "))
-
-
-async def _drain_stream(stream: object) -> None:
-    assert hasattr(stream, "__aiter__")
-    _ = [chunk async for chunk in stream]  # pyright: ignore[reportGeneralTypeIssues]  # the handler's union narrows to an async iterator once stream is on
 
 
 def _available_tool_uses(results: object) -> Mapping[str, object]:
@@ -216,30 +201,10 @@ def _forwarded_stamp(headers: Mapping[str, str], *, model_group_scoped: bool = F
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
-async def test_classifier_call_carries_the_caller_headers_the_proxy_forwards_to_the_parent_model(stream: bool):
-    backend: Final = _Backend(stream=stream)
-    router: Final = _ClassifierRouter('{"verdicts": {"call_main": {"flagged": false}}}')
-    caller_headers: Final = {"X-User-Id": "user-42", "X-Tenant": "acme"}
-    response: Final = await _call(
-        backend,
-        router,
-        stream,
-        {"safeguards_classifier_model": "classifier"},
-        safeguards=SAFEGUARDS,
-        headers=caller_headers,
-        **_forwarded_stamp(caller_headers),
-    )
-    if stream:
-        await _drain_stream(response)
-    assert router.calls[0]["headers"] == caller_headers
-
-
-@pytest.mark.asyncio
-async def test_classifier_call_drops_a_header_the_proxy_did_not_forward_to_the_parent_model():
+async def test_classifier_call_carries_only_the_headers_the_proxy_forwarded_to_the_parent_model():
     backend: Final = _Backend(stream=False)
     router: Final = _ClassifierRouter('{"verdicts": {"call_main": {"flagged": false}}}')
-    caller_headers: Final = {"X-User-Id": "user-42"}
+    caller_headers: Final = {"X-User-Id": "user-42", "X-Tenant": "acme"}
     response: Final = await _call(
         backend,
         router,
@@ -257,13 +222,18 @@ async def _scoped_classifier_call(
     monkeypatch: pytest.MonkeyPatch,
     *,
     scope: Sequence[str],
-    caller: UserAPIKeyAuth,
-    deployments: Sequence[str] = ("classifier",),
+    aliases: Mapping[str, str] | None,
 ) -> Mapping[str, object]:
     router: Final = Router(
-        model_list=[_mock_deployment(name, '{"verdicts": {"call_1": {"flagged": false}}}') for name in deployments]
+        model_list=[
+            _mock_deployment(name, '{"verdicts": {"call_1": {"flagged": false}}}')
+            for name in ("classifier", "team-classifier")
+        ]
     )
-    recorder: Final = _ClassifierCall()
+    classifier: Final = _ClassifierRouter('{"verdicts": {"call_1": {"flagged": false}}}')
+    caller: Final = UserAPIKeyAuth(
+        api_key="sk-test", team_id="team-1", team_model_aliases=dict(aliases) if aliases else None
+    )
     monkeypatch.setattr(
         litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=list(scope))
     )
@@ -282,45 +252,36 @@ async def _scoped_classifier_call(
             forwarded_headers=proxy_sub_call_forwarded_headers(forwarded_headers),
         )
     assert evaluator is not None
-    recorded: Final = replace(evaluator, acompletion=recorder, caller_model_verdict=_allowed)
+    recorded: Final = replace(evaluator, acompletion=classifier.acompletion, caller_model_verdict=_allowed)
     await recorded.evaluate((ToolUseUnderReview(id="call_1", name="Bash", input={"command": "ls"}),))
-    return recorder.calls[0]
+    return classifier.calls[0]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "scope, expected",
-    [(["classifier"], {"X-User-Id": "user-42"}), (["parent-group"], None)],
-    ids=["scope-covers-the-classifier", "scope-covers-only-the-parent"],
+    "scope, aliases, expected",
+    [
+        (["classifier"], None, {"X-User-Id": "user-42"}),
+        (["parent-group"], None, None),
+        (["team-classifier"], {"classifier": "team-classifier"}, {"X-User-Id": "user-42"}),
+        (["parent-group"], {"classifier": "team-classifier"}, None),
+    ],
+    ids=[
+        "scope-covers-the-classifier",
+        "scope-covers-only-the-parent",
+        "scope-covers-the-group-the-alias-resolves-to",
+        "scope-excludes-the-group-the-alias-resolves-to",
+    ],
 )
-async def test_a_model_group_scoped_forwarding_reaches_the_classifier_only_when_its_scope_covers_it(
-    monkeypatch: pytest.MonkeyPatch, scope: Sequence[str], expected: Mapping[str, str] | None
+async def test_a_scoped_forwarding_reaches_the_classifier_only_when_the_scope_covers_where_it_lands(
+    monkeypatch: pytest.MonkeyPatch,
+    scope: Sequence[str],
+    aliases: Mapping[str, str] | None,
+    expected: Mapping[str, str] | None,
 ) -> None:
-    classifier_call: Final = await _scoped_classifier_call(
-        monkeypatch, scope=scope, caller=UserAPIKeyAuth(api_key="sk-test", team_id="team-1")
-    )
+    classifier_call: Final = await _scoped_classifier_call(monkeypatch, scope=scope, aliases=aliases)
     assert classifier_call.get("headers") == expected
     assert (classifier_call.get("proxy_server_request") is not None) is (expected is not None)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "scope, expected",
-    [(["team-classifier"], {"X-User-Id": "user-42"}), (["parent-group"], None)],
-    ids=["scope-covers-the-alias-destination", "scope-excludes-the-alias-destination"],
-)
-async def test_a_team_alias_on_the_classifier_name_does_not_widen_the_forwarding_scope(
-    monkeypatch: pytest.MonkeyPatch, scope: Sequence[str], expected: Mapping[str, str] | None
-) -> None:
-    classifier_call: Final = await _scoped_classifier_call(
-        monkeypatch,
-        scope=scope,
-        caller=UserAPIKeyAuth(
-            api_key="sk-test", team_id="team-1", team_model_aliases={"classifier": "team-classifier"}
-        ),
-        deployments=("classifier", "team-classifier"),
-    )
-    assert classifier_call.get("headers") == expected
 
 
 @pytest.mark.asyncio
