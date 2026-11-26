@@ -15,7 +15,9 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import datetime
+import json
 import os
+import re
 import time
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -24,6 +26,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeVar
 
 _T = TypeVar("_T")
 MAX_REDACTION_STRING_LENGTH: Final = 50_000
+_UNTERMINATED_PEM_RE: Final = re.compile(r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*", re.IGNORECASE)
 
 import httpx
 from httpx import Response
@@ -243,27 +246,50 @@ class DataDogLogger(
         return False
 
     @classmethod
+    def _redact_structured_leaf(cls, key: str | None, value: str) -> str:
+        """
+        Scrub a string leaf using key-aware structured redaction.
+        Masks oversized strings (> 50,000 chars) and unterminated sensitive blocks (e.g. PEM private keys)
+        to prevent cleartext leakage when delimiters are missing or truncated.
+        """
+        try:
+            if len(value) > MAX_REDACTION_STRING_LENGTH:
+                return "REDACTED"
+
+            stripped = value.lstrip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    parsed = json.loads(value)
+                    from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
+
+                    redacted_struct = safe_json_structure(parsed, value_transform=cls._redact_structured_leaf)
+                    return json.dumps(redacted_struct)
+                except Exception:
+                    pass
+
+            from litellm.litellm_core_utils.secret_redaction import redact_structured_value
+
+            scrubbed = redact_structured_value(key, value)
+            if "-----BEGIN" in scrubbed and "PRIVATE KEY-----" in scrubbed:
+                scrubbed = _UNTERMINATED_PEM_RE.sub("REDACTED", scrubbed)
+            return scrubbed
+        except Exception as e:
+            verbose_logger.exception("Datadog: Error redacting secret in payload leaf: %s", e)
+            return "REDACTED"
+
+    @classmethod
     def redact_payload_secrets(cls, payload: _T) -> _T:
         """
         Recursively redact sensitive strings (passwords, tokens, API keys) from a logging payload.
+        Expands nested Pydantic models and applies key-aware structured redaction to all string leaves.
         """
-        if isinstance(payload, str):
-            try:
-                max_len: Final = MAX_REDACTION_STRING_LENGTH
-                bounded_str = payload[:max_len] if len(payload) > max_len else payload
-                from litellm.litellm_core_utils.secret_redaction import redact_string
+        try:
+            from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 
-                return redact_string(bounded_str)  # type: ignore[return-value]
-            except Exception as e:
-                verbose_logger.exception("Datadog: Error redacting secret in payload: %s", e)
-                return "REDACTED"  # type: ignore[return-value]
-        elif isinstance(payload, Mapping):
-            return {k: cls.redact_payload_secrets(v) for k, v in payload.items()}  # type: ignore[return-value]
-        elif isinstance(payload, list):
-            return [cls.redact_payload_secrets(item) for item in payload]  # type: ignore[return-value]
-        elif isinstance(payload, tuple):
-            return tuple(cls.redact_payload_secrets(item) for item in payload)  # type: ignore[return-value]
-        return payload
+            return safe_json_structure(payload, value_transform=cls._redact_structured_leaf)  # type: ignore[return-value]
+        except Exception as e:
+            verbose_logger.exception("Datadog: Error redacting secret in payload: %s", e)
+            return "REDACTED"  # type: ignore[return-value]
 
     def _configure_dd_agent(
         self,
@@ -416,11 +442,12 @@ class DataDogLogger(
             if self._should_redact_secrets():
                 message_payload = self.redact_payload_secrets(message_payload)
 
+            value_transform = self._redact_structured_leaf if self._should_redact_secrets() else None
             dd_payload: Final = DatadogPayload(
                 ddsource=get_datadog_source(),
                 ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
-                message=safe_dumps(message_payload),
+                message=safe_dumps(message_payload, value_transform=value_transform),
                 service=get_datadog_service(),
                 status=DataDogStatus.ERROR,
             )
@@ -600,7 +627,8 @@ class DataDogLogger(
     ) -> DatadogPayload:
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        json_payload: Final = safe_dumps(standard_logging_object)
+        value_transform = self._redact_structured_leaf if self._should_redact_secrets() else None
+        json_payload: Final = safe_dumps(standard_logging_object, value_transform=value_transform)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload: Final = DatadogPayload(
             ddsource=get_datadog_source(),
@@ -641,9 +669,13 @@ class DataDogLogger(
         if standard_logging_object.get("status") == "failure":
             status = DataDogStatus.ERROR
 
-        logging_payload = self.truncate_standard_logging_payload_content(standard_logging_object)
         if self._should_redact_secrets():
-            logging_payload = self.redact_payload_secrets(logging_payload)
+            # Redact secrets on the untruncated payload so delimiters (e.g. -----END PRIVATE KEY-----)
+            # are not stripped by truncation before secret detection can match them.
+            redacted_payload = self.redact_payload_secrets(standard_logging_object)
+            logging_payload = self.truncate_standard_logging_payload_content(redacted_payload)
+        else:
+            logging_payload = self.truncate_standard_logging_payload_content(standard_logging_object)
 
         dd_payload: Final = self._create_datadog_logging_payload_helper(
             standard_logging_object=logging_payload,
@@ -826,7 +858,8 @@ class DataDogLogger(
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        json_payload: Final = safe_dumps(logging_payload)
+        value_transform = self._redact_structured_leaf if self._should_redact_secrets() else None
+        json_payload: Final = safe_dumps(logging_payload, value_transform=value_transform)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
