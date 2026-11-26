@@ -11,6 +11,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     Error,
     anthropic::{
@@ -55,6 +56,13 @@ impl MessagesEndpoint for DeepSeekMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_deepseek_anthropic_url(api_base, env_lookup))
+    }
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
     }
 }
 
@@ -106,7 +114,7 @@ impl MessagesDialect for DeepSeekMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
@@ -466,11 +474,13 @@ mod tests {
     }
 
     #[rstest]
-    fn thinking_history_and_params_pass_through() {
+    #[case::signed("sig")]
+    #[case::unsigned("")]
+    fn thinking_history_and_params_pass_through(#[case] signature: &str) {
         let messages = json!([
             {"role": "user", "content": "Use the tool."},
             {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "I should call the tool.", "signature": "sig"},
+                {"type": "thinking", "thinking": "I should call the tool.", "signature": signature},
                 {"type": "tool_use", "id": "toolu_123", "name": "get_weather", "input": {"city": "Sao Paulo"}}
             ]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_123", "content": "Sunny"}]}

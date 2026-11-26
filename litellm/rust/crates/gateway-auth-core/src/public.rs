@@ -1,7 +1,7 @@
 use crate::error::InvalidCredentials;
 use crate::{
     BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
-    PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
+    PremiumRequired, RbacDenial, RequestDenial, TeamDenial, VerifyDenial,
 };
 
 /// `ProxyErrorTypes` values a denial carries.
@@ -93,6 +93,12 @@ impl PremiumRequired {
     }
 }
 
+impl RequestDenial {
+    pub fn public(&self) -> PublicDenial {
+        http(403, self)
+    }
+}
+
 impl Error {
     /// The exception Python raises for this error, or `None` when the host surfaces its own failure.
     pub fn public(&self) -> Option<PublicDenial> {
@@ -101,7 +107,7 @@ impl Error {
             Self::Key(denial) => denial.public(),
             Self::Jwt(denial) => denial.public(),
             Self::BudgetExceeded(exceeded) => PublicDenial::BudgetExceeded(exceeded.clone()),
-            Self::HostFailed => return None,
+            Self::HostFailed | Self::HostDeclined => return None,
         })
     }
 }

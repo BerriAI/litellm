@@ -25,7 +25,6 @@ from litellm.litellm_core_utils.core_helpers import (
     dict_from_pairs,
     drop_params_env_flag,
     env_flag,
-    drop_params_flag,
     filter_internal_params,
     float_of,
     get_litellm_metadata_from_kwargs,
@@ -55,6 +54,7 @@ from litellm.litellm_core_utils.core_helpers import (
     set_item,
     set_provider_response_headers_in_hidden_params,
     spread,
+    str_param,
     subscript,
     sum_of,
     unbind_budget_reservation_from_callbacks,
@@ -92,10 +92,7 @@ def test_claude_subscription_usage_reads_oauth_billing_signals(
         {
             "custom_llm_provider": "anthropic",
             "litellm_params": {"litellm_metadata": {"used_client_oauth_token": True}},
-            "response_headers": {
-                f"{prefix}anthropic-ratelimit-unified-{key}": value
-                for key, value in signals.items()
-            },
+            "response_headers": {f"{prefix}anthropic-ratelimit-unified-{key}": value for key, value in signals.items()},
         }
     )
     assert usage == {
@@ -550,20 +547,6 @@ class TestRedactNestedMatchAndRegexKeys:
 )
 def test_normalize_drop_params(value, expected):
     assert normalize_drop_params(value) is expected
-
-
-@pytest.mark.parametrize("value, expected", [("true", True), ("off", False), (None, False)])
-def test_drop_params_flag_returns_a_bool_without_a_warning(value, expected, caplog):
-    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
-        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is expected
-    assert caplog.text == ""
-
-
-@pytest.mark.parametrize("value", ["temperature", "ture", 2])
-def test_drop_params_flag_treats_non_flag_values_as_off_with_a_warning(value, caplog):
-    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
-        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is False
-    assert f"LITELLM_DROP_PARAMS={value!r} is not a flag value, treating it as off" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -1230,3 +1213,47 @@ def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() ->
     assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
     assert only(source) == {}
     assert source == {"a": 1, "b": 2, "c": 3, "d": 4}
+
+
+def test_str_param_returns_a_declared_string_field_of_the_params_model() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    assert str_param(GenericLiteLLMParams(api_base="https://example.test"), "api_base") == "https://example.test"
+
+
+def test_str_param_returns_the_same_admin_secret_reference_object() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+    from litellm.types.utils import AdminApiKeySecretReference
+
+    reference: Final = AdminApiKeySecretReference("oidc/google/aud", frozenset({"https://example.test"}))
+
+    assert str_param(GenericLiteLLMParams(api_key=reference), "api_key") is reference
+
+
+def test_str_param_is_none_for_an_absent_undeclared_key_and_an_unset_field() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    params: Final = GenericLiteLLMParams()
+
+    assert str_param(params, "not_a_field") is None
+    assert str_param(params, "api_key") is None
+    assert str_param({}, "api_key") is None
+
+
+def test_str_param_reads_an_undeclared_extra_key() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    params: Final = GenericLiteLLMParams(**{"not_a_declared_field": "extra-value"})
+
+    assert "not_a_declared_field" not in GenericLiteLLMParams.model_fields
+    assert str_param(params, "not_a_declared_field") == "extra-value"
+
+
+@pytest.mark.parametrize("wrong", [123, True, b"sk-bytes", ["sk-list"], {"key": "sk"}])
+def test_str_param_is_none_for_a_value_that_is_not_a_string(wrong: object) -> None:
+    assert str_param({"api_key": wrong}, "api_key") is None
+
+
+def test_str_param_reads_a_plain_dict_receiver() -> None:
+    assert str_param({"api_key": "sk-dict"}, "api_key") == "sk-dict"
+    assert str_param({"api_key": ""}, "api_key") == ""

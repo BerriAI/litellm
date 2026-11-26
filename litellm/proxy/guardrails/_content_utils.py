@@ -18,6 +18,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     changed_server_tool_call_arguments,
@@ -331,7 +332,7 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
             messages.append({"role": "user", "content": item})
         elif (summary := compaction_summary(item)) is not None:
             messages.append({"role": "user", "content": summary})
-        elif isinstance(item, dict):
+        elif is_str_keyed_dict(item):
             if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
             elif item.get("type") == "reasoning":
@@ -371,7 +372,7 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
     the entire conversation, not just user turns.
     """
     for message in _iter_inspection_messages(data):
-        if not isinstance(message, dict):
+        if not is_str_keyed_dict(message):
             continue
         yield from _iter_text_parts_in_content(message.get("content"))
 
@@ -426,7 +427,7 @@ def walk_user_text(
 
     def _rewrite_arguments(arguments: object) -> object:
         nonlocal visited
-        if isinstance(arguments, dict):
+        if is_str_keyed_dict(arguments):
             return _rewrite_tool(arguments)
         if not isinstance(arguments, str) or not arguments:
             return arguments
@@ -470,7 +471,7 @@ def walk_user_text(
                 if isinstance(part, str) and part:
                     visited += 1
                     new_parts.append(visit(part))
-                elif isinstance(part, dict):
+                elif is_str_keyed_dict(part):
                     new_parts.append(_rewrite_part(part, native))
                 else:
                     new_parts.append(part)
@@ -479,20 +480,20 @@ def walk_user_text(
 
     def _rewrite_call_arguments(calls: object) -> None:
         for call in _object_list(calls) or ():
-            function = call.get("function") if isinstance(call, dict) else None
-            if isinstance(function, dict) and "arguments" in function:
+            function = call.get("function") if is_str_keyed_dict(call) else None
+            if is_str_keyed_dict(function) and "arguments" in function:
                 function["arguments"] = _rewrite_arguments(function["arguments"])
 
     messages: Final = _object_list(data.get("messages")) or ()
     server_tool_calls_before: Final = tuple(anthropic_server_tool_call_params(message) for message in messages)
     for message in messages:
-        if (skip_tool_message and _is_tool_message(message)) or not isinstance(message, dict):
+        if (skip_tool_message and _is_tool_message(message)) or not is_str_keyed_dict(message):
             continue
         if "content" in message:
             message["content"] = _rewrite_content(message["content"])
         _rewrite_call_arguments(message.get("tool_calls"))
         provider_fields = message.get("provider_specific_fields")
-        if isinstance(provider_fields, dict):
+        if is_str_keyed_dict(provider_fields):
             _rewrite_call_arguments(provider_fields.get("server_tool_calls"))
     for message, original in zip(messages, server_tool_calls_before, strict=True):
         write_request_hosted_web_call_arguments(
@@ -519,10 +520,10 @@ def walk_user_text(
             elif (compaction := with_visited_compaction_summary(item, visit)) is not None:
                 visited += 1
                 input_value[idx] = compaction
-            elif isinstance(item, dict):
-                if _part_text(item) is not None:
+            elif is_str_keyed_dict(item):
+                if (item_text := _part_text(item)) is not None:
                     visited += 1
-                    input_value[idx] = {**item, "text": visit(item["text"])}
+                    input_value[idx] = {**item, "text": visit(item_text)}
                 elif item.get("type") == "reasoning":
                     if "content" in item:
                         item["content"] = _rewrite_content(item["content"])
@@ -586,7 +587,7 @@ def apply_redacted_messages_back(data: dict[str, object], redacted_messages: Seq
     if isinstance(input_value, str):
         text_parts: Final[list[str]] = []
         for msg in redacted_messages:
-            if not isinstance(msg, dict):
+            if not is_str_keyed_dict(msg):
                 continue
             text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
         data["input"] = "\n".join(text_parts)
@@ -604,7 +605,7 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
     messages: Final = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
-            if isinstance(message, dict) and not isinstance(message.get("content"), str):
+            if is_str_keyed_dict(message) and not isinstance(message.get("content"), str):
                 if message.get("content") is not None:
                     return True
     input_value: Final = data.get("input")

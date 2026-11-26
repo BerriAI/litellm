@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain, groupby, takewhile
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
@@ -13,7 +13,7 @@ from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import VLLM_CHOICE_FIELDS
+from litellm.constants import VLLM_CHOICE_FIELDS, VLLM_STREAM_PROMPT_FIELDS
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     UPSTREAM_USAGE_COST,
@@ -207,6 +207,14 @@ class _ToolCallChunk(TypedDict):
     choices: ReadOnly[Sequence[_ToolCallChoice]]
 
 
+class _CacheTokenFields(Protocol):
+    def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
+
+
+class _SystemFingerprintField(Protocol):
+    def get(self, key: Literal["system_fingerprint"], default: None, /) -> str | None: ...
+
+
 class _UsageBearingChunk(TypedDict, total=False):
     usage: Usage | None
     _hidden_params: Mapping[str, str]
@@ -280,13 +288,16 @@ def apply_grounding_request_counts(
     return counted.model_copy(update=updates)
 
 
+_ChunkT = TypeVar("_ChunkT")
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: Sequence[object] | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
 
-    def _sort_chunks(self, chunks: list) -> list:
+    def _sort_chunks(self, chunks: list[_ChunkT]) -> list[_ChunkT]:
         if not chunks:
             return []
 
@@ -517,6 +528,7 @@ class ChunkProcessor:
                     if service_tier is not None
                     else MappingProxyType({})
                 ),
+                **streamed_prompt_fields(chunks),
                 "choices": (
                     [ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams]
                     if len(choice_streams) > 1
@@ -905,15 +917,16 @@ class ChunkProcessor:
         cost: float | None = None
 
         if "prompt_tokens" in usage_chunk:
-            prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
+            prompt_tokens = usage_chunk.prompt_tokens or 0
         if "completion_tokens" in usage_chunk:
-            completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
+            completion_tokens = usage_chunk.completion_tokens or 0
+        cache_token_fields: Final = require_attributes(usage_chunk, _CacheTokenFields, "get")
         if "cache_creation_input_tokens" in usage_chunk:
-            cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
+            cache_creation_input_tokens = cache_token_fields.get("cache_creation_input_tokens")
         if "cache_read_input_tokens" in usage_chunk:
-            cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+            cache_read_input_tokens = cache_token_fields.get("cache_read_input_tokens")
         if "cost" in usage_chunk:
-            cost = usage_chunk.get("cost")
+            cost = usage_chunk.cost
         if hasattr(usage_chunk, "completion_tokens_details"):
             if isinstance(usage_chunk.completion_tokens_details, dict):
                 completion_tokens_details = CompletionTokensDetails(**usage_chunk.completion_tokens_details)
@@ -1166,28 +1179,29 @@ class ChunkProcessor:
         Anthropic ``message_start`` cursor, a small placeholder whose magnitude
         varies per request (1 and 8 both observed live), so reset to None and let
         ``calculate_usage()``'s ``token_counter(...)`` fallback estimate from
-        the actually-received text and reasoning instead. Gated on
-        ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
-        Anthropic's specific message_start SSE shape) does not silently affect
-        other providers that legitimately report usage from a single event.
+        the actually-received text and reasoning instead. Gated on streams
+        parsed from Anthropic's message_start SSE shape (``anthropic``, or a
+        chunk Anthropic's parser marked as its message_start on any provider
+        that reuses it) so the heuristic does not silently affect other
+        providers that legitimately report usage from a single event.
         """
         saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
-        custom_llm_provider: str | None = None
-        if chunks:
-            first_chunk: Final = chunks[0]
-            if isinstance(first_chunk, dict):
-                hp = first_chunk.get("_hidden_params")
-            else:
-                hp = getattr(first_chunk, "_hidden_params", None)
-            if isinstance(hp, dict):
-                custom_llm_provider = hp.get("custom_llm_provider")
-
-        if custom_llm_provider == "anthropic":
+        if any(ChunkProcessor._streamed_anthropic_message_start(chunk) for chunk in chunks):
             return None
         return completion_tokens
+
+    @staticmethod
+    def _streamed_anthropic_message_start(chunk: "_UsageBearingChunk | ModelResponse") -> bool:
+        hidden_params: Final = object_mapping(
+            chunk.get("_hidden_params") if isinstance(chunk, dict) else getattr(chunk, "_hidden_params", None)
+        )
+        return hidden_params is not None and (
+            hidden_params.get("custom_llm_provider") == "anthropic"
+            or hidden_params.get("anthropic_message_start") is True
+        )
 
     def calculate_usage(
         self,
@@ -1421,7 +1435,9 @@ def stream_chunk_builder_text_completion(
     object: Final = text_chunks[0].object
     created: Final = text_chunks[0].created
     model: Final = text_chunks[0].model
-    system_fingerprint: Final = text_chunks[0].get("system_fingerprint", None)
+    system_fingerprint: Final = require_attributes(text_chunks[0], _SystemFingerprintField, "get").get(
+        "system_fingerprint", None
+    )
     all_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in text_chunks))
     choices: Final = [
         _rebuilt_text_choice(index, tuple(group))
@@ -1539,6 +1555,20 @@ def _field_of(value: object, name: str) -> object:
     if isinstance(value, dict):
         return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
     return getattr(value, name, None)
+
+
+def _first_streamed_value(chunks: Sequence[object], field: str) -> object:
+    return next((value for chunk in chunks if (value := _field_of(chunk, field)) is not None), None)
+
+
+def streamed_prompt_fields(chunks: Sequence[object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            field: value
+            for field in VLLM_STREAM_PROMPT_FIELDS
+            if (value := _first_streamed_value(chunks, field)) is not None
+        }
+    )
 
 
 def _first_choices(chunks: Iterable[object]) -> tuple[object, ...]:

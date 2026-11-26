@@ -9,10 +9,11 @@ use crate::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::{CachedTeam, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
-            RegisteredAgent, TeamRead, UserLookup, UserRead,
+            RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -247,6 +248,15 @@ pub trait AuthHost: Send + Sync {
         alias: &str,
     ) -> impl Future<Output = Result<AliasRead<TeamRow<Self>>, Error>> + Send;
 
+    /// Project the effective user's member from the team already read by this request.
+    fn bind_team_member(
+        &self,
+        team: Team<TeamRow<Self>>,
+        _user_id: &str,
+    ) -> impl Future<Output = Result<Team<TeamRow<Self>>, Error>> + Send {
+        std::future::ready(Ok(team))
+    }
+
     /// `get_team_membership`
     fn load_team_membership(
         &self,
@@ -437,4 +447,10 @@ pub trait AuthHost: Send + Sync {
         key: &KeyRow<Self>,
         team: &TeamRow<Self>,
     ) -> impl Future<Output = Result<KeyRow<Self>, Error>> + Send;
+
+    // Request body: what the body check reads before it decides.
+
+    /// The values stored under a `litellm_credential_name`, `None` when no credential has that
+    /// name.
+    fn credential(&self, name: &str) -> impl Future<Output = Result<Option<Params>, Error>> + Send;
 }

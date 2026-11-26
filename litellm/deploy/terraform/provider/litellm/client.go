@@ -458,10 +458,11 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	}
 
 	log.Printf("Response status: %d", resp.StatusCode)
-	log.Printf("Response body: %s", c.redactSensitiveData(string(bodyBytes)))
+	safeBody := redactResponseBody(bodyBytes)
+	log.Printf("Response body: %s", safeBody)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &apiError{StatusCode: resp.StatusCode, Body: string(bodyBytes)}
+		return nil, &apiError{StatusCode: resp.StatusCode, Body: safeBody}
 	}
 
 	var result map[string]interface{}
@@ -470,26 +471,40 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 			(len(bodyBytes) == 0 || string(bodyBytes) == "null") {
 			return make(map[string]interface{}), nil
 		}
-		return nil, fmt.Errorf("error parsing response JSON: %v\nResponse body: %s", err, string(bodyBytes))
+		return nil, fmt.Errorf("error parsing response JSON: %v\nResponse body: %s", err, safeBody)
 	}
 
 	return result, nil
 }
 
 var sensitiveLogFields = map[string]bool{
-	"api_key":               true,
-	"key":                   true,
-	"token":                 true,
-	"password":              true,
-	"secret":                true,
-	"credential":            true,
-	"auth":                  true,
-	"model_api_key":         true,
-	"aws_access_key_id":     true,
-	"aws_secret_access_key": true,
-	"vertex_credentials":    true,
-	"x-api-key":             true,
-	"credential_values":     true,
+	"api_key":                       true,
+	"key":                           true,
+	"token":                         true,
+	"password":                      true,
+	"secret":                        true,
+	"credential":                    true,
+	"auth":                          true,
+	"model_api_key":                 true,
+	"aws_access_key_id":             true,
+	"aws_secret_access_key":         true,
+	"vertex_credentials":            true,
+	"x-api-key":                     true,
+	"credential_values":             true,
+	"client_private_key":            true,
+	"client_secret":                 true,
+	"id_jag_resource_client_secret": true,
+	"callback_vars":                 true,
+}
+
+func isSensitiveLogField(key string, value interface{}) bool {
+	key = strings.ToLower(key)
+	if sensitiveLogFields[key] || strings.HasSuffix(key, "_secret_key") ||
+		strings.HasSuffix(key, "_secret") || strings.HasSuffix(key, "_api_key") {
+		return true
+	}
+	_, isString := value.(string)
+	return isString && (key == "logging" || key == "callback_settings")
 }
 
 func redactJSONValue(value interface{}) interface{} {
@@ -497,7 +512,7 @@ func redactJSONValue(value interface{}) interface{} {
 	case map[string]interface{}:
 		redacted := make(map[string]interface{}, len(typed))
 		for k, v := range typed {
-			if sensitiveLogFields[k] {
+			if isSensitiveLogField(k, v) {
 				redacted[k] = "[REDACTED]"
 			} else {
 				redacted[k] = redactJSONValue(v)
@@ -516,9 +531,7 @@ func redactJSONValue(value interface{}) interface{} {
 }
 
 var sensitiveLogPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`"(api_key|key|token|password|secret|credential|auth)":\s*"[^"]*"`),
-	regexp.MustCompile(`"(model_api_key|aws_access_key_id|aws_secret_access_key|vertex_credentials)":\s*"[^"]*"`),
-	regexp.MustCompile(`"(x-api-key)":\s*"[^"]*"`),
+	regexp.MustCompile(`(?i)"(api_key|key|token|password|secret|credential|auth|aws_access_key_id|aws_secret_access_key|vertex_credentials|x-api-key|credential_values|client_private_key|callback_vars|logging|callback_settings|[^"\\]*(?:_secret_key|_secret|_api_key))"\s*:\s*"(?:\\.|[^"\\])*"`),
 }
 
 func redactWithPatterns(data string) string {
@@ -546,4 +559,17 @@ func (c *Client) redactSensitiveData(data string) string {
 		return redactWithPatterns(data)
 	}
 	return string(redactedBytes)
+}
+
+func redactResponseBody(body []byte) string {
+	var parsed interface{}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		switch parsed.(type) {
+		case map[string]interface{}, []interface{}, nil:
+			if safe, err := json.Marshal(redactJSONValue(parsed)); err == nil {
+				return string(safe)
+			}
+		}
+	}
+	return "[REDACTED]"
 }

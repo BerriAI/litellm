@@ -267,7 +267,9 @@ async def test_create_from_temp_pair_never_snapshots_team_default(mock_tx, fake_
 
 
 @pytest.mark.asyncio
-async def test_temp_pair_on_shared_default_member_clones_default_with_its_reset_schedule(mock_tx, fake_user):
+async def test_temp_pair_on_shared_default_member_keeps_the_default_reset_schedule_and_leaves_the_cap_inherited(
+    mock_tx, fake_user
+):
     expiry = datetime(2100, 1, 1, tzinfo=timezone.utc)
     default_reset_at = datetime(2026, 11, 1, tzinfo=timezone.utc)
     mock_tx.litellm_budgettable.find_unique = AsyncMock(
@@ -293,7 +295,6 @@ async def test_temp_pair_on_shared_default_member_clones_default_with_its_reset_
     mock_tx.litellm_teammembership.update.assert_not_called()
     assert stored_budget_row(mock_tx) == {
         "model_max_budget": "{}",
-        "max_budget": 0.4,
         "rpm_limit": 10,
         "budget_duration": "30d",
         "budget_reset_at": default_reset_at,
@@ -301,6 +302,36 @@ async def test_temp_pair_on_shared_default_member_clones_default_with_its_reset_
         "temp_budget_expiry": expiry,
     }
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "default_caps",
+    [
+        pytest.param({"max_budget": 0.0}, id="zero default"),
+        pytest.param({"max_budget": 0.4, "rollover_max_budget": 0.9}, id="default with rollover"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_temp_pair_on_shared_default_member_keeps_its_own_cap_when_the_default_cannot_be_followed(
+    mock_tx, fake_user, default_caps
+):
+    expiry = datetime(2100, 1, 1, tzinfo=timezone.utc)
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(
+        return_value=budget_row(budget_id="team-default-budget-1", budget_duration="30d", **default_caps)
+    )
+    await upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-default",
+        user_id="user-on-default",
+        existing_budget_id="team-default-budget-1",
+        user_api_key_dict=fake_user,
+        budget_patch={"temp_budget_increase": 1.0, "temp_budget_expiry": expiry},
+        team_default_budget_id="team-default-budget-1",
+    )
+
+    stored = stored_budget_row(mock_tx)
+    assert {field: stored.get(field) for field in default_caps} == default_caps
+    assert stored["temp_budget_increase"] == 1.0
 
 
 @pytest.mark.asyncio

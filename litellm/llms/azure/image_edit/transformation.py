@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
@@ -11,8 +12,11 @@ from litellm.utils import add_path_to_api_base
 
 
 class AzureImageEditConfig(OpenAIImageEditConfig):
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
+        return [param for param in super().get_supported_openai_params(model) if param != "markup"]
+
     @staticmethod
-    def azure_deployment_image_edit_form_data(data: dict, request_url: str) -> dict:
+    def azure_deployment_image_edit_form_data(data: dict[str, object], request_url: str) -> dict[str, object]:
         """
         Azure OpenAI ``.../openai/deployments/{deployment}/images/edits`` routes by
         deployment in the URL; including ``model`` in multipart fields can break
@@ -26,12 +30,12 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate Azure environment and set up authentication headers.
 
@@ -71,7 +75,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Constructs a complete URL for the API request.
@@ -134,5 +138,5 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         return str(final_url)
 
-    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
+    def finalize_image_edit_request_data(self, data: dict[str, object], resolved_request_url: str) -> dict[str, object]:
         return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

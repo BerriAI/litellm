@@ -76,7 +76,7 @@ async fn found_key<H: AuthHost>(
     settings: &KeySettings,
     hash: &KeyHash,
 ) -> Result<Option<Keyed<KeyRow<H>>>, Error> {
-    match host.cached_key(hash).await.ok().flatten() {
+    match Error::absent_unless_declined(host.cached_key(hash).await)? {
         None if !token.is_virtual_key() && settings.ui_login => host.ui_key(token).await,
         cached => Ok(cached),
     }
@@ -105,7 +105,7 @@ async fn cached_team_values<H: AuthHost>(
     else {
         return Ok(key);
     };
-    let Some(team) = host.cached_team(team_id).await.ok().flatten() else {
+    let Some(team) = Error::absent_unless_declined(host.cached_team(team_id).await)? else {
         return Ok(key);
     };
     match (team.refreshed_at, key.record.last_refreshed_at) {
