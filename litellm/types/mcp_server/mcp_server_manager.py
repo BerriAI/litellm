@@ -131,6 +131,7 @@ def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
 
 
 class MCPServer(LiteLLMBaseModel):
+    auth_profile_id: str | None = Field(default=None, exclude=True)
     server_id: str
     name: str
     alias: str | None = None

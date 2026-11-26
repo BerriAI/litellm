@@ -151,6 +151,11 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         default_cooldown_time_seconds,
         default_cooldown_redis_read_interval_seconds: _,
         default_max_redis_batch_cache_size: _,
+        litellm_local_model_cost_map: _,
+        litellm_offline_mode: _,
+        model_cost_map_min_model_count: _,
+        model_cost_map_max_shrink_ratio: _,
+        aws_region_name: _,
     } = environment;
     set!(
         "",
@@ -173,12 +178,23 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
     .map(|field| field.to_uppercase().into())
 }
 
+/// Python fetches the cost map at import from `LITELLM_MODEL_COST_MAP_URL`, as the native app
+/// does at boot, and reads `litellm_settings.model_cost_map_url` from config.yaml only on a reload.
+fn set_by_its_variable(config: &Config) -> bool {
+    config
+        .origins
+        .variable("litellm_settings.model_cost_map_url")
+        .is_some()
+}
+
 /// The database settings are read as the proxy reads them, and what the proxy holds in its
 /// database beyond keys is not checked here. `store_model_in_db` and `supported_db_objects` are
 /// honored, since boot layers the stored config in, and [`settings`] checks what it could not
 /// load. `encryption_algorithm` only picks the format Python writes a secret in, and the at-rest
 /// crate reads either format. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
-/// who sends no key.
+/// who sends no key. `allowed_ips`, `use_x_forwarded_for` and `allowed_routes` are
+/// `middleware::request_allowlist`, and `head::forwarded_for` names the address the native app
+/// cannot resolve as Python does.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -208,6 +224,9 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         token_rate_limit_type: _,
         user_api_key_cache_ttl: _,
         user_api_key_cache_max_size: _,
+        allowed_routes: _,
+        use_x_forwarded_for: _,
+        allowed_ips: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
@@ -228,8 +247,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         enable_oauth2_proxy_auth,
         allow_requests_on_db_unavailable,
         allow_client_side_credentials,
-        allowed_ips,
-        allowed_routes,
         custom_auth,
         litellm_key_header_name,
         required_customer_headers,
@@ -257,8 +274,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             enable_oauth2_proxy_auth,
             allow_requests_on_db_unavailable,
             allow_client_side_credentials,
-            allowed_ips,
-            allowed_routes,
             custom_auth,
             litellm_key_header_name,
             required_customer_headers,
@@ -415,7 +430,6 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             success_callback,
             failure_callback,
             anthropic_prompt_caching_ttl,
-            model_cost_map_url,
             anthropic_beta_headers_url,
         ],
         on: [cache, modify_params, enable_anthropic_prompt_caching],
@@ -423,6 +437,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             callbacks => other_callbacks,
             priority_reservation_settings => borrows,
             request_timeout => |_| unkept(config),
+            model_cost_map_url => |url: &Option<_>| url.is_some() && !set_by_its_variable(config)
         ]
     )
     .chain(unknown("litellm_settings.", additional_fields))
@@ -641,6 +656,23 @@ mod tests {
             found(&set_by(variable, value)),
             named.into_iter().collect::<Vec<_>>()
         );
+    }
+
+    #[rstest]
+    #[case::by_its_variable(
+        set_by("LITELLM_MODEL_COST_MAP_URL", "https://cost-map.test/map.json"),
+        &[]
+    )]
+    #[case::in_the_config(
+        Config::from_yaml("litellm_settings:\n  model_cost_map_url: https://cost-map.test/map.json\n")
+            .unwrap(),
+        &["litellm_settings.model_cost_map_url"]
+    )]
+    fn the_cost_map_url_is_honored_only_where_the_proxy_fetches_at_boot_from(
+        #[case] config: Config,
+        #[case] named: &[&str],
+    ) {
+        assert_eq!(found(&config), named);
     }
 
     #[rstest]

@@ -30,7 +30,7 @@ from litellm.types.semantic_cache import SemanticCacheParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span: TypeAlias = _Span | Any
+    Span: TypeAlias = _Span
 else:
     Span: TypeAlias = Any
 

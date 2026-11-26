@@ -1792,6 +1792,29 @@ def split_reported_cost_by_cost_map_ratio(
     return input_cost, reported_total - input_cost
 
 
+def billed_flat_cost(
+    base_cost: float,
+    custom_llm_provider: str | None,
+    model: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> float:
+    adjusted: Final = adjusted_cost(base_cost, custom_llm_provider, model)
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=None,
+        completion_tokens_cost_usd_dollar=None,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=adjusted.cost,
+        original_cost=base_cost,
+        discount_percent=adjusted.discount_percent,
+        discount_amount=adjusted.discount_amount,
+        margin_percent=adjusted.margin_percent,
+        margin_fixed_amount=adjusted.margin_fixed_amount,
+        margin_total_amount=adjusted.margin_total_amount,
+    )
+    return adjusted.cost
+
+
 def _adjusted_provider_billed_cost(
     reported_cost: float,
     custom_llm_provider: str | None,

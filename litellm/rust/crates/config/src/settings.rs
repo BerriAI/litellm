@@ -11,9 +11,9 @@ use serde_with::{Map, serde_as};
 use veil::Redact;
 
 use crate::{
-    AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
-    PriorityReservation, PriorityReservationSettings, RedisSettings, RolePermissions, RouteList,
-    Spelled, Value, value::one_or_many,
+    AdditionalFields, AddressList, CacheSettings, JwtAuthSettings, LitellmRole, Object,
+    PassThroughEndpoint, PriorityReservation, PriorityReservationSettings, RedisSettings,
+    RolePermissions, RouteList, Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -156,8 +156,11 @@ pub struct GeneralSettings {
     #[serde_as(as = "IsTrue")]
     pub allow_client_side_credentials: bool,
     pub public_routes: Option<RouteList>,
-    pub allowed_ips: Option<Box<[String]>>,
-    pub allowed_routes: Option<Box<[String]>>,
+    pub allowed_ips: Option<AddressList>,
+    #[serde_as(as = "IsTrue")]
+    pub use_x_forwarded_for: bool,
+    #[serde(deserialize_with = "crate::routes::where_the_key_is_written")]
+    pub allowed_routes: Option<RouteList>,
     pub custom_auth: Option<String>,
     pub litellm_key_header_name: Option<String>,
     pub required_customer_headers: Box<[String]>,
@@ -227,6 +230,7 @@ impl Default for GeneralSettings {
             allow_client_side_credentials: false,
             public_routes: None,
             allowed_ips: None,
+            use_x_forwarded_for: false,
             allowed_routes: None,
             custom_auth: None,
             litellm_key_header_name: None,
@@ -310,7 +314,7 @@ mod tests {
     use std::{num::NonZeroUsize, time::Duration};
 
     use super::{GeneralSettings, LiteLlmSettings};
-    use crate::JwtAuthSettings;
+    use crate::{JwtAuthSettings, RouteList};
 
     #[test]
     fn jwt_auth_settings_hide_unknown_fields() {
@@ -322,6 +326,29 @@ mod tests {
 
         assert!(!debug.contains("credential-value"), "{debug}");
         assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[rstest]
+    #[case::left_out(serde_json::json!({}), None)]
+    #[case::written_with_no_value(
+        serde_json::json!({"allowed_routes": null}),
+        Some(RouteList::Malformed)
+    )]
+    #[case::written_as_text(
+        serde_json::json!({"allowed_routes": "/health"}),
+        Some(RouteList::Malformed)
+    )]
+    #[case::a_list(
+        serde_json::json!({"allowed_routes": ["/health"]}),
+        Some(RouteList::Valid(Box::from(["/health".to_owned()])))
+    )]
+    fn allowed_routes_is_a_list_wherever_the_key_is_written(
+        #[case] general: serde_json::Value,
+        #[case] expected: Option<RouteList>,
+    ) {
+        let settings: GeneralSettings = serde_json::from_value(general).unwrap();
+
+        assert_eq!(settings.allowed_routes, expected);
     }
 
     #[rstest]
