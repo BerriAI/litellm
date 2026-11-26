@@ -1155,6 +1155,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
     "https://api.resetdata.ai/api/v1",
+    "https://api.blockrun.ai/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
@@ -1219,6 +1220,7 @@ openai_compatible_providers: Final[list[str]] = [
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
     "resetdata",
+    "blockrun",
     "featherless_ai",
     "nscale",
     "nebius",

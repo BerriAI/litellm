@@ -2475,6 +2475,32 @@
         "generateContent": true
       }
     },
+    "blockrun": {
+      "display_name": "BlockRun (`blockrun`)",
+      "url": "https://docs.litellm.ai/docs/providers/blockrun",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "resetdata": {
       "display_name": "ResetData (`resetdata`)",
       "url": "https://docs.litellm.ai/docs/providers/resetdata",

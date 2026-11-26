@@ -3668,6 +3668,34 @@
     "default_model_placeholder": "resetdata/zai/glm-5.3"
   },
   {
+    "provider": "BLOCKRUN",
+    "provider_display_name": "BlockRun",
+    "litellm_provider": "blockrun",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.blockrun.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "blockrun/nvidia/nemotron-3.5-lightning"
+  },
+  {
     "provider": "RUNWAYML",
     "provider_display_name": "Runwayml",
     "litellm_provider": "runwayml",

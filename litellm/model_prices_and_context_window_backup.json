@@ -17051,6 +17051,41 @@
             "/v1/images/generations"
         ]
     },
+    "blockrun/nvidia/nemotron-3-super-120b": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "blockrun",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.blockrun.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "blockrun/nvidia/nemotron-3.5-bolt": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "blockrun",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.blockrun.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "blockrun/nvidia/nemotron-3.5-lightning": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "blockrun",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.blockrun.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "cerebras/llama-3.1-70b": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "cerebras",

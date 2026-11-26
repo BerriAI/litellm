@@ -713,6 +713,7 @@ openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
+blockrun_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 huawei_maas_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
@@ -1020,6 +1021,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             streamlake_models.add(key)
         elif value.get("litellm_provider") == "resetdata":
             resetdata_models.add(key)
+        elif value.get("litellm_provider") == "blockrun":
+            blockrun_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
         elif value.get("litellm_provider") == "huawei_maas":
@@ -1214,6 +1217,7 @@ model_list = list(
     | kyma_models
     | streamlake_models
     | resetdata_models
+    | blockrun_models
     | wally_models
     | huawei_maas_models
     | zerogpu_models
@@ -1353,6 +1357,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "kyma": kyma_models,
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,
+        "blockrun": blockrun_models,
         "wally": wally_models,
         "huawei_maas": huawei_maas_models,
         "zerogpu": zerogpu_models,
