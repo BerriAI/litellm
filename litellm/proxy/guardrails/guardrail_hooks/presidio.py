@@ -1678,6 +1678,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     )
                 )
 
+        if call_type in supported_call_types:
             if (
                 isinstance(result, ModelResponse)
                 and result.choices
