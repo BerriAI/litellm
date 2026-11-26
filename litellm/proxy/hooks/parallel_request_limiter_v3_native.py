@@ -10,7 +10,7 @@ from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
-from pydantic import StrictInt, TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -50,16 +50,14 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     ITPM_DESCRIPTOR_KEYS,
     OTPM_DESCRIPTOR_KEYS,
-    PROJECT_ITPM_DESCRIPTOR_KEY,
 )
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, valid_io_limit
 from litellm.rust_bridge.execution import drive
 from litellm.types.integrations.custom_logger_v2 import Record
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, Usage
 
 _IO_KEYS: Final = ITPM_DESCRIPTOR_KEYS | OTPM_DESCRIPTOR_KEYS
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
-PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 
 if TYPE_CHECKING:
@@ -91,7 +89,6 @@ _RESERVATION: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 _OVER_LIMIT: Final = TypeAdapter(BatchEnqueuedTokenOverLimit)
 _OUTCOME: Final = TypeAdapter(dict[str, object])
 _PTU_FIELDS: Final = TypeAdapter(dict[str, str | int | float])
-_IO_LIMIT: Final[TypeAdapter[int | None]] = TypeAdapter(StrictInt | None)
 _READS: Final = frozenset(
     {
         Field.key_identity,
@@ -630,23 +627,8 @@ def _metadata_member(metadata: object, name: str) -> object:
     return entries.get(name) if entries else None
 
 
-def _valid_io_limit(value: object) -> int | None:
-    try:
-        return _IO_LIMIT.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def io_limit_values(metadata: object, name: str) -> tuple[int, ...]:
-    return tuple(
-        limit
-        for limit in map(_valid_io_limit, (_entries(_metadata_member(metadata, name)) or {}).values())
-        if limit is not None
-    )
-
-
 def _io_limit(source: str, model: object, value: object) -> int | None:
-    limit: Final = _valid_io_limit(value)
+    limit: Final = valid_io_limit(value)
     if limit is None and value is not None:
         verbose_proxy_logger.warning("Ignoring %s[%s]: expected an integer", source, model)
     return limit
@@ -905,12 +887,12 @@ async def _prepared_batch(
                 (descriptor, increment)
                 for descriptor, increment in zip(
                     *await batch._create_project_io_descriptors_for_models(  # pyright: ignore[reportPrivateUsage]  # the batch limiter's own descriptors
-                        user_api_key_dict=auth, per_model_usage=usage.per_model_usage
+                        user_api_key_dict=auth,
+                        per_model_usage=usage.per_model_usage,
+                        include_project_io_limits=not project_covers_batch,
                     ),
                     strict=True,
                 )
-                if not project_covers_batch
-                or descriptor["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
             )
         )
     except HTTPException as error:

@@ -1362,6 +1362,25 @@ async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token
     assert outcomes[1] is not None and "model_per_key_otpm" in str(outcomes[1])
 
 
+@pytest.mark.asyncio
+async def test_malformed_project_input_limit_leaves_the_key_daily_token_limit_enforced_under_a_covering_project_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _batch_usage(monkeypatch, total_tokens=600, request_count=6)
+    auth: Final = _auth(
+        tpd_limit=1000,
+        project_id="proj",
+        project_metadata={"model_batch_enqueued_token_limit": {"gpt-4o": 1000000}, "model_itpm_limit": [1]},
+    )
+
+    outcomes: Final = await _admitted(
+        _side(Clock()), [Request(auth, _BATCH, call_type="acreate_batch") for _ in range(2)]
+    )
+
+    assert outcomes[0] is None
+    assert outcomes[1] is not None and "api_key_tpd" in str(outcomes[1])
+
+
 def _batch_object(batch_id: str, status: str) -> SimpleNamespace:
     return SimpleNamespace(id=batch_id, status=status, object="batch")
 

@@ -65,8 +65,6 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     ITPM_DESCRIPTOR_KEYS,
     OTPM_DESCRIPTOR_KEYS,
-    PROJECT_ITPM_DESCRIPTOR_KEY,
-    PROJECT_OTPM_DESCRIPTOR_KEY,
     ReservationWindowIdentity,
     WindowGuardedIncrement,
     atomic_check_and_increment_by_n,
@@ -78,8 +76,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     project_io_token_rate_limit_descriptors,
     rate_limited_model,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3_native import io_limit_values
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.rate_limiter_utils import io_limit_values, resolve_llm_provider_for_rate_limit
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitScope
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import BatchInputFormat, HttpxBinaryResponseContent
@@ -117,7 +114,6 @@ else:
 
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_PROJECT_IO_DESCRIPTOR_KEYS: Final = frozenset({PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY})
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 
@@ -380,6 +376,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         per_model_usage: Mapping[tuple[str, ...], Mapping[str, int]],
+        include_project_io_limits: bool = True,
     ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: callers extend these lists
         """Build project ITPM/OTPM descriptors charged against each row's own model.
 
@@ -390,12 +387,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         different model's counter, and rows whose names share one counter add
         to it once, held to the lowest limit any of those names sets.
         """
+        scoped: Final = (
+            user_api_key_dict
+            if include_project_io_limits
+            else user_api_key_dict.model_copy(update={"project_id": None, "project_metadata": None})
+        )
         charges: Final = tuple(
             itertools.chain.from_iterable(
-                [
-                    await self._project_io_charges(user_api_key_dict, models, usage)
-                    for models, usage in per_model_usage.items()
-                ]
+                [await self._project_io_charges(scoped, models, usage) for models, usage in per_model_usage.items()]
             )
         )
         descriptors: Final = coalesce_rate_limit_descriptors(tuple(descriptor for descriptor, _ in charges))
@@ -906,19 +905,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for _d in descriptors
         ]
 
-        io_charges: Final = tuple(
-            (descriptor, increment)
-            for descriptor, increment in zip(
-                *await self._create_project_io_descriptors_for_models(
-                    user_api_key_dict=user_api_key_dict,
-                    per_model_usage=batch_usage.per_model_usage,
-                ),
-                strict=True,
-            )
-            if include_project_io_limits or descriptor["key"] not in _PROJECT_IO_DESCRIPTOR_KEYS
+        io_descriptors, io_increments = await self._create_project_io_descriptors_for_models(
+            user_api_key_dict=user_api_key_dict,
+            per_model_usage=batch_usage.per_model_usage,
+            include_project_io_limits=include_project_io_limits,
         )
-        descriptors = [*descriptors, *(descriptor for descriptor, _ in io_charges)]
-        increments = [*increments, *(increment for _, increment in io_charges)]
+        descriptors = [*descriptors, *io_descriptors]
+        increments = [*increments, *io_increments]
 
         rate_limit_response: Final = await atomic_check_and_increment_by_n(
             self.parallel_request_limiter,

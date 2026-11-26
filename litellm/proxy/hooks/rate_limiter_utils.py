@@ -5,7 +5,7 @@ Shared utility functions for rate limiter hooks.
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import StrictInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -16,6 +16,23 @@ from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 
 _SOCKET_SESSION_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_IO_LIMIT: Final[TypeAdapter[int | None]] = TypeAdapter(StrictInt | None)
+
+
+def valid_io_limit(value: object) -> int | None:
+    try:
+        return _IO_LIMIT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def io_limit_values(metadata: object, name: str) -> tuple[int, ...]:
+    limits: Final[object] = metadata.get(name) if isinstance(metadata, dict) else None  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # auth metadata is untyped
+    return (
+        tuple(limit for limit in map(valid_io_limit, limits.values()) if limit is not None)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # auth metadata is untyped
+        if isinstance(limits, dict)
+        else ()
+    )
 
 
 def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
