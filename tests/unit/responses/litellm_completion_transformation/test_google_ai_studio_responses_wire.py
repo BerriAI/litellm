@@ -631,9 +631,7 @@ async def test_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_op
         mock_router.post(f"{_GEMINI_3_URL}:streamGenerateContent?alt=sse").mock(
             return_value=_searches_sharing_a_chunk(chunks)
         )
-        mock_router.post(f"{_GEMINI_3_URL}:generateContent").mock(
-            return_value=_the_same_reply_unstreamed(chunks)
-        )
+        mock_router.post(f"{_GEMINI_3_URL}:generateContent").mock(return_value=_the_same_reply_unstreamed(chunks))
         response: Final = await litellm.aresponses(
             model="gemini/gemini-3-flash-preview",
             api_key="test-key",
@@ -666,9 +664,7 @@ def test_sync_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_ope
         mock_router.post(f"{_GEMINI_3_URL}:streamGenerateContent?alt=sse").mock(
             return_value=_searches_sharing_a_chunk(chunks)
         )
-        mock_router.post(f"{_GEMINI_3_URL}:generateContent").mock(
-            return_value=_the_same_reply_unstreamed(chunks)
-        )
+        mock_router.post(f"{_GEMINI_3_URL}:generateContent").mock(return_value=_the_same_reply_unstreamed(chunks))
         response: Final = litellm.responses(
             model="gemini/gemini-3-flash-preview",
             api_key="test-key",

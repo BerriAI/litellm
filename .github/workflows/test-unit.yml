@@ -788,6 +788,7 @@ jobs:
               tests/unit/responses/test_custom_tool_call.py
               tests/unit/responses/test_input_items_query.py
               tests/unit/responses/test_instructions_length.py
+              tests/unit/responses/test_gemini_interactions_bridge_routing.py
               tests/unit/responses/test_metadata_codex_callback.py
               tests/unit/responses/test_no_duplicate_spend_logs.py
               tests/unit/responses/test_null_test_fix.py

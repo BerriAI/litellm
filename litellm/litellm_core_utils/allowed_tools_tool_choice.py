@@ -91,8 +91,14 @@ def drops_unsupported_allowed_tools_tool_choice(
     custom_llm_provider: str,
     model: str,
     drop_params: bool,
+    *,
+    bridges_to_interactions_api: bool = False,
 ) -> bool:
-    if not is_allowed_tools_tool_choice(tool_choice) or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
+    if (
+        bridges_to_interactions_api
+        or not is_allowed_tools_tool_choice(tool_choice)
+        or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
+    ):
         return False
     if drop_params:
         return True

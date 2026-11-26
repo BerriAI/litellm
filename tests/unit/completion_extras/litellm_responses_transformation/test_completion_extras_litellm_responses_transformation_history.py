@@ -462,7 +462,10 @@ def test_a_cached_turn_replayed_as_a_stream_labels_each_text_chunk_with_its_mess
 
     assert _phase_runs(chunks) == [("commentary", "Checking the weather."), ("final_answer", "Paris: light rain.")]
     rebuilt: Final = litellm.stream_chunk_builder(list(chunks)).choices[0].message
-    assert rebuilt.provider_specific_fields == _assistant_turn(OUTPUT, stream=False, model=model)["provider_specific_fields"]
+    assert (
+        rebuilt.provider_specific_fields
+        == _assistant_turn(OUTPUT, stream=False, model=model)["provider_specific_fields"]
+    )
 
 
 @pytest.mark.parametrize("fields", [None, ["not", "a", "mapping"]], ids=["no-fields", "malformed-fields"])

@@ -151,9 +151,7 @@ def test_chat_follow_up_answers_only_tool_calls_in_its_assistant_turn():
                 "message": {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [
-                        {"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}
-                    ],
+                    "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
                 },
                 "finish_reason": "tool_calls",
             }
@@ -597,8 +595,12 @@ async def test_initialized_content_filter_blocks_mcp_according_to_its_config(
     monkeypatch: pytest.MonkeyPatch, behavior: Literal["tool_result", "raise"] | None
 ) -> None:
     for name in (
-        "callbacks", "input_callback", "success_callback", "failure_callback",
-        "_async_success_callback", "_async_failure_callback",
+        "callbacks",
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
     ):
         monkeypatch.setattr(litellm, name, [])
     handler: Final = InMemoryGuardrailHandler()
@@ -835,7 +837,10 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
 
     assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
     request_data = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"]
-    assert (request_data["request_id"], request_data["metadata"]["guardrails"]) == ("request-1", ["requested-guardrail"])
+    assert (request_data["request_id"], request_data["metadata"]["guardrails"]) == (
+        "request-1",
+        ["requested-guardrail"],
+    )
 
 
 @pytest.mark.asyncio
@@ -1711,7 +1716,9 @@ TOOLSET_ROWS: Final = (
         tools=[{"server_id": "srv-1", "tool_name": "add"}, {"server_id": "srv-1", "tool_name": "calc-subtract"}],
     ),
     MCPToolset(
-        toolset_id="ts-subtract", toolset_name="subtract-toolset", tools=[{"server_id": "srv-1", "tool_name": "subtract"}]
+        toolset_id="ts-subtract",
+        toolset_name="subtract-toolset",
+        tools=[{"server_id": "srv-1", "tool_name": "subtract"}],
     ),
 )
 GATEWAY_SERVERS: Final = (
@@ -1849,7 +1856,11 @@ async def _calls_the_entries_run(
         monkeypatch, user, mcp_tools, _team_grants(*granted_toolsets), servers=servers
     )
     _deduplicated, tool_server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(tools, server_names)
-    tool_choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": allowed_label}]}
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "mcp", "server_label": allowed_label}],
+    }
     gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
         tool_choice, {**tool_server_map, **unresolvable_tools}, mcp_tools, user, _team_grants(*granted_toolsets)
     )

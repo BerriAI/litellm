@@ -2477,9 +2477,7 @@ def client(original_function):
                     and kwargs["complete_response"] is True
                     and not isinstance(result, Awaitable)
                 ):
-                    chunks = []
-                    for idx, chunk in enumerate(result):
-                        chunks.append(chunk)
+                    chunks = list(result)
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
                     return result
@@ -5620,7 +5618,7 @@ def remove_additional_properties(schema: _SchemaT) -> _SchemaT:
             del schema["additionalProperties"]
 
         # Recursively process all dictionary values
-        for key, value in schema.items():
+        for value in schema.values():
             remove_additional_properties(value)
 
     elif isinstance(schema, list):
@@ -5644,7 +5642,7 @@ def remove_strict_from_schema(schema: _SchemaT) -> _SchemaT:
             del schema["strict"]
 
         # Recursively process all dictionary values
-        for key, value in schema.items():
+        for value in schema.values():
             remove_strict_from_schema(value)
 
     elif isinstance(schema, list):
@@ -5680,7 +5678,7 @@ def remove_json_schema_refs(schema: _SchemaT, max_depth: int = 10) -> _SchemaT:
         schema.pop("$schema", None)
 
         # Recursively process all dictionary values
-        for key, value in schema.items():
+        for value in schema.values():
             remove_json_schema_refs(value, max_depth - 1)
 
     elif isinstance(schema, list):
@@ -10382,6 +10380,8 @@ def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
     drop_params: bool = False,
+    *,
+    allow_interactions_tool_choice: bool = False,
 ) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -10404,11 +10404,17 @@ def validate_chat_completion_tool_choice(
             )
             return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
 
+        is_allowed_tools_cfg: Final = (
+            allow_interactions_tool_choice
+            and len(tool_choice) == 1  # pyright: ignore[reportUnknownArgumentType]  # tool_choice is an untyped caller dict
+            and isinstance(tool_choice.get("allowed_tools"), dict)  # pyright: ignore[reportUnknownMemberType]  # tool_choice is an untyped caller dict
+        )
         # Standard OpenAI format: {"type": "function", "function": {...}}
         forces_hosted_tool: Final[bool] = (
             isinstance(tool_choice_type, str) and tool_choice_type in HOSTED_TOOL_CHOICE_TYPES
         )
-        if not forces_hosted_tool and (tool_choice_type is None or tool_choice.get("function") is None):
+        is_function_choice: Final = tool_choice_type is not None and tool_choice.get("function") is not None
+        if not (is_allowed_tools_cfg or forces_hosted_tool or is_function_choice):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,

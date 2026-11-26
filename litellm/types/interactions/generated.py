@@ -325,7 +325,9 @@ class ToolChoiceType(Enum):
 
 
 class ThinkingLevel(Enum):
+    minimal = "minimal"
     low = "low"
+    medium = "medium"
     high = "high"
 
 

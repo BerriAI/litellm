@@ -1,19 +1,36 @@
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
 from urllib.parse import urlsplit
 
+import httpx
+from pydantic import BaseModel, TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import is_allowed_tools_tool_choice
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import is_whitespace_user_message
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    DeploymentReasoningEffort,
+    deployment_reasoning_effort_levels,
+    reasoning_effort_needs_allowing,
+)
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -26,14 +43,43 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import Ver
 from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ChatCompletionUserMessage, OpenAIWebSearchOptions
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 _REASONING_OBJECT_KEYS: Final = ("reasoning_effort", "reasoning")
 _SDK_MERGED_REASONING_KEYS: Final = ("reasoning",)
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
-ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
+_GEMINI_GENERATION: Final = re.compile(r"^gemini-(\d+)(?:[.-]|$)")
+_FIRST_GEMINI_GENERATION_ON_INTERACTIONS: Final = 4
+ROUTABLE_MODES: Final = frozenset({"chat", "responses", "interactions"})
+_INTERACTIONS_ELIGIBLE_PROVIDERS: Final = frozenset({"gemini", "vertex_ai", "vertex_ai_beta"})
+_INTERACTIONS_ALLOWED_OPENAI_PARAMS: Final = (
+    "store",
+    "audio",
+    "frequency_penalty",
+    "presence_penalty",
+    "logprobs",
+    "top_logprobs",
+    "previous_interaction_id",
+    "continuation_token",
+    "background",
+    "environment",
+    "response_json_schema",
+    "response_schema",
+    "generation_config",
+    "cached_content",
+    "video_metadata",
+)
+_VERTEX_BRIDGE_PARAM_KEYS: Final = (
+    "vertex_credentials",
+    "vertex_ai_credentials",
+    "vertex_project",
+    "vertex_ai_project",
+    "vertex_location",
+    "vertex_ai_location",
+)
+_OBJECT_SEQ: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
 
 
 def deployment_routing_mode(deployment_model_info: Mapping[str, object] | None, custom_llm_provider: str) -> str | None:
@@ -68,7 +114,7 @@ def keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, objec
         deployment_mode not in ROUTABLE_MODES or backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS
     ):
         return shared_model_info
-    if registered_mode is None and deployment_mode == "chat":
+    if registered_mode is None and deployment_mode in ("chat", "interactions"):
         return without_mode
     if registered_mode is None:
         return shared_model_info
@@ -577,6 +623,327 @@ def chat_completion_ends_in_responses_api(
         base_model=declared_base_model if isinstance(declared_base_model, str) else None,
     )
     return model_info.get("mode") == "responses"
+
+
+def _is_interactions_eligible_target(
+    model: str,
+    custom_llm_provider: str,
+    litellm_params: Mapping[str, object] | None,
+) -> bool:
+    if custom_llm_provider not in _INTERACTIONS_ELIGIBLE_PROVIDERS:
+        return False
+    if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
+        return get_vertex_ai_model_route(model=model, litellm_params=litellm_params) == VertexAIModelRoute.GEMINI
+    return True
+
+
+_GENERATE_CONTENT_ONLY_KEYS: Final = frozenset(
+    {
+        "generationConfig",
+        "generation_config",
+        "cached_content",
+        "cachedContent",
+        "previous_interaction_id",
+        "environment",
+        "service_tier",
+        "video_metadata",
+    }
+)
+_VERTEX_LOCATION_KEYS: Final = ("vertex_location", "vertex_ai_location")
+_VERTEX_LOCATION_ENV_VARS: Final = ("VERTEXAI_LOCATION", "VERTEX_LOCATION")
+
+
+def _relies_on_ambient_vertex_location(custom_llm_provider: str, *param_sources: Mapping[str, object] | None) -> bool:
+    if custom_llm_provider not in ("vertex_ai", "vertex_ai_beta"):
+        return False
+    if any(any((source or {}).get(key) for key in _VERTEX_LOCATION_KEYS) for source in param_sources):
+        return False
+    return bool(litellm.vertex_location) or any(get_secret_str(name) for name in _VERTEX_LOCATION_ENV_VARS)
+
+
+def _needs_generate_content(*param_sources: Mapping[str, object] | None) -> bool:
+    sources: Final = tuple(source or {} for source in param_sources)
+    extra_bodies: Final = (str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
+    return any(
+        not _GENERATE_CONTENT_ONLY_KEYS.isdisjoint(params) or _names_a_file_search_store(params.get("tools"))
+        for params in (*sources, *extra_bodies)
+    )
+
+
+def _names_a_file_search_store(tools: object) -> bool:
+    return any(
+        tool.get("type") == "file_search" or "file_search" in tool
+        for tool in (str_keyed_mapping(entry) or {} for entry in as_object_list(tools) or ())
+    )
+
+
+def _is_gemini_4_or_newer(model: str) -> bool:
+    generation: Final = _GEMINI_GENERATION.match(model.rsplit("/", 1)[-1].lower())
+    return generation is not None and int(generation.group(1)) >= _FIRST_GEMINI_GENERATION_ON_INTERACTIONS
+
+
+def _explicit_use_interactions(optional_params: Mapping[str, object] | None) -> bool | None:
+    if optional_params is None:
+        return None
+    direct: Final = optional_params.get("use_interactions")
+    if isinstance(direct, bool):
+        return direct
+    nested: Final = str_keyed_mapping(optional_params.get("extra_body"))
+    if nested is not None and isinstance(nested.get("use_interactions"), bool):
+        return bool(nested["use_interactions"])
+    return None
+
+
+def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object] | None:
+    try:
+        return str_keyed_mapping(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+    except Exception as exc:  # noqa: BLE001  # capability lookup must not fail request dispatch
+        verbose_logger.debug("interactions routing model info lookup failed: %s", exc)
+        return None
+
+
+_INTERACTIONS_HARM_TYPES: Final = frozenset(
+    {"hate_speech", "dangerous_content", "harassment", "sexually_explicit", "jailbreak"}
+)
+_INTERACTIONS_HARM_THRESHOLDS: Final = frozenset(
+    {"block_low_and_above", "block_medium_and_above", "block_only_high", "block_none", "off"}
+)
+_INTERACTIONS_HARM_METHODS: Final = frozenset({"severity", "probability"})
+_SAFETY_SETTING_KEYS: Final = ("safety_settings", "safetySettings")
+
+
+def _interactions_safety_setting(setting: object, custom_llm_provider: str) -> Mapping[str, str] | None:
+    fields: Final = str_keyed_mapping(setting) or {}
+    category: Final = fields.get("category")
+    raw_threshold: Final = fields.get("threshold")
+    raw_method: Final = fields.get("method")
+    if not isinstance(category, str) or not isinstance(raw_threshold, str):
+        return None
+    harm_type: Final = category.lower().removeprefix("harm_category_")
+    lowered: Final = raw_threshold.lower()
+    threshold: Final = "off" if lowered == "block_none" and custom_llm_provider == "gemini" else lowered
+    method: Final = raw_method.lower() if isinstance(raw_method, str) else None
+    known_method: Final = method is None or method in _INTERACTIONS_HARM_METHODS
+    if harm_type not in _INTERACTIONS_HARM_TYPES or threshold not in _INTERACTIONS_HARM_THRESHOLDS or not known_method:
+        return None
+    return {"type": harm_type, "threshold": threshold, **({"method": method} if method is not None else {})}
+
+
+def _global_safety_settings() -> object:
+    return litellm.vertex_ai_safety_settings  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # module global is an untyped dict
+
+
+def _named_safety_settings(params: Mapping[str, object]) -> object:
+    return next((params[key] for key in _SAFETY_SETTING_KEYS if params.get(key) is not None), None)
+
+
+def requested_safety_settings(*param_sources: Mapping[str, object] | None) -> object:
+    if _global_safety_settings() is not None:
+        return _global_safety_settings()
+    sources: Final = tuple(source or {} for source in param_sources)
+    extra_bodies: Final = tuple(str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
+    return next(filter(None, map(_named_safety_settings, (*sources, *extra_bodies))), None)
+
+
+def interactions_safety_settings(requested: object, custom_llm_provider: str) -> Sequence[Mapping[str, str]] | None:
+    if requested is None:
+        return ()
+    entries: Final = as_object_list(requested)
+    if entries is None:
+        return None
+    translated: Final = tuple(_interactions_safety_setting(entry, custom_llm_provider) for entry in entries)
+    return None if any(setting is None for setting in translated) else tuple(filter(None, translated))
+
+
+def should_route_to_interactions_api(
+    *,
+    model: str,
+    custom_llm_provider: str,
+    optional_params: object = None,
+    litellm_params: object = None,
+    deployment_model_info: object = None,
+    skip_bridge: object = False,
+    asks_for_penalty: bool = False,
+    tools: object = None,
+    service_tier: str | None = None,
+) -> bool:
+    if bool(skip_bridge):
+        return False
+    llm_map: Final = str_keyed_mapping(litellm_params)
+    if not _is_interactions_eligible_target(model, custom_llm_provider, llm_map):
+        return False
+
+    explicit_toggle: Final = _explicit_use_interactions(str_keyed_mapping(optional_params))
+    if explicit_toggle is not None:
+        return explicit_toggle
+
+    pinned_mode: Final = deployment_routing_mode(
+        deployment_model_info.model_dump(exclude_none=True)
+        if isinstance(deployment_model_info, BaseModel)
+        else str_keyed_mapping(deployment_model_info),
+        custom_llm_provider,
+    )
+    if pinned_mode == "chat":
+        return False
+    if pinned_mode == "interactions":
+        return True
+
+    catalog_row: Final = _catalog_row(model, custom_llm_provider)
+    if catalog_row is not None and catalog_row.get("mode") == "interactions":
+        return True
+
+    if bool(litellm.route_all_chat_gemini_to_interactions):
+        return True
+    return (
+        _is_gemini_4_or_newer(model)
+        and interactions_safety_settings(
+            requested_safety_settings(str_keyed_mapping(optional_params), llm_map), custom_llm_provider
+        )
+        is not None
+        and not asks_for_penalty
+        and service_tier is None
+        and not _names_a_file_search_store(tools)
+        and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)
+        and not _relies_on_ambient_vertex_location(custom_llm_provider, str_keyed_mapping(optional_params), llm_map)
+    )
+
+
+def resolve_bridge_allowed_openai_params(
+    *,
+    raw_allowed: object,
+    bridges_to_responses_api: bool,
+    bridges_to_interactions_api: bool,
+    effort: DeploymentReasoningEffort,
+    model: str,
+    custom_llm_provider: str,
+    base_model: object,
+) -> tuple[str, ...] | None:
+    existing: Final = None if raw_allowed is None else allowed_openai_param_names(raw_allowed)
+    needs_reasoning: Final = (
+        bridges_to_responses_api
+        or bridges_to_interactions_api
+        or reasoning_effort_needs_allowing(
+            effort,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model if isinstance(base_model, str) else None,
+        )
+    )
+    if not needs_reasoning:
+        return tuple(existing) if existing is not None else None
+    extra_interactions: Final = _INTERACTIONS_ALLOWED_OPENAI_PARAMS if bridges_to_interactions_api else ()
+    return (*(existing or ()), "reasoning_effort", *extra_interactions)
+
+
+def strip_interactions_routing_params(raw_params: object) -> Mapping[str, object]:
+    mapped: Final = str_keyed_mapping(raw_params)
+    if mapped is None:
+        return MappingProxyType({})
+    nested_eb: Final = str_keyed_mapping(mapped.get("extra_body"))
+    has_top: Final = "use_interactions" in mapped
+    has_nested: Final = nested_eb is not None and "use_interactions" in nested_eb
+    if not has_top and not has_nested:
+        return mapped
+    without_top: Final = {k: v for k, v in mapped.items() if k not in ("use_interactions", "extra_body")}
+    if nested_eb is None:
+        return MappingProxyType(without_top)
+    cleaned_eb: Final = {k: v for k, v in nested_eb.items() if k != "use_interactions"}
+    if cleaned_eb:
+        return MappingProxyType({**without_top, "extra_body": cleaned_eb})
+    return MappingProxyType(without_top)
+
+
+def resolve_bridge_tool_choice(
+    tool_choice: object,
+    *,
+    bridges_to_interactions_api: bool,
+    model: str,
+    custom_llm_provider: str,
+    drop_params: bool,
+) -> object:
+    mapped: Final = str_keyed_mapping(tool_choice)
+    is_plain_or_chat_shaped: Final = (
+        mapped is None or "allowed_tools" not in mapped or is_allowed_tools_tool_choice(tool_choice)
+    )
+    if bridges_to_interactions_api or is_plain_or_chat_shaped:
+        return tool_choice
+    if drop_params:
+        return None
+    raise UnsupportedParamsError(
+        message=(f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"),
+        model=model,
+        llm_provider=custom_llm_provider,
+        status_code=400,
+    )
+
+
+def _merge_vertex_bridge_params(
+    base_llm_map: Mapping[str, object] | None,
+    raw_kwargs_map: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    if base_llm_map is None and raw_kwargs_map is None:
+        return None
+    merged: Final[dict[str, object]] = dict(base_llm_map or {})  # mutable-ok: request litellm_params copy
+    if raw_kwargs_map is not None:
+        for key in _VERTEX_BRIDGE_PARAM_KEYS:
+            if merged.get(key) is None and raw_kwargs_map.get(key) is not None:
+                merged[key] = raw_kwargs_map[key]
+    return merged
+
+
+def dispatch_interactions_bridge(
+    *,
+    model: str,
+    messages: object,
+    headers: object,
+    model_response: ModelResponse,
+    api_key: object,
+    api_base: object,
+    acompletion: bool,
+    logging_obj: object,
+    processed_params: object,
+    stream_options: object,
+    litellm_params: object,
+    raw_kwargs: object = None,
+    timeout: float | httpx.Timeout | None,
+    client: object,
+    custom_llm_provider: str,
+    stream: object,
+) -> object:
+    from litellm.completion_extras import interactions_api_bridge
+
+    raw_opt: Final = str_keyed_mapping(processed_params)
+    cleaned_opt: Final[dict[str, object]] = (  # mutable-ok: request optional_params copy
+        {k: v for k, v in raw_opt.items() if k != "use_interactions"} if raw_opt is not None else {}
+    )
+    if stream_options is not None and "stream_options" not in cleaned_opt:
+        cleaned_opt["stream_options"] = stream_options
+    raw_kwargs_map: Final = str_keyed_mapping(raw_kwargs) or {}
+    continuation_token: Final = raw_kwargs_map.get("continuation_token") or (
+        str_keyed_mapping(raw_kwargs_map.get("extra_body")) or {}
+    ).get("continuation_token")
+    if continuation_token:
+        cleaned_opt["continuation_token"] = continuation_token
+    llm_map: Final = _merge_vertex_bridge_params(str_keyed_mapping(litellm_params), str_keyed_mapping(raw_kwargs))
+    hdr_map: Final = str_keyed_mapping(headers)
+    msg_seq: Final = _OBJECT_SEQ.validate_python(messages)
+    assert isinstance(logging_obj, LiteLLMLoggingObj)
+    return interactions_api_bridge.completion(
+        model=model,
+        messages=msg_seq,
+        headers=hdr_map,
+        model_response=model_response,
+        api_key=api_key if isinstance(api_key, str) else None,
+        api_base=api_base if isinstance(api_base, str) else None,
+        acompletion=acompletion,
+        logging_obj=logging_obj,
+        optional_params=cleaned_opt,
+        litellm_params=llm_map,
+        timeout=timeout,
+        client=client,
+        custom_llm_provider=custom_llm_provider,
+        stream=stream if isinstance(stream, bool) else None,
+    )
 
 
 _USER_TURN_ROLES: Final = frozenset({"user", "tool", "function"})

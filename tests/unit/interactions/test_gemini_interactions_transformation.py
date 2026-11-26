@@ -20,6 +20,7 @@ from litellm.llms.gemini.common_utils import GeminiError
 from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
 )
+from litellm.types.interactions import GenerationConfig, ThinkingLevel
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
@@ -640,3 +641,10 @@ class TestTransformRequestSchemaCoalescing:
                 litellm_params=GenericLiteLLMParams(),
                 headers={},
             )
+
+
+@pytest.mark.parametrize("level", ("minimal", "low", "medium", "high"))
+def test_generation_config_accepts_all_thinking_levels(level: str) -> None:
+    parsed = GenerationConfig.model_validate({"thinking_level": level})
+    assert parsed.thinking_level == ThinkingLevel(level)
+    assert parsed.model_dump(mode="json", exclude_none=True) == {"thinking_level": level}

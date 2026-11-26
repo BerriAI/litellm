@@ -140,7 +140,6 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
     model_group_from_metadata,
-    reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
@@ -254,7 +253,6 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
-    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     keyword_arguments,
@@ -1437,6 +1435,7 @@ def mock_completion(
         raise Exception(f"Mock completion response failed - {e}")
 
 
+from litellm.responses import bridge_check as interactions_bridge
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
@@ -5935,6 +5934,7 @@ def completion(
     tool_choice = validate_chat_completion_tool_choice(
         tool_choice=tool_choice,
         model=model,
+        allow_interactions_tool_choice=True,
         drop_params=drops_unsupported_params(
             cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
         ),
@@ -5958,6 +5958,9 @@ def completion(
     # with no chat endpoint bridges anyway, since its native Responses config
     # ends the round-trip.
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
+    skip_interactions_api_bridge: Final = kwargs.pop(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # untyped kwargs dict
+        "_skip_interactions_api_bridge", False
+    )
 
     control_options: Final = _resolve_control_options(kwargs, model)
     replays_stream: Final = stream is True and control_options.fake_stream is True
@@ -6262,6 +6265,17 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
+        bridges_to_interactions_api: Final = interactions_bridge.should_route_to_interactions_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=provider_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
+            litellm_params=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs
+            deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
+            skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
+            asks_for_penalty=bool(frequency_penalty) or bool(presence_penalty),
+            tools=tools,  # pyright: ignore[reportUnknownArgumentType]  # untyped tools local
+            service_tier=service_tier,
+        )
         drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                 object, tool_choice
@@ -6269,6 +6283,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model=model,
             drop_params=drop_unsupported_reasoning,
+            bridges_to_interactions_api=bridges_to_interactions_api,
         )
 
         if provider_specific_header is not None:
@@ -6364,16 +6379,24 @@ def completion(
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
-        allowed_openai_params: Final[list[str] | None] = (
-            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
-            if bridges_to_responses_api
-            or reasoning_effort_needs_allowing(
-                chat_reasoning.effort,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                base_model=base_model if isinstance(base_model, str) else None,
-            )
-            else kwargs.get("allowed_openai_params")
+        cleaned_provider_params: Final = interactions_bridge.strip_interactions_routing_params(
+            provider_params  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
+        )
+        effective_tool_choice: Final = interactions_bridge.resolve_bridge_tool_choice(
+            tool_choice,  # pyright: ignore[reportUnknownArgumentType]  # untyped tool_choice local
+            bridges_to_interactions_api=bridges_to_interactions_api,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=drop_unsupported_reasoning,
+        )
+        allowed_openai_params: Final = interactions_bridge.resolve_bridge_allowed_openai_params(
+            raw_allowed=kwargs.get("allowed_openai_params"),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped kwargs
+            bridges_to_responses_api=bool(bridges_to_responses_api),  # pyright: ignore[reportUnknownArgumentType]  # untyped responses_api_model_info
+            bridges_to_interactions_api=bridges_to_interactions_api,
+            effort=chat_reasoning.effort,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,  # pyright: ignore[reportUnknownArgumentType]  # untyped base_model
         )
         optional_param_args: Final = {
             "functions": functions,
@@ -6399,7 +6422,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": None if drops_tool_choice else tool_choice,
+            "tool_choice": None if drops_tool_choice else effective_tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
@@ -6425,20 +6448,23 @@ def completion(
         }
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             resolved_reasoning_effort,
-            provider_params,
+            cleaned_provider_params,
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
 
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
-        mapping_special_params: Final = MappingProxyType(dict(provider_params))
+        mapping_special_params: Final = MappingProxyType(dict(cleaned_provider_params))
 
         def optional_params_for_model_info(
             deployment_info: Mapping[str, object] | None,
             reasoning_drop_logger: WarningLogger = verbose_logger,
         ) -> dict[str, object]:
+            precheck_args: Final[Mapping[str, object]] = (
+                {**mapping_args, "tool_choice": None, "audio": None} if bridges_to_interactions_api else mapping_args
+            )
             return get_optional_params(
-                **mapping_args,
+                **precheck_args,
                 model_info=deployment_info,
                 _litellm_reasoning_drop_logger=reasoning_drop_logger,
                 **mapping_special_params,
@@ -6479,7 +6505,7 @@ def completion(
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
-            special_params=provider_params,
+            special_params=dict(cleaned_provider_params),
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
             remove_sensitive_keys=True,
@@ -6583,6 +6609,12 @@ def completion(
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
                     *litellm.types.utils.provider_oauth_litellm_params,
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
+                    "vertex_credentials",
+                    "vertex_ai_credentials",
+                    "vertex_project",
+                    "vertex_ai_project",
+                    "vertex_location",
+                    "vertex_ai_location",
                     "github_copilot_auth_type",
                     "github_copilot_host",
                     "github_copilot_app_id",
@@ -6664,6 +6696,40 @@ def completion(
                 prompt_tokens=admission_input_tokens(
                     cast(Mapping[str, object], kwargs)  # cast-ok: completion's **kwargs is untyped
                 ),
+            )
+
+        if bridges_to_interactions_api:
+            return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+                interactions_bridge.dispatch_interactions_bridge(
+                    model=model,
+                    messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # untyped messages local
+                    headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped headers local
+                    model_response=model_response,
+                    api_key=api_key,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_key local
+                    api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
+                    acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
+                    logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
+                    processed_params=pre_process_non_default_params(
+                        model=model,
+                        passed_params=optional_param_args,
+                        special_params=dict(cleaned_provider_params),
+                        custom_llm_provider=custom_llm_provider,
+                        additional_drop_params=kwargs.get("additional_drop_params"),
+                        remove_sensitive_keys=False,
+                        add_provider_specific_params=True,
+                        provider_config=provider_config,
+                    ),
+                    stream_options=None if replays_stream else stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
+                    litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
+                    raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
+                    timeout=timeout,
+                    client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
+                    custom_llm_provider=custom_llm_provider,
+                    stream=dispatch_stream,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream local
+                ),
+                partial(_replayed_stream, logging_obj=logging, stream_options=stream_options)
+                if replays_stream
+                else None,
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
@@ -6797,7 +6863,7 @@ def completion(
             organization=organization,
             provider_config=provider_config,
             request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **cleaned_provider_params})
             ),
             shared_session=shared_session,
             stream=dispatch_stream,

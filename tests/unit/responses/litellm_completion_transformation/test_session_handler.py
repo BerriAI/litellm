@@ -2223,7 +2223,9 @@ _ARN_ROUTE_THAT_FILLS: Final = {
 
 def _stored_turns(*spend_logs: dict[str, object]) -> StoredTurns:
     return StoredTurns(
-        spend_logs=cast(tuple[SpendLogsPayload, ...], spend_logs),  # cast-ok: rows hold only the fields the replay reads
+        spend_logs=cast(
+            tuple[SpendLogsPayload, ...], spend_logs
+        ),  # cast-ok: rows hold only the fields the replay reads
         proxy_server_requests=tuple(as_str_mapping(spend_log["proxy_server_request"]) for spend_log in spend_logs),
     )
 
@@ -2305,7 +2307,9 @@ async def test_a_stored_blank_user_turn_replays_the_placeholder_its_model_saw(
 
 @pytest.mark.asyncio
 async def test_a_stored_blank_user_turn_replays_as_sent_when_its_model_accepts_a_prefill() -> None:
-    replay: Final = await _replay_of_a_blank_follow_up(_ROUTE_THAT_ACCEPTS_A_PREFILL, [{"role": "user", "content": "   "}])
+    replay: Final = await _replay_of_a_blank_follow_up(
+        _ROUTE_THAT_ACCEPTS_A_PREFILL, [{"role": "user", "content": "   "}]
+    )
 
     assert replay == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "   "), ("assistant", "Eight.")]
 

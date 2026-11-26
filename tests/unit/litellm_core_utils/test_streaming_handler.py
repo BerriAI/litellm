@@ -11552,3 +11552,33 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+def test_signature_only_thinking_blocks_chunk_survives_stream_wrapper() -> None:
+    sig_chunk: Final = ModelResponseStream(
+        id="chatcmpl-sig-test",
+        model="gemini-3-flash-preview",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "sig_only_xyz"}]),
+            )
+        ],
+    )
+    end_chunk: Final = ModelResponseStream(
+        id="chatcmpl-sig-test",
+        model="gemini-3-flash-preview",
+        choices=[StreamingChoices(index=0, delta=Delta(content="42"), finish_reason="stop")],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([sig_chunk, end_chunk]),
+        model="gemini-3-flash-preview",
+        logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+    emitted: Final = list(wrapper)
+    rebuilt: Final = litellm.stream_chunk_builder(emitted)
+    assert rebuilt is not None
+    assert rebuilt.choices[0].message.thinking_blocks == [  # pyright: ignore[reportAttributeAccessIssue]  # Choices vs StreamingChoices union
+        {"type": "thinking", "thinking": "", "signature": "sig_only_xyz"}
+    ]

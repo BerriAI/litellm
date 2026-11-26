@@ -1766,6 +1766,9 @@ def _text_chat_model_max_output_tokens(
     return _catalog_capped_output_limit(info["key"], deployment_model_info or info)
 
 
+text_chat_model_max_output_tokens: Final = _text_chat_model_max_output_tokens
+
+
 def _with_default_output_budget(
     request_body: RequestBody, model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> RequestBody:

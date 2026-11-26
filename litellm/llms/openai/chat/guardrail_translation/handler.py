@@ -327,13 +327,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name,
-        and the tools a replayed tool_search_output loads)."""
-        names: Final[list[str]] = []
-        for tool in list_field(data, "tools"):
-            if isinstance(tool, dict) and tool.get("type") == "function":
-                fn = tool.get("function")
-                if isinstance(fn, dict) and fn.get("name"):
-                    names.append(str(fn["name"]))
+        Gemini-native tools[].functionDeclarations[].name, and the tools a replayed tool_search_output loads)."""
+        names: Final[list[str]] = list(chain.from_iterable(map(_chat_tool_names, list_field(data, "tools"))))
         for fn in list_field(data, "functions"):
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
@@ -1519,6 +1514,27 @@ class _BlockedChunk(TypedDict):
     model: ReadOnly[str]
     choices: ReadOnly[tuple[_BlockedChunkChoice, ...]]
     usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
+
+
+_TOOL_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _tool_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _TOOL_FIELDS.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+def _chat_tool_names(tool: object) -> tuple[str, ...]:
+    fields: Final = _tool_fields(tool)
+    function_name: Final = _tool_fields(fields.get("function")).get("name")
+    declarations: Final = list_field(fields, "functionDeclarations") or list_field(fields, "function_declarations")
+    return (
+        *((str(function_name),) if fields.get("type") == "function" and function_name else ()),
+        *((str(server),) if fields.get("type") == "mcp_server" and (server := fields.get("name")) else ()),
+        *(name for declaration in declarations if (name := openai_tool_name(declaration))),
+    )
 
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
