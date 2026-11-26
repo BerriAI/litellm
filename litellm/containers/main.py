@@ -15,6 +15,7 @@ from litellm.containers.utils import (
     ContainerRequestUtils,
     decode_managed_container_id_for_request,
 )
+from litellm.litellm_core_utils.call_kwargs import logging_obj_of
 from litellm.litellm_core_utils.core_helpers import (
     SupportsGet,
     json_contains,
@@ -23,7 +24,6 @@ from litellm.litellm_core_utils.core_helpers import (
     set_item,
     subscript,
 )
-from litellm.litellm_core_utils.call_kwargs import logging_obj_of
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.main import base_llm_http_handler
 from litellm.types.containers.main import (
