@@ -200,6 +200,17 @@ def _filename_from_uri(uri: str) -> str:
     return parsed_uri.path.split("/")[-1] or parsed_uri.netloc
 
 
+def _filename_from_location_uri(uri: str) -> str:
+    if uri.startswith("s3://"):
+        bucket, _, key = uri.removeprefix("s3://").partition("/")
+        return key.rstrip("/").split("/")[-1] or bucket
+    try:
+        parsed_uri: Final = urlparse(uri)
+    except ValueError:
+        return uri
+    return parsed_uri.path.rstrip("/").split("/")[-1] or parsed_uri.netloc
+
+
 def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | None:
     custom_document_id: Final = (location.get("customDocumentLocation") or {}).get("id")
     if custom_document_id:
@@ -212,7 +223,7 @@ def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | No
     document_uri: Final = next((uri for uri in location_uris if uri), None)
     if document_uri is None:
         return None
-    filename: Final = _filename_from_uri(document_uri)
+    filename: Final = _filename_from_location_uri(document_uri)
     return (document_uri, filename) if filename else None
 
 
