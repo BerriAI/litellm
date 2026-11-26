@@ -186,10 +186,19 @@ def _present(values: Iterable[str | None]) -> Iterator[str]:
 def _budgeted_members(
     candidates: Iterable[tuple[LiteLLM_TeamMembership, LiteLLM_BudgetTable | None]], now: datetime
 ) -> Iterator[tuple[LiteLLM_TeamMembership, TeamMemberBudget]]:
-    for membership, team_default in candidates:
-        budget: Final = team_member_budget(membership=membership, team_default_budget=team_default, now=now)
-        if budget is not None:
-            yield membership, budget
+    resolved: Final = (
+        (membership, team_member_budget(membership=membership, team_default_budget=team_default, now=now))
+        for membership, team_default in candidates
+    )
+    return ((membership, budget) for membership, budget in resolved if budget is not None)
+
+
+def _swept_member_spend(membership: LiteLLM_TeamMembership, counters: Mapping[str, float | None] | None) -> float:
+    stored_spend: Final = membership.spend or 0.0
+    counter_spend: Final = (
+        counters.get(team_member_counter(membership.user_id, membership.team_id)) if counters is not None else None
+    )
+    return max(counter_spend, stored_spend) if counter_spend is not None else stored_spend
 
 
 def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrismaTable[_TableRowT]:
@@ -4794,21 +4803,15 @@ class PrometheusLogger(CustomLogger):
         counters: Final = await io.read_counters(
             tuple(team_member_counter(membership.user_id, membership.team_id) for membership, _ in budgeted)
         )
+        aliases: Final = MappingProxyType({team_id: team.team_alias for team_id, team in teams.items()})
         for membership, budget in budgeted:
-            team: Final = teams.get(membership.team_id)
-            stored_spend: Final = membership.spend or 0.0
-            counter_spend: Final = (
-                counters.get(team_member_counter(membership.user_id, membership.team_id))
-                if counters is not None
-                else None
-            )
             self._set_team_member_budget_metrics(
                 team_id=membership.team_id,
-                team_alias=team.team_alias if team is not None else None,
+                team_alias=aliases.get(membership.team_id),
                 user_id=membership.user_id,
                 user_email=emails.get(membership.user_id),
                 max_budget=budget.max_budget,
-                spend=max(counter_spend, stored_spend) if counter_spend is not None else stored_spend,
+                spend=_swept_member_spend(membership, counters),
                 budget_reset_at=budget.budget_reset_at,
                 now=now,
             )
