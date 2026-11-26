@@ -329,7 +329,7 @@ class AzureAIAgentsConfig(BaseConfig):
         timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> Any:
         """
         Dispatch method for Azure Foundry Agents completion.

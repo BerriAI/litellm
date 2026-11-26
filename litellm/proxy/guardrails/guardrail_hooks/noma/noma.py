@@ -174,7 +174,7 @@ class NomaGuardrail(CustomGuardrail):
     ) -> str | None:
         """Shared logic for processing user message checks"""
         start_time: Final = datetime.now()
-        extra_data: Final = self.get_guardrail_dynamic_request_body_params(request_data)
+        extra_data: Final[dict[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data)
 
         messages: Final = request_data.get("messages") or []
         if not messages:
@@ -284,7 +284,7 @@ class NomaGuardrail(CustomGuardrail):
         event_type: GuardrailEventHooks | None,
     ) -> str:
         start_time: Final = datetime.now()
-        extra_data: Final = self.get_guardrail_dynamic_request_body_params(request_data)
+        extra_data: Final[dict[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data)
 
         payload: Final = {
             "input": [
@@ -749,7 +749,7 @@ class NomaGuardrail(CustomGuardrail):
         extra_data: Mapping[str, object],
     ) -> object:
         call_id: Final = request_data.get("litellm_call_id")
-        headers: Final = {
+        headers: Final[dict[str, object]] = {  # mutable-ok: built here, sent as is
             **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             **({"X-Noma-Request-ID": call_id} if call_id else {}),
         }

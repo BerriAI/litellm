@@ -27,9 +27,9 @@ class OpenAILikeBase:
         api_key: str | None,
         api_base: str | None,
         endpoint_type: Literal["chat_completions", "embeddings"],
-        headers: dict[str, str] | None,
+        headers: dict[str, object] | None,  # mutable-ok: dict-typed callees take it
         custom_endpoint: bool | None,
-    ) -> tuple[str, dict[str, str]]:
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: dict-typed callees take it
         if api_key is None and headers is None:
             raise OpenAILikeError(
                 status_code=400,

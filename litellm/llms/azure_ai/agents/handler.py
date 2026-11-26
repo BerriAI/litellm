@@ -258,8 +258,8 @@ class AzureAIAgentsHandler:
         api_base: str,
         api_key: str,
         optional_params: dict[str, object],
-        headers: dict[str, str] | None,
-    ) -> tuple[dict[str, str], object, str, object, str]:
+        headers: dict[str, object] | None,  # mutable-ok: dict-typed callees take it
+    ) -> tuple[dict[str, object], object, str, object, str]:  # mutable-ok: dict-typed callees take it
         """Prepare common parameters for completion.
 
         Azure Foundry Agents API uses Bearer token authentication:
@@ -306,7 +306,7 @@ class AzureAIAgentsHandler:
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: HTTPHandler | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
         from litellm.llms.custom_httpx.http_handler import get_httpx_client
@@ -428,7 +428,7 @@ class AzureAIAgentsHandler:
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> ModelResponse:
         """Execute asynchronous completion using Azure Agent Service."""
         import litellm
@@ -552,7 +552,7 @@ class AzureAIAgentsHandler:
         optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
         import litellm
