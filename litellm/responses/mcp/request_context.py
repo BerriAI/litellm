@@ -17,15 +17,19 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
 if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
-async def resolve_inference_mcp_auth(auth: "UserAPIKeyAuth | None") -> "UserAPIKeyAuth | None":
-    if auth is None:
+async def resolve_inference_mcp_auth(raw_auth: object) -> "UserAPIKeyAuth | None":
+    if raw_auth is None:
         return None
     from litellm.proxy.mcp_server.ui_session_utils import acting_user_auth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
+    auth: Final = require_attributes(raw_auth, UserAPIKeyAuth, "dashboard_model_access_auth")
     session: Final = auth.dashboard_model_access_auth()
     if session.mcp_explicit_grants_only or any(
         scope is not None

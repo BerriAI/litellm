@@ -448,7 +448,10 @@ def _should_run_cooldown_logic(
         )
         return False
 
-    if isinstance(original_exception, (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError)):
+    if isinstance(
+        original_exception,
+        (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError, litellm.DocumentFetchError),
+    ):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )

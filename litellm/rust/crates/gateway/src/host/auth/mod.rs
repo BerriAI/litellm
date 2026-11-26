@@ -17,11 +17,11 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use litellm_config::{Config, LitellmRole};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey, KeyAuthenticator, SystemClock};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks,
+    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks, Refreshed,
     RouteGroups, Rows, Settings, Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
     body::Params,
     identity::{
@@ -33,7 +33,7 @@ use litellm_gateway_auth_core::{
     },
     record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
 };
-use litellm_redis_store::auth_cache::CachedKey;
+use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
 pub use key::Key;
@@ -85,7 +85,7 @@ fn declined<T>(step: &'static str) -> Result<T, Error> {
     Err(Error::HostDeclined)
 }
 
-fn keyed(key: &CachedKey) -> Result<Option<Keyed<Key>>, Error> {
+fn keyed(key: &KeyEntry) -> Result<Option<Keyed<Key>>, Error> {
     match key::read(key) {
         Ok(key) => Ok(Some(key)),
         Err(field) => declined(field),
@@ -269,7 +269,7 @@ impl AuthHost for NativeAuthHost {
         declined("resolve_user_identity")
     }
 
-    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<TeamRecord>>, Error> {
+    async fn cached_team(&self, _: &str) -> Result<Option<Refreshed<TeamRecord>>, Error> {
         declined("cached_team")
     }
 
@@ -655,7 +655,7 @@ mod tests {
                 caller.hash(),
                 caller.role(),
                 key.record.expires,
-                key.models().to_vec(),
+                crate::host::allowed_models(&caller),
             ),
             (
                 Some(&Token::new(VIRTUAL_KEY).hash()),

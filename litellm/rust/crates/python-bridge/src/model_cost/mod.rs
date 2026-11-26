@@ -12,6 +12,7 @@ use litellm_model_catalog::{
     CapabilityRules, CostMap, FallbackRule, IntegrityLimits, Landed, Pass, Placed, PricingContext,
     Provenance, RegistrationTable, Registrations, Store, write_pass,
 };
+use litellm_model_catalog_refresh::{Refreshed, refresh};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyMapping};
@@ -103,6 +104,62 @@ pub(crate) struct NativeRejected {
     integrity: bool,
 }
 
+/// A fetched document that passed its checks and is installed nowhere yet
+#[pyclass(
+    frozen,
+    name = "CostMapRefreshed",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct CostMapRefreshed(CostMap);
+
+/// A refresh that installed nothing, with why in the words every host reports
+#[pyclass(frozen, name = "CostMapKept", module = "litellm.rust_bridge._native")]
+pub(crate) struct CostMapKept {
+    /// The cause as the failure itself tells it, for a log line
+    #[pyo3(get)]
+    detail: String,
+    /// What a reload answers its caller
+    #[pyo3(get)]
+    reason: String,
+    /// What the source info shows while the bundled or last document stays
+    #[pyo3(get)]
+    fallback_reason: String,
+    /// Another fetch could succeed. Only the attempt limit ended this one
+    #[pyo3(get)]
+    retryable: bool,
+}
+
+/// Ends a blocking refresh from another thread. A daemon thread that comes back from native code once the
+/// interpreter is finalizing aborts the process, so interpreter exit calls `stop`, which returns only after the
+/// refresh has left native code
+#[pyclass(
+    frozen,
+    name = "CostMapRefreshStop",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct CostMapRefreshStop {
+    stopped: tokio::sync::watch::Sender<bool>,
+    /// Read by a refresh for as long as it is in native code, and written by `stop` to wait for it
+    in_native: Arc<parking_lot::RwLock<()>>,
+}
+
+#[pymethods]
+impl CostMapRefreshStop {
+    #[new]
+    fn new() -> Self {
+        Self {
+            stopped: tokio::sync::watch::Sender::new(false),
+            in_native: Arc::default(),
+        }
+    }
+
+    fn stop(&self, py: Python<'_>) {
+        self.stopped.send_replace(true);
+        let in_native = self.in_native.clone();
+        litellm_host_python::release_gil(py, move || drop(in_native.write()));
+    }
+}
+
 /// A finished registration pass, with the registrations no built-in row matched, by registered key
 #[pyclass(
     frozen,
@@ -145,19 +202,23 @@ pub(crate) struct NativeProvenance {
 #[pymethods]
 impl NativeModelCostMap {
     /// Starts from the bundled document. A fetched document with fewer than `min_model_count` models, or fewer than
-    /// `max_shrink_ratio` times the bundled count, is rejected
+    /// `max_shrink_ratio` times the bundled count, is rejected. A limit left out is `IntegrityLimits::DEFAULT`'s
     #[staticmethod]
-    fn bundled(min_model_count: i64, max_shrink_ratio: f64) -> PyResult<Self> {
-        let min_model_count = usize::try_from(min_model_count).map_err(|_| {
-            PyValueError::new_err(format!(
-                "min_model_count must be 0 or more, got {min_model_count}"
-            ))
-        })?;
-        let limits = IntegrityLimits::new(min_model_count, max_shrink_ratio).ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "max_shrink_ratio must be between 0 and 1, got {max_shrink_ratio}"
-            ))
-        })?;
+    #[pyo3(signature = (min_model_count = None, max_shrink_ratio = None))]
+    fn bundled(min_model_count: Option<i64>, max_shrink_ratio: Option<f64>) -> PyResult<Self> {
+        let min_model_count = min_model_count
+            .map(|count| {
+                usize::try_from(count).map_err(|_| {
+                    PyValueError::new_err(format!("min_model_count must be 0 or more, got {count}"))
+                })
+            })
+            .transpose()?;
+        let limits =
+            IntegrityLimits::over_default(min_model_count, max_shrink_ratio).map_err(|ratio| {
+                PyValueError::new_err(format!(
+                    "max_shrink_ratio must be between 0 and 1, got {ratio}"
+                ))
+            })?;
         Ok(Self {
             inputs: RwLock::new(Inputs {
                 cost_map: CostMap::bundled(),
@@ -176,6 +237,78 @@ impl NativeModelCostMap {
             Ok(cost_map) => self.install_document(py, cost_map),
             Err(error) => rejected(py, &error),
         }
+    }
+
+    #[getter]
+    fn min_model_count(&self) -> usize {
+        self.limits.min_model_count()
+    }
+
+    #[getter]
+    fn max_shrink_ratio(&self) -> f64 {
+        self.limits.min_reference_ratio()
+    }
+
+    /// Fetches and reads the document on a throwaway runtime, off the GIL, and installs nothing. The result is a
+    /// `CostMapRefreshed` or a `CostMapKept`, or `None` once `stop` was called
+    fn refresh_blocking(
+        &self,
+        py: Python<'_>,
+        source: PyRef<'_, NativeCostMapSource>,
+        policy: PyRef<'_, NativeFetchPolicy>,
+        stop: PyRef<'_, CostMapRefreshStop>,
+    ) -> PyResult<Py<PyAny>> {
+        let _in_native = stop.in_native.read();
+        if *stop.stopped.borrow() {
+            return Ok(py.None());
+        }
+        let mut stopped = stop.stopped.subscribe();
+        let (connection, policy, limits) = (source.0.clone(), policy.0, self.limits);
+        let url = connection.url().to_owned();
+        let logger = crate::logger::capture(py);
+        let refreshed = litellm_host_python::release_gil(py, move || {
+            logger.scope(|| {
+                let source = connection.unpooled(policy)?;
+                litellm_host_python::run_isolated(async {
+                    tokio::select! {
+                        refreshed = refresh(&source, limits) => Some(refreshed),
+                        _ = stopped.wait_for(|stopped| *stopped) => None,
+                    }
+                })
+                .map_err(PyErr::from)
+            })
+        })?;
+        match refreshed {
+            Some(refreshed) => Outcome { refreshed, url }
+                .into_pyobject(py)
+                .map(Bound::unbind),
+            None => Ok(py.None()),
+        }
+    }
+
+    /// `refresh_blocking` on the shared runtime with a pooled client, for workers after the fork
+    fn refresh<'py>(
+        &self,
+        py: Python<'py>,
+        source: PyRef<'_, NativeCostMapSource>,
+        policy: PyRef<'_, NativeFetchPolicy>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let url = source.0.url().to_owned();
+        let (source, limits) = (source.0.pooled(policy.0)?, self.limits);
+        crate::execution::run_async_value(py, async move {
+            Ok(Outcome {
+                refreshed: refresh(&source, limits).await,
+                url,
+            })
+        })
+    }
+
+    fn install_refreshed(
+        &self,
+        py: Python<'_>,
+        refreshed: PyRef<'_, CostMapRefreshed>,
+    ) -> PyResult<Py<PyAny>> {
+        self.install_document(py, refreshed.0.clone())
     }
 
     /// A caller's document as a table, read without size limits and installed nowhere
@@ -490,6 +623,33 @@ fn built(py: Python<'_>, cost_map: &CostMap) -> PyResult<NativeInstalled> {
     })
 }
 
+struct Outcome {
+    refreshed: Refreshed,
+    url: String,
+}
+
+impl<'py> IntoPyObject<'py> for Outcome {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        match self.refreshed.or_kept(&self.url) {
+            Ok(cost_map) => Bound::new(py, CostMapRefreshed(cost_map)).map(Bound::into_any),
+            Err(kept) => Bound::new(
+                py,
+                CostMapKept {
+                    detail: kept.detail,
+                    reason: kept.reason,
+                    fallback_reason: kept.fallback_reason,
+                    retryable: kept.retryable,
+                },
+            )
+            .map(Bound::into_any),
+        }
+    }
+}
+
 fn rejected(py: Python<'_>, error: &litellm_model_catalog::Error) -> PyResult<Py<PyAny>> {
     let rejected = NativeRejected {
         reason: litellm_error::Report::new(error).to_string(),
@@ -555,7 +715,7 @@ def write(rows, written):
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let outcome = Python::attach(|py| -> PyResult<(Vec<Option<String>>, f64)> {
-                let cost_map = Py::new(py, NativeModelCostMap::bundled(0, 0.0)?)?;
+                let cost_map = Py::new(py, NativeModelCostMap::bundled(Some(0), Some(0.0))?)?;
                 let module_name = std::ffi::CString::new(host::MODULE).unwrap();
                 let host =
                     PyModule::from_code(py, HOST, c_str!("host_model_cost.py"), &module_name)?;
@@ -641,7 +801,7 @@ def write(key, row):
         let _host = HOST_MODULE.lock().unwrap_or_else(PoisonError::into_inner);
         Python::initialize();
         Python::attach(|py| {
-            let cost_map = NativeModelCostMap::bundled(0, 0.0)?;
+            let cost_map = NativeModelCostMap::bundled(Some(0), Some(0.0))?;
             let module_name = std::ffi::CString::new(host::MODULE).unwrap();
             let host =
                 PyModule::from_code(py, PRICING_HOST, c_str!("host_model_cost.py"), &module_name)?;
@@ -736,7 +896,7 @@ def write(key, row):
         let _host = HOST_MODULE.lock().unwrap_or_else(PoisonError::into_inner);
         Python::initialize();
         let outcome = Python::attach(|py| -> PyResult<(Option<f64>, Option<f64>)> {
-            let cost_map = Py::new(py, NativeModelCostMap::bundled(0, 0.0)?)?;
+            let cost_map = Py::new(py, NativeModelCostMap::bundled(Some(0), Some(0.0))?)?;
             let module_name = std::ffi::CString::new(host::MODULE).unwrap();
             let host =
                 PyModule::from_code(py, PRICING_HOST, c_str!("host_model_cost.py"), &module_name)?;

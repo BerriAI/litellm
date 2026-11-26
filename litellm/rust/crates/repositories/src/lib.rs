@@ -72,4 +72,4 @@ pub use team_membership::{
     AddedMember, MemberAdd, MemberBudget, NewMemberBudget, TeamMembership, TeamMembershipRepository,
 };
 pub use ui_settings::UiSettingsRepository;
-pub use user::{NewUserDefaults, SignIn, User, UserRepository};
+pub use user::{NewUserDefaults, OrganizationMembership, SignIn, User, UserRepository};

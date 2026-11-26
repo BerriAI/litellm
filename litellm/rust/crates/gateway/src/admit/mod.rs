@@ -14,9 +14,8 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::{Allowlists, authz::Layer};
+use litellm_gateway_auth_core::{Allowlists, authz::ModelList};
 use litellm_gateway_inference::{JsonObject, routing};
-use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
@@ -77,9 +76,6 @@ pub struct Admit {
     /// Each deployment the router built from `config`, since only the router knows which provider
     /// serves each one.
     deployed: Vec<Deployed>,
-    /// The model group of each deployment whose model the cost map holds as another model's alias,
-    /// with the name it holds it under.
-    aliased: Vec<(String, Box<str>)>,
     /// The router the native app serves through, which says where a request for a name can be
     /// served and what a call served there asks of its host.
     router: Router,
@@ -122,18 +118,6 @@ impl Admit {
             .router
             .registry()
             .deployments(&DeploymentFilter::default());
-        let cost_map = CostMap::bundled();
-        let aliased = deployments
-            .iter()
-            .filter_map(|deployment| {
-                let alias = checks::alias(
-                    cost_map.catalog(),
-                    deployment.provider(),
-                    &deployment.params.model,
-                )?;
-                Some((deployment.model_name.clone(), alias))
-            })
-            .collect();
         let deployed = deployments
             .iter()
             .map(|deployment| {
@@ -150,7 +134,6 @@ impl Admit {
             environment: state.variables.clone(),
             stored,
             auth: state.auth(config),
-            aliased,
             host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
@@ -171,7 +154,6 @@ impl Admit {
             environment: Environment::default(),
             stored: StoredConfig::Unused,
             deployed,
-            aliased: Vec::new(),
             host: NativeHost::default(),
             inference: None,
         }
@@ -184,7 +166,7 @@ impl Admit {
         let model = fields.get("model")?.as_str()?;
         let allowed = match &self.inference {
             Some(inference) => routing::allows(inference, caller, model),
-            None => host::layers(caller).all(|Layer::Key(models)| models.is_empty()),
+            None => host::layers(caller).all(|layer| layer.list() == ModelList::Every),
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }

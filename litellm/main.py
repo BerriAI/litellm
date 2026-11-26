@@ -257,9 +257,12 @@ from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    joined,
     keyword_arguments,
     normalize_drop_params,
+    require_attributes,
     safe_deep_copy,
+    subscript,
     without,
 )
 from .litellm_core_utils.fallback_utils import (
@@ -1589,6 +1592,10 @@ def _replayed_as_stream(
     return _replayed_when_done(dispatched, replay)
 
 
+class _MergesMapping(Protocol):
+    def update(self, other: object, /) -> object: ...
+
+
 class _ProxyAuthHeadersProvider(Protocol):
     def get_auth_headers(self) -> Mapping[str, str]: ...
 
@@ -1657,7 +1664,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     dynamic_params = False
@@ -1792,7 +1799,7 @@ def _complete_azure_text(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     api_type: Final = get_secret_str("AZURE_API_TYPE") or "azure"
@@ -3937,7 +3944,7 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
             if "extra_body" in optional_params:
-                optional_params[k].update(v)
+                require_attributes(optional_params[k], _MergesMapping, "update").update(v)
             else:
                 optional_params[k] = v
         elif k not in optional_params:
@@ -4044,7 +4051,7 @@ def _complete_vercel_ai_gateway(
         if k == "extra_body":
             # we use openai 'extra_body' to pass vercel specific params - providerOptions
             if "extra_body" in optional_params:
-                optional_params[k].update(v)
+                require_attributes(optional_params[k], _MergesMapping, "update").update(v)
             else:
                 optional_params[k] = v
         elif k not in optional_params:
@@ -4147,7 +4154,7 @@ def _complete_vertex_ai_beta(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     vertex_ai_project: Final = (
@@ -4213,7 +4220,7 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -4396,7 +4403,7 @@ def _complete_predibase(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     tenant_id: Final = (
@@ -4456,7 +4463,7 @@ def _complete_text_completion_codestral(
     logging: Final = ctx.logging
     messages: Final = ctx.messages
     model: Final = ctx.model
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -4508,7 +4515,7 @@ def _complete_text_completion_inception(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     text_completion: Final = ctx.text_completion
     timeout: Final = ctx.timeout
 
@@ -4701,7 +4708,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     messages: Final = ctx.messages
     model = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     provider_config = ctx.provider_config
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
@@ -4913,7 +4920,7 @@ def _complete_watsonx_text(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
@@ -5501,7 +5508,7 @@ def _complete_custom(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     )
 
     """
-    prompt: Final = " ".join([message["content"] for message in messages])
+    prompt: Final = joined(" ", [subscript(message, "content") for message in messages])
     resp: Final = litellm.module_level_client.post(
         url,
         headers=headers,
@@ -6806,6 +6813,7 @@ def completion(
             timeout=timeout,
             timeout_for_optional_params=timeout_for_optional_params,
             top_p=top_p,
+            unnarrowed_optional_params=chat_optional_params,
         )
         if custom_llm_provider == "azure":
             # azure configs
@@ -7414,18 +7422,19 @@ def embedding(
         "encoding_format",
     ]
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
+    request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
     non_default_params: Final = filter_out_litellm_params(
-        kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        request_kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**request_kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
-        litellm_params=GenericLiteLLMParams(**kwargs),
+        litellm_params=GenericLiteLLMParams(**request_kwargs),
     )
 
     if dynamic_api_key is not None:
@@ -7447,7 +7456,7 @@ def embedding(
     )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
-    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
+    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, request_kwargs, "embedding"))
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -9084,7 +9093,7 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**_REQUEST_KWARGS_ADAPTER.validate_python(kwargs))
     configured_base_model: Final = litellm_params_dict.get("base_model")
     pricing_model: Final = (
         configured_base_model.removeprefix(f"{custom_llm_provider}/")
@@ -9436,7 +9445,11 @@ def speech(
     )
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
+    litellm_params_dict: Final = get_litellm_params(
+        metadata=metadata,
+        api_key=api_key or dynamic_api_key,
+        **_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+    )
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(

@@ -5,12 +5,14 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
+use litellm_config::LitellmRole;
 use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
+    authz::ModelList,
 };
-use litellm_python_compat::{Value, json};
-use litellm_redis_store::auth_cache::{Bag, CachedKey, CachedObjectPermission, Lists};
+use litellm_python_compat::{Value, datetime::IsoDateTime, json};
+use litellm_redis_store::auth_cache::{Bag, KeyEntry, Lists, ModelRegion, ObjectPermissionEntry};
 use serde::Deserialize;
 
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
@@ -27,16 +29,6 @@ macro_rules! carried {
 
 /// The key type the proxy gives a key generated without one, which reaches every route.
 const DEFAULT_KEY_TYPE: &str = "default";
-
-/// The `models` entries the proxy reads through a team or a user, which a key with neither does
-/// not have.
-const OWNER_MODELS: [&str; 2] = ["all-team-models", "no-default-models"];
-
-/// Whether the auth core's model rule reads a `models` entry as the proxy does: a name, an
-/// access group or `*`. A pattern like `anthropic/*` the proxy matches against providers is not read.
-fn is_read(model: &str) -> bool {
-    !OWNER_MODELS.contains(&model) && (model == "*" || !model.contains('*'))
-}
 
 pub(super) trait Carried {
     fn is_carried(&self) -> bool;
@@ -59,7 +51,15 @@ macro_rules! carried_when_held {
     };
 }
 
-carried_when_held!(String, i64, f64, Timestamp, CachedObjectPermission);
+carried_when_held!(
+    String,
+    i64,
+    f64,
+    IsoDateTime,
+    LitellmRole,
+    ModelRegion,
+    ObjectPermissionEntry
+);
 
 impl<T> Carried for Vec<T> {
     fn is_carried(&self) -> bool {
@@ -177,8 +177,8 @@ struct Held {
 /// project fields are only filled for a key that names one, and the last group
 /// only describes the key or the request that cached it. A field this build does not name, which
 /// a newer pod wrote, is not asked about either unless that pod wrote it empty.
-fn held(key: &CachedKey) -> Held {
-    let CachedKey {
+fn held(key: &KeyEntry) -> Held {
+    let KeyEntry {
         token: _,
         key_name: _,
         key_alias: _,
@@ -288,7 +288,7 @@ fn held(key: &CachedKey) -> Held {
     let other_key_type = key_type
         .as_deref()
         .is_some_and(|key_type| key_type != DEFAULT_KEY_TYPE);
-    let unread_models = models.iter().any(|model| !is_read(model));
+    let unread_models = ModelList::read(models) == ModelList::Unread;
     let ui_team = team_id.as_deref() == Some(UI_TEAM);
     let unread = &unread.iter().any(|(_, value)| value.is_carried());
     Held {
@@ -363,7 +363,7 @@ fn expiry(text: &str) -> Result<Timestamp, &'static str> {
 
 /// `key` as the core takes it. `Err` names a field that holds something no host step is asked
 /// about. A blocked key is the core's to deny, whatever else it holds.
-pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
+pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
     let blocked = key.blocked == Some(true);
     let Held {
         unasked,
@@ -456,13 +456,13 @@ mod tests {
     }"#;
 
     /// The cached key with `change` set on it.
-    fn cached(change: Fields) -> CachedKey {
+    fn cached(change: Fields) -> KeyEntry {
         let mut entry: Fields = serde_json::from_str(CACHED).unwrap();
         entry
             .as_object_mut()
             .unwrap()
             .extend(change.as_object().unwrap().clone());
-        CachedKey::from_value(&json::loads(&entry.to_string()).unwrap()).unwrap()
+        KeyEntry::from_value(&json::loads(&entry.to_string()).unwrap()).unwrap()
     }
 
     #[rstest]

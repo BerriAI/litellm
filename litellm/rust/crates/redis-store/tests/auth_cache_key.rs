@@ -5,22 +5,14 @@
 
 mod support;
 
-use std::time::Duration;
-
 use jiff::Timestamp;
-use litellm_redis_client::commands;
-use litellm_redis_store::{
-    FromValue, IntoValue,
-    auth_cache::{
-        AuthCache, AuthObject, CachedKey, CachedMember, CachedObjectPermission, Lists, MemberRole,
-        Settings,
-    },
+use litellm_python_compat::datetime::IsoDateTime;
+use litellm_redis_store::auth_cache::{
+    AuthObject, Dict, KeyEntry, MemberEntry, MemberRole, ObjectPermissionEntry,
 };
-use litellm_redis_testing::{RedisDeployment, Topology};
+use litellm_redis_testing::Topology;
 use rstest::rstest;
-use support::{connect, remote};
-
-const TTL: Duration = Duration::from_secs(60);
+use support::auth_cache::round_trip;
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const REWRITTEN: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
@@ -71,8 +63,10 @@ const PERMISSION_ENTRY: &str = concat!(
     r#" "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null}"#,
 );
 
-fn utc(text: &str) -> Option<Timestamp> {
-    Some(text.parse().unwrap())
+fn utc(text: &str) -> Option<IsoDateTime> {
+    Some(IsoDateTime::utc(
+        text.parse::<Timestamp>().unwrap().as_microsecond(),
+    ))
 }
 
 #[rstest]
@@ -80,28 +74,13 @@ fn utc(text: &str) -> Option<Timestamp> {
 async fn a_key_entry_python_wrote_is_read_typed_and_written_back_in_the_same_bytes(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
-    let deployment = RedisDeployment::start(topology).await.unwrap();
-    let raw = connect(&deployment);
-    let cache = AuthCache::new(Some(remote(connect(&deployment))), Settings::default());
-    raw.send(commands::set(TOKEN, TEAM_ENTRY, TTL))
-        .await
-        .unwrap();
-
-    let held = cache
-        .get(None, &AuthObject::Key(TOKEN.to_owned()))
-        .await
-        .unwrap()
-        .unwrap();
-    let key = CachedKey::from_value(&held).unwrap();
-    cache
-        .set(
-            None,
-            &AuthObject::Key(REWRITTEN.to_owned()),
-            key.clone().into_value(),
-            Some(TTL),
-        )
-        .await
-        .unwrap();
+    let (key, written) = round_trip::<KeyEntry>(
+        topology,
+        AuthObject::Key(TOKEN.to_owned()),
+        AuthObject::Key(REWRITTEN.to_owned()),
+        TEAM_ENTRY,
+    )
+    .await;
 
     assert_eq!(
         (
@@ -117,10 +96,7 @@ async fn a_key_entry_python_wrote_is_read_typed_and_written_back_in_the_same_byt
                 .and_then(|permission| permission.mcp_servers),
             key.last_refreshed_at,
             key.unread,
-            raw.send(commands::get::<String>(REWRITTEN))
-                .await
-                .unwrap()
-                .as_deref(),
+            written.as_deref(),
         ),
         (
             Some(TOKEN),
@@ -130,7 +106,7 @@ async fn a_key_entry_python_wrote_is_read_typed_and_written_back_in_the_same_byt
             utc("2026-11-19T10:00:00.123Z"),
             Some(5),
             Some(Vec::new()),
-            Some(CachedMember {
+            Some(MemberEntry {
                 user_id: Some("kv-user".to_owned()),
                 user_email: None,
                 role: MemberRole::Admin,
@@ -149,35 +125,24 @@ async fn a_key_entry_python_wrote_is_read_typed_and_written_back_in_the_same_byt
 async fn an_object_permission_entry_python_wrote_is_written_back_in_the_same_bytes(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
-    let deployment = RedisDeployment::start(topology).await.unwrap();
-    let raw = connect(&deployment);
-    let cache = AuthCache::new(Some(remote(connect(&deployment))), Settings::default());
-    let read = AuthObject::ObjectPermission("kv-permission".to_owned());
-    let rewritten = AuthObject::ObjectPermission("rewritten".to_owned());
-    raw.send(commands::set(&read.key(), PERMISSION_ENTRY, TTL))
-        .await
-        .unwrap();
-
-    let held = cache.get(None, &read).await.unwrap().unwrap();
-    let permission = CachedObjectPermission::from_value(&held).unwrap();
-    cache
-        .set(None, &rewritten, permission.clone().into_value(), Some(TTL))
-        .await
-        .unwrap();
+    let (permission, written) = round_trip::<ObjectPermissionEntry>(
+        topology,
+        AuthObject::ObjectPermission("kv-permission".to_owned()),
+        AuthObject::ObjectPermission("rewritten".to_owned()),
+        PERMISSION_ENTRY,
+    )
+    .await;
 
     assert_eq!(
         (
             permission.vector_stores,
             permission.mcp_tool_permissions,
             permission.apps,
-            raw.send(commands::get::<String>(&rewritten.key()))
-                .await
-                .unwrap()
-                .as_deref(),
+            written.as_deref(),
         ),
         (
             Some(vec!["store-a".to_owned()]),
-            Some(Lists(vec![(
+            Some(Dict(vec![(
                 "server-a".to_owned(),
                 vec!["search".to_owned()]
             )])),
