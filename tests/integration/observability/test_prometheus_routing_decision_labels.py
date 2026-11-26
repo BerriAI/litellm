@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
@@ -10,7 +11,7 @@ from typing import Final
 import pytest
 import yaml
 from integration._support import responses_vendor as rv
-from integration._support.client import Gateway, gateway_from_environment, until_asserted
+from integration._support.client import Gateway, Scenario, gateway_from_environment, until_asserted
 from integration._support.process import owned_proxy
 from integration._support.prometheus_series import Sample, scrape
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -35,6 +36,15 @@ _CALLER_METADATA: Final = {
     "routing_decision": {"tier": "CALLER", "cause": "caller", "routed_model": "caller", "classifier_crux": "caller"},
 }
 _UNROUTED: Final = ("None", "None", "None", "None", "from-header")
+_OPERATOR_METADATA: Final = {"routing_decision": {"tier": "KEY-META", "cause": "operator", "routed_model": "operator"}}
+_OPERATOR_LABELS: Final = ("KEY-META", "operator", "operator", "None", "from-header")
+_RATE_LIMIT_HEADERS: Final = {"x-ratelimit-remaining-requests": "99", "x-ratelimit-remaining-tokens": "9999"}
+_GAUGES: Final = (
+    "litellm_remaining_requests_metric",
+    "litellm_remaining_tokens_metric",
+    "litellm_remaining_api_key_requests_for_model",
+    "litellm_remaining_api_key_tokens_for_model",
+)
 _ROUTED_UP: Final = ("SIMPLE", "heuristic_scorer", _UP, "None", "from-header")
 _ROUTED_DOWN: Final = ("SIMPLE", "heuristic_scorer", _DOWN, "None", "from-header")
 _SUCCESS_METRICS: Final = (
@@ -60,7 +70,7 @@ def _respond_with(vendor: rv.ResponsesVendor, request: Request) -> Reply:
         return Reply()
     if request.method == "POST" and json.loads(request.body).get("model") == _DOWN_UPSTREAM_MODEL:
         return rv.error(503, "synthetic upstream outage", "server_error")
-    return vendor.respond(request)
+    return replace(vendor.respond(request), headers=_RATE_LIMIT_HEADERS)
 
 
 def _deployment(name: str, upstream_model: str, upstream: Wire) -> dict[str, JsonValue]:
@@ -189,6 +199,55 @@ def test_request_metrics_are_labelled_with_the_routers_decision_and_never_the_ca
         def landed() -> None:
             found: Final = _labels_by_metric(scrape(gateway), metrics, sha256(key.encode()).hexdigest())
             assert found == {metric: [expected] for metric in metrics}
+
+        until_asserted(landed, seconds=30)
+
+
+def _operator_key(scenario: Scenario, owner: str) -> str:
+    if owner == "key":
+        return scenario.key(metadata=_OPERATOR_METADATA)
+    return scenario.key(team_id=scenario.team(metadata=_OPERATOR_METADATA))
+
+
+@pytest.mark.parametrize("owner", ("key", "team"))
+@pytest.mark.parametrize(
+    ("model", "metrics", "succeeds", "expected"),
+    [
+        pytest.param(_ROUTER_UP, _SUCCESS_METRICS, True, _ROUTED_UP, id="auto-routed-success"),
+        pytest.param(_ROUTER_DOWN, _FAILURE_METRICS, False, _ROUTED_DOWN, id="auto-routed-failure"),
+        pytest.param(_UP, _SUCCESS_METRICS, True, _OPERATOR_LABELS, id="direct-success"),
+        pytest.param(_DOWN, _FAILURE_METRICS, False, _OPERATOR_LABELS, id="direct-failure"),
+    ],
+)
+def test_key_or_team_metadata_labels_the_calls_the_router_did_not_route(
+    gateway: Gateway, owner: str, model: str, metrics: tuple[str, ...], succeeds: bool, expected: tuple[str, ...]
+) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = _operator_key(scenario, owner)
+        status: Final = _send(gateway, "/v1/chat/completions", model, key, stream=False)
+        assert (status == 200) is succeeds, status
+
+        def landed() -> None:
+            found: Final = _labels_by_metric(scrape(gateway), metrics, sha256(key.encode()).hexdigest())
+            assert found == {metric: [expected] for metric in metrics}
+
+        until_asserted(landed, seconds=30)
+
+
+@pytest.mark.parametrize("owner", ("key", "team"))
+def test_rate_limit_gauges_keep_one_series_whatever_tier_the_router_picked(gateway: Gateway, owner: str) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = _operator_key(scenario, owner)
+        statuses: Final = tuple(
+            _send(gateway, "/v1/chat/completions", model, key, stream=False) for model in (_ROUTER_UP, _UP)
+        )
+        assert statuses == (200, 200)
+
+        def landed() -> None:
+            found: Final = _labels_by_metric(scrape(gateway), _GAUGES, sha256(key.encode()).hexdigest())
+            assert {metric: set(labels) for metric, labels in found.items()} == {
+                metric: {_OPERATOR_LABELS} for metric in _GAUGES
+            }
 
         until_asserted(landed, seconds=30)
 

@@ -10,6 +10,8 @@ from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
 import litellm
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
@@ -436,15 +438,23 @@ def auto_router(auto_routed_logger: PrometheusLogger) -> litellm.Router:
     )
 
 
-async def _call(router: litellm.Router, model: str, **spend_logs_metadata: object) -> None:
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+
+async def _call(
+    router: litellm.Router,
+    model: str,
+    key_metadata: Mapping[str, object] | None = None,
+    **spend_logs_metadata: object,
+) -> None:
     with contextlib.suppress(litellm.InternalServerError):
         await router.acompletion(
             model=model,
             messages=[{"role": "user", "content": "hi"}],
-            metadata={"spend_logs_metadata": spend_logs_metadata},
+            metadata={"spend_logs_metadata": spend_logs_metadata, "user_api_key_auth_metadata": key_metadata},
         )
     await drain_logging_tasks()
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
 
 @pytest.mark.parametrize(
@@ -477,6 +487,106 @@ async def test_request_metrics_carry_the_routing_decision_of_an_auto_routed_call
     await _call(auto_router, model, nested={"caller": "from-header"}, routing_decision={"tier": "CALLER"})
 
     assert {name: _custom_labels_of(name) for name in metric_names} == {name: [expected] for name in metric_names}
+
+
+_KEY_GAUGES: Final = ("litellm_remaining_api_key_requests_for_model", "litellm_remaining_api_key_tokens_for_model")
+_KEY_METADATA_LABELS: Final = ("KEY-META", "None", "None", "from-header")
+
+
+@pytest.mark.parametrize(
+    ("model", "metric_names", "request_labels"),
+    [
+        pytest.param(
+            "smart-router",
+            _SUCCESS_REQUEST_METRICS,
+            ("SIMPLE", "heuristic_scorer", "tier-up", "from-header"),
+            id="auto-routed success",
+        ),
+        pytest.param("tier-up", _SUCCESS_REQUEST_METRICS, _KEY_METADATA_LABELS, id="direct success"),
+        pytest.param("tier-down", _FAILURE_EVENT_METRICS, _KEY_METADATA_LABELS, id="direct failure"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_metadata_labels_what_the_router_did_not_route_and_the_key_gauges(
+    auto_router: litellm.Router, model: str, metric_names: tuple[str, ...], request_labels: tuple[str, ...]
+):
+    await _call(
+        auto_router,
+        model,
+        key_metadata={"routing_decision": {"tier": "KEY-META"}},
+        nested={"caller": "from-header"},
+        routing_decision={"tier": "CALLER"},
+    )
+
+    gauges: Final = _KEY_GAUGES if metric_names is _SUCCESS_REQUEST_METRICS else ()
+    assert {name: _custom_labels_of(name) for name in (*metric_names, *gauges)} == {
+        **{name: [request_labels] for name in metric_names},
+        **{name: [_KEY_METADATA_LABELS] for name in gauges},
+    }
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[dict[str, object], object, object, object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append((kwargs, response_obj, start_time, end_time))
+
+
+_PROVIDER_HEADERS: Final = {"x_ratelimit_remaining_requests": 99, "x_ratelimit_remaining_tokens": 9999}
+_V3_LIMITER_HEADERS: Final = {"x-ratelimit-api_key-limit-requests": 100, "x-ratelimit-api_key-remaining-requests": 99}
+_REMAINING_GAUGES: Final = ("litellm_remaining_requests_metric", "litellm_remaining_tokens_metric")
+_V3_GAUGES: Final = ("litellm_api_key_rate_limit_allowed_metric", "litellm_api_key_rate_limit_used_metric")
+
+
+@pytest.mark.parametrize(
+    ("logged_headers", "gauges"),
+    [
+        pytest.param(_PROVIDER_HEADERS, _REMAINING_GAUGES, id="provider headers"),
+        pytest.param(_V3_LIMITER_HEADERS, _V3_GAUGES, id="v3 limiter headers"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("key_metadata", "gauge_labels"),
+    [
+        pytest.param({"routing_decision": {"tier": "KEY-META"}}, _KEY_METADATA_LABELS, id="key metadata"),
+        pytest.param(None, ("None", "None", "None", "from-header"), id="no key metadata"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_rate_limit_gauges_of_an_auto_routed_call_never_take_its_tier(
+    auto_routed_logger: PrometheusLogger,
+    auto_router: litellm.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    logged_headers: Mapping[str, int],
+    gauges: tuple[str, ...],
+    key_metadata: Mapping[str, object] | None,
+    gauge_labels: tuple[str, ...],
+):
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    await _call(auto_router, "smart-router", key_metadata=key_metadata, nested={"caller": "from-header"})
+    kwargs, response_obj, start_time, end_time = recorder.events[0]
+    payload: Final = kwargs["standard_logging_object"]
+
+    await auto_routed_logger.async_log_success_event(
+        kwargs={
+            **kwargs,
+            "standard_logging_object": {
+                **payload,
+                "hidden_params": {**payload["hidden_params"], "additional_headers": dict(logged_headers)},
+            },
+        },
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert _custom_labels_of("litellm_requests_metric_total") == [
+        ("SIMPLE", "heuristic_scorer", "tier-up", "from-header")
+    ]
+    assert {name: _custom_labels_of(name) for name in gauges} == {name: [gauge_labels] for name in gauges}
 
 
 @pytest.mark.parametrize(

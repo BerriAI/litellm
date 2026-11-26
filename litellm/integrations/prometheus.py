@@ -1882,6 +1882,15 @@ class PrometheusLogger(CustomLogger):
             user_api_key = hash_token(user_api_key)
 
         label_context: Final = PrometheusLabelFactoryContext(enum_values)  # amortized per request.
+        gauge_enum_values: Final = replace(
+            enum_values,
+            custom_metadata_labels=get_custom_labels_from_metadata(
+                metadata=_get_combined_custom_metadata_from_standard_logging_payload(
+                    standard_logging_payload=standard_logging_payload, include_router_record=False
+                )
+            ),
+        )
+        gauge_label_context: Final = PrometheusLabelFactoryContext(gauge_enum_values)
 
         # increment total LLM requests and spend metric
         self._increment_top_level_request_and_spend_metrics(
@@ -1943,7 +1952,7 @@ class PrometheusLogger(CustomLogger):
 
         self._set_v3_rate_limit_allowed_and_used_metrics(
             standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
-            enum_values=enum_values,
+            enum_values=gauge_enum_values,
         )
 
         # set latency metrics
@@ -1974,6 +1983,7 @@ class PrometheusLogger(CustomLogger):
             enum_values,
             output_tokens,
             label_context=label_context,
+            gauge_label_context=gauge_label_context,
         )
 
         # Provider-agnostic fallback: providers like Bedrock and Vertex don't return
@@ -1983,8 +1993,8 @@ class PrometheusLogger(CustomLogger):
         # the same metric is populated for any provider.
         await self._async_set_router_remaining_metrics(
             standard_logging_payload=standard_logging_payload,
-            enum_values=enum_values,
-            label_context=label_context,
+            enum_values=gauge_enum_values,
+            label_context=gauge_label_context,
         )
 
         # cache metrics
@@ -2773,7 +2783,7 @@ class PrometheusLogger(CustomLogger):
             model_id=model_id,
             custom_metadata_labels=get_custom_labels_from_metadata(
                 metadata=_get_combined_custom_metadata_from_standard_logging_payload(
-                    standard_logging_payload=kwargs.get("standard_logging_object")
+                    standard_logging_payload=kwargs.get("standard_logging_object"), include_router_record=False
                 )
             ),
         )
@@ -3795,6 +3805,7 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
         label_context: PrometheusLabelFactoryContext | None = None,
+        gauge_label_context: PrometheusLabelFactoryContext | None = None,
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
@@ -3852,6 +3863,9 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
+            gauge_context: Final = gauge_label_context if gauge_label_context is not None else label_context
+            gauge_enum_values: Final = gauge_context.enum_values if gauge_context is not None else enum_values
+
             if remaining_requests is not None:
                 """
                 "model_group",
@@ -3861,16 +3875,16 @@ class PrometheusLogger(CustomLogger):
                 """
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_requests_metric"),
-                    enum_values=enum_values,
-                    label_context=label_context,
+                    enum_values=gauge_enum_values,
+                    label_context=gauge_context,
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
             if remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
-                    enum_values=enum_values,
-                    label_context=label_context,
+                    enum_values=gauge_enum_values,
+                    label_context=gauge_context,
                 )
                 self.litellm_remaining_tokens_metric.labels(**_labels).set(remaining_tokens)
 
@@ -5536,14 +5550,17 @@ def _opted_out_of_logging(request_data: Mapping[str, object]) -> bool:
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
     standard_logging_payload: dict | None,
+    include_router_record: bool = True,
 ) -> dict[str, object]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
 
     Includes top-level scalar fields from the standard logging metadata (e.g.
-    user_api_key_project_alias, user_api_key_team_alias) and the router's
-    routing_decision, minus the fields that quote the prompt, so they are
-    accessible via custom_prometheus_metadata_labels configuration.
+    user_api_key_project_alias, user_api_key_team_alias) so they are accessible
+    via custom_prometheus_metadata_labels configuration. routing_decision is the
+    router's record of this request, minus the fields that quote the prompt,
+    else the key or team metadata of that name. Gauges, which hold one value per
+    series rather than counting requests, pass include_router_record=False.
     """
     if not isinstance(standard_logging_payload, dict):
         return {}
@@ -5557,6 +5574,9 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     user_api_key_auth_metadata: Final = standard_logging_metadata.get("user_api_key_auth_metadata")
     spend_logs_metadata: Final = standard_logging_metadata.get("spend_logs_metadata")
     routing_decision: Final = standard_logging_metadata.get("routing_decision")
+    operator_routing_decision: Final = (
+        user_api_key_auth_metadata.get("routing_decision") if isinstance(user_api_key_auth_metadata, dict) else None
+    )
 
     return {
         **{k: v for k, v in standard_logging_metadata.items() if not isinstance(v, dict)},
@@ -5571,8 +5591,8 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
         ),
         "routing_decision": (
             without(_logged_fields(routing_decision), *PROMPT_QUOTING_ROUTING_DECISION_FIELDS)
-            if routing_decision
-            else None
+            if include_router_record and routing_decision
+            else operator_routing_decision
         ),
     }
 

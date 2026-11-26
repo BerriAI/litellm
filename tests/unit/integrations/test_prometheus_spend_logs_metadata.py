@@ -255,6 +255,17 @@ _ROUTER_LABELS: Final = {
     "routing_decision_routed_model": "tier-small",
 }
 _CALLER_RECORD: Final = {"tier": "CALLER", "cause": "caller", "routed_model": "caller-model", "signals": "caller"}
+_KEY_RECORD: Final = {"tier": "KEY", "cause": "key", "routed_model": "key-model"}
+_KEY_LABELS: Final = {
+    "routing_decision_tier": "KEY",
+    "metadata_routing_decision_cause": "key",
+    "routing_decision_routed_model": "key-model",
+}
+_AUTO_ROUTED: Final = {"routing_decision": _ROUTER_RECORD}
+_RECORD_WITHOUT_A_TIER: Final = {"routing_decision": {"cause": "heuristic_scorer", "tier": None}}
+_NULL_RECORD: Final = {"routing_decision": None}
+_DIRECT_CALL: Final[dict[str, object]] = {}
+_ROUTER_SOURCE_IDS: Final = ("auto-routed call", "record without a tier", "null record", "direct call")
 
 
 @pytest.mark.parametrize(
@@ -262,26 +273,22 @@ _CALLER_RECORD: Final = {"tier": "CALLER", "cause": "caller", "routed_model": "c
     [
         {},
         {"requester_metadata": {"routing_decision": _CALLER_RECORD}},
-        {"user_api_key_auth_metadata": {"routing_decision": _CALLER_RECORD}},
         {"spend_logs_metadata": {"routing_decision": _CALLER_RECORD}},
         {"spend_logs_metadata": {"routing_decision": "CALLER"}},
     ],
-    ids=["no caller value", "requester metadata", "key or team metadata", "spend logs header", "scalar value"],
+    ids=["no caller value", "requester metadata", "spend logs header", "scalar value"],
 )
 @pytest.mark.parametrize(
     ("router_source", "expected_labels"),
     [
-        ({"routing_decision": _ROUTER_RECORD}, _ROUTER_LABELS),
-        (
-            {"routing_decision": {"cause": "heuristic_scorer", "tier": None}},
-            {"metadata_routing_decision_cause": "heuristic_scorer"},
-        ),
-        ({"routing_decision": None}, {}),
-        ({}, {}),
+        (_AUTO_ROUTED, _ROUTER_LABELS),
+        (_RECORD_WITHOUT_A_TIER, {"metadata_routing_decision_cause": "heuristic_scorer"}),
+        (_NULL_RECORD, {}),
+        (_DIRECT_CALL, {}),
     ],
-    ids=["auto-routed call", "record without a tier", "null record", "direct call"],
+    ids=_ROUTER_SOURCE_IDS,
 )
-def test_routing_decision_labels_come_only_from_the_router_record(
+def test_routing_decision_labels_never_come_from_the_caller(
     monkeypatch: pytest.MonkeyPatch,
     router_source: dict[str, object],
     caller_source: dict[str, object],
@@ -294,6 +301,55 @@ def test_routing_decision_labels_come_only_from_the_router_record(
     )
 
     assert get_custom_labels_from_metadata(combined) == expected_labels
+
+
+@pytest.mark.parametrize(
+    ("router_source", "request_labels"),
+    [
+        (_AUTO_ROUTED, _ROUTER_LABELS),
+        (_RECORD_WITHOUT_A_TIER, {"metadata_routing_decision_cause": "heuristic_scorer"}),
+        (_NULL_RECORD, _KEY_LABELS),
+        (_DIRECT_CALL, _KEY_LABELS),
+    ],
+    ids=_ROUTER_SOURCE_IDS,
+)
+def test_key_or_team_routing_decision_labels_what_the_router_did_not_record_and_every_gauge(
+    monkeypatch: pytest.MonkeyPatch, router_source: dict[str, object], request_labels: dict[str, str]
+):
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", list(_ROUTING_LABELS))
+    payload: Final = {
+        "metadata": {
+            "user_api_key_auth_metadata": {"routing_decision": _KEY_RECORD},
+            "spend_logs_metadata": {"routing_decision": _CALLER_RECORD},
+            **router_source,
+        }
+    }
+
+    labels: Final = {
+        include_router_record: get_custom_labels_from_metadata(
+            _get_combined_custom_metadata_from_standard_logging_payload(
+                payload, include_router_record=include_router_record
+            )
+        )
+        for include_router_record in (True, False)
+    }
+
+    assert labels == {True: request_labels, False: _KEY_LABELS}
+
+
+@pytest.mark.parametrize(
+    "router_source", (_AUTO_ROUTED, _RECORD_WITHOUT_A_TIER, _NULL_RECORD, _DIRECT_CALL), ids=_ROUTER_SOURCE_IDS
+)
+def test_gauges_never_take_the_routers_per_request_record(
+    monkeypatch: pytest.MonkeyPatch, router_source: dict[str, object]
+):
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", list(_ROUTING_LABELS))
+
+    combined: Final = _get_combined_custom_metadata_from_standard_logging_payload(
+        {"metadata": router_source}, include_router_record=False
+    )
+
+    assert get_custom_labels_from_metadata(combined) == {}
 
 
 @pytest.mark.parametrize("field", sorted(PROMPT_QUOTING_ROUTING_DECISION_FIELDS))
