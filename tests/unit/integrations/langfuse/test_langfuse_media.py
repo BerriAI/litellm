@@ -71,6 +71,23 @@ def test_typed_provider_blocks_keep_their_shape_and_carry_the_reference(block):
     assert [media.content for media in found] == [b"hello"]
 
 
+@pytest.mark.parametrize(
+    ("part_key", "content_type_key"),
+    [("inline_data", "mime_type"), ("inlineData", "mimeType")],
+    ids=["snake-case", "camel-case"],
+)
+def test_gemini_inline_data_parts_keep_their_shape_and_carry_the_reference(part_key, content_type_key):
+    part: Final = {part_key: {content_type_key: "image/png", "data": HELLO_BASE64}}
+
+    replaced, found = extract_media(json.dumps({"contents": [{"role": "user", "parts": [{"text": "describe"}, part]}]}))
+
+    assert json.loads(replaced)["contents"][0]["parts"] == [
+        {"text": "describe"},
+        {part_key: {content_type_key: "image/png", "data": HELLO_PNG_REFERENCE}},
+    ]
+    assert [media.content for media in found] == [b"hello"]
+
+
 def test_a_value_that_is_one_data_uri_is_replaced_whole():
     replaced, found = extract_media(HELLO_PNG_URI)
 
@@ -117,6 +134,9 @@ def test_every_payload_in_one_value_is_replaced_and_returned():
         json.dumps({"question": "what does the mime_type header do?", "type": "base64"}),
         json.dumps({"schema": {"media_type": "string"}, "text": "see data: below"}),
         json.dumps({"data": "plain", "kind": "base64"}),
+        json.dumps({"inlineData": {"mimeType": "image/png", "data": DECODABLE_REFERENCE}}),
+        json.dumps({"inlineData": {"data": HELLO_BASE64}, "note": "mimeType"}),
+        json.dumps({"inline_data": {"mime_type": "application/x-not-stored", "data": HELLO_BASE64}}),
     ],
     ids=[
         "text-only",
@@ -133,6 +153,9 @@ def test_every_payload_in_one_value_is_replaced_and_returned():
         "mime-type-in-prose",
         "content-type-key-without-data",
         "data-key-without-content-type",
+        "inline-data-already-a-reference",
+        "inline-data-without-content-type",
+        "inline-data-unsupported-content-type",
     ],
 )
 def test_values_without_storable_media_are_returned_untouched(serialized):

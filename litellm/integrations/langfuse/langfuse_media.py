@@ -38,6 +38,7 @@ _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _CONTENT_TYPE_KEY_BY_BLOCK_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {"base64": "media_type", "media": "mime_type"}
 )
+_INLINE_DATA_KEYS: Final = ("inline_data", "inlineData")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,25 @@ def _from_typed_block(block: Mapping[str, JsonValue]) -> Media | None:
     return _media(block.get(content_type_key), data)
 
 
+def _inline_data_part(node: Mapping[str, JsonValue], key: str) -> tuple[str, Mapping[str, JsonValue], Media] | None:
+    part: Final = node.get(key)
+    if not isinstance(part, dict):
+        return None
+    data: Final = part.get("data")
+    if not isinstance(data, str) or data.startswith(_REFERENCE_PREFIX):
+        return None
+    media: Final = _media(part.get("mime_type") or part.get("mimeType"), data)
+    return None if media is None else (key, part, media)
+
+
+def _from_inline_data(node: Mapping[str, JsonValue]) -> tuple[str, Mapping[str, JsonValue], Media] | None:
+    """A Gemini ``{"inline_data": {"mime_type", "data"}}`` part in either spelling of its keys, as the part's key,
+    the part and its payload."""
+    return next(
+        (found for found in (_inline_data_part(node, key) for key in _INLINE_DATA_KEYS) if found is not None), None
+    )
+
+
 def _extract_media_nodes(node: JsonValue, depth: int) -> tuple[JsonValue, tuple[Media, ...]]:
     if depth > _MAX_DEPTH:
         return node, ()
@@ -112,6 +132,10 @@ def _extract_media_nodes(node: JsonValue, depth: int) -> tuple[JsonValue, tuple[
         block: Final = _from_typed_block(node)
         if block is not None:
             return {**node, "data": block.reference}, (block,)
+        inline_data: Final = _from_inline_data(node)
+        if inline_data is not None:
+            key, part, media = inline_data
+            return {**node, key: {**part, "data": media.reference}}, (media,)
         entries: Final = {key: _extract_media_nodes(value, depth + 1) for key, value in node.items()}
         return (
             {key: value for key, (value, _) in entries.items()},
@@ -122,17 +146,18 @@ def _extract_media_nodes(node: JsonValue, depth: int) -> tuple[JsonValue, tuple[
 
 def _may_hold_media(serialized: str) -> bool:
     """Whether ``serialized`` carries the markers every payload ``extract_media`` replaces has: a base64 data URI, or
-    a typed block's content type key next to a ``data`` key."""
+    a typed block's or Gemini part's content type key next to a ``data`` key."""
     return ("data:" in serialized and ";base64" in serialized) or (
-        '"data"' in serialized and ('"media_type"' in serialized or '"mime_type"' in serialized)
+        '"data"' in serialized
+        and ('"media_type"' in serialized or '"mime_type"' in serialized or '"mimeType"' in serialized)
     )
 
 
 def extract_media(serialized: str) -> tuple[str, tuple[Media, ...]]:
     """``serialized`` with each base64 payload replaced by its Langfuse media reference, and the payloads replaced.
 
-    Covers what the v2 SDK replaced before ingestion: a ``data:<type>;base64,`` string anywhere in the JSON
-    value, and the Anthropic and Vertex typed blocks.
+    Covers what the Langfuse SDK replaces before ingestion: a ``data:<type>;base64,`` string anywhere in the JSON
+    value, the Anthropic and Vertex typed blocks, and Gemini ``inline_data`` parts.
     """
     if not _may_hold_media(serialized):
         return serialized, ()
