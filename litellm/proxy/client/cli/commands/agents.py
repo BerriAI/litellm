@@ -81,6 +81,8 @@ _OPENCODE_VALUE_FLAGS: Final = frozenset({"--session", "-s", "--prompt", "--log-
 _OPENCODE_HELP_USAGE: Final = re.compile(r"^USAGE\n\s+opencode((?: [^\s<\[]+)*)", re.MULTILINE)
 _OPENCODE_HELP_LISTS_STANDALONE: Final = re.compile(rf"^\s+{OPENCODE_STANDALONE_FLAG}\b", re.MULTILINE)
 _OPENCODE_PROBE_TIMEOUT_SECONDS: Final = 10.0
+_OPENCODE_SERVICE_STOPPED: Final = "stopped"
+_OPENCODE_SERVICE_ONLY_ENV: Final = frozenset({"XDG_STATE_HOME"})
 
 _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
@@ -905,6 +907,12 @@ class OpencodeLaunch:
     service_env: Mapping[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class _OpencodeStandaloneCommand:
+    insert_at: int
+    reads_config: bool
+
+
 _OPENCODE_SERVICE_ENV: Final = TypeAdapter(dict[str, str])
 
 
@@ -936,9 +944,21 @@ def _opencode_service_env(
     if isinstance(printed, _OpencodeProbeFailed):
         return printed
     try:
-        return MappingProxyType(_OPENCODE_SERVICE_ENV.validate_json(printed))
+        service_env: Final = _OPENCODE_SERVICE_ENV.validate_json(printed)
     except ValidationError:
         return _OpencodeProbeFailed("it did not print a JSON object of strings")
+    return MappingProxyType(
+        {name: value for name, value in service_env.items() if name not in _OPENCODE_SERVICE_ONLY_ENV}
+    )
+
+
+def _opencode_service_running(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> bool | _OpencodeProbeFailed:
+    printed: Final = _run_opencode(binary, ("service", "status"), env, run=run)
+    if isinstance(printed, _OpencodeProbeFailed):
+        return printed
+    return printed.strip() != _OPENCODE_SERVICE_STOPPED
 
 
 def _opencode_command_words(args: Sequence[str]) -> tuple[int, tuple[str, ...]]:
@@ -956,16 +976,19 @@ def _opencode_command_words(args: Sequence[str]) -> tuple[int, tuple[str, ...]]:
     return index, (args[index], *(word for word in following if not word.startswith("-")))
 
 
-def _opencode_standalone_index(help_text: str, index: int) -> int | None | _OpencodeProbeFailed:
+def _opencode_standalone_command(
+    help_text: str, index: int
+) -> _OpencodeStandaloneCommand | None | _OpencodeProbeFailed:
     if _OPENCODE_HELP_LISTS_STANDALONE.search(help_text) is None:
         return None
     usage: Final = _OPENCODE_HELP_USAGE.search(help_text)
     if usage is None:
         return _OpencodeProbeFailed("its --help has no USAGE line lite can read")
     command: Final = tuple(usage.group(1).split())
-    if command not in _OPENCODE_CONFIG_COMMANDS:
-        return None
-    return index + len(command) if command else 0
+    return _OpencodeStandaloneCommand(
+        insert_at=index + len(command) if command else 0,
+        reads_config=command in _OPENCODE_CONFIG_COMMANDS,
+    )
 
 
 def with_opencode_private_server(
@@ -981,9 +1004,11 @@ def with_opencode_private_server(
     OpenCode 2 keeps a background service running after the TUI exits, and later
     launches reuse it, so the provider config and key exported here never reach
     the server that lists and calls models. A standalone server is a private
-    child of this launch with this env. Only the commands that start a session
-    or print the config get it, and only when that command's own --help lists
-    it, since OpenCode 1 has no such flag and 2.x adds it command by command.
+    child of this launch with this env. Only a command whose own --help lists
+    it gets one, since OpenCode 1 has no such flag and 2.x adds it command by
+    command. Commands that start a session or print the config always get it,
+    and the others only when no service runs, so they never start a shared
+    service that keeps this env after they exit.
     A `--server`, `--standalone` or `--no-standalone` the user passed wins.
     A private server gets the env set with `opencode service set env` too, which
     OpenCode itself applies only to the shared service.
@@ -995,18 +1020,27 @@ def with_opencode_private_server(
         return unchanged
     index, words = _opencode_command_words(args)
     help_text: Final = _run_opencode(binary, (*words, "--help"), base_env, run=run)
-    insert_at: Final = (
+    command: Final = (
         help_text
         if isinstance(help_text, _OpencodeProbeFailed)
-        else _opencode_standalone_index(click.unstyle(help_text), index)
+        else _opencode_standalone_command(click.unstyle(help_text), index)
     )
-    if isinstance(insert_at, _OpencodeProbeFailed):
+    if isinstance(command, _OpencodeProbeFailed):
         warn(
-            f"litellm: could not check whether OpenCode takes {OPENCODE_STANDALONE_FLAG} ({insert_at.reason}), "
+            f"litellm: could not check whether OpenCode takes {OPENCODE_STANDALONE_FLAG} ({command.reason}), "
             "so a running OpenCode service may not see the LiteLLM models"
         )
         return unchanged
-    if insert_at is None:
+    if command is None:
+        return unchanged
+    service_running: Final = False if command.reads_config else _opencode_service_running(binary, base_env, run=run)
+    if isinstance(service_running, _OpencodeProbeFailed):
+        warn(
+            f"litellm: could not check whether the OpenCode service is running ({service_running.reason}), "
+            "so this command may start it with the LiteLLM config"
+        )
+        return unchanged
+    if service_running:
         return unchanged
     service_env: Final = _opencode_service_env(binary, base_env, run=run)
     if isinstance(service_env, _OpencodeProbeFailed):
@@ -1015,7 +1049,7 @@ def with_opencode_private_server(
             "so this launch runs without it"
         )
     return OpencodeLaunch(
-        (*args[:insert_at], OPENCODE_STANDALONE_FLAG, *args[insert_at:]),
+        (*args[: command.insert_at], OPENCODE_STANDALONE_FLAG, *args[command.insert_at :]),
         _NO_EXTRA_ENV if isinstance(service_env, _OpencodeProbeFailed) else service_env,
     )
 

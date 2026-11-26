@@ -820,12 +820,14 @@ class _FakeOpencode:
         returncode: int = 0,
         error: Exception | None = None,
         service_env: str = "{}",
+        service_status: str = "http://127.0.0.1:4096\n",
     ) -> None:
         self.takes_standalone = takes_standalone | {()}
         self.stdout = stdout
         self.returncode = returncode
         self.error = error
         self.service_env = service_env
+        self.service_status = service_status
         self.calls: list[tuple[Sequence[str], dict[str, object]]] = []
 
     def __call__(self, command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -834,6 +836,8 @@ class _FakeOpencode:
             raise self.error
         if tuple(command[1:]) == ("service", "get", "env"):
             return subprocess.CompletedProcess(command, 0, self.service_env, "")
+        if tuple(command[1:]) == ("service", "status"):
+            return subprocess.CompletedProcess(command, 0, self.service_status, "")
         words = tuple(command[1:-1])
         resolved = next((words[:depth] for depth in (2, 1) if words[:depth] in _OPENCODE_COMMANDS), ())
         stdout = self.stdout if self.stdout is not None else _opencode_2_help(resolved, resolved in self.takes_standalone)
@@ -918,13 +922,10 @@ class TestOpencodePrivateServer:
         assert _private_server(["debug", "config"], run=older) == ("debug", "config")
         assert _private_server(["run", "hi"], run=older) == ("run", "--standalone", "hi")
 
+    @pytest.mark.parametrize("service_status", ["http://127.0.0.1:4096\n", "stopped\n"])
     @pytest.mark.parametrize(
         "args",
         [
-            ["auth", "login"],
-            ["session", "list"],
-            ["machine", "list"],
-            ["mcp", "list"],
             ["service", "status"],
             ["--log-level", "warn", "service", "stop"],
             ["serve", "--port", "4096"],
@@ -934,8 +935,48 @@ class TestOpencodePrivateServer:
             ["debug", "paths"],
         ],
     )
-    def test_commands_that_start_no_session_keep_the_shared_service(self, args):
-        assert _private_server(args) == tuple(args)
+    def test_commands_whose_help_lacks_the_flag_launch_unchanged(self, args, service_status):
+        assert _private_server(args, run=_FakeOpencode(service_status=service_status)) == tuple(args)
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["auth", "login"],
+            ["session", "list"],
+            ["machine", "list"],
+            ["--log-level", "warn", "mcp", "list"],
+        ],
+    )
+    def test_management_commands_use_a_running_service(self, args):
+        assert _private_server(args, run=_FakeOpencode(service_status="http://127.0.0.1:4096\n")) == tuple(args)
+
+    @pytest.mark.parametrize(
+        ("args", "launched"),
+        [
+            (["auth", "login"], ["auth", "login", "--standalone"]),
+            (["session", "list"], ["session", "list", "--standalone"]),
+            (["machine", "list"], ["machine", "list", "--standalone"]),
+            (["--log-level", "warn", "mcp", "list"], ["--log-level", "warn", "mcp", "list", "--standalone"]),
+        ],
+    )
+    def test_management_commands_start_no_shared_service(self, args, launched):
+        assert _private_server(args, run=_FakeOpencode(service_status="stopped\n")) == tuple(launched)
+
+    def test_a_session_launch_gets_a_private_server_while_a_service_runs(self):
+        run = _FakeOpencode(service_status="http://127.0.0.1:4096\n")
+        assert _private_server(["run", "hi"], run=run) == ("run", "--standalone", "hi")
+
+    def test_a_service_status_that_fails_warns_and_launches_unchanged(self) -> None:
+        def status_fails(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if tuple(command[1:]) == ("service", "status"):
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return _FakeOpencode()(command, **kwargs)
+
+        warnings: list[str] = []
+        assert _private_server(["session", "list"], run=status_fails, warn=warnings.append) == ("session", "list")
+        assert len(warnings) == 1
+        assert "service is running" in warnings[0]
+        assert "exit code 1" in warnings[0]
 
     @pytest.mark.parametrize(
         "args",
@@ -975,6 +1016,10 @@ class TestOpencodePrivateServer:
         launch = _private_launch(["run", "hi"], run=run)
         assert launch.args == ("run", "--standalone", "hi")
         assert launch.service_env == {"ANTHROPIC_API_KEY": "sk-ant-service"}
+
+    def test_a_private_server_keeps_the_launch_state_folder_like_the_service_does(self) -> None:
+        run = _FakeOpencode(service_env='{"ANTHROPIC_API_KEY": "sk-ant-service", "XDG_STATE_HOME": "/srv/state"}')
+        assert _private_launch(["run", "hi"], run=run).service_env == {"ANTHROPIC_API_KEY": "sk-ant-service"}
 
     @pytest.mark.parametrize(
         ("args", "printed"),
