@@ -16478,7 +16478,7 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
         )
         request = httpx.Request("GET", "https://up.example/mcp", headers=remaining)
         if auth is not None:
-            next(auth.auth_flow(request))
+            await anext(auth.async_auth_flow(request))
         assert diagnostics.resolution() == expected_source
         assert request.headers.get("Authorization") == expected_authorization
         assert store.calls == (1 if config == "stored" else 0)

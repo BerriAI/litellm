@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException
 
@@ -59,11 +59,11 @@ class AuthorizationCodeTokenUnreachable:
     tag: Literal["unreachable"] = "unreachable"
 
 
-AuthorizationCodeTokenOutcome = (
+AuthorizationCodeTokenOutcome: TypeAlias = (
     AuthorizationCodeTokenSuccess | AuthorizationCodeTokenDenied | AuthorizationCodeTokenUnreachable
 )
-TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable[AuthorizationCodeTokenOutcome]]
-CredentialRevoker = Callable[[str, str, str, str | None], Awaitable[None]]
+TokenEndpointPost: TypeAlias = Callable[[str, dict[str, str], dict[str, str]], Awaitable[AuthorizationCodeTokenOutcome]]
+CredentialRevoker: TypeAlias = Callable[[str, str, str, str | None], Awaitable[None]]
 
 
 class CredentialPersist(Protocol):

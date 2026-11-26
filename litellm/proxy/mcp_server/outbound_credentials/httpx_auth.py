@@ -64,7 +64,7 @@ class PerUserOAuthBearerAuth(httpx2.Auth):
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         token: Final = self._access_token.get_secret_value()
         name, value = self._carrier.header(token)
-        request.headers[name] = value
+        request.headers[name] = value  # rebind-ok: httpx auth owns mutation of the outgoing request headers
         response: Final = yield request
         if response.status_code != 401:
             return
@@ -75,7 +75,7 @@ class PerUserOAuthBearerAuth(httpx2.Auth):
             case Ok(fresh):
                 self._access_token = SecretStr(fresh.access_token)
                 fresh_name, fresh_value = self._carrier.header(fresh.access_token)
-                request.headers[fresh_name] = fresh_value
+                request.headers[fresh_name] = fresh_value  # rebind-ok: httpx auth owns mutation of the retried request headers
                 yield request
 
     def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:

@@ -7154,17 +7154,15 @@ class MCPServerManager:
                             ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
                         recovery_error: Final = _extract_per_user_oauth_recovery_error(e) if managed_per_user else None
-                        has_recovery_error: Final = managed_per_user and recovery_error is not None
-                        has_auth_rejection: Final = auth_info is not None and auth_info[0] == 401
-                        if has_recovery_error and has_auth_rejection:
-                            if recovery_error.tag == "unauthorized":
-                                _, www_authenticate = auth_info
-                                raise MCPUpstreamAuthError(
-                                    status_code=401,
-                                    www_authenticate=www_authenticate,
-                                    server_name=server_label,
-                                ) from e
-                            raise_public(recovery_error)
+                        if managed_per_user and recovery_error is not None:
+                            if auth_info is not None and auth_info[0] == 401:
+                                if recovery_error.tag == "unauthorized":
+                                    raise MCPUpstreamAuthError(
+                                        status_code=401,
+                                        www_authenticate=auth_info[1],
+                                        server_name=server_label,
+                                    ) from e
+                                raise_public(recovery_error)
                         if not relays_upstream_auth or auth_info is None or auth_info[0] != 401:
                             # A genuine (non-auth or 403-forbidden) upstream/transport failure.
                             # raise_on_error demoted the client-layer log to debug, so surface it here at
